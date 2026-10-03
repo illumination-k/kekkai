@@ -1,8 +1,10 @@
-// Kekkai runtime for Cloudflare Workers (and Node for tests).
+// Kekkai runtime for Cloudflare Workers.
 //
-// The compiled WasmGC module imports host operations from the "kek"
-// module. Capabilities are plain JS objects passed into the handler; the
-// wasm code can only reach the outside world through them.
+// A #[handler] program compiles to a self-contained WasmGC module (strings,
+// collections and the other builtin operations are implemented in wasm by
+// the runtime prelude). It imports only its capability operations from the
+// "kek" module. Capabilities are plain JS objects passed into the handler;
+// the wasm code can only reach the outside world through them.
 //
 // Functions that perform I/O are compiled into resumable state machines:
 // handler_step() returns 1 when the computation is suspended on a pending
@@ -37,29 +39,6 @@ export class NetError extends Error {
 function toTxError(e) {
   if (e instanceof TxError) return e;
   return new TxError(String(e && e.message ? e.message : e));
-}
-
-export class IoError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "IoError";
-  }
-}
-
-function toIoError(e) {
-  if (e instanceof IoError) return e;
-  return new IoError(String(e && e.message ? e.message : e));
-}
-
-/** File system capability for command-line programs (Node only). */
-export async function nodeFs() {
-  const fsp = await import("node:fs/promises");
-  return {
-    read: (p) => fsp.readFile(p, "utf8"),
-    write: (p, c) => fsp.writeFile(p, c),
-    writeBytes: (p, b) => fsp.writeFile(p, b),
-    list: (p) => fsp.readdir(p),
-  };
 }
 
 function toNetError(e) {
@@ -459,15 +438,15 @@ async function readRequest(request) {
   };
 }
 
-function resp(status, body, contentType) {
+/** Convert a Response produced by the program into a fetch Response. */
+function toResponse(ex, r) {
+  const status = Number(ex.resp_status(r));
   const headers = {};
-  if (contentType) headers["content-type"] = contentType;
-  return { status: Number(status), body, headers };
-}
-
-function toResponse(r) {
-  const body = r.body === null || r.status === 204 || r.status === 304 ? null : r.body;
-  return new Response(body, { status: r.status, headers: r.headers });
+  const n = Number(ex.resp_header_count(r));
+  for (let i = 0; i + 1 < n; i += 2) headers[ex.resp_header(r, BigInt(i))] = ex.resp_header(r, BigInt(i + 1));
+  let body = ex.resp_body(r);
+  if (status === 204 || status === 304) body = null;
+  return new Response(body, { status, headers });
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +461,7 @@ function i64(n) {
 /**
  * Create a Kekkai program instance.
  *   module:  WebAssembly.Module compiled from module.wasm
- *   meta:    { strings, handlerParams } (generated kekkai_meta.js)
+ *   meta:    { handlerParams } (generated kekkai_meta.js)
  */
 export function createKekkai(module, meta) {
   let current = null; // the request whose computation is being stepped
@@ -498,9 +477,11 @@ export function createKekkai(module, meta) {
       (error) => ({ ok: false, error: toErr(error) }),
     );
 
+  let memory = null;
+  const u16 = (ptr, len) => new Uint16Array(memory.buffer, ptr, len);
+
   const host = {
     // --- runtime helpers ---
-    lit: (i) => meta.strings[i],
     take: () => current.result,
     is_null: (x) => (x === null || x === undefined ? 1 : 0),
     to_i64: (x) => i64(x),
@@ -508,61 +489,27 @@ export function createKekkai(module, meta) {
     res_tag: (x) => (x.ok ? 0 : 1),
     res_val: (x) => x.value,
     res_err: (x) => x.error,
-    str_eq: (a, b) => (a === b ? 1 : 0),
-    str_concat: (a, b) => a + b,
-
-    // --- collections (Vec <-> JS array conversion, Map as a JS Map) ---
     arr_new: () => [],
     arr_len: (a) => a.length,
     arr_get: (a, i) => a[i],
     arr_push: (a, x) => { a.push(x); },
     box_i64: (x) => x,
     box_i32: (x) => x,
-    map_new: () => new Map(),
-    map_len: (m) => BigInt(m.size),
-    map_keys: (m) => [...m.keys()],
-    map_get: (m, k) => (m.has(k) ? m.get(k) : null),
-    map_insert: (m, k, v) => { m.set(k, v); },
-    map_contains: (m, k) => (m.has(k) ? 1 : 0),
-    map_remove: (m, k) => { m.delete(k); },
 
-    // --- pure data ---
-    "int.min": (a, b) => (a < b ? a : b),
-    "int.max": (a, b) => (a > b ? a : b),
-    "string.char_at": (s, i) => (i >= 0n && i < BigInt(s.length) ? BigInt(s.charCodeAt(Number(i))) : null),
-    "string.slice": (s, a, b) => {
-      const n = BigInt(s.length);
-      const clamp = (x) => (x < 0n ? 0n : x > n ? n : x);
-      const lo = clamp(a), hi = clamp(b);
-      return hi <= lo ? "" : s.slice(Number(lo), Number(hi));
+    // --- strings cross through linear memory as UTF-16 code units ---
+    str_len: (s) => s.length,
+    str_to_mem: (s, ptr) => {
+      const a = u16(ptr, s.length);
+      for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
     },
-    "string.index_of": (s, t) => { const i = s.indexOf(t); return i < 0 ? null : BigInt(i); },
-    "string.replace": (s, a, b) => (a === "" ? s : s.split(a).join(b)),
-    "string.split": (s, sep) => (sep === "" ? [...s] : s.split(sep)),
-    "string.to_bytes": (s) => [...new TextEncoder().encode(s)].map(BigInt),
-    "string.from_char": (c) => String.fromCharCode(Number(BigInt.asUintN(16, c))),
-    "string.from_bytes": (a) => new TextDecoder().decode(new Uint8Array(a.map((x) => Number(BigInt.asUintN(8, x))))),
-    "ioError.message": (e) => e.message,
-    "fs.read": (fs, p) => start(asResult(fs.read(p), toIoError)),
-    "fs.write": (fs, p, c) => start(asResult(fs.write(p, c), toIoError)),
-    "fs.list": (fs, p) => start(asResult(Promise.resolve(fs.list(p)).then((names) => [...names].sort()), toIoError)),
-    "fs.write_bytes": (fs, p, a) => start(asResult(fs.writeBytes(p, new Uint8Array(a.map((x) => Number(BigInt.asUintN(8, x))))), toIoError)),
-
-    "int.to_string": (x) => x.toString(),
-    "int.abs": (x) => i64(x < 0n ? -x : x),
-    "bool.to_string": (b) => (b ? "true" : "false"),
-    "string.len": (s) => BigInt(s.length),
-    "string.parse_int": (s) => {
-      if (!/^[+-]?\d+$/.test(s)) return null;
-      const n = BigInt(s);
-      return n === BigInt.asIntN(64, n) ? n : null;
+    str_from_mem: (ptr, len) => {
+      const a = u16(ptr, len);
+      let s = "";
+      for (let i = 0; i < len; i += 8192) s += String.fromCharCode.apply(null, a.subarray(i, Math.min(len, i + 8192)));
+      return s;
     },
-    "string.contains": (s, t) => (s.includes(t) ? 1 : 0),
-    "string.starts_with": (s, t) => (s.startsWith(t) ? 1 : 0),
-    "string.ends_with": (s, t) => (s.endsWith(t) ? 1 : 0),
-    "string.trim": (s) => s.trim(),
-    "string.to_upper": (s) => s.toUpperCase(),
-    "string.to_lower": (s) => s.toLowerCase(),
+    err_message: (e) => String(e && e.message !== undefined ? e.message : e),
+    err_retryable: (e) => (e && e.retryable ? 1 : 0),
 
     "request.method": (r) => r.method,
     "request.path": (r) => r.path,
@@ -573,18 +520,6 @@ export function createKekkai(module, meta) {
     "request.query": (r, k) => OPTION(r.url.searchParams.get(k)),
     "request.header": (r, k) => OPTION(r.headers.get(k)),
     "request.body": (r) => r.body,
-
-    "response.text": (s, b) => resp(s, b, "text/plain; charset=utf-8"),
-    "response.json": (s, b) => resp(s, b, "application/json"),
-    "response.empty": (s) => resp(s, null),
-    "response.no_content": () => resp(204, null),
-    "response.not_found": () => resp(404, "not found", "text/plain; charset=utf-8"),
-    "response.bad_request": (m) => resp(400, m, "text/plain; charset=utf-8"),
-    "response.with_header": (r, k, v) => ({ ...r, headers: { ...r.headers, [k]: v } }),
-
-    "txError.message": (e) => e.message,
-    "txError.retryable": (e) => (e.retryable ? 1 : 0),
-    "netError.message": (e) => e.message,
 
     // --- capabilities (sync) ---
     "log.info": (log, m) => log.info(m),
@@ -620,6 +555,7 @@ export function createKekkai(module, meta) {
   }
   const instance = new WebAssembly.Instance(module, imports);
   const ex = instance.exports;
+  memory = ex.memory;
 
   async function run(args, ctx) {
     const req = { pending: null, result: undefined, ctx };
@@ -640,22 +576,6 @@ export function createKekkai(module, meta) {
   return {
     exports: ex,
     /**
-     * Run a #[main] program: `args` is an array of strings, `caps` maps
-     * parameter names to capabilities. Returns the exit code.
-     */
-    async main(argv, caps, ctx = {}) {
-      const args = [];
-      for (const p of meta.handlerParams) {
-        if (p.kind === "args") args.push(argv);
-        else {
-          const c = caps[p.name];
-          if (!c) throw new Error(`kekkai: missing capability ${p.name}: ${p.kind}`);
-          args.push(c);
-        }
-      }
-      return Number(await run(args, ctx));
-    },
-    /**
      * Run the handler. `caps` maps handler parameter names to capability
      * objects (Db capabilities are { store, outbox }).
      */
@@ -670,7 +590,7 @@ export function createKekkai(module, meta) {
         }
       }
       try {
-        return toResponse(await run(args, ctx));
+        return toResponse(ex, await run(args, ctx));
       } catch (e) {
         console.error("kekkai: handler failed:", e);
         return new Response("internal error", { status: 500 });

@@ -1,0 +1,260 @@
+// Capabilities of command-line programs and of `kek test` (mocks).
+//
+// Capability values carry no state on WASI: there is one instance of each
+// kind per program, and the state lives in `__Rt`.
+
+fn __rt_new() -> __Rt {
+    let rt = __Rt {
+        test: false,
+        base: 1024,
+        brk: 1024,
+        cwd: "",
+        store: __store_new(),
+        test_name: "",
+        clock_ms: 0,
+        rand: 0,
+        net: Map::new(),
+        net_err: Map::new(),
+        lines: Vec::new(),
+        sent: Vec::new(),
+        start_ns: 0,
+    };
+    let env = __env_all(rt);
+    rt.cwd = __env_lookup(env, "PWD");
+    if __env_lookup(env, "KEK_TEST") == "1" {
+        rt.test = true;
+        __test_setup(rt, env);
+    }
+    rt
+}
+
+// ---- &Log ----
+
+fn __log_line(level: String, m: String) {
+    let rt = __Rt::get();
+    if rt.test {
+        rt.lines.push(level + ": " + m);
+    } else if level == "info" {
+        __print(m);
+    } else {
+        __eprint(m);
+    }
+}
+
+fn __log_info(log: __Any, m: String) {
+    __log_line("info", m)
+}
+
+fn __log_warn(log: __Any, m: String) {
+    __log_line("warn", m)
+}
+
+fn __log_error(log: __Any, m: String) {
+    __log_line("error", m)
+}
+
+// ---- &Clock ----
+
+fn __clock_now_ms(c: __Any) -> Int {
+    let rt = __Rt::get();
+    if rt.test {
+        return rt.clock_ms;
+    }
+    __now_ns(0) / 1000000
+}
+
+// ---- &Random ----
+
+// SplitMix64
+fn __splitmix(rt: __Rt) -> Int {
+    rt.rand = rt.rand + -7046029254386353131;
+    let mut z = rt.rand;
+    z = z.bit_xor(z.ushr(30)) * -4658895280553007687;
+    z = z.bit_xor(z.ushr(27)) * -7723592293110705685;
+    z.bit_xor(z.ushr(31))
+}
+
+// A uniform integer in [lo, hi) (lo when the range is empty).
+fn __random_int(r: __Any, lo: Int, hi: Int) -> Int {
+    if hi <= lo {
+        return lo;
+    }
+    let rt = __Rt::get();
+    let x = if rt.test { __splitmix(rt) } else { __random_u64() };
+    lo + __Int::rem_u(x, hi - lo)
+}
+
+// ---- &Net ----
+
+fn __net_request(method: String, url: String, body: String, has_body: Bool) -> Result<String, NetError> {
+    let rt = __Rt::get();
+    if !rt.test {
+        return Err(NetError { message: "network access is not available to command-line programs" });
+    }
+    let key = method + " " + url;
+    rt.lines.push("net: " + key + if has_body { " " + __json_quote(body) } else { "" });
+    match rt.net_err.get(key) {
+        Some(m) => {
+            return Err(NetError { message: m });
+        }
+        None => {}
+    }
+    match rt.net.get(key) {
+        Some(v) => Ok(v),
+        None => Err(NetError { message: "network access is mocked in tests: no canned response for " + key }),
+    }
+}
+
+fn __net_get(net: __Any, url: String) -> Result<String, NetError> {
+    __net_request("GET", url, "", false)
+}
+
+fn __net_post(net: __Any, url: String, body: String) -> Result<String, NetError> {
+    __net_request("POST", url, body, true)
+}
+
+fn __netError_message(e: NetError) -> String {
+    e.message
+}
+
+// ---- &Db: an in-memory store with optimistic concurrency control ----
+
+struct __Entry {
+    value: String,
+    version: Int,
+}
+
+struct __Store {
+    data: Map<String, __Entry>,
+    clock: Int,
+}
+
+struct __Tx {
+    // key -> version observed (0 = absent)
+    reads: Map<String, Int>,
+    // key -> new value (None = delete)
+    writes: Map<String, Option<String>>,
+    // url, body pairs
+    outbox: Vec<String>,
+    open: Bool,
+}
+
+fn __store_new() -> __Store {
+    __Store { data: Map::new(), clock: 0 }
+}
+
+fn __store_put(s: __Store, k: String, v: String) {
+    s.clock = s.clock + 1;
+    s.data.insert(k, __Entry { value: v, version: s.clock });
+}
+
+fn __db_get(db: __Any, key: String) -> Result<Option<String>, TxError> {
+    match __Rt::get().store.data.get(key) {
+        Some(e) => Ok(Some(e.value)),
+        None => Ok(None),
+    }
+}
+
+fn __db_begin(db: __Any) -> __Any {
+    __Tx::to_any(__Tx { reads: Map::new(), writes: Map::new(), outbox: Vec::new(), open: true })
+}
+
+fn __tx_get(t: __Any, key: String) -> Result<Option<String>, TxError> {
+    let tx = __Tx::from_any(t);
+    match tx.writes.get(key) {
+        Some(w) => {
+            return Ok(w);
+        }
+        None => {}
+    }
+    let e = __Rt::get().store.data.get(key);
+    if !tx.reads.contains(key) {
+        tx.reads.insert(
+            key,
+            match e {
+                Some(x) => x.version,
+                None => 0,
+            },
+        );
+    }
+    match e {
+        Some(x) => Ok(Some(x.value)),
+        None => Ok(None),
+    }
+}
+
+fn __tx_put(t: __Any, key: String, value: String) -> Result<(), TxError> {
+    __Tx::from_any(t).writes.insert(key, Some(value));
+    Ok(())
+}
+
+fn __tx_delete(t: __Any, key: String) -> Result<(), TxError> {
+    __Tx::from_any(t).writes.insert(key, None);
+    Ok(())
+}
+
+fn __tx_outbox(t: __Any, url: String, body: String) {
+    let tx = __Tx::from_any(t);
+    tx.outbox.push(url);
+    tx.outbox.push(body);
+}
+
+fn __tx_commit(t: __Any) -> Result<(), TxError> {
+    let tx = __Tx::from_any(t);
+    tx.open = false;
+    let rt = __Rt::get();
+    let s = rt.store;
+    for k in tx.reads.keys() {
+        let seen = tx.reads.get(k).unwrap_or(0);
+        let cur = match s.data.get(k) {
+            Some(x) => x.version,
+            None => 0,
+        };
+        if cur != seen {
+            tx.writes = Map::new();
+            tx.outbox = Vec::new();
+            return Err(TxError { message: "conflict on key " + __json_quote(k), retryable: true });
+        }
+    }
+    for k in tx.writes.keys() {
+        match tx.writes.get(k) {
+            Some(Some(v)) => __store_put(s, k, v),
+            _ => s.data.remove(k),
+        }
+    }
+    // irrevocable effects run only after a successful commit
+    let n = tx.outbox.len() / 2;
+    for i in 0..n {
+        let url = tx.outbox.get(i * 2).unwrap_or("");
+        let body = tx.outbox.get(i * 2 + 1).unwrap_or("");
+        if rt.test {
+            rt.sent.push(url + " " + __json_quote(body));
+        } else {
+            __eprint("kekkai outbox: POST " + url + " " + __json_quote(body));
+        }
+    }
+    tx.outbox = Vec::new();
+    Ok(())
+}
+
+fn __tx_rollback(t: __Any) {
+    let tx = __Tx::from_any(t);
+    tx.open = false;
+    tx.writes = Map::new();
+    tx.outbox = Vec::new();
+}
+
+fn __tx_finish(t: __Any) {
+    let tx = __Tx::from_any(t);
+    if tx.open {
+        __tx_rollback(t);
+    }
+}
+
+fn __txError_message(e: TxError) -> String {
+    e.message
+}
+
+fn __txError_retryable(e: TxError) -> Bool {
+    e.retryable
+}

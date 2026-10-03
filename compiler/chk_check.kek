@@ -109,6 +109,10 @@ struct Chk {
     rets: Vec<ChkRet>,
     cur: ChkFunc,
     builtins: ChkBuiltins,
+    // prelude mode: the program includes the runtime prelude, which may
+    // define Response / TxError / NetError / IoError as structs and use
+    // the `__` intrinsics
+    prelude: Bool,
 }
 
 struct ChkResult {
@@ -144,8 +148,18 @@ fn chk_dummy_func() -> ChkFunc {
     }
 }
 
-// chk_check type-checks a parsed program (types.Check in Go).
+// chk_check type-checks a parsed program.
 fn chk_check(f: AstFile) -> ChkResult {
+    chk_check_mode(f, false)
+}
+
+// chk_check_prelude type-checks a program together with the runtime
+// prelude (see lib/prelude).
+fn chk_check_prelude(f: AstFile) -> ChkResult {
+    chk_check_mode(f, true)
+}
+
+fn chk_check_mode(f: AstFile, prelude: Bool) -> ChkResult {
     let info = ChkInfo {
         funcs: Map::new(),
         func_list: Vec::new(),
@@ -175,8 +189,12 @@ fn chk_check(f: AstFile) -> ChkResult {
         rets: Vec::new(),
         cur: chk_dummy_func(),
         builtins: chk_new_builtins(),
+        prelude: prelude,
     };
     chk_declare(c, f);
+    if prelude {
+        chk_add_intrinsics(c);
+    }
     for fd in f.funcs {
         match c.info.funcs.get(fd.name) {
             Some(fun) => {
@@ -236,9 +254,15 @@ fn chk_reserved(n: String) -> Bool {
         || n == "None"
 }
 
+// chk_prelude_type reports the builtin types that the prelude defines as
+// structs.
+fn chk_prelude_type(n: String) -> Bool {
+    n == "Response" || n == "TxError" || n == "NetError" || n == "IoError"
+}
+
 fn chk_declare(c: Chk, f: AstFile) {
     for sd in f.structs {
-        if chk_reserved(sd.name)
+        if (chk_reserved(sd.name) && !(c.prelude && chk_prelude_type(sd.name)))
             || c.info.structs.contains(sd.name)
             || c.info.enums.contains(sd.name) {
             chk_errorf(c, sd.pos, "type `" + sd.name + "` is already defined");
@@ -473,7 +497,7 @@ fn chk_handler_sig(c: Chk, fun: ChkFunc) {
             );
         }
     }
-    if !ty_is_opaque(fun.result, "Response") {
+    if !ty_is_named(fun.result, "Response") {
         chk_errorf(
             c,
             fun.decl.pos,
@@ -617,11 +641,21 @@ fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 }
                 return Ty::Map(chk_ty_at(a, 0), chk_ty_at(a, 1));
             }
+            if c.prelude && chk_prelude_type(n) {
+                match c.info.structs.get(n) {
+                    Some(st) => {
+                        chk_type_args(c, te, 0);
+                        return Ty::Struct(st);
+                    }
+                    None => {}
+                }
+            }
             if n == "Request"
                 || n == "Response"
                 || n == "TxError"
                 || n == "NetError"
-                || n == "IoError" {
+                || n == "IoError"
+                || (c.prelude && (n == "__Any" || n == "__Chars")) {
                 chk_type_args(c, te, 0);
                 return Ty::Opaque(n);
             }

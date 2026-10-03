@@ -3,7 +3,7 @@
 // Byte buffers are Vec<Int> (one byte per element). Value types are
 // encoded as one Int: a non-negative value is `(ref null <typeidx>)`, and
 // a negative value is the negated type code:
-//   -127 i32, -126 i64, -111 externref, -110 anyref, -107 structref
+//   -127 i32, -126 i64, -119 i16 (packed storage), -110 anyref, -107 structref
 
 fn wasm_i32_t() -> Int {
     -127
@@ -105,6 +105,21 @@ fn cg_get(c: Vec<Int>, l: Int) {
 fn cg_set(c: Vec<Int>, l: Int) {
     c.push(33); // local.set
     wasm_u32(c, l);
+}
+
+fn cg_tee(c: Vec<Int>, l: Int) {
+    c.push(34); // local.tee
+    wasm_u32(c, l);
+}
+
+fn cg_global_get(c: Vec<Int>, g: Int) {
+    c.push(35);
+    wasm_u32(c, g);
+}
+
+fn cg_global_set(c: Vec<Int>, g: Int) {
+    c.push(36);
+    wasm_u32(c, g);
 }
 
 fn cg_call(c: Vec<Int>, f: Int) {

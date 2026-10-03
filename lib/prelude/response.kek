@@ -1,0 +1,57 @@
+// Response values (see js/kekkai_runtime.js for how Workers send them).
+
+fn __resp(status: Int, body: String, has_body: Bool, content_type: String) -> Response {
+    let h = Vec::new();
+    if content_type != "" {
+        h.push("content-type");
+        h.push(content_type);
+    }
+    Response { status: status, body: body, has_body: has_body, headers: h }
+}
+
+fn __response_text(status: Int, body: String) -> Response {
+    __resp(status, body, true, "text/plain; charset=utf-8")
+}
+
+fn __response_json(status: Int, body: String) -> Response {
+    __resp(status, body, true, "application/json")
+}
+
+fn __response_empty(status: Int) -> Response {
+    __resp(status, "", false, "")
+}
+
+fn __response_no_content() -> Response {
+    __resp(204, "", false, "")
+}
+
+fn __response_not_found() -> Response {
+    __resp(404, "not found", true, "text/plain; charset=utf-8")
+}
+
+fn __response_bad_request(m: String) -> Response {
+    __resp(400, m, true, "text/plain; charset=utf-8")
+}
+
+// A copy of r with header k set to v (an existing header of the same name
+// keeps its position).
+fn __response_with_header(r: Response, k: String, v: String) -> Response {
+    let h = Vec::new();
+    let mut found = false;
+    let n = r.headers.len() / 2;
+    for i in 0..n {
+        let name = r.headers.get(i * 2).unwrap_or("");
+        h.push(name);
+        if name == k {
+            h.push(v);
+            found = true;
+        } else {
+            h.push(r.headers.get(i * 2 + 1).unwrap_or(""));
+        }
+    }
+    if !found {
+        h.push(k);
+        h.push(v);
+    }
+    Response { status: r.status, body: r.body, has_body: r.has_body, headers: h }
+}

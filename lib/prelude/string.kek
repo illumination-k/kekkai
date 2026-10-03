@@ -1,0 +1,608 @@
+// Strings are immutable arrays of UTF-16 code units (`__Chars` is the same
+// array, used for building). Lengths and indices count code units.
+
+// ---- building ----
+
+struct __Sb {
+    buf: __Chars,
+    n: Int,
+}
+
+fn __sb_new(cap: Int) -> __Sb {
+    __Sb { buf: __Chars::new(if cap < 8 { 8 } else { cap }), n: 0 }
+}
+
+fn __sb_reserve(b: __Sb, extra: Int) {
+    let need = b.n + extra;
+    let cap = b.buf.len();
+    if need <= cap {
+        return;
+    }
+    let mut c = cap * 2;
+    if c < need {
+        c = need;
+    }
+    let nb = __Chars::new(c);
+    nb.copy(0, b.buf, 0, b.n);
+    b.buf = nb;
+}
+
+fn __sb_char(b: __Sb, c: Int) {
+    __sb_reserve(b, 1);
+    b.buf.set(b.n, c);
+    b.n = b.n + 1;
+}
+
+fn __sb_str(b: __Sb, s: String) {
+    let x = __Chars::of(s);
+    let k = x.len();
+    __sb_reserve(b, k);
+    b.buf.copy(b.n, x, 0, k);
+    b.n = b.n + k;
+}
+
+fn __sb_ascii(b: __Sb, s: String) {
+    __sb_str(b, s)
+}
+
+fn __sb_finish(b: __Sb) -> String {
+    __chars_prefix(b.buf, b.n)
+}
+
+// __chars_prefix returns the first n code units of c as a new string.
+fn __chars_prefix(c: __Chars, n: Int) -> String {
+    if n == c.len() {
+        return c.freeze();
+    }
+    let r = __Chars::new(n);
+    r.copy(0, c, 0, n);
+    r.freeze()
+}
+
+fn __str_sub(s: String, a: Int, b: Int) -> String {
+    let x = __Chars::of(s);
+    let r = __Chars::new(b - a);
+    r.copy(0, x, a, b - a);
+    r.freeze()
+}
+
+// ---- operators ----
+
+fn __string_eq(a: String, b: String) -> Bool {
+    let x = __Chars::of(a);
+    let y = __Chars::of(b);
+    let n = x.len();
+    if n != y.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < n {
+        if x.get(i) != y.get(i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn __string_concat(a: String, b: String) -> String {
+    let x = __Chars::of(a);
+    let y = __Chars::of(b);
+    let n = x.len();
+    let k = y.len();
+    if n == 0 {
+        return b;
+    }
+    if k == 0 {
+        return a;
+    }
+    let r = __Chars::new(n + k);
+    r.copy(0, x, 0, n);
+    r.copy(n, y, 0, k);
+    r.freeze()
+}
+
+// __str_less orders strings by UTF-16 code units.
+fn __str_less(a: String, b: String) -> Bool {
+    let x = __Chars::of(a);
+    let y = __Chars::of(b);
+    let n = x.len();
+    let k = y.len();
+    let mut i = 0;
+    while i < n && i < k {
+        let p = x.get(i);
+        let q = y.get(i);
+        if p != q {
+            return p < q;
+        }
+        i = i + 1;
+    }
+    n < k
+}
+
+// ---- Int and Bool ----
+
+fn __int_min_value() -> Int {
+    0 - 9223372036854775807 - 1
+}
+
+fn __int_to_string(x: Int) -> String {
+    if x == 0 {
+        return "0";
+    }
+    // digits of a non-positive number (so that MIN works)
+    let mut v = if x < 0 { x } else { 0 - x };
+    let tmp = __Chars::new(20);
+    let mut i = 20;
+    while v != 0 {
+        i = i - 1;
+        tmp.set(i, 48 - v % 10);
+        v = v / 10;
+    }
+    let neg = if x < 0 { 1 } else { 0 };
+    let r = __Chars::new(20 - i + neg);
+    if neg == 1 {
+        r.set(0, 45);
+    }
+    r.copy(neg, tmp, i, 20 - i);
+    r.freeze()
+}
+
+fn __int_abs(x: Int) -> Int {
+    if x < 0 { 0 - x } else { x }
+}
+
+fn __int_min(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn __int_max(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn __bool_to_string(b: Bool) -> String {
+    if b { "true" } else { "false" }
+}
+
+// ---- String ----
+
+fn __string_len(s: String) -> Int {
+    __Chars::of(s).len()
+}
+
+// `^[+-]?[0-9]+$` within the range of Int, else None.
+fn __string_parse_int(s: String) -> Option<Int> {
+    let x = __Chars::of(s);
+    let n = x.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 && (x.get(0) == 45 || x.get(0) == 43) {
+        neg = x.get(0) == 45;
+        i = 1;
+    }
+    if i >= n {
+        return None;
+    }
+    let min = __int_min_value();
+    // accumulate negatively: |MIN| > MAX
+    let mut acc = 0;
+    while i < n {
+        let c = x.get(i);
+        if c < 48 || c > 57 {
+            return None;
+        }
+        let d = c - 48;
+        if acc < min / 10 {
+            return None;
+        }
+        acc = acc * 10;
+        if acc < min + d {
+            return None;
+        }
+        acc = acc - d;
+        i = i + 1;
+    }
+    if neg {
+        return Some(acc);
+    }
+    if acc == min {
+        return None;
+    }
+    Some(0 - acc)
+}
+
+fn __str_index_from(x: __Chars, y: __Chars, from: Int) -> Int {
+    let n = x.len();
+    let k = y.len();
+    let mut i = from;
+    while i + k <= n {
+        let mut j = 0;
+        while j < k && x.get(i + j) == y.get(j) {
+            j = j + 1;
+        }
+        if j == k {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn __string_contains(s: String, t: String) -> Bool {
+    __str_index_from(__Chars::of(s), __Chars::of(t), 0) >= 0
+}
+
+fn __string_index_of(s: String, t: String) -> Option<Int> {
+    let i = __str_index_from(__Chars::of(s), __Chars::of(t), 0);
+    if i < 0 { None } else { Some(i) }
+}
+
+fn __string_starts_with(s: String, t: String) -> Bool {
+    let x = __Chars::of(s);
+    let y = __Chars::of(t);
+    let k = y.len();
+    if k > x.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < k {
+        if x.get(i) != y.get(i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn __string_ends_with(s: String, t: String) -> Bool {
+    let x = __Chars::of(s);
+    let y = __Chars::of(t);
+    let k = y.len();
+    let off = x.len() - k;
+    if off < 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < k {
+        if x.get(off + i) != y.get(i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// JavaScript WhiteSpace and LineTerminator.
+fn __is_space(c: Int) -> Bool {
+    (c >= 9 && c <= 13)
+        || c == 32
+        || c == 160
+        || c == 5760
+        || (c >= 8192 && c <= 8202)
+        || c == 8232
+        || c == 8233
+        || c == 8239
+        || c == 8287
+        || c == 12288
+        || c == 65279
+}
+
+fn __string_trim(s: String) -> String {
+    let x = __Chars::of(s);
+    let mut a = 0;
+    let mut b = x.len();
+    while a < b && __is_space(x.get(a)) {
+        a = a + 1;
+    }
+    while b > a && __is_space(x.get(b - 1)) {
+        b = b - 1;
+    }
+    if a == 0 && b == x.len() {
+        return s;
+    }
+    __str_sub(s, a, b)
+}
+
+// ASCII-only case mapping.
+fn __str_map_case(s: String, lo: Int, hi: Int, delta: Int) -> String {
+    let x = __Chars::of(s);
+    let n = x.len();
+    let r = __Chars::new(n);
+    let mut i = 0;
+    while i < n {
+        let c = x.get(i);
+        if c >= lo && c <= hi {
+            r.set(i, c + delta);
+        } else {
+            r.set(i, c);
+        }
+        i = i + 1;
+    }
+    r.freeze()
+}
+
+fn __string_to_upper(s: String) -> String {
+    __str_map_case(s, 97, 122, -32)
+}
+
+fn __string_to_lower(s: String) -> String {
+    __str_map_case(s, 65, 90, 32)
+}
+
+fn __string_char_at(s: String, i: Int) -> Option<Int> {
+    let x = __Chars::of(s);
+    if i >= 0 && i < x.len() { Some(x.get(i)) } else { None }
+}
+
+// Indices are clamped to [0, len].
+fn __string_slice(s: String, a: Int, b: Int) -> String {
+    let n = __Chars::of(s).len();
+    let lo = if a < 0 { 0 } else if a > n { n } else { a };
+    let hi = if b < 0 { 0 } else if b > n { n } else { b };
+    if hi <= lo {
+        return "";
+    }
+    if lo == 0 && hi == n {
+        return s;
+    }
+    __str_sub(s, lo, hi)
+}
+
+fn __is_high(c: Int) -> Bool {
+    c >= 55296 && c < 56320
+}
+
+fn __is_low(c: Int) -> Bool {
+    c >= 56320 && c < 57344
+}
+
+// An empty separator splits into code points.
+fn __string_split(s: String, sep: String) -> Vec<String> {
+    let out = Vec::new();
+    let x = __Chars::of(s);
+    let y = __Chars::of(sep);
+    let n = x.len();
+    let k = y.len();
+    if k == 0 {
+        let mut i = 0;
+        while i < n {
+            let mut w = 1;
+            if __is_high(x.get(i)) && i + 1 < n && __is_low(x.get(i + 1)) {
+                w = 2;
+            }
+            out.push(__str_sub(s, i, i + w));
+            i = i + w;
+        }
+        return out;
+    }
+    let mut start = 0;
+    while true {
+        let j = __str_index_from(x, y, start);
+        if j < 0 {
+            break;
+        }
+        out.push(__str_sub(s, start, j));
+        start = j + k;
+    }
+    out.push(__str_sub(s, start, n));
+    out
+}
+
+fn __string_replace(s: String, a: String, b: String) -> String {
+    if __Chars::of(a).len() == 0 {
+        return s;
+    }
+    __string_split(s, a).join(b)
+}
+
+fn __string_from_char(c: Int) -> String {
+    let r = __Chars::new(1);
+    r.set(0, c.bit_and(65535));
+    r.freeze()
+}
+
+// ---- UTF-8 ----
+
+// __utf8_each calls the encoder on every code point of s: lone surrogates
+// become U+FFFD.
+fn __code_point_at(x: __Chars, i: Int, n: Int) -> Int {
+    let c = x.get(i);
+    if __is_high(c) && i + 1 < n && __is_low(x.get(i + 1)) {
+        return 65536 + (c - 55296) * 1024 + (x.get(i + 1) - 56320);
+    }
+    if __is_high(c) || __is_low(c) {
+        return 65533;
+    }
+    c
+}
+
+fn __utf8_len(cp: Int) -> Int {
+    if cp < 128 {
+        1
+    } else if cp < 2048 {
+        2
+    } else if cp < 65536 {
+        3
+    } else {
+        4
+    }
+}
+
+fn __string_to_bytes(s: String) -> Vec<Int> {
+    let out = Vec::new();
+    let x = __Chars::of(s);
+    let n = x.len();
+    let mut i = 0;
+    while i < n {
+        let cp = __code_point_at(x, i, n);
+        i = i + if cp >= 65536 { 2 } else { 1 };
+        if cp < 128 {
+            out.push(cp);
+        } else if cp < 2048 {
+            out.push(192 + cp.shr(6));
+            out.push(128 + cp.bit_and(63));
+        } else if cp < 65536 {
+            out.push(224 + cp.shr(12));
+            out.push(128 + cp.shr(6).bit_and(63));
+            out.push(128 + cp.bit_and(63));
+        } else {
+            out.push(240 + cp.shr(18));
+            out.push(128 + cp.shr(12).bit_and(63));
+            out.push(128 + cp.shr(6).bit_and(63));
+            out.push(128 + cp.bit_and(63));
+        }
+    }
+    out
+}
+
+// __Utf8Dec is the WHATWG UTF-8 decoder: invalid sequences become U+FFFD
+// (maximal subparts).
+struct __Utf8Dec {
+    sb: __Sb,
+    needed: Int,
+    seen: Int,
+    cp: Int,
+    lower: Int,
+    upper: Int,
+}
+
+fn __utf8_dec_new(cap: Int) -> __Utf8Dec {
+    __Utf8Dec { sb: __sb_new(cap), needed: 0, seen: 0, cp: 0, lower: 128, upper: 191 }
+}
+
+fn __utf8_emit(d: __Utf8Dec, cp: Int) {
+    if cp >= 65536 {
+        let w = cp - 65536;
+        __sb_char(d.sb, 55296 + w.shr(10));
+        __sb_char(d.sb, 56320 + w.bit_and(1023));
+    } else {
+        __sb_char(d.sb, cp);
+    }
+}
+
+fn __utf8_byte(d: __Utf8Dec, b: Int) {
+    if d.needed == 0 {
+        if b <= 127 {
+            __sb_char(d.sb, b);
+        } else if b >= 194 && b <= 223 {
+            d.needed = 1;
+            d.cp = b.bit_and(31);
+        } else if b >= 224 && b <= 239 {
+            d.needed = 2;
+            d.cp = b.bit_and(15);
+            if b == 224 {
+                d.lower = 160;
+            }
+            if b == 237 {
+                d.upper = 159;
+            }
+        } else if b >= 240 && b <= 244 {
+            d.needed = 3;
+            d.cp = b.bit_and(7);
+            if b == 240 {
+                d.lower = 144;
+            }
+            if b == 244 {
+                d.upper = 143;
+            }
+        } else {
+            __sb_char(d.sb, 65533);
+        }
+        return;
+    }
+    if b < d.lower || b > d.upper {
+        d.needed = 0;
+        d.seen = 0;
+        d.cp = 0;
+        d.lower = 128;
+        d.upper = 191;
+        __sb_char(d.sb, 65533);
+        // reprocess this byte from the initial state
+        __utf8_byte(d, b);
+        return;
+    }
+    d.lower = 128;
+    d.upper = 191;
+    d.cp = d.cp * 64 + b.bit_and(63);
+    d.seen = d.seen + 1;
+    if d.seen == d.needed {
+        __utf8_emit(d, d.cp);
+        d.needed = 0;
+        d.seen = 0;
+        d.cp = 0;
+    }
+}
+
+fn __utf8_dec_finish(d: __Utf8Dec) -> String {
+    if d.needed != 0 {
+        __sb_char(d.sb, 65533);
+    }
+    __sb_finish(d.sb)
+}
+
+fn __string_from_bytes(v: Vec<Int>) -> String {
+    let d = __utf8_dec_new(v.len());
+    let n = v.len();
+    let mut i = 0;
+    // a leading byte order mark is removed
+    if n >= 3
+        && v.get(0).unwrap_or(0).bit_and(255) == 239
+        && v.get(1).unwrap_or(0).bit_and(255) == 187
+        && v.get(2).unwrap_or(0).bit_and(255) == 191 {
+        i = 3;
+    }
+    while i < n {
+        __utf8_byte(d, v.get(i).unwrap_or(0).bit_and(255));
+        i = i + 1;
+    }
+    __utf8_dec_finish(d)
+}
+
+// ---- JSON strings ----
+
+fn __hex_digit(d: Int) -> String {
+    "0123456789abcdef".slice(d, d + 1)
+}
+
+// __json_quote is JSON.stringify for strings.
+fn __json_quote(s: String) -> String {
+    let b = __sb_new(__string_len(s) + 2);
+    __sb_char(b, 34);
+    let x = __Chars::of(s);
+    let n = x.len();
+    let mut i = 0;
+    while i < n {
+        let c = x.get(i);
+        if c == 34 {
+            __sb_str(b, "\\\"");
+        } else if c == 92 {
+            __sb_str(b, "\\\\");
+        } else if c == 10 {
+            __sb_str(b, "\\n");
+        } else if c == 13 {
+            __sb_str(b, "\\r");
+        } else if c == 9 {
+            __sb_str(b, "\\t");
+        } else if c == 8 {
+            __sb_str(b, "\\b");
+        } else if c == 12 {
+            __sb_str(b, "\\f");
+        } else if c < 32
+            || (__is_high(c) && !(i + 1 < n && __is_low(x.get(i + 1))))
+            || (__is_low(c) && !(i > 0 && __is_high(x.get(i - 1)))) {
+            __sb_str(
+                b,
+                "\\u"
+                    + __hex_digit(c.shr(12).bit_and(15))
+                    + __hex_digit(c.shr(8).bit_and(15))
+                    + __hex_digit(c.shr(4).bit_and(15))
+                    + __hex_digit(c.bit_and(15)),
+            );
+        } else {
+            __sb_char(b, c);
+        }
+        i = i + 1;
+    }
+    __sb_char(b, 34);
+    __sb_finish(b)
+}

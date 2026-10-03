@@ -1,27 +1,8 @@
 // Collections.
 //
 // Vec<T> is a struct { len: i32, data: (ref null (array (mut T))) } with
-// amortised doubling, implemented entirely in wasm. Map<K, V> is a JS Map
-// held as an externref and manipulated through host imports.
-
-fn wasm_add_collection_imports(m: WasmMod) {
-    let i32 = wasm_i32_t();
-    let i64 = wasm_i64_t();
-    let ext = wasm_extern_t();
-    wasm_add_import(m, "arr_new", wasm_sig(wasm_v0(), wasm_v1(ext)), false);
-    wasm_add_import(m, "arr_len", wasm_sig(wasm_v1(ext), wasm_v1(i32)), false);
-    wasm_add_import(m, "arr_get", wasm_sig(wasm_v2(ext, i32), wasm_v1(ext)), false);
-    wasm_add_import(m, "arr_push", wasm_sig(wasm_v2(ext, ext), wasm_v0()), false);
-    wasm_add_import(m, "box_i64", wasm_sig(wasm_v1(i64), wasm_v1(ext)), false);
-    wasm_add_import(m, "box_i32", wasm_sig(wasm_v1(i32), wasm_v1(ext)), false);
-    wasm_add_import(m, "map_new", wasm_sig(wasm_v0(), wasm_v1(ext)), false);
-    wasm_add_import(m, "map_len", wasm_sig(wasm_v1(ext), wasm_v1(i64)), false);
-    wasm_add_import(m, "map_keys", wasm_sig(wasm_v1(ext), wasm_v1(ext)), false);
-    wasm_add_import(m, "map_get", wasm_sig(wasm_v2(ext, ext), wasm_v1(ext)), false);
-    wasm_add_import(m, "map_insert", wasm_sig(wasm_v3(ext, ext, ext), wasm_v0()), false);
-    wasm_add_import(m, "map_contains", wasm_sig(wasm_v2(ext, ext), wasm_v1(i32)), false);
-    wasm_add_import(m, "map_remove", wasm_sig(wasm_v2(ext, ext), wasm_v0()), false);
-}
+// amortised doubling, implemented entirely in wasm. Map<K, V> is the
+// prelude's __Map (lib/prelude/map.kek); values are boxed into anyref.
 
 fn wasm_is_collection_op(name: String) -> Bool {
     name.starts_with("vec.") || name.starts_with("map.")
@@ -31,47 +12,26 @@ fn wasm_is_vec(m: WasmMod, t: IrTy) -> Bool {
     t.kind == "agg" && wasm_td(m, t.agg).coll == "vec"
 }
 
-// wasm_host_param is the import parameter type for an IR value passed to
-// the JS host: Vec values are converted to JS arrays.
-fn wasm_host_param(m: WasmMod, t: IrTy) -> Int {
-    if wasm_is_vec(m, t) {
-        return wasm_extern_t();
-    }
-    wasm_val(m, t)
-}
-
-// wasm_to_host converts the wasm value on the stack (of IR type t) into its
-// JS representation.
-fn wasm_to_host(m: WasmMod, c: Vec<Int>, t: IrTy) {
-    if wasm_is_vec(m, t) {
-        cg_call(c, wasm_vec_to_host_func(m, t.agg));
-    }
-}
-
-// wasm_box converts the value on the stack into an externref for storage
-// in a JS container; wasm_unbox is its inverse.
+// wasm_box converts the value on the stack into an anyref for storage in
+// a map; wasm_unbox is its inverse.
 fn wasm_box(m: WasmMod, c: Vec<Int>, t: IrTy) {
     if t.kind == "int" {
-        cg_call(c, wasm_imp(m, "box_i64"));
+        cg_struct_new(c, m.box_t);
     } else if t.kind == "bool" || t.kind == "unit" {
-        cg_call(c, wasm_imp(m, "box_i32"));
-    } else if t.kind == "agg" {
-        if wasm_td(m, t.agg).coll != "map" {
-            cg_gc(c, 27); // extern.convert_any
-        }
+        cg_op(c, 173); // i64.extend_i32_u
+        cg_struct_new(c, m.box_t);
     }
 }
 
 fn wasm_unbox(m: WasmMod, c: Vec<Int>, t: IrTy) {
-    if t.kind == "int" {
-        cg_call(c, wasm_imp(m, "to_i64"));
-    } else if t.kind == "bool" || t.kind == "unit" {
-        cg_call(c, wasm_imp(m, "to_i32"));
-    } else if t.kind == "agg" {
-        if wasm_td(m, t.agg).coll != "map" {
-            cg_gc(c, 26); // any.convert_extern
-            cg_cast_null(c, wasm_at(m.agg_type, t.agg));
+    if t.kind == "int" || t.kind == "bool" || t.kind == "unit" {
+        cg_cast_null(c, m.box_t);
+        cg_struct_get(c, m.box_t, 0);
+        if t.kind != "int" {
+            cg_op(c, 167); // i32.wrap_i64
         }
+    } else if t.kind != "ext" || t.ext == "__Chars" {
+        cg_cast_null(c, wasm_val(m, t));
     }
 }
 
@@ -107,8 +67,8 @@ fn wasm_vec_to_host_func(m: WasmMod, agg: Int) -> Int {
     let d = wasm_helper_begin(
         m,
         name,
-        wasm_sig(wasm_v1(vt), wasm_v1(wasm_extern_t())),
-        wasm_v2(wasm_extern_t(), wasm_i32_t()),
+        wasm_sig(wasm_v1(vt), wasm_v1(wasm_any_t())),
+        wasm_v2(wasm_any_t(), wasm_i32_t()),
     );
     let c = d.body;
     cg_call(c, wasm_imp(m, "arr_new"));
@@ -141,17 +101,12 @@ fn wasm_vec_to_host_func(m: WasmMod, agg: Int) -> Int {
     wasm_helper_end(m, d)
 }
 
-// wasm_box_host_elem converts a value to the externref that JS sees in an array.
+// wasm_box_host_elem converts a value to the JS value of an array element.
 fn wasm_box_host_elem(m: WasmMod, c: Vec<Int>, t: IrTy) {
     if t.kind == "int" {
         cg_call(c, wasm_imp(m, "box_i64"));
     } else if t.kind == "bool" || t.kind == "unit" {
         cg_call(c, wasm_imp(m, "box_i32"));
-    } else if t.kind == "agg" {
-        let coll = wasm_td(m, t.agg).coll;
-        if coll != "map" && coll != "vec" {
-            cg_gc(c, 27); // extern.convert_any
-        }
     }
 }
 
@@ -171,7 +126,7 @@ fn wasm_vec_from_host_func(m: WasmMod, agg: Int) -> Int {
     let d = wasm_helper_begin(
         m,
         name,
-        wasm_sig(wasm_v1(wasm_extern_t()), wasm_v1(vt)),
+        wasm_sig(wasm_v1(wasm_any_t()), wasm_v1(vt)),
         wasm_v3(wasm_i32_t(), at, wasm_i32_t()),
     );
     let c = d.body;
@@ -231,40 +186,37 @@ fn cg_coll_op(g: CgGen, ins: IrInstr) {
     let dst_ty = cg_ty(g, ins.dst);
     let name = ins.name;
     if td.coll == "map" {
+        let sfx = if td.key.kind == "string" { "_str" } else { "_int" };
         if name == "map.new" {
-            cg_call(c, wasm_imp(m, "map_new"));
+            cg_i32(c, if td.key.kind == "string" { 1 } else { 0 });
+            cg_call(c, wasm_prelude_func(m, "__map_new"));
         } else if name == "map.insert" {
             cg_arg(g, ins, 0);
             cg_arg(g, ins, 1);
-            wasm_box(m, c, td.key);
             cg_arg(g, ins, 2);
             wasm_box(m, c, td.elem);
-            cg_call(c, wasm_imp(m, "map_insert"));
-            cg_i32(c, 0);
+            cg_call(c, wasm_prelude_func(m, "__map_insert" + sfx));
         } else if name == "map.get" {
             let fname = wasm_map_get_func(m, ins.ty, dst_ty.agg);
             cg_arg(g, ins, 0);
             cg_arg(g, ins, 1);
-            wasm_box(m, c, td.key);
             cg_call(c, fname);
         } else if name == "map.contains" {
             cg_arg(g, ins, 0);
             cg_arg(g, ins, 1);
-            wasm_box(m, c, td.key);
-            cg_call(c, wasm_imp(m, "map_contains"));
+            cg_call(c, wasm_prelude_func(m, "__map_find" + sfx));
+            cg_i64(c, 0);
+            cg_op(c, 89); // i64.ge_s
         } else if name == "map.remove" {
             cg_arg(g, ins, 0);
             cg_arg(g, ins, 1);
-            wasm_box(m, c, td.key);
-            cg_call(c, wasm_imp(m, "map_remove"));
-            cg_i32(c, 0);
+            cg_call(c, wasm_prelude_func(m, "__map_remove" + sfx));
         } else if name == "map.len" {
             cg_arg(g, ins, 0);
-            cg_call(c, wasm_imp(m, "map_len"));
+            cg_call(c, wasm_prelude_func(m, "__map_len"));
         } else if name == "map.keys" {
             cg_arg(g, ins, 0);
-            cg_call(c, wasm_imp(m, "map_keys"));
-            cg_call(c, wasm_vec_from_host_func(m, dst_ty.agg));
+            cg_call(c, wasm_prelude_func(m, "__map_keys" + sfx));
         } else {
             wasm_fail(m, "codegen: unknown map op " + name);
         }
@@ -310,17 +262,12 @@ fn cg_coll_op(g: CgGen, ins: IrInstr) {
         let f = wasm_vec_pop_func(m, ins.ty, dst_ty.agg);
         cg_arg(g, ins, 0);
         cg_call(c, f);
-    } else if name == "vec.join" {
-        let f = wasm_vec_join_func(m, ins.ty);
-        cg_arg(g, ins, 0);
-        cg_arg(g, ins, 1);
-        cg_call(c, f);
     } else {
         wasm_fail(m, "codegen: unknown vec op " + name);
     }
 }
 
-// returns null when absent
+// params: 0 map, 1 key; locals: 2 entry index
 fn wasm_map_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
     let name = "$map_get" + agg.to_string() + "_" + opt.to_string();
     match m.func_idx.get(name) {
@@ -330,22 +277,30 @@ fn wasm_map_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
         None => {}
     }
     let td = wasm_td(m, agg);
-    let ext = wasm_extern_t();
+    let sfx = if td.key.kind == "string" { "_str" } else { "_int" };
     let rt = wasm_at(m.agg_type, opt);
-    let d = wasm_helper_begin(m, name, wasm_sig(wasm_v2(ext, ext), wasm_v1(rt)), wasm_v1(ext));
+    let d = wasm_helper_begin(
+        m,
+        name,
+        wasm_sig(wasm_v2(m.map_t, wasm_val(m, td.key)), wasm_v1(rt)),
+        wasm_v1(wasm_i64_t()),
+    );
     let h = d.body;
     cg_get(h, 0);
     cg_get(h, 1);
-    cg_call(h, wasm_imp(m, "map_get"));
+    cg_call(h, wasm_prelude_func(m, "__map_find" + sfx));
     cg_set(h, 2);
     cg_get(h, 2);
-    cg_call(h, wasm_imp(m, "is_null"));
+    cg_i64(h, 0);
+    cg_op(h, 83); // i64.lt_s
     cg_op(h, 4); // if
     wasm_valtype(h, rt);
     wasm_none(m, h, opt);
     cg_op(h, 5); // else
     cg_i32(h, 1);
+    cg_get(h, 0);
     cg_get(h, 2);
+    cg_call(h, wasm_prelude_func(m, "__map_val"));
     wasm_unbox(m, h, td.elem);
     wasm_some_end(m, h, opt);
     cg_end(h);
@@ -532,62 +487,6 @@ fn wasm_vec_pop_func(m: WasmMod, agg: Int, opt: Int) -> Int {
     wasm_helper_end(m, d)
 }
 
-// params: 0 vec, 1 sep; locals: 2 acc, 3 i
-fn wasm_vec_join_func(m: WasmMod, agg: Int) -> Int {
-    let name = "$vec_join" + agg.to_string();
-    match m.func_idx.get(name) {
-        Some(i) => {
-            return i;
-        }
-        None => {}
-    }
-    let vt = wasm_at(m.agg_type, agg);
-    let at = wasm_at(m.vec_arr, agg);
-    let ext = wasm_extern_t();
-    let d = wasm_helper_begin(
-        m,
-        name,
-        wasm_sig(wasm_v2(vt, ext), wasm_v1(ext)),
-        wasm_v2(ext, wasm_i32_t()),
-    );
-    let h = d.body;
-    cg_i32(h, wasm_lit(m, ""));
-    cg_call(h, wasm_imp(m, "lit"));
-    cg_set(h, 2);
-    cg_open(h, 2); // block
-    cg_open(h, 3); // loop
-    cg_get(h, 3);
-    cg_get(h, 0);
-    cg_struct_get(h, vt, 0);
-    cg_op(h, 79); // i32.ge_u
-    cg_op(h, 13); // br_if
-    wasm_u32(h, 1);
-    cg_get(h, 3);
-    cg_open(h, 4); // if
-    cg_get(h, 2);
-    cg_get(h, 1);
-    cg_call(h, wasm_imp(m, "str_concat"));
-    cg_set(h, 2);
-    cg_end(h);
-    cg_get(h, 2);
-    cg_get(h, 0);
-    cg_struct_get(h, vt, 1);
-    cg_get(h, 3);
-    cg_gc(h, 11); // array.get
-    wasm_u32(h, at);
-    cg_call(h, wasm_imp(m, "str_concat"));
-    cg_set(h, 2);
-    cg_get(h, 3);
-    cg_i32(h, 1);
-    cg_op(h, 106); // i32.add
-    cg_set(h, 3);
-    cg_br(h, 0);
-    cg_end(h);
-    cg_end(h);
-    cg_get(h, 2);
-    wasm_helper_end(m, d)
-}
-
 fn wasm_is_inline_int_op(name: String) -> Bool {
     name == "int.bit_and"
         || name == "int.bit_or"
@@ -597,7 +496,7 @@ fn wasm_is_inline_int_op(name: String) -> Bool {
         || name == "int.ushr"
 }
 
-// cg_int_op emits Int bit operations inline; it reports false for other ops.
+// cg_int_op emits an Int bit operation inline.
 fn cg_int_op(g: CgGen, ins: IrInstr) -> Bool {
     let o = match ins.name {
         "int.bit_and" => 131,

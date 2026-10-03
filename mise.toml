@@ -3,6 +3,8 @@ node = "26.7.0"
 wasm-tools = "1.261.0"
 "github:leanprover/lean4" = "4.34.1"
 "npm:wrangler" = "4.147.0"
+wasmtime = "49.0.2"
+workerd = "1.20261002.1"
 
 [tasks.test]
 description = "Run all tests with Node and ./kek only (bootstrap fixed point, check, run, e2e, adapters, difftest, fmt, workerd, node:test files); args: node tests/run.mjs --help"

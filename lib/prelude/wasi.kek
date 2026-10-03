@@ -1,0 +1,410 @@
+// Command-line programs run on WASI (preview 1). The host preopens the
+// file system root as "/"; relative paths are resolved against $PWD.
+
+// ---- linear memory scratch area ----
+
+fn __mem_reset(rt: __Rt) {
+    rt.brk = rt.base;
+}
+
+fn __mem_ensure(end: Int) {
+    let pages = (end + 65535) / 65536;
+    let have = __Mem::size();
+    if pages > have {
+        __Mem::grow(pages - have);
+    }
+}
+
+// __mem_alloc reserves n bytes (8-aligned) of scratch memory.
+fn __mem_alloc(rt: __Rt, n: Int) -> Int {
+    let a = (rt.brk + 7).bit_and(-8);
+    rt.brk = a + n;
+    __mem_ensure(rt.brk);
+    a
+}
+
+// __mem_put_utf8 writes s as UTF-8 at scratch memory and returns the
+// address; the length is stored at the returned address - 8.
+fn __mem_utf8(rt: __Rt, s: String) -> Int {
+    let x = __Chars::of(s);
+    let n = x.len();
+    let a = __mem_alloc(rt, 8 + n * 3);
+    let mut p = a + 8;
+    let mut i = 0;
+    while i < n {
+        let c = x.get(i);
+        if c < 128 {
+            __Mem::store8(p, c);
+            p = p + 1;
+            i = i + 1;
+        } else {
+            let cp = __code_point_at(x, i, n);
+            i = i + if cp >= 65536 { 2 } else { 1 };
+            if cp < 2048 {
+                __Mem::store8(p, 192 + cp.shr(6));
+                __Mem::store8(p + 1, 128 + cp.bit_and(63));
+                p = p + 2;
+            } else if cp < 65536 {
+                __Mem::store8(p, 224 + cp.shr(12));
+                __Mem::store8(p + 1, 128 + cp.shr(6).bit_and(63));
+                __Mem::store8(p + 2, 128 + cp.bit_and(63));
+                p = p + 3;
+            } else {
+                __Mem::store8(p, 240 + cp.shr(18));
+                __Mem::store8(p + 1, 128 + cp.shr(12).bit_and(63));
+                __Mem::store8(p + 2, 128 + cp.shr(6).bit_and(63));
+                __Mem::store8(p + 3, 128 + cp.bit_and(63));
+                p = p + 4;
+            }
+        }
+    }
+    __Mem::store64(a, p - a - 8);
+    a + 8
+}
+
+fn __mem_len(a: Int) -> Int {
+    __Mem::load64(a - 8)
+}
+
+// __mem_string decodes n bytes of UTF-8 at address a (a byte order mark
+// is kept, like Node's readFile).
+fn __mem_string(a: Int, n: Int) -> String {
+    let d = __utf8_dec_new(n);
+    let mut i = 0;
+    while i < n {
+        let b = __Mem::load8(a + i);
+        if b < 128 && d.needed == 0 {
+            __sb_char(d.sb, b);
+        } else {
+            __utf8_byte(d, b);
+        }
+        i = i + 1;
+    }
+    __utf8_dec_finish(d)
+}
+
+// ---- output ----
+
+fn __write_fd(fd: Int, s: String) {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let p = __mem_utf8(rt, s);
+    let n = __mem_len(p);
+    let iov = __mem_alloc(rt, 16);
+    let out = __mem_alloc(rt, 8);
+    let mut off = 0;
+    while off < n {
+        __Mem::store32(iov, p + off);
+        __Mem::store32(iov + 4, n - off);
+        let e = __Wasi::fd_write(fd, iov, 1, out);
+        if e != 0 {
+            return;
+        }
+        let w = __Mem::load32(out);
+        if w <= 0 {
+            return;
+        }
+        off = off + w;
+    }
+}
+
+fn __print(s: String) {
+    __write_fd(1, s + "\n");
+}
+
+fn __eprint(s: String) {
+    __write_fd(2, s + "\n");
+}
+
+fn __exit(code: Int) {
+    __Wasi::proc_exit(code);
+}
+
+// ---- arguments and environment ----
+
+fn __read_strings(rt: __Rt, count: Int, ptrs: Int, end: Int) -> Vec<String> {
+    let out = Vec::new();
+    for i in 0..count {
+        let p = __Mem::load32(ptrs + i * 4);
+        let mut q = p;
+        while q < end && __Mem::load8(q) != 0 {
+            q = q + 1;
+        }
+        out.push(__mem_string(p, q - p));
+    }
+    out
+}
+
+// __args returns the command-line arguments without the program name.
+fn __args() -> Vec<String> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let sz = __mem_alloc(rt, 16);
+    __Wasi::args_sizes_get(sz, sz + 4);
+    let argc = __Mem::load32(sz);
+    let bytes = __Mem::load32(sz + 4);
+    let ptrs = __mem_alloc(rt, argc * 4 + 4);
+    let buf = __mem_alloc(rt, bytes + 1);
+    __Wasi::args_get(ptrs, buf);
+    let all = __read_strings(rt, argc, ptrs, buf + bytes);
+    let out = Vec::new();
+    for i in 1..all.len() {
+        out.push(all.get(i).unwrap_or(""));
+    }
+    out
+}
+
+fn __env_all(rt: __Rt) -> Vec<String> {
+    __mem_reset(rt);
+    let sz = __mem_alloc(rt, 16);
+    __Wasi::environ_sizes_get(sz, sz + 4);
+    let n = __Mem::load32(sz);
+    let bytes = __Mem::load32(sz + 4);
+    let ptrs = __mem_alloc(rt, n * 4 + 4);
+    let buf = __mem_alloc(rt, bytes + 1);
+    __Wasi::environ_get(ptrs, buf);
+    __read_strings(rt, n, ptrs, buf + bytes)
+}
+
+fn __env_lookup(env: Vec<String>, name: String) -> String {
+    let pre = name + "=";
+    for kv in env {
+        if kv.starts_with(pre) {
+            return kv.slice(pre.len(), kv.len());
+        }
+    }
+    ""
+}
+
+// ---- clock and randomness ----
+
+fn __now_ns(clock: Int) -> Int {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let out = __mem_alloc(rt, 8);
+    if __Wasi::clock_time_get(clock, 1000, out) != 0 {
+        return 0;
+    }
+    __Mem::load64(out)
+}
+
+fn __random_u64() -> Int {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let out = __mem_alloc(rt, 8);
+    __Wasi::random_get(out, 8);
+    __Mem::load64(out)
+}
+
+// ---- paths ----
+
+// __path_abs makes p absolute (against cwd) and normalizes `.` and `..`.
+fn __path_abs(cwd: String, p: String) -> String {
+    let full = if p.starts_with("/") { p } else { cwd + "/" + p };
+    let parts = Vec::new();
+    for seg in full.split("/") {
+        if seg == "" || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            parts.pop();
+        } else {
+            parts.push(seg);
+        }
+    }
+    parts.join("/")
+}
+
+fn __errno_text(e: Int) -> String {
+    match e {
+        2 => "EACCES: permission denied",
+        8 => "EBADF: bad file descriptor",
+        20 => "EEXIST: file already exists",
+        28 => "EINVAL: invalid argument",
+        29 => "EIO: i/o error",
+        31 => "EISDIR: illegal operation on a directory",
+        44 => "ENOENT: no such file or directory",
+        51 => "ENOSPC: no space left on device",
+        54 => "ENOTDIR: not a directory",
+        55 => "ENOTEMPTY: directory not empty",
+        63 => "EPERM: operation not permitted",
+        76 => "ENOTCAPABLE: file system access is not permitted",
+        _ => "error " + e.to_string(),
+    }
+}
+
+fn __io_err(e: Int, op: String, path: String) -> IoError {
+    IoError { message: __errno_text(e) + ", " + op + " '" + path + "'" }
+}
+
+// the root preopen
+fn __root_fd() -> Int {
+    3
+}
+
+// __open opens path (relative to the root preopen) with the given rights
+// and returns the fd, or -errno.
+fn __open(rt: __Rt, path: String, oflags: Int, rights: Int) -> Int {
+    let rel = __path_abs(rt.cwd, path);
+    let rp = __mem_utf8(rt, if rel == "" { "." } else { rel });
+    let out = __mem_alloc(rt, 8);
+    let e = __Wasi::path_open(__root_fd(), 1, rp, __mem_len(rp), oflags, rights, rights, 0, out);
+    if e != 0 {
+        return 0 - e;
+    }
+    __Mem::load32(out)
+}
+
+// ---- &Fs ----
+
+fn __fs_read(fs: __Any, path: String) -> Result<String, IoError> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    // fd_read | fd_seek
+    let fd = __open(rt, path, 0, 6);
+    if fd < 0 {
+        return Err(__io_err(0 - fd, "open", path));
+    }
+    let iov = __mem_alloc(rt, 16);
+    let nread = __mem_alloc(rt, 8);
+    let mut cap = 65536;
+    let mut buf = __mem_alloc(rt, cap);
+    let mut len = 0;
+    while true {
+        if len == cap {
+            // move to a buffer twice as large at the end of the scratch area
+            let nb = __mem_alloc(rt, cap * 2);
+            for i in 0..len {
+                __Mem::store8(nb + i, __Mem::load8(buf + i));
+            }
+            buf = nb;
+            cap = cap * 2;
+        }
+        __Mem::store32(iov, buf + len);
+        __Mem::store32(iov + 4, cap - len);
+        let e = __Wasi::fd_read(fd, iov, 1, nread);
+        if e != 0 {
+            __Wasi::fd_close(fd);
+            return Err(__io_err(e, "read", path));
+        }
+        let k = __Mem::load32(nread);
+        if k == 0 {
+            break;
+        }
+        len = len + k;
+    }
+    __Wasi::fd_close(fd);
+    Ok(__mem_string(buf, len))
+}
+
+fn __write_all(rt: __Rt, fd: Int, p: Int, n: Int) -> Int {
+    let iov = __mem_alloc(rt, 16);
+    let out = __mem_alloc(rt, 8);
+    let mut off = 0;
+    while off < n {
+        __Mem::store32(iov, p + off);
+        __Mem::store32(iov + 4, n - off);
+        let e = __Wasi::fd_write(fd, iov, 1, out);
+        if e != 0 {
+            return e;
+        }
+        off = off + __Mem::load32(out);
+    }
+    0
+}
+
+fn __fs_write_mem(rt: __Rt, path: String, p: Int, n: Int) -> Result<(), IoError> {
+    // O_CREAT | O_TRUNC, fd_write
+    let fd = __open(rt, path, 9, 64);
+    if fd < 0 {
+        return Err(__io_err(0 - fd, "open", path));
+    }
+    let e = __write_all(rt, fd, p, n);
+    __Wasi::fd_close(fd);
+    if e != 0 {
+        return Err(__io_err(e, "write", path));
+    }
+    Ok(())
+}
+
+fn __fs_write(fs: __Any, path: String, content: String) -> Result<(), IoError> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let p = __mem_utf8(rt, content);
+    __fs_write_mem(rt, path, p, __mem_len(p))
+}
+
+fn __fs_write_bytes(fs: __Any, path: String, bytes: Vec<Int>) -> Result<(), IoError> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let n = bytes.len();
+    let p = __mem_alloc(rt, n);
+    for i in 0..n {
+        __Mem::store8(p + i, bytes.get(i).unwrap_or(0));
+    }
+    __fs_write_mem(rt, path, p, n)
+}
+
+// Entry names of a directory (without "." and ".."), sorted.
+fn __fs_list(fs: __Any, path: String) -> Result<Vec<String>, IoError> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    // O_DIRECTORY, fd_readdir
+    let fd = __open(rt, path, 2, 16384);
+    if fd < 0 {
+        return Err(__io_err(0 - fd, "scandir", path));
+    }
+    let names = Vec::new();
+    let used = __mem_alloc(rt, 8);
+    let size = 65536;
+    let buf = __mem_alloc(rt, size);
+    let mut cookie = 0;
+    while true {
+        let e = __Wasi::fd_readdir(fd, buf, size, cookie, used);
+        if e != 0 {
+            __Wasi::fd_close(fd);
+            return Err(__io_err(e, "scandir", path));
+        }
+        let n = __Mem::load32(used);
+        let mut off = 0;
+        let mut progressed = false;
+        // dirent: d_next u64, d_ino u64, d_namlen u32, d_type u8, name
+        while off + 24 <= n {
+            let namlen = __Mem::load32(buf + off + 16);
+            if off + 24 + namlen > n {
+                break;
+            }
+            let name = __mem_string(buf + off + 24, namlen);
+            cookie = __Mem::load64(buf + off);
+            progressed = true;
+            if name != "." && name != ".." {
+                names.push(name);
+            }
+            off = off + 24 + namlen;
+        }
+        if n < size || !progressed {
+            break;
+        }
+    }
+    __Wasi::fd_close(fd);
+    __sort_strings(names);
+    Ok(names)
+}
+
+// insertion sort by UTF-16 code units
+fn __sort_strings(v: Vec<String>) {
+    let n = v.len();
+    for i in 1..n {
+        let x = v.get(i).unwrap_or("");
+        let mut j = i;
+        while j > 0 && __str_less(x, v.get(j - 1).unwrap_or("")) {
+            v.set(j, v.get(j - 1).unwrap_or(""));
+            j = j - 1;
+        }
+        v.set(j, x);
+    }
+}
+
+fn __ioError_message(e: IoError) -> String {
+    e.message
+}

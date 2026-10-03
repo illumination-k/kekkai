@@ -1,3 +1,410 @@
 #!/bin/sh
-# Kekkai toolchain launcher (self-hosted compiler on Node). See js/kek.mjs.
-exec node "$(dirname "$0")/js/kek.mjs" "$@"
+# kek: the Kekkai toolchain launcher.
+#
+# The compiler (compiler/, written in Kekkai) is a WasmGC + WASI module run
+# by wasmtime. The compiler that runs is built from the current compiler/
+# sources by the committed bootstrap compiler (bootstrap/kek.wasm) and
+# cached under .kek-cache/stage-<hash>/, keyed by the hash of the
+# bootstrap, the sources, the runtime prelude (lib/prelude) and the
+# wasmtime version. Cache entries are built in a temporary directory and
+# renamed into place, so concurrent launches need no lock.
+#
+#   kek <command> [args...]         run a compiler command (check, ir, build, ...)
+#   kek run <file|dir> [args...]    build a #[main] program and run it
+#   kek test [flags] <file|dir>     run #[test] functions with mock capabilities
+#   KEK_STAGE=bootstrap kek ...     use the bootstrap compiler directly
+#
+# Maintenance:
+#   kek bootstrap-check   rebuild the compiler with itself; require a fixed point
+#   kek bootstrap-update  replace bootstrap/ with the current compiler (after the check)
+set -eu
+
+root=$(cd "$(dirname "$0")" && pwd)
+cache=${KEK_CACHE:-$root/.kek-cache}
+wasmtime=${WASMTIME:-wasmtime}
+wasm_flags="-W gc=y,function-references=y"
+
+die() {
+	echo "$*" >&2
+	exit 1
+}
+
+command -v "$wasmtime" >/dev/null 2>&1 || die "kek: wasmtime not found (install it with: mise install)"
+
+sha() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum | cut -c1-24
+	else
+		shasum -a 256 | cut -c1-24
+	fi
+}
+
+# wasm <module> [args...]: run a WASI module with the file system and the
+# working directory of the caller. Extra flags (e.g. --env) come from
+# $wasm_extra.
+wasm() {
+	_m=$1
+	shift
+	_pre=
+	case $_m in *.cwasm) _pre=--allow-precompiled ;; esac
+	# shellcheck disable=SC2086
+	"$wasmtime" run $wasm_flags $_pre --dir / --env PWD="$PWD" ${wasm_extra:-} "$_m" "$@"
+}
+
+# compile <dir>: precompile <dir>/module.wasm into <dir>/module.cwasm.
+precompile() {
+	# shellcheck disable=SC2086
+	"$wasmtime" compile $wasm_flags "$1/module.wasm" -o "$1/module.cwasm"
+}
+
+sources_hash() {
+	{
+		cat "$root/bootstrap/kek.wasm"
+		"$wasmtime" --version
+		for f in "$root"/compiler/*.kek "$root"/lib/prelude/*.kek; do
+			printf '%s\0' "${f#"$root"/}"
+			cat "$f"
+			printf '\0'
+		done
+	} | sha
+}
+
+# build_compiler <compiler-module> <outdir>: compile compiler/ with the
+# given compiler.
+build_compiler() {
+	mkdir -p "$2"
+	(cd "$root" && wasm "$1" build compiler "$2") || return 1
+	precompile "$2"
+}
+
+bootstrap_module() {
+	echo "$root/bootstrap/kek.wasm"
+}
+
+# current_stage prints the directory of the current compiler.
+current_stage() {
+	if [ "${KEK_STAGE:-}" = bootstrap ]; then
+		echo "$root/bootstrap"
+		return
+	fi
+	_dir=$cache/stage-$(sources_hash)
+	if [ ! -f "$_dir/module.cwasm" ]; then
+		mkdir -p "$cache"
+		# the prelude is embedded in the compiler: regenerate it first
+		(cd "$root" && wasm "$(bootstrap_module)" embed-prelude lib/prelude compiler/prelude_src.kek) >&2
+		_dir=$cache/stage-$(sources_hash)
+		if [ ! -f "$_dir/module.cwasm" ]; then
+			_tmp=$(mktemp -d "$cache/tmp-XXXXXX")
+			build_compiler "$(bootstrap_module)" "$_tmp" >&2 || {
+				rm -rf "$_tmp"
+				die "kek: building the compiler failed"
+			}
+			if [ -e "$_dir" ]; then
+				rm -rf "$_tmp" # lost a race: the entry is already there
+			else
+				mv "$_tmp" "$_dir"
+				# mv moved it inside if another launch won in between
+				rm -rf "${_dir:?}/$(basename "$_tmp")"
+			fi
+		fi
+	fi
+	echo "$_dir"
+}
+
+stage_module() {
+	if [ "$1" = "$root/bootstrap" ]; then
+		echo "$1/kek.wasm"
+	else
+		echo "$1/module.cwasm"
+	fi
+}
+
+# compiler <args...>: run the current compiler.
+compiler() {
+	wasm "$(stage_module "$(current_stage)")" "$@"
+}
+
+bootstrap_check() {
+	_s1=$(current_stage)
+	_s2=$(mktemp -d "${TMPDIR:-/tmp}/kek-stage2-XXXXXX")
+	if ! build_compiler "$_s1/module.cwasm" "$_s2"; then
+		rm -rf "$_s2"
+		echo "bootstrap-check: stage1 failed to build the compiler" >&2
+		return 1
+	fi
+	if cmp -s "$_s1/module.wasm" "$_s2/module.wasm"; then
+		echo "bootstrap-check: fixed point ($(wc -c <"$_s1/module.wasm" | tr -d ' ') bytes)"
+		rm -rf "$_s2"
+		return 0
+	fi
+	rm -rf "$_s2"
+	echo "bootstrap-check: no fixed point: module.wasm differs between stage1 and stage2" >&2
+	return 1
+}
+
+usage() {
+	cat <<'EOF'
+kek — the Kekkai toolchain (self-hosted)
+
+Usage:
+  kek check <file|dir>            type-check (capabilities, effects, transactions)
+  kek ir <file|dir>               print the intermediate representation
+  kek build [-o dir] [-target d1|do] <file|dir>
+                                  compile: a WASI command for #[main], a Worker for #[handler]
+  kek run <file|dir> [args...]    compile a #[main] program and run it
+  kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>
+                                  run the #[test] functions with mock capabilities
+  kek fmt [-w|-check] <paths>     format
+  kek caps [-json] <file|dir>     capabilities (side effects) of each function
+  kek search [-json] '<sig>' [path]
+                                  search functions by type
+
+Compiler internals:
+  kek lex <file> | kek ast <file> token / syntax tree dumps
+  kek test-build <file|dir> <outdir> [-list | -run name...]
+  kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
+
+Maintenance:
+  kek bootstrap-check             rebuild the compiler with itself; require a fixed point
+  kek bootstrap-update            replace bootstrap/ with the current compiler (after the check)
+EOF
+}
+
+# ---- kek build ----
+
+cmd_build() {
+	_out=out
+	_target=d1
+	_path=
+	_n=0
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-o | --o)
+			[ $# -ge 2 ] || die "usage: kek build [-o dir] [-target d1|do] <file|dir>"
+			_out=$2
+			shift
+			;;
+		-o=* | --o=*) _out=${1#*=} ;;
+		-target | --target)
+			[ $# -ge 2 ] || die "usage: kek build [-o dir] [-target d1|do] <file|dir>"
+			_target=$2
+			shift
+			;;
+		-target=* | --target=*) _target=${1#*=} ;;
+		*)
+			_path=$1
+			_n=$((_n + 1))
+			;;
+		esac
+		shift
+	done
+	if [ "$_n" -ne 1 ]; then
+		echo "usage: kek build [-o dir] [-target d1|do] <file|dir>" >&2
+		exit 2
+	fi
+	mkdir -p "$_out"
+	compiler build "$_path" "$_out" -target "$_target" || exit $?
+	if [ -f "$_out/kekkai_meta.js" ]; then
+		cp "$root/js/kekkai_runtime.js" "$_out/kekkai_runtime.js"
+	fi
+	echo "$_path -> $_out ($(wc -c <"$_out/module.wasm" | tr -d ' ') bytes of wasm)"
+}
+
+# ---- kek run ----
+
+cmd_run() {
+	if [ $# -lt 1 ]; then
+		echo "usage: kek run <file|dir> [args...]" >&2
+		exit 2
+	fi
+	_src=$1
+	shift
+	_out=$(mktemp -d "${TMPDIR:-/tmp}/kek-run-XXXXXX")
+	trap 'rm -rf "$_out"' EXIT
+	compiler build "$_src" "$_out" || exit $?
+	if [ -f "$_out/kekkai_meta.js" ]; then
+		die "kek run: $_src is a #[handler] program (run it on Workers: kek build, then wrangler dev)"
+	fi
+	set +e
+	wasm "$_out/module.wasm" "$@"
+	_code=$?
+	set -e
+	exit $_code
+}
+
+# ---- kek test ----
+
+test_usage() {
+	cat >&2 <<'EOF'
+Usage of test:
+  -clock int
+    	fixed time of the mock &Clock (ms since the epoch) (default 1767225600000)
+  -db string
+    	JSON file with the initial contents of the mock &Db store: {"key": "value"}
+  -net string
+    	JSON file of canned &Net responses: {"GET url": "body", "POST url": {"error": "msg"}}
+  -run string
+    	run only tests whose name matches this extended regular expression
+  -seed int
+    	seed of the mock &Random
+EOF
+}
+
+test_usage_error() {
+	echo "$1" >&2
+	test_usage
+	exit 2
+}
+
+is_int64() {
+	printf '%s' "$1" | grep -Eq '^[+-]?(0|[1-9][0-9]*)$' || return 1
+	_d=${1#[+-]}
+	[ ${#_d} -lt 19 ] && return 0
+	[ ${#_d} -gt 19 ] && return 1
+	case $1 in
+	-*) [ "$_d" \< "9223372036854775809" ] ;;
+	*) [ "$_d" \< "9223372036854775808" ] ;;
+	esac
+}
+
+cmd_test() {
+	_run=
+	_seed=0
+	_clock=1767225600000
+	_net=
+	_db=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--) shift; break ;;
+		-?*) ;;
+		*) break ;;
+		esac
+		_name=${1#-}
+		_name=${_name#-}
+		_val=
+		_has=0
+		case $_name in
+		*=*)
+			_val=${_name#*=}
+			_name=${_name%%=*}
+			_has=1
+			;;
+		esac
+		case $_name in
+		h | help) test_usage; exit 0 ;;
+		run | seed | clock | net | db) ;;
+		*) test_usage_error "flag provided but not defined: -$_name" ;;
+		esac
+		if [ $_has -eq 0 ]; then
+			[ $# -ge 2 ] || test_usage_error "flag needs an argument: -$_name"
+			_val=$2
+			shift
+		fi
+		case $_name in
+		seed | clock)
+			is_int64 "$_val" || test_usage_error "invalid value \"$_val\" for flag -$_name: parse error"
+			;;
+		esac
+		case $_name in
+		run) _run=$_val ;;
+		seed) _seed=$_val ;;
+		clock) _clock=$_val ;;
+		net) _net=$_val ;;
+		db) _db=$_val ;;
+		esac
+		shift
+	done
+	[ $# -eq 1 ] || die "kek test: expected exactly one .kek file"
+	_file=$1
+	[ -e "$_file" ] || die "stat $_file: no such file or directory"
+	[ "${_clock#+}" = 0 ] && _clock=1767225600000
+
+	_dir=$(mktemp -d "${TMPDIR:-/tmp}/kek-test-XXXXXX")
+	trap 'rm -rf "$_dir"' EXIT
+	_select=0
+	[ -n "$_run" ] && _select=1
+	if [ $_select -eq 1 ]; then
+		compiler test-build "$_file" "$_dir" -list || exit $?
+	else
+		compiler test-build "$_file" "$_dir" || exit $?
+	fi
+	# errors in the options are reported after the program's diagnostics
+	for _f in "$_net" "$_db"; do
+		[ -z "$_f" ] || [ -f "$_f" ] || die "open $_f: no such file or directory"
+	done
+	if [ -n "$_run" ]; then
+		set +e
+		grep -E -- "$_run" "$_dir/tests.txt" >"$_dir/selected.txt" 2>"$_dir/grep.err"
+		_g=$?
+		set -e
+		[ $_g -le 1 ] || die "kek test: -run: invalid regular expression: $_run"
+	else
+		cp "$_dir/tests.txt" "$_dir/selected.txt"
+	fi
+	_count=$(wc -l <"$_dir/selected.txt" | tr -d ' ')
+	if [ "$_count" -eq 0 ]; then
+		echo "$_file: no tests"
+		exit 0
+	fi
+	if [ $_select -eq 1 ]; then
+		# shellcheck disable=SC2046
+		compiler test-build "$_file" "$_dir" -run $(cat "$_dir/selected.txt") || exit $?
+	fi
+	precompile "$_dir"
+	wasm_extra="--env KEK_TEST=1 --env KEK_TEST_CLOCK=$_clock --env KEK_TEST_SEED=$_seed"
+	[ -z "$_net" ] || wasm_extra="$wasm_extra --env KEK_TEST_NET=$_net"
+	[ -z "$_db" ] || wasm_extra="$wasm_extra --env KEK_TEST_DB=$_db"
+	if [ -n "$_net$_db" ]; then
+		wasm "$_dir/module.cwasm" "" || exit 1
+	fi
+	if [ "$_count" -eq 1 ]; then
+		echo "running 1 test from $_file"
+	else
+		echo "running $_count tests from $_file"
+	fi
+	_passed=0
+	_failed=0
+	while IFS= read -r _t; do
+		set +e
+		wasm "$_dir/module.cwasm" "$_t" 2>"$_dir/stderr"
+		_code=$?
+		set -e
+		if [ $_code -eq 0 ]; then
+			_passed=$((_passed + 1))
+		elif [ $_code -eq 1 ]; then
+			_failed=$((_failed + 1))
+		else
+			_failed=$((_failed + 1))
+			echo "test $_t ... FAILED (trapped)"
+			_trap=$(grep -E 'wasm trap: ' "$_dir/stderr" | sed 's/.*wasm trap: //' | head -n 1)
+			[ -n "$_trap" ] || _trap=$(tail -n 1 "$_dir/stderr")
+			echo "    trap: $_trap"
+		fi
+	done <"$_dir/selected.txt"
+	echo
+	if [ $_failed -eq 0 ]; then
+		echo "test result: ok. $_passed passed; $_failed failed"
+		exit 0
+	fi
+	echo "test result: FAILED. $_passed passed; $_failed failed"
+	exit 1
+}
+
+cmd=${1:-help}
+[ $# -gt 0 ] && shift
+case $cmd in
+bootstrap-check)
+	bootstrap_check
+	;;
+bootstrap-update)
+	bootstrap_check
+	_s1=$(current_stage)
+	cp "$_s1/module.wasm" "$root/bootstrap/kek.wasm"
+	echo "bootstrap/ updated"
+	;;
+build) cmd_build "$@" ;;
+run) cmd_run "$@" ;;
+test) cmd_test "$@" ;;
+help | -h | --help) usage ;;
+*) compiler "$cmd" "$@" ;;
+esac

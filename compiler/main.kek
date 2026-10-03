@@ -11,7 +11,7 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "search" {
         return search_main(args, fs, log);
     }
-    if cmd == "lex" || cmd == "ast" || cmd == "check" || cmd == "ir" || cmd == "build" {
+    if cmd == "prelude-check" || cmd == "lex" || cmd == "ast" || cmd == "check" || cmd == "ir" || cmd == "build" {
         return frontend_main(args, fs, log);
     }
     if cmd == "test-build" {
@@ -20,9 +20,9 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "fmt" {
         return fmt_main(args, fs, log);
     }
-    if cmd == "ir2wasm" {
-        return backend_main(args, fs, log);
+    if cmd == "embed-prelude" {
+        return prelude_embed_main(args, fs, log);
     }
-    log.error("usage: kek-stage1 (lex|ast|check|ir|build|ir2wasm|test-build|fmt) ...");
+    log.error("usage: kek (lex|ast|check|ir|build|test-build|fmt|caps|search|embed-prelude) ...");
     2
 }

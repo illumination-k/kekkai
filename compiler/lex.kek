@@ -316,6 +316,9 @@ fn lex_run(lx: LexState) {
                 lex_advance(lx);
             }
             let word = lx.src.slice(start, lx.uoff);
+            if word.starts_with("__") && lx.file != "" && !lx.file.starts_with("<prelude>") {
+                lex_error(lx, pos, "identifiers starting with `__` are reserved for the runtime");
+            }
             if lex_is_keyword(word) {
                 lex_emit(lx, word, word, pos);
             } else {

@@ -556,7 +556,9 @@ fn parse_postfix(p: ParseState, x0: AstExpr) -> AstExpr {
 }
 
 fn parse_is_upper(s: String) -> Bool {
-    let c = s.char_at(0).unwrap_or(0);
+    // runtime prelude types are spelled `__Name`
+    let t = if s.starts_with("__") { s.slice(2, s.len()) } else { s };
+    let c = t.char_at(0).unwrap_or(0);
     c >= 65 && c <= 90
 }
 

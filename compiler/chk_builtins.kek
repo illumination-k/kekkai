@@ -168,3 +168,99 @@ fn chk_new_builtins() -> ChkBuiltins {
     chk_s(bs, "Response", "bad_request", chk_tys1(s), resp);
     bs
 }
+
+// ---- prelude intrinsics ----
+//
+// Only programs checked together with the runtime prelude see these (the
+// lexer rejects `__` identifiers outside the prelude). Each lowers to a
+// host operation that the code generator emits inline.
+
+fn chk_tys3(a: Ty, b: Ty, c: Ty) -> Vec<Ty> {
+    let v = chk_tys2(a, b);
+    v.push(c);
+    v
+}
+
+fn chk_ints(n: Int) -> Vec<Ty> {
+    let v = Vec::new();
+    for k in 0..n {
+        v.push(ty_int());
+    }
+    v
+}
+
+// chk_wasi_funcs lists the WASI preview 1 functions available to the
+// prelude as `__Wasi::name(...)`: name and arity (every parameter and the
+// result are Int).
+fn chk_wasi_funcs() -> Vec<String> {
+    "args_get:2 args_sizes_get:2 environ_get:2 environ_sizes_get:2 clock_time_get:3 fd_close:1 fd_filestat_get:2 fd_prestat_get:2 fd_prestat_dir_name:3 fd_read:4 fd_readdir:5 fd_write:4 path_open:9 path_create_directory:3 random_get:2 proc_exit:1".split(
+        " ",
+    )
+}
+
+fn chk_add_intrinsics(c: Chk) {
+    let bs = c.builtins;
+    let i = ty_int();
+    let u = ty_unit();
+    let b = ty_bool();
+    let s = ty_string();
+    let any = Ty::Opaque("__Any");
+    let chars = Ty::Opaque("__Chars");
+
+    chk_s(bs, "__Chars", "new", chk_tys1(i), chars);
+    chk_s(bs, "__Chars", "of", chk_tys1(s), chars);
+    chk_m(bs, "__Chars", "len", chk_tys0(), i);
+    chk_m(bs, "__Chars", "get", chk_tys1(i), i);
+    chk_m(bs, "__Chars", "set", chk_tys2(i, i), u);
+    let cp = chk_tys2(i, chars);
+    cp.push(i);
+    cp.push(i);
+    chk_m(bs, "__Chars", "copy", cp, u);
+    chk_m(bs, "__Chars", "freeze", chk_tys0(), s);
+
+    chk_s(bs, "__Int", "rem_u", chk_tys2(i, i), i);
+    chk_s(bs, "__Int", "div_u", chk_tys2(i, i), i);
+    chk_s(bs, "__Int", "lt_u", chk_tys2(i, i), b);
+
+    chk_s(bs, "__Any", "null", chk_tys0(), any);
+    chk_s(bs, "__Any", "is_null", chk_tys1(any), b);
+
+    for w in "8 16 32 64".split(" ") {
+        chk_s(bs, "__Mem", "load" + w, chk_tys1(i), i);
+        chk_s(bs, "__Mem", "store" + w, chk_tys2(i, i), u);
+    }
+    chk_s(bs, "__Mem", "size", chk_tys0(), i);
+    chk_s(bs, "__Mem", "grow", chk_tys1(i), i);
+
+    chk_s(bs, "__Js", "str_len", chk_tys1(any), i);
+    chk_s(bs, "__Js", "str_to_mem", chk_tys2(any, i), u);
+    chk_s(bs, "__Js", "str_from_mem", chk_tys2(i, i), any);
+    chk_s(bs, "__Js", "err_message", chk_tys1(any), any);
+    chk_s(bs, "__Js", "err_retryable", chk_tys1(any), b);
+
+    for w in chk_wasi_funcs() {
+        let parts = w.split(":");
+        let name = parts.get(0).unwrap_or("");
+        let n = parts.get(1).unwrap_or("0").parse_int().unwrap_or(0);
+        chk_s(bs, "__Wasi", name, chk_ints(n), i);
+    }
+
+    // conversions between `__Any` and the prelude's own types
+    for st in c.info.structs.keys() {
+        if st.starts_with("__") || chk_prelude_type(st) {
+            match c.info.structs.get(st) {
+                Some(t) => {
+                    chk_s(bs, st, "from_any", chk_tys1(any), Ty::Struct(t));
+                    chk_s(bs, st, "to_any", chk_tys1(Ty::Struct(t)), any);
+                }
+                None => {}
+            }
+        }
+    }
+    // the runtime state: one instance per program, created on first use
+    // by the prelude function `__rt_new`
+    match c.info.structs.get("__Rt") {
+        Some(t) => chk_s(bs, "__Rt", "get", chk_tys0(), Ty::Struct(t)),
+        None => {}
+    }
+}

@@ -5,12 +5,13 @@
 //   test-build <file-or-dir> <outdir> -run a b ..  build only the named tests
 //
 // Writes <outdir>/tests.json (all discovered tests, in declaration order:
-// [{"name", "caps", "result", "pure"}]) and, when at least one test is
-// selected, <outdir>/module.wasm + kekkai_meta.js of the test program: the
-// sources plus a synthesized `#[handler] fn __kek_test_main` that dispatches
-// on the request path to each selected test. Any #[handler] of the program
-// itself is demoted to a plain function. js/test_runner.mjs drives the
-// result with mock capabilities.
+// [{"name", "caps", "result", "pure"}]), <outdir>/tests.txt (one name per
+// line) and, when at least one test is selected, <outdir>/module.wasm: the
+// sources plus a synthesized `#[main] fn __kek_test_main` that runs the
+// test named by its first argument with mock capabilities
+// (lib/prelude/test.kek). Any #[handler] or #[main] of the program itself
+// is demoted to a plain function. The launcher runs each test in its own
+// process.
 
 struct TestrunTest {
     name: String,
@@ -76,8 +77,14 @@ fn testrun_tests_json(tests: Vec<TestrunTest>) -> String {
     "[" + items.join(",") + "]\n"
 }
 
-// testrun_harness returns the source of the synthesized handler
-// (testrun.Harness; the text is identical).
+fn testrun_kind(t: TestrunTest) -> String {
+    if t.caps.len() == 0 {
+        return "pure: hermetic, cacheable";
+    }
+    "mock " + t.caps.join(", ")
+}
+
+// testrun_harness returns the source of the synthesized #[main].
 fn testrun_harness(tests: Vec<TestrunTest>) -> String {
     let used: Map<String, Bool> = Map::new();
     for t in tests {
@@ -85,38 +92,38 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
             used.insert(c, true);
         }
     }
-    let mut b = "\n// ---- synthesized by kek test ----\n#[handler]\nfn "
+    let mut b = "// synthesized by kek test\n#[main]\nfn "
         + testrun_main_name()
-        + "(__req: Request";
+        + "(__args: Vec<String>";
     for c in "Log Clock Random Db Net".split(" ") {
         if used.get(c).unwrap_or(false) {
             b = b + ", __" + c.to_lower() + ": &" + c;
         }
     }
-    b = b + ") -> Response {\n    let __name = __req.path();\n";
+    b = b + ") -> Int {\n    let __name = __args.get(0).unwrap_or(\"\");\n";
+    b = b + "    if !__test_begin(__name) {\n        return 1;\n    }\n";
+    b = b + "    if __name == \"\" {\n        return 0;\n    }\n";
     for t in tests {
         let args = Vec::new();
         for c in t.caps {
             args.push("__" + c.to_lower());
         }
         let call = t.name + "(" + args.join(", ") + ")";
-        b = b + "    if __name == \"/" + t.name + "\" {\n";
+        let who = json_quote(t.name) + ", " + json_quote(testrun_kind(t));
+        b = b + "    if __name == " + json_quote(t.name) + " {\n";
         if t.result == "bool" {
-            b = b
-                + "        if "
-                + call
-                + " {\n            return Response::text(200, \"\");\n        }\n";
-            b = b + "        return Response::text(500, \"test returned false\");\n";
+            b = b + "        if " + call + " {\n            return __test_ok(" + who + ");\n        }\n";
+            b = b + "        return __test_false(" + who + ");\n";
         } else if t.result == "result" {
             b = b + "        return match " + call + " {\n";
-            b = b + "            Ok(_) => Response::text(200, \"\"),\n";
-            b = b + "            Err(__e) => Response::text(500, __e),\n        };\n";
+            b = b + "            Ok(_) => __test_ok(" + who + "),\n";
+            b = b + "            Err(__e) => __test_err(" + who + ", __e),\n        };\n";
         } else {
-            b = b + "        " + call + ";\n        return Response::text(200, \"\");\n";
+            b = b + "        " + call + ";\n        return __test_ok(" + who + ");\n";
         }
         b = b + "    }\n";
     }
-    b + "    Response::not_found()\n}\n"
+    b + "    __eprint(\"kek test: no test named \" + __name);\n    2\n}\n"
 }
 
 fn testrun_write(fs: &Fs, log: &Log, p: String, text: String) -> Bool {
@@ -161,6 +168,13 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if !testrun_write(fs, log, out_dir + "/tests.json", testrun_tests_json(all)) {
         return 1;
     }
+    let names = Vec::new();
+    for t in all {
+        names.push(t.name + "\n");
+    }
+    if !testrun_write(fs, log, out_dir + "/tests.txt", names.join("")) {
+        return 1;
+    }
     if mode == "-list" {
         return 0;
     }
@@ -185,8 +199,8 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     testrun_build(srcs, tests, out_dir, fs, log)
 }
 
-// testrun_build compiles the sources plus the harness (appended to the
-// last file's source text) with the program's own #[handler] demoted.
+// testrun_build compiles the sources plus the harness with the
+// program's own entry point demoted.
 fn testrun_build(
     srcs: Vec<FeSource>,
     tests: Vec<TestrunTest>,
@@ -194,13 +208,15 @@ fn testrun_build(
     fs: &Fs,
     log: &Log,
 ) -> Int {
-    match srcs.get(srcs.len() - 1) {
-        Some(last) => {
-            last.text = last.text + testrun_harness(tests);
-        }
-        None => {}
+    let all = Vec::new();
+    for s in srcs {
+        all.push(s);
     }
-    let prog = frontend_parse_all(srcs);
+    all.push(FeSource { name: "<prelude>/kek_test_main.kek", text: testrun_harness(tests) });
+    for s in prelude_sources() {
+        all.push(s);
+    }
+    let prog = frontend_parse_all(all);
     if prog.errs.len() > 0 {
         log.error("kek test: internal error in synthesized harness:");
         frontend_print_errors(log, prog.errs);
@@ -212,13 +228,13 @@ fn testrun_build(
         }
         let attrs = Vec::new();
         for a in fd.attrs {
-            if a.name != "handler" {
+            if a.name != "handler" && a.name != "main" {
                 attrs.push(a);
             }
         }
         fd.attrs = attrs;
     }
-    let res = chk_check(prog.file);
+    let res = chk_check_prelude(prog.file);
     if res.errs.len() > 0 {
         frontend_print_errors(log, res.errs);
         return 1;
@@ -236,12 +252,6 @@ fn testrun_build(
             log.error(wasm_path + ": " + e.message());
             return 1;
         }
-    }
-    let meta = "// Generated by kek. Do not edit.\nexport default "
-        + backend_meta_json(out.strings, ir.handler_params)
-        + ";\n";
-    if !testrun_write(fs, log, out_dir + "/kekkai_meta.js", meta) {
-        return 1;
     }
     0
 }

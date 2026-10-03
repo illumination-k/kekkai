@@ -1,0 +1,61 @@
+// Runtime prelude: compiled together with every program by `kek build`.
+//
+// The prelude implements the builtin operations in Kekkai itself, on top
+// of a few intrinsics that the code generator emits inline (`__Chars`,
+// `__Mem`, `__Wasi`, `__Any`, `__Int`). A builtin operation `recv.name`
+// (for example `string.split`) is implemented by the function
+// `__recv_name`, whose parameters are the receiver and the arguments.
+//
+// Identifiers starting with `__` are reserved: user programs cannot name
+// anything defined here.
+
+// ---- builtin types implemented as structs ----
+
+struct Response {
+    status: Int,
+    body: String,
+    has_body: Bool,
+    // header names and values, alternating
+    headers: Vec<String>,
+}
+
+struct TxError {
+    message: String,
+    retryable: Bool,
+}
+
+struct NetError {
+    message: String,
+}
+
+struct IoError {
+    message: String,
+}
+
+// ---- boxes for Map values ----
+
+struct __BoxInt {
+    v: Int,
+}
+
+// ---- runtime state ----
+
+// __Rt is created by `__rt_new` the first time `__Rt::get()` runs.
+struct __Rt {
+    // capabilities are mocks (`kek test`)
+    test: Bool,
+    // linear memory scratch area: [base, brk)
+    base: Int,
+    brk: Int,
+    cwd: String,
+    store: __Store,
+    // test mode
+    test_name: String,
+    clock_ms: Int,
+    rand: Int,
+    net: Map<String, String>,
+    net_err: Map<String, String>,
+    lines: Vec<String>,
+    sent: Vec<String>,
+    start_ns: Int,
+}

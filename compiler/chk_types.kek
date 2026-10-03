@@ -81,6 +81,16 @@ fn ty_is_opaque(t: Ty, name: String) -> Bool {
     }
 }
 
+// ty_is_named reports whether t is the opaque type `name` or the prelude
+// struct that implements it.
+fn ty_is_named(t: Ty, name: String) -> Bool {
+    match ty_prune(t) {
+        Ty::Opaque(n) => n == name,
+        Ty::Struct(s) => s.name == name,
+        _ => false,
+    }
+}
+
 fn ty_is_var(t: Ty) -> Bool {
     match t {
         Ty::Var(_) => true,
@@ -160,7 +170,8 @@ fn ty_is_cap(t: Ty) -> Bool {
     }
 }
 
-// ty_same is pointer identity in Go (for already pruned types).
+// ty_same compares already pruned types by name. An opaque type and the
+// prelude struct implementing it are the same type.
 fn ty_same(a: Ty, b: Ty) -> Bool {
     match a {
         Ty::Prim(x) => match b {
@@ -169,10 +180,12 @@ fn ty_same(a: Ty, b: Ty) -> Bool {
         },
         Ty::Opaque(x) => match b {
             Ty::Opaque(y) => x == y,
+            Ty::Struct(y) => x == y.name,
             _ => false,
         },
         Ty::Struct(x) => match b {
             Ty::Struct(y) => x.name == y.name,
+            Ty::Opaque(y) => x.name == y,
             _ => false,
         },
         Ty::Enum(x) => match b {

@@ -1,0 +1,58 @@
+// Conversions between JS values and Kekkai values (Workers). Strings
+// cross through linear memory as UTF-16 code units, starting at byte 1024.
+
+fn __js_string(a: __Any) -> String {
+    let n = __Js::str_len(a);
+    __mem_ensure(1024 + n * 2);
+    __Js::str_to_mem(a, 1024);
+    let r = __Chars::new(n);
+    for i in 0..n {
+        r.set(i, __Mem::load16(1024 + i * 2));
+    }
+    r.freeze()
+}
+
+fn __js_from_string(s: String) -> __Any {
+    let x = __Chars::of(s);
+    let n = x.len();
+    __mem_ensure(1024 + n * 2);
+    for i in 0..n {
+        __Mem::store16(1024 + i * 2, x.get(i));
+    }
+    __Js::str_from_mem(1024, n)
+}
+
+fn __js_lift_TxError(e: __Any) -> TxError {
+    TxError { message: __js_string(__Js::err_message(e)), retryable: __Js::err_retryable(e) }
+}
+
+fn __js_lift_NetError(e: __Any) -> NetError {
+    NetError { message: __js_string(__Js::err_message(e)) }
+}
+
+fn __js_lift_IoError(e: __Any) -> IoError {
+    IoError { message: __js_string(__Js::err_message(e)) }
+}
+
+// ---- reading a Response (exported as resp_*) ----
+
+fn __js_export_resp_status(r: __Any) -> Int {
+    Response::from_any(r).status
+}
+
+// the body as a JS string, or null
+fn __js_export_resp_body(r: __Any) -> __Any {
+    let x = Response::from_any(r);
+    if !x.has_body {
+        return __Any::null();
+    }
+    __js_from_string(x.body)
+}
+
+fn __js_export_resp_header_count(r: __Any) -> Int {
+    Response::from_any(r).headers.len()
+}
+
+fn __js_export_resp_header(r: __Any, i: Int) -> __Any {
+    __js_from_string(Response::from_any(r).headers.get(i).unwrap_or(""))
+}

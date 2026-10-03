@@ -101,7 +101,11 @@ fn lower_ty(l: Lower, t0: Ty) -> IrTy {
             }
             ir_ty("unit")
         }
-        Ty::Opaque(n) => IrTy { kind: "ext", agg: 0, ext: n },
+        Ty::Opaque(n) => match l.info.structs.get(n) {
+            // implemented by a prelude struct
+            Some(st) => ir_ty_agg(lower_agg(l, Ty::Struct(st))),
+            None => IrTy { kind: "ext", agg: 0, ext: n },
+        },
         Ty::Cap(k, _) => IrTy { kind: "ext", agg: 0, ext: k },
         _ => ir_ty_agg(lower_agg(l, t)),
     }

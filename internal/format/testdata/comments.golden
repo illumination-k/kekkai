@@ -1,0 +1,41 @@
+// File header comment.
+
+/* A block
+   comment spanning lines. */
+struct Point {
+    x: Int, // the x
+    y: Int, /* the y */
+}
+
+// Leading comment for Shape.
+enum Shape {
+    Dot,
+    Rect(Int, Int), // trailing on Rect
+    // own-line inside enum
+}
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+} // trailing after fn
+
+// between attr and fn
+#[handler]
+fn handle(req: Request, log: &Log) -> Response { // after open brace
+    // leading comment
+    let x = 1_000; // trailing comment
+
+    let y = (x + 2) * 3;
+    /* inline */
+    log.info("a\tb\n" + req.path());
+    let p = Point { x, y: y };
+    // before tail
+    Response::text(200, p.x.to_string())
+    // after tail
+}
+
+fn empty() {
+    // only a comment
+}
+
+fn empty2() {}
+// trailing file comment

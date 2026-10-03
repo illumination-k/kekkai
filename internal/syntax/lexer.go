@@ -52,12 +52,36 @@ func Lex(src string) ([]Token, ErrorList) {
 	return lx.toks, lx.errs
 }
 
+// Comment is a `//` line comment or a `/* */` block comment. The parser
+// ignores comments; tools that need them (the formatter) collect them with
+// LexWithComments and re-attach them by position.
+type Comment struct {
+	Pos  Pos
+	Text string // including the `//` or `/* */` delimiters, without the newline
+}
+
+// LexWithComments is Lex that also returns the comments, in source order.
+func LexWithComments(src string) ([]Token, []Comment, ErrorList) {
+	lx := &lexer{src: src, line: 1, col: 1, keepComments: true}
+	lx.run()
+	return lx.toks, lx.comments, lx.errs
+}
+
 type lexer struct {
 	src       string
 	off       int
 	line, col int
 	toks      []Token
 	errs      ErrorList
+
+	keepComments bool
+	comments     []Comment
+}
+
+func (lx *lexer) comment(pos Pos, start int) {
+	if lx.keepComments {
+		lx.comments = append(lx.comments, Comment{Pos: pos, Text: strings.TrimRight(lx.src[start:lx.off], "\r")})
+	}
 }
 
 func (lx *lexer) peek(n int) byte {
@@ -109,10 +133,13 @@ func (lx *lexer) run() {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			lx.advance()
 		case c == '/' && lx.peek(1) == '/':
+			start := lx.off
 			for lx.off < len(lx.src) && lx.peek(0) != '\n' {
 				lx.advance()
 			}
+			lx.comment(pos, start)
 		case c == '/' && lx.peek(1) == '*':
+			start := lx.off
 			lx.advance()
 			lx.advance()
 			for lx.off < len(lx.src) && !(lx.peek(0) == '*' && lx.peek(1) == '/') {
@@ -124,6 +151,7 @@ func (lx *lexer) run() {
 			}
 			lx.advance()
 			lx.advance()
+			lx.comment(pos, start)
 		case isIdentStart(c):
 			start := lx.off
 			for lx.off < len(lx.src) && (isIdentStart(lx.peek(0)) || isDigit(lx.peek(0))) {

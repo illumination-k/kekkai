@@ -1,0 +1,17 @@
+struct P { a: Int, b: Int }
+enum E { A, B(Int) }
+fn helper(a: Int, b: Int, c: Int) -> Int { a + b + c }
+fn f(x: Int, y: Bool) -> Result<Option<Int>, String> {
+    let a = -(x + 1) * (2 - (3 - 4));
+    let b = !(y && x == 1) || (x < 2) == true;
+    let c = if (P { a: 1, b: 2 }).a == 1 { 1 } else { 2 };
+    let mut d = match x { 0 => 1, -5 => 2, _ => { 3 } };
+    d = d + 1;
+    while d < 10 { d = d + 1; }
+    let s = match E::B(1) { E::A => "a", E::B(n) => if n > 0 { "pos" } else { "neg" }, };
+    if x > 100 { return Err("too big"); }
+    if y { d = 0; } else if x == 0 { d = 1; } else { d = 2; }
+    let long_variable_name = helper(first_argument_value_xxxxxxxx, second_argument_value_xxxxxxxx, a);
+    let q = P { a: helper(1, 2, 3), b: if b { 1 } else { 0 } };
+    match x { 1 => Ok(Some(a)), _ => Ok(None) }
+}

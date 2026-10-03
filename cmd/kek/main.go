@@ -20,6 +20,7 @@ Usage:
   kek caps <file.kek>             list the capabilities (effects) of every function
   kek ir [-json] <file.kek>       print the intermediate representation
   kek build [-o dir] <file.kek>   compile to a Cloudflare Workers module (WasmGC + JS glue)
+  kek fmt [-w|-check] <paths>     format source files (directories are searched for *.kek)
 `
 
 func main() {
@@ -38,6 +39,8 @@ func main() {
 		err = runIR(args)
 	case "build":
 		err = runBuild(args)
+	case "fmt":
+		err = runFmt(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

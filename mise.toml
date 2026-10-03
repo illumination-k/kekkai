@@ -17,3 +17,25 @@ run = "go test ./..."
 description = "Build and check the Lean formalization"
 dir = "lean"
 run = "lake build"
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.fmt]
+description = "Format Go and Kekkai sources"
+run = [
+  "gofmt -w cmd internal",
+  "go run ./cmd/kek fmt -w testdata/test",
+]
+
+[tasks.fmt-check]
+description = "Check that Go and Kekkai sources are formatted"
+run = [
+  "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; exit 1)",
+  "go run ./cmd/kek fmt -check testdata/test",
+]
+
+[tasks.ci]
+description = "Everything CI runs: vet, tests, format check, Lean proofs"
+depends = ["vet", "test", "fmt-check", "lean"]

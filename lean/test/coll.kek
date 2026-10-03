@@ -1,0 +1,111 @@
+// Collections, mutable structs and string operations (lean/test_ref.sh).
+struct Cell {
+    v: Int,
+    xs: Vec<Int>,
+}
+
+fn alias(a: Int) -> Int {
+    let c = Cell { v: a, xs: Vec::new() };
+    let d = c;
+    d.v = d.v + 1;
+    d.xs.push(5);
+    c.xs.push(6);
+    c.v * 100 + c.xs.len() * 10 + d.xs.get(1).unwrap_or(0)
+}
+
+fn vecs(n: Int) -> Int {
+    let v: Vec<Int> = Vec::new();
+    for i in 0..n {
+        if i % 3 == 0 { continue; }
+        if i > 20 { break; }
+        v.push(i * i);
+    }
+    let mut s = 0;
+    for x in v { s = s + x; }
+    let ok = v.set(0, 1000);
+    let bad = v.set(-1, 7);
+    let p = v.pop().unwrap_or(-1);
+    s * 7 + v.get(0).unwrap_or(-2) + p + (if ok { 1 } else { 0 }) + (if bad { 100000 } else { 0 }) + v.get(-1).unwrap_or(-3) + v.get(99).unwrap_or(-4)
+}
+
+fn maps(n: Int) -> Int {
+    let m: Map<Int, Int> = Map::new();
+    for i in 0..n { m.insert(i % 4, i); }
+    m.remove(1);
+    m.insert(1, 50);
+    let ks = m.keys();
+    let mut s = 0;
+    for k in ks { s = s * 10 + k; }
+    let names: Map<String, Int> = Map::new();
+    names.insert("a", 1);
+    names.insert("b", 2);
+    names.insert("a", 3);
+    s * 1000 + m.len() * 100 + names.get("a").unwrap_or(0) * 10 + (if names.contains("z") { 1 } else { 0 })
+}
+
+fn keys_str() -> String {
+    let m: Map<String, Int> = Map::new();
+    m.insert("x", 1); m.insert("y", 2); m.insert("x", 3); m.remove("y"); m.insert("y", 4);
+    m.keys().join("|")
+}
+
+fn strops(s: String) -> String {
+    let parts = s.split(",");
+    let chars = s.split("");
+    parts.join("+") + "/" + chars.len().to_string() + "/" + s.slice(1, 4) + "/" + s.slice(-3, 99)
+        + "/" + s.index_of("b").unwrap_or(-1).to_string() + "/" + s.replace(",", "--")
+        + "/" + s.char_at(0).unwrap_or(-1).to_string() + "/" + s.char_at(-1).unwrap_or(-1).to_string()
+        + "/" + String::from_char(66) + String::from_bytes(s.to_bytes())
+        + "/" + 3.min(-4).to_string() + 3.max(-4).to_string()
+}
+
+fn retvec(n: Int) -> Vec<Int> {
+    let v = Vec::new();
+    for i in 0..n { v.push(i); }
+    v
+}
+
+fn retmap() -> Map<String, Int> {
+    let m = Map::new();
+    m.insert("k", 1);
+    m
+}
+
+fn retcell() -> Cell {
+    let c = Cell { v: 1, xs: Vec::new() };
+    c.xs.push(2);
+    c
+}
+
+fn nested(a: Int) -> Int {
+    let m: Map<Int, Vec<Int>> = Map::new();
+    let v: Vec<Int> = Vec::new();
+    m.insert(1, v);
+    m.insert(2, v);
+    v.push(a);
+    match m.get(2) {
+        Some(w) => { w.push(a + 1); }
+        None => {}
+    }
+    let cells: Vec<Cell> = Vec::new();
+    let c = Cell { v: 1, xs: v };
+    cells.push(c);
+    cells.push(c);
+    match cells.get(0) {
+        Some(d) => { d.v = 40; }
+        None => {}
+    }
+    let o = Some(c);
+    let mut t = 0;
+    match o {
+        Some(e) => { e.xs.push(9); t = e.v; }
+        None => {}
+    }
+    t * 1000 + vsum3(m.get(1).unwrap_or(Vec::new())) + cells.get(1).unwrap_or(c).v
+}
+
+fn vsum3(v: Vec<Int>) -> Int {
+    let mut s = 0;
+    for x in v { s = s * 10 + x; }
+    s
+}

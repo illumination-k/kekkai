@@ -84,6 +84,8 @@ fn transfer(db: &Db, from: String, to: String, n: Int) -> Result<(), TxError> {
 
 範囲外アクセスは `Option` で表され、panic は起きない。
 
+`for x in v` は毎回 `v.len()` を読み直す。本体で `v`（やその別名）に `push` すると終わらないので注意する。
+
 ## 実行モデル
 
 - I/O に到達する関数は、コンパイラがステートマシンに変換する。async/await の色分けはない。

@@ -10,6 +10,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/kekkai-ref.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 (cd "$root" && go run ./cmd/kek ir -json lean/test/smoke.kek >"$tmp/smoke.json")
 (cd "$root" && go run ./cmd/kek ir -json testdata/check/ok_basic.kek >"$tmp/basic.json")
+(cd "$root" && go run ./cmd/kek ir -json lean/test/coll.kek >"$tmp/coll.json")
 
 fail=0
 check() { # check <ir> <expected> <fn> <args...>
@@ -52,5 +53,17 @@ check smoke "$(ok 12)" parse '"+12"'
 check smoke "$(ok -1)" parse '"9223372036854775808"'
 check smoke "$(ok 5 '[["info","hi HeLLo"],["warn","hello"]]')" shout '"HeLLo"'
 
+# collections, mutable structs, aliasing (expected values checked against WasmGC on Node)
+check coll "$(ok 426)" alias 3
+check coll "$(ok 15751)" vecs 30
+check coll "$(ok -10)" vecs 0
+check coll "$(ok 231430)" maps 10
+check coll "$(ok '"x|y"')" keys_str
+check coll "$(ok '"a+bc++de/8/,bc/a,bc,,de/2/a--bc----de/97/-1/Ba,bc,,de/-43"')" strops '"a,bc,,de"'
+check coll "$(ok '{"vec":[0,1,2]}')" retvec 3
+check coll "$(ok '{"map":[["k",1]]}')" retmap
+check coll "$(ok '{"fields":[1,{"vec":[2]}]}')" retcell
+check coll "$(ok 40389)" nested 3
+check coll "$(ok 123)" vsum3 '{"vec":[0,1,2,3]}'
 if [[ $fail -ne 0 ]]; then exit 1; fi
 echo "kekkai-ref: all smoke tests passed"

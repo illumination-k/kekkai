@@ -1,6 +1,7 @@
 package difftest
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/illumination-k/kekkai/internal/driver"
 )
@@ -16,7 +18,18 @@ import (
 var (
 	nprogs = flag.Int("difftest.n", 60, "number of random programs")
 	seed0  = flag.Int64("difftest.seed", 1, "first seed")
+	dump   = flag.String("difftest.dump", "", "write the program for -difftest.seed to this file (TestDump)")
 )
+
+// TestDump writes the generated program for -difftest.seed to -difftest.dump.
+func TestDump(t *testing.T) {
+	if *dump == "" {
+		t.Skip("use -difftest.dump=<file>")
+	}
+	if err := os.WriteFile(*dump, []byte(New(*seed0).Generate().Source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type call struct {
 	Fn   string `json:"fn"`
@@ -75,7 +88,10 @@ func TestDifferential(t *testing.T) {
 		}
 		cj, _ := json.Marshal(calls)
 		write("calls.json", cj)
-		out, err := exec.Command(node, "run_pure.mjs", dir, filepath.Join(dir, "calls.json")).Output()
+		// generated programs terminate: a hang in wasm is a bug
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		out, err := exec.CommandContext(ctx, node, "run_pure.mjs", dir, filepath.Join(dir, "calls.json")).Output()
+		cancel()
 		if err != nil {
 			t.Fatalf("seed %d: node: %v\n%s", s, err, out)
 		}

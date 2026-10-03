@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 )
@@ -12,9 +13,14 @@ import (
 // set is exactly the effects the function (and everything it calls) can
 // perform. Functions with no capabilities are pure.
 func runCaps(args []string) error {
-	path, err := oneFile(flag.NewFlagSet("caps", flag.ExitOnError), args)
+	fs := flag.NewFlagSet("caps", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emit JSON: per function caps, pure, async, direct effects, unused caps")
+	path, err := oneFile(fs, args)
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		return capsJSON(os.Stdout, path)
 	}
 	info, err := load(path)
 	if err != nil {

@@ -1,22 +1,39 @@
-// Test entry point for running a compiled program on workerd (wrangler dev
-// --local). It wraps the generated worker.js without changing it:
+// Main module of the "worker" e2e service in workerd (generated config:
+// tests/suites/e2e.sh): it serves a program built with `./kek build
+// -target do` through its generated worker.js, unchanged, and adds test
+// hooks around it:
 //
 //   x-kekkai-backend: do      route the request into the Durable Object
 //                             (binds TEST_DO as KEKKAI_DO); default is D1
 //   x-test-conflict: <key>    simulate a concurrent writer: just before the
 //                             transaction's commit reaches storage, another
 //                             transaction adds 1000 to <key> and commits
-//   POST /__test/seed         body {key: value}: write through a transaction
-//                             (Durable Object backend only; D1 is seeded with
-//                             `wrangler d1 execute`)
+//   POST /__test/seed         body {key: value}: seed the backend (D1: raw
+//                             SQL creating the adapter's tables by hand;
+//                             Durable Object: a transaction)
+//
+// The D1 binding DB is a FakeD1 (D1 API over a FakeD1Object Durable Object
+// with SQLite storage), since workerd alone has no D1 service; the Durable
+// Object backend uses real Durable Object storage.
 import generated, { KekkaiObject } from "./worker.js";
 import { D1KvStore, DurableObjectStore } from "./kekkai_runtime.js";
+import { FakeD1 } from "./fakes.js";
+
+export { FakeD1Object } from "./fakes.js";
 
 async function addThousand(store, key) {
   const tx = await store.begin();
   const v = Number((await tx.get(key)) ?? "0");
   await tx.put(key, String(v + 1000));
   await tx.commit();
+}
+
+// All requests share one database (the FakeD1Object named "DB"). The
+// binding object is created per request because a Durable Object stub
+// belongs to the request that created it; worker.js then sets up its
+// D1KvStore (an idempotent schema batch) once per request.
+function d1Binding(env) {
+  return new FakeD1(env.FAKE_D1.get(env.FAKE_D1.idFromName("DB")));
 }
 
 // A D1 binding whose second batch (the first is the adapter's schema
@@ -33,13 +50,28 @@ function conflictingD1(db, key) {
   };
 }
 
+// The adapter's schema plus rows, written by hand the way a user would
+// seed D1. The clock row starts at the highest version present.
+function seedSql(rows) {
+  const q = (s) => "'" + String(s).replaceAll("'", "''") + "'";
+  const values = Object.entries(rows).map(([k, v]) => `(${q(k)}, ${q(v)}, 1)`).join(", ");
+  return `CREATE TABLE IF NOT EXISTS kekkai_kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, ver INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS kekkai_kv_guard (conflict INTEGER CHECK (conflict = 0));
+CREATE TABLE IF NOT EXISTS kekkai_kv_clock (id INTEGER PRIMARY KEY CHECK (id = 0), n INTEGER NOT NULL);
+INSERT INTO kekkai_kv (k, v, ver) VALUES ${values};
+INSERT OR IGNORE INTO kekkai_kv_clock (id, n) SELECT 0, COALESCE(MAX(ver), 0) FROM kekkai_kv;`;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const useDO = request.headers.get("x-kekkai-backend") === "do";
     const conflict = request.headers.get("x-test-conflict");
-    const e = { ...env, KEKKAI_DO: useDO ? env.TEST_DO : undefined };
-    if (!useDO && conflict) e.DB = conflictingD1(env.DB, conflict);
-    if (!useDO && new URL(request.url).pathname === "/__test/seed") return new Response("seed D1 with wrangler d1 execute", { status: 400 });
+    const e = { ...env, KEKKAI_DO: useDO ? env.TEST_DO : undefined, DB: d1Binding(env) };
+    if (!useDO && conflict) e.DB = conflictingD1(e.DB, conflict);
+    if (!useDO && new URL(request.url).pathname === "/__test/seed" && request.method === "POST") {
+      await e.DB.exec(seedSql(await request.json()));
+      return new Response("seeded");
+    }
     return generated.fetch(request, e, ctx);
   },
 };

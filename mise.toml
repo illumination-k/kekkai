@@ -33,7 +33,7 @@ run = [
 description = "Check that Go and Kekkai sources are formatted"
 run = [
   "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; exit 1)",
-  "go run ./cmd/kek fmt -check testdata/test",
+  "go run ./cmd/kek fmt -check testdata/test compiler",
 ]
 
 [tasks.ci]

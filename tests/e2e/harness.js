@@ -1,7 +1,7 @@
 // Main module of one e2e test service in workerd (generated config:
 // tests/suites/e2e.sh). The service bundles:
 //
-//   scenario.js        the scenario: a *.test.mjs next to a program, or the
+//   scenario.js        the scenario: a *.test.js next to a program, or the
 //                      adapter conformance suite (adapters.test.js)
 //   program.js         exports { module, meta } of the compiled program
 //                      (module.wasm, kekkai_meta.js), or nulls
@@ -23,7 +23,7 @@
 // A scenario's default export receives { createApp, runtime, meta, module,
 // assert, recordingLog, recordingOutbox, call, fakeNet, fakes, allStores }.
 import { DurableObject } from "cloudflare:workers";
-import assert from "node:assert/strict";
+import assert from "./assert.js";
 import * as runtime from "./kekkai_runtime.js";
 import * as program from "./program.js";
 import scenario from "./scenario.js";

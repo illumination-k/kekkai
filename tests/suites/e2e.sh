@@ -3,7 +3,7 @@
 #
 # Cases:
 #   <program>   every testdata/e2e/*.kek and examples/*/*.kek with a sibling
-#               *.test.mjs is built with `./kek build`; its scenario runs
+#               *.test.js is built with `./kek build`; its scenario runs
 #               against the compiled module (tests/e2e/harness.js), with
 #               every store adapter, and its generated worker.js must load
 #   adapters    the store adapter conformance suite (tests/e2e/adapters.test.js):
@@ -33,7 +33,7 @@ programs() {
 	for f in testdata/e2e/*.kek examples/*/*.kek; do
 		[ -f "$f" ] || continue
 		case $f in *.bad.kek) continue ;; esac
-		[ -f "${f%.kek}.test.mjs" ] && echo "$f"
+		[ -f "${f%.kek}.test.js" ] && echo "$f"
 	done
 }
 
@@ -91,6 +91,7 @@ harness_service() {
     (name = "case-$1", worker = (
       modules = [
         (name = "harness.js", esModule = embed "lib/harness.js"),
+        (name = "assert.js", esModule = embed "lib/assert.js"),
         (name = "fakes.js", esModule = embed "lib/fakes.js"),
         (name = "scenario.js", esModule = embed "$1.scenario.js"),
         (name = "program.js", esModule = embed "$3"),
@@ -148,7 +149,10 @@ EOF
       bindings = [(name = "LOG", durableObjectNamespace = "HookLog")],
     )),
     (name = "case-worker", worker = (
-      modules = [(name = "worker_driver.js", esModule = embed "lib/worker_driver.js")],
+      modules = [
+        (name = "worker_driver.js", esModule = embed "lib/worker_driver.js"),
+        (name = "assert.js", esModule = embed "lib/assert.js"),
+      ],
       compatibilityDate = "$COMPAT_DATE",
       bindings = [
         (name = "WORKER", service = "worker"),
@@ -172,7 +176,7 @@ early_fail() {
 	for f in $(programs); do
 		c=$(basename "$f" .kek)
 		if built "p-$c"; then
-			cp "${f%.kek}.test.mjs" "$T/$c.scenario.js"
+			cp "${f%.kek}.test.js" "$T/$c.scenario.js"
 			harness_service "$c" "p-$c/kekkai_runtime.js" lib/program.js 1 "p-$c"
 		else
 			early_fail "$c" "./kek build $f failed:

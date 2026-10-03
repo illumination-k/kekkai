@@ -169,7 +169,7 @@ mise run dev -- examples/todo/todo.kek
 
 `tests/run.sh e2e`（`mise run e2e`）が、すべてを1回の `workerd test` で実行する（workerdがなければスキップ）。
 
-- **プログラムのシナリオ**：`testdata/e2e/*.kek` と `examples/*/*.kek` のうち `*.test.mjs` を持つものをビルドし、シナリオを実行する。
+- **プログラムのシナリオ**：`testdata/e2e/*.kek` と `examples/*/*.kek` のうち `*.test.js` を持つものをビルドし、シナリオを実行する。
   - シナリオはDurable Objectの中で動き、すべてのストアアダプタ（memory、d1、durable-object、remote）に対して同じプログラムを走らせる。
   - 生成された `worker.js` が読み込めることも確認する。
 - **適合テスト**（`tests/e2e/adapters.test.js`）：lost update、write skew、phantom、delete→再作成（ABA）、読み取りだけのトランザクションの検証、blind write、失敗したcommitの原子性、並行インクリメントの再試行を、MemoryStore／D1KvStore／DurableObjectStore／RemoteKvStoreのすべてに対して確認する。新しいアダプタはここに加える。

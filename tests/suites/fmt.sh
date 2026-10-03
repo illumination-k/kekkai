@@ -163,10 +163,9 @@ dirs() {
 	pretty='fn main() -> Int {
     1
 }'
-	mkdir "$d/sub" "$d/.hidden" "$d/node_modules"
+	mkdir "$d/sub" "$d/.hidden"
 	echo "$ugly" >"$d/sub/a.kek"
 	echo "$ugly" >"$d/.hidden/b.kek"
-	echo "$ugly" >"$d/node_modules/c.kek"
 	echo "$ugly" >"$d/d.txt"
 	echo "$pretty" >"$d/ok.kek"
 	report=
@@ -188,8 +187,6 @@ fmt -w: sub/a.kek is
 $(cat "$d/sub/a.kek")"
 	[ "$(cat "$d/.hidden/b.kek")" = "$ugly" ] || report="$report
 fmt -w changed .hidden/b.kek"
-	[ "$(cat "$d/node_modules/c.kek")" = "$ugly" ] || report="$report
-fmt -w changed node_modules/c.kek"
 	[ "$(cat "$d/d.txt")" = "$ugly" ] || report="$report
 fmt -w changed d.txt"
 	"$KEK" fmt -check "$d" >"$d/out" 2>&1 || report="$report

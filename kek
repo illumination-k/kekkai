@@ -223,7 +223,7 @@ cmd_run() {
 	trap 'rm -rf "$_out"' EXIT
 	compiler build "$_src" "$_out" || exit $?
 	if [ -f "$_out/kekkai_meta.js" ]; then
-		die "kek run: $_src is a #[handler] program (run it on Workers: kek build, then wrangler dev)"
+		die "kek run: $_src is a #[handler] program (serve it locally with scripts/dev.sh)"
 	fi
 	set +e
 	wasm "$_out/module.wasm" "$@"

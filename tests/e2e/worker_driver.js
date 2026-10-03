@@ -13,7 +13,7 @@
 //     after each commit, never for rolled-back or conflicting transactions
 //
 // Output: "KEK <case> | <line>" lines and a final "KEK <case> ok|fail".
-import assert from "node:assert/strict";
+import assert from "./assert.js";
 
 const TRANSFER_HOOK = "https://hooks.example/transfer";
 

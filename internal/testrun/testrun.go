@@ -18,9 +18,9 @@
 package testrun
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"github.com/illumination-k/kekkai/js"
 	"io"
 	"os"
 	"os/exec"
@@ -33,8 +33,7 @@ import (
 	"github.com/illumination-k/kekkai/internal/types"
 )
 
-//go:embed runner.mjs
-var runnerJS string
+var runnerJS = js.TestRunner
 
 // mainName is the synthesized handler.
 const mainName = "__kek_test_main"

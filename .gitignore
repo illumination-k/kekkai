@@ -4,3 +4,4 @@ node_modules/
 .wrangler/
 lean/.lake/
 /.claude/worktrees/
+/.kek-cache/

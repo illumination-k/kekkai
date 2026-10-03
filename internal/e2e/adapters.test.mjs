@@ -6,7 +6,7 @@
 // DurableObjectStore (on a fake DO storage) and RemoteKvStore (against
 // the reference HTTP gateway).
 import assert from "node:assert/strict";
-import * as runtime from "../glue/runtime.js";
+import * as runtime from "../../js/kekkai_runtime.js";
 import { allStores, FakeD1, snapshotOf } from "./fakes.mjs";
 
 const { D1KvStore, TxConflict } = runtime;

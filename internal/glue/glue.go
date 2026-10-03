@@ -5,21 +5,19 @@
 package glue
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/illumination-k/kekkai/internal/ir"
+	"github.com/illumination-k/kekkai/js"
 )
 
-//go:embed runtime.js
-var Runtime string
+// Runtime is the JS runtime (js/kekkai_runtime.js).
+var Runtime = js.Runtime
 
-// RunMJS runs a compiled #[main] program on Node.
-//
-//go:embed run.mjs
-var RunMJS string
+// RunMJS runs a compiled #[main] program on Node (js/run.mjs).
+var RunMJS = js.RunMJS
 
 // Meta is the program metadata consumed by the runtime.
 type Meta struct {

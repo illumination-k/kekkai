@@ -1,0 +1,3 @@
+#!/bin/sh
+# Kekkai toolchain launcher (self-hosted compiler on Node). See js/kek.mjs.
+exec node "$(dirname "$0")/js/kek.mjs" "$@"

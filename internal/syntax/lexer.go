@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"fmt"
+	"unicode/utf8"
 	"sort"
 	"strings"
 )
@@ -192,8 +193,11 @@ func (lx *lexer) run() {
 				lx.emit(k, "", pos)
 				continue
 			}
-			lx.errs.Add(pos, "unexpected character %q", c)
-			lx.advance()
+			r, size := utf8.DecodeRuneInString(lx.src[lx.off:])
+			lx.errs.Add(pos, "unexpected character %q", r)
+			for i := 0; i < size; i++ {
+				lx.advance()
+			}
 		}
 	}
 	lx.emit(EOF, "", Pos{Line: lx.line, Col: lx.col, File: lx.file})

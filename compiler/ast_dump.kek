@@ -1,0 +1,272 @@
+// Canonical dumps of tokens and syntax trees; must match
+// internal/selfhost/dump.go byte for byte.
+
+struct AstDumper {
+    lines: Vec<String>,
+}
+
+fn ast_dump_pos(p: AstPos) -> String {
+    p.line.to_string() + ":" + p.col.to_string()
+}
+
+fn ast_dump_tokens(toks: Vec<Tok>, errs: Vec<AstError>) -> Vec<String> {
+    let out = Vec::new();
+    for t in toks {
+        out.push(ast_dump_pos(t.pos) + " " + lex_kind_name(t.kind) + " " + ast_quote(t.text));
+    }
+    for e in errs {
+        out.push("error " + ast_error_string(e));
+    }
+    out
+}
+
+fn ast_indent(depth: Int) -> String {
+    let parts = Vec::new();
+    for i in 0..depth {
+        parts.push("  ");
+    }
+    parts.join("")
+}
+
+fn ast_line(d: AstDumper, depth: Int, s: String) {
+    d.lines.push(ast_indent(depth) + s);
+}
+
+fn ast_dump_file(f: AstFile) -> Vec<String> {
+    let d = AstDumper { lines: Vec::new() };
+    for s in f.structs {
+        ast_line(d, 0, "struct " + s.name + " @" + ast_dump_pos(s.pos));
+        for fl in s.fields {
+            ast_line(d, 1, "field " + fl.name + " @" + ast_dump_pos(fl.pos));
+            ast_dump_type(d, 2, fl.ty);
+        }
+    }
+    for e in f.enums {
+        ast_line(d, 0, "enum " + e.name + " @" + ast_dump_pos(e.pos));
+        for v in e.variants {
+            ast_line(d, 1, "variant " + v.name + " @" + ast_dump_pos(v.pos));
+            for t in v.fields {
+                ast_dump_type(d, 2, t);
+            }
+        }
+    }
+    for fd in f.funcs {
+        ast_line(d, 0, "fn " + fd.name + " @" + ast_dump_pos(fd.pos));
+        for a in fd.attrs {
+            ast_line(d, 1, "attr " + a.name + " @" + ast_dump_pos(a.pos));
+        }
+        for p in fd.params {
+            ast_dump_param(d, 1, p);
+        }
+        match fd.result {
+            Some(t) => {
+                ast_line(d, 1, "result");
+                ast_dump_type(d, 2, t);
+            }
+            None => {}
+        }
+        ast_dump_block(d, 1, fd.body);
+    }
+    d.lines
+}
+
+fn ast_dump_type(d: AstDumper, depth: Int, t: AstType) {
+    match t {
+        AstType::Named(n) => {
+            ast_line(d, depth, "type " + n.name + " @" + ast_dump_pos(n.pos));
+            for a in n.args {
+                ast_dump_type(d, depth + 1, a);
+            }
+        }
+        AstType::Ref(r) => {
+            ast_line(d, depth, "ref @" + ast_dump_pos(r.pos));
+            ast_dump_type(d, depth + 1, r.elem);
+        }
+        AstType::Unit(u) => ast_line(d, depth, "unit-type @" + ast_dump_pos(u.pos)),
+    }
+}
+
+fn ast_dump_param(d: AstDumper, depth: Int, p: AstParam) {
+    ast_line(d, depth, "param " + p.name + " @" + ast_dump_pos(p.pos));
+    match p.ty {
+        Some(t) => ast_dump_type(d, depth + 1, t),
+        None => {}
+    }
+}
+
+fn ast_dump_block(d: AstDumper, depth: Int, b: AstBlock) {
+    ast_line(d, depth, "block @" + ast_dump_pos(b.pos) + " end=" + ast_dump_pos(b.end));
+    for s in b.stmts {
+        ast_dump_stmt(d, depth + 1, s);
+    }
+    match b.tail {
+        Some(e) => {
+            ast_line(d, depth + 1, "tail");
+            ast_dump_expr(d, depth + 2, e);
+        }
+        None => {}
+    }
+}
+
+fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
+    match s {
+        AstStmt::Let(l) => {
+            ast_line(d, depth, "let " + l.name + " mut=" + l.mutable.to_string() + " @" + ast_dump_pos(l.pos));
+            match l.ty {
+                Some(t) => ast_dump_type(d, depth + 1, t),
+                None => {}
+            }
+            ast_dump_expr(d, depth + 1, l.init);
+        }
+        AstStmt::Assign(a) => {
+            ast_line(d, depth, "assign " + a.name + " @" + ast_dump_pos(a.pos));
+            ast_dump_expr(d, depth + 1, a.value);
+        }
+        AstStmt::FieldAssign(a) => {
+            ast_line(d, depth, "field-assign @" + ast_dump_pos(a.pos));
+            ast_dump_expr(d, depth + 1, AstExpr::Field(a.target));
+            ast_dump_expr(d, depth + 1, a.value);
+        }
+        AstStmt::Break(b) => ast_line(d, depth, "break @" + ast_dump_pos(b.pos)),
+        AstStmt::Continue(c) => ast_line(d, depth, "continue @" + ast_dump_pos(c.pos)),
+        AstStmt::While(w) => {
+            ast_line(d, depth, "while @" + ast_dump_pos(w.pos));
+            ast_dump_expr(d, depth + 1, w.cond);
+            ast_dump_block(d, depth + 1, w.body);
+        }
+        AstStmt::For(f) => {
+            ast_line(d, depth, "for " + f.var + " @" + ast_dump_pos(f.pos));
+            ast_dump_expr(d, depth + 1, f.iter);
+            match f.end {
+                Some(e) => {
+                    ast_line(d, depth + 1, "to");
+                    ast_dump_expr(d, depth + 2, e);
+                }
+                None => {}
+            }
+            ast_dump_block(d, depth + 1, f.body);
+        }
+        AstStmt::Return(r) => {
+            ast_line(d, depth, "return @" + ast_dump_pos(r.pos));
+            match r.value {
+                Some(e) => ast_dump_expr(d, depth + 1, e),
+                None => {}
+            }
+        }
+        AstStmt::Expr(x) => {
+            ast_line(d, depth, "expr-stmt semi=" + x.semi.to_string() + " @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+        }
+    }
+}
+
+fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
+    match e {
+        AstExpr::IntLit(x) => ast_line(d, depth, "int " + x.value.to_string() + " @" + ast_dump_pos(x.pos)),
+        AstExpr::BoolLit(x) => ast_line(d, depth, "bool " + x.value.to_string() + " @" + ast_dump_pos(x.pos)),
+        AstExpr::StrLit(x) => ast_line(d, depth, "string " + ast_quote(x.value) + " @" + ast_dump_pos(x.pos)),
+        AstExpr::UnitLit(x) => ast_line(d, depth, "unit @" + ast_dump_pos(x.pos)),
+        AstExpr::Ident(x) => ast_line(d, depth, "ident " + x.name + " @" + ast_dump_pos(x.pos)),
+        AstExpr::Binary(x) => {
+            ast_line(d, depth, "binary " + x.op + " @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+            ast_dump_expr(d, depth + 1, x.y);
+        }
+        AstExpr::Unary(x) => {
+            ast_line(d, depth, "unary " + x.op + " @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+        }
+        AstExpr::Call(x) => {
+            ast_line(d, depth, "call @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.func);
+            for a in x.args {
+                ast_dump_expr(d, depth + 1, a);
+            }
+        }
+        AstExpr::Method(x) => {
+            ast_line(d, depth, "method " + x.name + " @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.recv);
+            for a in x.args {
+                ast_dump_expr(d, depth + 1, a);
+            }
+        }
+        AstExpr::Field(x) => {
+            ast_line(d, depth, "field " + x.name + " @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+        }
+        AstExpr::Path(x) => ast_line(d, depth, "path " + x.ty + "::" + x.name + " @" + ast_dump_pos(x.pos)),
+        AstExpr::StructLit(x) => {
+            ast_line(d, depth, "struct-lit " + x.name + " @" + ast_dump_pos(x.pos));
+            for f in x.fields {
+                ast_line(d, depth + 1, "init " + f.name + " @" + ast_dump_pos(f.pos));
+                ast_dump_expr(d, depth + 2, f.value);
+            }
+        }
+        AstExpr::If(x) => {
+            ast_line(d, depth, "if @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.cond);
+            ast_dump_block(d, depth + 1, x.then);
+            match x.els {
+                Some(e) => {
+                    ast_line(d, depth + 1, "else");
+                    ast_dump_expr(d, depth + 2, e);
+                }
+                None => {}
+            }
+        }
+        AstExpr::Match(x) => {
+            ast_line(d, depth, "match @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+            for a in x.arms {
+                ast_line(d, depth + 1, "arm @" + ast_dump_pos(a.pos));
+                ast_dump_pattern(d, depth + 2, a.pat);
+                ast_dump_expr(d, depth + 2, a.body);
+            }
+        }
+        AstExpr::Block(b) => ast_dump_block(d, depth, b),
+        AstExpr::Try(x) => {
+            ast_line(d, depth, "try @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+        }
+        AstExpr::Closure(x) => {
+            ast_line(d, depth, "closure @" + ast_dump_pos(x.pos));
+            for p in x.params {
+                ast_dump_param(d, depth + 1, p);
+            }
+            ast_dump_expr(d, depth + 1, x.body);
+        }
+    }
+}
+
+fn ast_dump_pattern(d: AstDumper, depth: Int, p: AstPattern) {
+    let at = " @" + ast_dump_pos(p.pos);
+    if p.wildcard {
+        ast_line(d, depth, "pat _" + at);
+        return;
+    }
+    match p.int_value {
+        Some(v) => {
+            ast_line(d, depth, "pat int " + v.to_string() + at);
+            return;
+        }
+        None => {}
+    }
+    match p.bool_lit {
+        Some(b) => {
+            ast_line(d, depth, "pat bool " + b.to_string() + at);
+            return;
+        }
+        None => {}
+    }
+    match p.str_value {
+        Some(s) => {
+            ast_line(d, depth, "pat string " + ast_quote(s) + at);
+            return;
+        }
+        None => {}
+    }
+    ast_line(d, depth, "pat type=" + p.ty + " ctor=" + p.ctor + " bind=" + p.bind + at);
+    for a in p.args {
+        ast_dump_pattern(d, depth + 1, a);
+    }
+}

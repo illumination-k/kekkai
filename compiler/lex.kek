@@ -1,0 +1,310 @@
+// Lexer: a port of internal/syntax/lexer.go.
+//
+// Token kinds are strings: "EOF", "IDENT", "INT", "STRING" for the token
+// classes, and the source spelling for keywords and punctuation ("fn",
+// "(", "->", ...). The lexer scans the UTF-8 bytes of the source (like the
+// Go implementation, columns count bytes) and keeps a parallel UTF-16
+// offset so that token texts can be sliced from the JS source string.
+
+struct Tok {
+    kind: String,
+    text: String,
+    pos: AstPos,
+}
+
+struct LexState {
+    src: String,
+    bytes: Vec<Int>,
+    n: Int,
+    off: Int,
+    uoff: Int,
+    line: Int,
+    col: Int,
+    file: String,
+    toks: Vec<Tok>,
+    errs: Vec<AstError>,
+}
+
+struct LexResult {
+    toks: Vec<Tok>,
+    errs: Vec<AstError>,
+}
+
+// lex_kind_name is TokenKind.String() in Go.
+fn lex_kind_name(k: String) -> String {
+    if k == "EOF" {
+        return "end of file";
+    }
+    if k == "IDENT" {
+        return "identifier";
+    }
+    if k == "INT" {
+        return "integer literal";
+    }
+    if k == "STRING" {
+        return "string literal";
+    }
+    "`" + k + "`"
+}
+
+fn lex_is_keyword(w: String) -> Bool {
+    w == "fn" || w == "let" || w == "mut" || w == "if" || w == "else" || w == "match"
+        || w == "while" || w == "return" || w == "true" || w == "false" || w == "struct"
+        || w == "enum" || w == "_" || w == "for" || w == "in" || w == "break" || w == "continue"
+}
+
+fn lex_peek(lx: LexState, n: Int) -> Int {
+    lx.bytes.get(lx.off + n).unwrap_or(0)
+}
+
+fn lex_advance(lx: LexState) -> Int {
+    let c = lx.bytes.get(lx.off).unwrap_or(0);
+    lx.off = lx.off + 1;
+    if c < 128 || c >= 240 {
+        lx.uoff = lx.uoff + if c >= 240 { 2 } else { 1 };
+    } else if c >= 192 {
+        lx.uoff = lx.uoff + 1;
+    }
+    if c == 10 {
+        lx.line = lx.line + 1;
+        lx.col = 1;
+    } else {
+        lx.col = lx.col + 1;
+    }
+    c
+}
+
+fn lex_pos(lx: LexState) -> AstPos {
+    AstPos { file: lx.file, line: lx.line, col: lx.col }
+}
+
+fn lex_emit(lx: LexState, k: String, text: String, pos: AstPos) {
+    lx.toks.push(Tok { kind: k, text: text, pos: pos });
+}
+
+fn lex_error(lx: LexState, pos: AstPos, msg: String) {
+    lx.errs.push(AstError { pos: pos, msg: msg });
+}
+
+fn lex_is_ident_start(c: Int) -> Bool {
+    c == 95 || (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+}
+
+fn lex_is_digit(c: Int) -> Bool {
+    c >= 48 && c <= 57
+}
+
+fn lex_two_char(a: Int, b: Int) -> String {
+    if a == 58 && b == 58 { return "::"; }
+    if a == 45 && b == 62 { return "->"; }
+    if a == 61 && b == 62 { return "=>"; }
+    if a == 38 && b == 38 { return "&&"; }
+    if a == 124 && b == 124 { return "||"; }
+    if a == 61 && b == 61 { return "=="; }
+    if a == 33 && b == 61 { return "!="; }
+    if a == 60 && b == 61 { return "<="; }
+    if a == 62 && b == 61 { return ">="; }
+    if a == 46 && b == 46 { return ".."; }
+    ""
+}
+
+fn lex_one_char(c: Int) -> String {
+    // ( ) { } [ ] , ; : . & | ? # ! = < > + - * / %
+    if c == 40 || c == 41 || c == 123 || c == 125 || c == 91 || c == 93 || c == 44 || c == 59
+        || c == 58 || c == 46 || c == 38 || c == 124 || c == 63 || c == 35 || c == 33 || c == 61
+        || c == 60 || c == 62 || c == 43 || c == 45 || c == 42 || c == 47 || c == 37 {
+        return String::from_char(c);
+    }
+    ""
+}
+
+fn lex_hex2(b: Int) -> String {
+    let digits = "0123456789abcdef";
+    digits.slice(b.shr(4), b.shr(4) + 1) + digits.slice(b.bit_and(15), b.bit_and(15) + 1)
+}
+
+// lex_quote_byte is Go's %q applied to a byte (formatted as a rune).
+fn lex_quote_byte(c: Int) -> String {
+    if c == 7 { return "'\\a'"; }
+    if c == 8 { return "'\\b'"; }
+    if c == 12 { return "'\\f'"; }
+    if c == 10 { return "'\\n'"; }
+    if c == 13 { return "'\\r'"; }
+    if c == 9 { return "'\\t'"; }
+    if c == 11 { return "'\\v'"; }
+    if c == 39 { return "'\\''"; }
+    if c == 92 { return "'\\\\'"; }
+    if c < 32 || c == 127 {
+        return "'\\x" + lex_hex2(c) + "'";
+    }
+    if c < 127 || (c >= 161 && c != 173) {
+        return "'" + String::from_char(c) + "'";
+    }
+    "'\\u00" + lex_hex2(c) + "'"
+}
+
+fn lex_file(file: String, src: String) -> LexResult {
+    let bytes = src.to_bytes();
+    let lx = LexState {
+        src: src, bytes: bytes, n: bytes.len(), off: 0, uoff: 0, line: 1, col: 1, file: file,
+        toks: Vec::new(), errs: Vec::new(),
+    };
+    lex_run(lx);
+    LexResult { toks: lx.toks, errs: lx.errs }
+}
+
+fn lex_run(lx: LexState) {
+    while lx.off < lx.n {
+        let c = lex_peek(lx, 0);
+        let pos = lex_pos(lx);
+        if c == 32 || c == 9 || c == 13 || c == 10 {
+            lex_advance(lx);
+        } else if c == 47 && lex_peek(lx, 1) == 47 {
+            while lx.off < lx.n && lex_peek(lx, 0) != 10 {
+                lex_advance(lx);
+            }
+        } else if c == 47 && lex_peek(lx, 1) == 42 {
+            lex_advance(lx);
+            lex_advance(lx);
+            while lx.off < lx.n && !(lex_peek(lx, 0) == 42 && lex_peek(lx, 1) == 47) {
+                lex_advance(lx);
+            }
+            if lx.off >= lx.n {
+                lex_error(lx, pos, "unterminated block comment");
+            } else {
+                lex_advance(lx);
+                lex_advance(lx);
+            }
+        } else if lex_is_ident_start(c) {
+            let start = lx.uoff;
+            while lx.off < lx.n && (lex_is_ident_start(lex_peek(lx, 0)) || lex_is_digit(lex_peek(lx, 0))) {
+                lex_advance(lx);
+            }
+            let word = lx.src.slice(start, lx.uoff);
+            if lex_is_keyword(word) {
+                lex_emit(lx, word, word, pos);
+            } else {
+                lex_emit(lx, "IDENT", word, pos);
+            }
+        } else if lex_is_digit(c) {
+            let start = lx.uoff;
+            while lx.off < lx.n && (lex_is_digit(lex_peek(lx, 0)) || lex_peek(lx, 0) == 95) {
+                lex_advance(lx);
+            }
+            lex_emit(lx, "INT", lx.src.slice(start, lx.uoff).replace("_", ""), pos);
+        } else if c == 34 {
+            lex_string(lx, pos);
+        } else {
+            let mut done = false;
+            if lx.off + 1 < lx.n {
+                let k2 = lex_two_char(c, lex_peek(lx, 1));
+                if k2 != "" {
+                    lex_advance(lx);
+                    lex_advance(lx);
+                    lex_emit(lx, k2, "", pos);
+                    done = true;
+                }
+            }
+            if !done {
+                let k1 = lex_one_char(c);
+                if k1 != "" {
+                    lex_advance(lx);
+                    lex_emit(lx, k1, "", pos);
+                } else if c < 128 {
+                    lex_error(lx, pos, "unexpected character " + lex_quote_byte(c));
+                    lex_advance(lx);
+                } else {
+                    lex_unexpected_rune(lx, pos);
+                }
+            }
+        }
+    }
+    lex_emit(lx, "EOF", "", lex_pos(lx));
+}
+
+fn lex_string(lx: LexState, pos: AstPos) {
+    lex_advance(lx); // opening quote
+    let parts = Vec::new();
+    let mut seg = lx.uoff;
+    while true {
+        if lx.off >= lx.n || lex_peek(lx, 0) == 10 {
+            lex_error(lx, pos, "unterminated string literal");
+            parts.push(lx.src.slice(seg, lx.uoff));
+            break;
+        }
+        let before = lx.uoff;
+        let c = lex_advance(lx);
+        if c == 34 {
+            parts.push(lx.src.slice(seg, before));
+            break;
+        }
+        if c != 92 {
+            continue;
+        }
+        parts.push(lx.src.slice(seg, before));
+        if lx.off >= lx.n {
+            seg = lx.uoff;
+            continue;
+        }
+        let e = lex_advance(lx);
+        seg = lx.uoff;
+        if e == 110 {
+            parts.push("\n");
+        } else if e == 116 {
+            parts.push("\t");
+        } else if e == 114 {
+            parts.push("\r");
+        } else if e == 92 {
+            parts.push("\\");
+        } else if e == 34 {
+            parts.push("\"");
+        } else if e == 48 {
+            parts.push(String::from_char(0));
+        } else {
+            lex_error(lx, AstPos { file: lx.file, line: lx.line, col: lx.col - 2 }, "unknown escape sequence \\" + String::from_char(e));
+        }
+    }
+    lex_emit(lx, "STRING", parts.join(""), pos);
+}
+
+// lex_unexpected_rune reports a non-ASCII character (one diagnostic per
+// UTF-8 sequence, formatted like Go's %q of a rune).
+fn lex_unexpected_rune(lx: LexState, pos: AstPos) {
+    let c = lex_peek(lx, 0);
+    let mut size = 1;
+    let mut r = 65533;
+    if c >= 194 && c < 224 {
+        size = 2;
+        r = c.bit_and(31);
+    } else if c >= 224 && c < 240 {
+        size = 3;
+        r = c.bit_and(15);
+    } else if c >= 240 && c < 245 {
+        size = 4;
+        r = c.bit_and(7);
+    }
+    if size > 1 {
+        for i in 1..size {
+            let b = lex_peek(lx, i);
+            if b < 128 || b >= 192 {
+                size = 1;
+                r = 65533;
+                break;
+            }
+            r = r.shl(6).bit_or(b.bit_and(63));
+        }
+    }
+    let ustart = lx.uoff;
+    for i in 0..size {
+        lex_advance(lx);
+    }
+    let mut q = "";
+    if r <= 160 || r == 173 || r == 8232 || r == 8233 || r == 65279 || (r >= 8203 && r <= 8207) {
+        q = "\\u" + lex_hex2(r.shr(8)) + lex_hex2(r.bit_and(255));
+    } else if r == 65533 && size == 1 {
+        q = String::from_char(65533);
+    } else {
+        q = lx.src.slice(ustart, lx.uoff);
+    }
+    lex_error(lx, pos, "unexpected character '" + q + "'");
+}

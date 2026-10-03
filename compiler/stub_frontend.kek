@@ -1,5 +1,0 @@
-// Placeholder until the front end lands (delete this file when implementing frontend_main).
-fn frontend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
-    log.error("front end not implemented yet");
-    1
-}

@@ -1,0 +1,714 @@
+// Parser: a port of internal/syntax/parser.go.
+//
+// The Go parser bails out on the first syntax error with a panic. Here a
+// failure sets `failed`; from then on the parser sees only EOF (so every
+// loop terminates quickly) and further errors are suppressed.
+
+struct AstIds {
+    next: Int,
+}
+
+struct ParseState {
+    toks: Vec<Tok>,
+    pos: Int,
+    eof: Tok,
+    errs: Vec<AstError>,
+    no_struct: Bool,
+    failed: Bool,
+    ids: AstIds,
+}
+
+struct ParseResult {
+    file: AstFile,
+    errs: Vec<AstError>,
+}
+
+fn parse_id(p: ParseState) -> Int {
+    p.ids.next = p.ids.next + 1;
+    p.ids.next
+}
+
+fn parse_tok(p: ParseState) -> Tok {
+    if p.failed {
+        return p.eof;
+    }
+    match p.toks.get(p.pos) {
+        Some(t) => t,
+        None => p.eof,
+    }
+}
+
+fn parse_at(p: ParseState, k: String) -> Bool {
+    parse_tok(p).kind == k
+}
+
+fn parse_next(p: ParseState) -> Tok {
+    let t = parse_tok(p);
+    if t.kind != "EOF" {
+        p.pos = p.pos + 1;
+    }
+    t
+}
+
+fn parse_accept(p: ParseState, k: String) -> Bool {
+    if parse_at(p, k) {
+        parse_next(p);
+        return true;
+    }
+    false
+}
+
+fn parse_fail(p: ParseState, pos: AstPos, msg: String) {
+    if !p.failed {
+        p.errs.push(AstError { pos: pos, msg: msg });
+        p.failed = true;
+    }
+}
+
+fn parse_expect(p: ParseState, k: String) -> Tok {
+    let t = parse_tok(p);
+    if t.kind != k {
+        parse_fail(p, t.pos, "expected " + lex_kind_name(k) + ", found " + parse_describe(t));
+    }
+    parse_next(p)
+}
+
+fn parse_describe(t: Tok) -> String {
+    if t.kind == "IDENT" {
+        return "identifier `" + t.text + "`";
+    }
+    if t.kind == "INT" {
+        return "integer `" + t.text + "`";
+    }
+    if t.kind == "STRING" {
+        return "string literal";
+    }
+    lex_kind_name(t.kind)
+}
+
+// parse_file parses one source file (ParseFile in Go): lexer errors plus at
+// most one syntax error, sorted by position.
+fn parse_file(name: String, src: String, ids: AstIds) -> ParseResult {
+    let lr = lex_file(name, src);
+    let eof = match lr.toks.get(lr.toks.len() - 1) {
+        Some(t) => t,
+        None => Tok { kind: "EOF", text: "", pos: AstPos { file: name, line: 1, col: 1 } },
+    };
+    let p = ParseState {
+        toks: lr.toks, pos: 0, eof: eof, errs: lr.errs, no_struct: false, failed: false, ids: ids,
+    };
+    let f = parse_items(p);
+    ParseResult { file: f, errs: ast_sort_errors(p.errs) }
+}
+
+fn parse_items(p: ParseState) -> AstFile {
+    let f = AstFile { structs: Vec::new(), enums: Vec::new(), funcs: Vec::new() };
+    while !parse_at(p, "EOF") {
+        let attrs = Vec::new();
+        while parse_at(p, "#") {
+            let pos = parse_next(p).pos;
+            parse_expect(p, "[");
+            let name = parse_expect(p, "IDENT");
+            parse_expect(p, "]");
+            attrs.push(AstAttr { pos: pos, name: name.text });
+        }
+        let k = parse_tok(p).kind;
+        if k == "fn" {
+            let fd = parse_func(p);
+            fd.attrs = attrs;
+            if !p.failed {
+                f.funcs.push(fd);
+            }
+        } else if k == "struct" {
+            let sd = parse_struct(p);
+            if !p.failed {
+                f.structs.push(sd);
+            }
+        } else if k == "enum" {
+            let ed = parse_enum(p);
+            if !p.failed {
+                f.enums.push(ed);
+            }
+        } else {
+            parse_fail(p, parse_tok(p).pos, "expected item (`fn`, `struct` or `enum`), found " + parse_describe(parse_tok(p)));
+        }
+    }
+    f
+}
+
+fn parse_struct(p: ParseState) -> AstStructDecl {
+    let pos = parse_expect(p, "struct").pos;
+    let name = parse_expect(p, "IDENT").text;
+    let d = AstStructDecl { id: parse_id(p), pos: pos, name: name, fields: Vec::new() };
+    parse_expect(p, "{");
+    while !parse_at(p, "}") {
+        let fp = parse_tok(p).pos;
+        let fname = parse_expect(p, "IDENT").text;
+        parse_expect(p, ":");
+        let ty = parse_type(p);
+        d.fields.push(AstField { id: parse_id(p), pos: fp, name: fname, ty: ty });
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, "}");
+    d
+}
+
+fn parse_enum(p: ParseState) -> AstEnumDecl {
+    let pos = parse_expect(p, "enum").pos;
+    let name = parse_expect(p, "IDENT").text;
+    let d = AstEnumDecl { id: parse_id(p), pos: pos, name: name, variants: Vec::new() };
+    parse_expect(p, "{");
+    while !parse_at(p, "}") {
+        let vp = parse_tok(p).pos;
+        let vname = parse_expect(p, "IDENT").text;
+        let v = AstVariant { id: parse_id(p), pos: vp, name: vname, fields: Vec::new() };
+        if parse_accept(p, "(") {
+            while !parse_at(p, ")") {
+                v.fields.push(parse_type(p));
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, ")");
+        }
+        d.variants.push(v);
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, "}");
+    d
+}
+
+fn parse_func(p: ParseState) -> AstFuncDecl {
+    let pos = parse_expect(p, "fn").pos;
+    let name = parse_expect(p, "IDENT").text;
+    let id = parse_id(p);
+    let params = Vec::new();
+    parse_expect(p, "(");
+    while !parse_at(p, ")") {
+        let pp = parse_tok(p).pos;
+        let mut pname = "_";
+        if parse_at(p, "_") {
+            parse_next(p);
+        } else {
+            pname = parse_expect(p, "IDENT").text;
+        }
+        parse_expect(p, ":");
+        let ty = parse_type(p);
+        params.push(AstParam { id: parse_id(p), pos: pp, name: pname, ty: Some(ty) });
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, ")");
+    let mut result = None;
+    if parse_accept(p, "->") {
+        result = Some(parse_type(p));
+    }
+    let body = parse_block(p);
+    AstFuncDecl { id: id, pos: pos, attrs: Vec::new(), name: name, params: params, result: result, body: body }
+}
+
+fn parse_dummy_pos(p: ParseState) -> AstPos {
+    p.eof.pos
+}
+
+fn parse_type(p: ParseState) -> AstType {
+    let t = parse_tok(p);
+    if t.kind == "&" {
+        parse_next(p);
+        let id = parse_id(p);
+        let elem = parse_type(p);
+        return AstType::Ref(AstRefType { id: id, pos: t.pos, elem: elem });
+    }
+    if t.kind == "(" {
+        parse_next(p);
+        parse_expect(p, ")");
+        return AstType::Unit(AstUnitType { id: parse_id(p), pos: t.pos });
+    }
+    if t.kind == "IDENT" {
+        parse_next(p);
+        let nt = AstNamedType { id: parse_id(p), pos: t.pos, name: t.text, args: Vec::new() };
+        if parse_accept(p, "<") {
+            while true {
+                nt.args.push(parse_type(p));
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, ">");
+        }
+        return AstType::Named(nt);
+    }
+    parse_fail(p, t.pos, "expected type, found " + parse_describe(t));
+    AstType::Unit(AstUnitType { id: parse_id(p), pos: t.pos })
+}
+
+fn parse_block(p: ParseState) -> AstBlock {
+    let pos = parse_expect(p, "{").pos;
+    let saved = p.no_struct;
+    p.no_struct = false;
+    let b = AstBlock { id: parse_id(p), pos: pos, stmts: Vec::new(), tail: None, end: pos };
+    while !parse_at(p, "}") && !parse_at(p, "EOF") {
+        let sp = parse_tok(p).pos;
+        let k = parse_tok(p).kind;
+        if k == ";" {
+            parse_next(p);
+            continue;
+        }
+        if k == "let" {
+            parse_next(p);
+            let mutable = parse_accept(p, "mut");
+            let mut name = "_";
+            if parse_at(p, "_") {
+                parse_next(p);
+            } else {
+                name = parse_expect(p, "IDENT").text;
+            }
+            let mut ty = None;
+            if parse_accept(p, ":") {
+                ty = Some(parse_type(p));
+            }
+            parse_expect(p, "=");
+            let init = parse_expr(p);
+            parse_expect(p, ";");
+            b.stmts.push(AstStmt::Let(AstLetStmt { id: parse_id(p), pos: sp, mutable: mutable, name: name, ty: ty, init: init }));
+            continue;
+        }
+        if k == "while" {
+            parse_next(p);
+            p.no_struct = true;
+            let cond = parse_expr(p);
+            p.no_struct = false;
+            let body = parse_block(p);
+            b.stmts.push(AstStmt::While(AstWhileStmt { id: parse_id(p), pos: sp, cond: cond, body: body }));
+            continue;
+        }
+        if k == "for" {
+            parse_next(p);
+            let mut var = "_";
+            if !parse_accept(p, "_") {
+                var = parse_expect(p, "IDENT").text;
+            }
+            parse_expect(p, "in");
+            p.no_struct = true;
+            let iter = parse_expr(p);
+            let mut end = None;
+            if parse_accept(p, "..") {
+                end = Some(parse_expr(p));
+            }
+            p.no_struct = false;
+            let body = parse_block(p);
+            b.stmts.push(AstStmt::For(AstForStmt { id: parse_id(p), pos: sp, var: var, iter: iter, end: end, body: body }));
+            continue;
+        }
+        if k == "return" {
+            parse_next(p);
+            let mut value = None;
+            if !parse_at(p, ";") && !parse_at(p, "}") {
+                value = Some(parse_expr(p));
+            }
+            if !parse_accept(p, ";") && !parse_at(p, "}") {
+                parse_fail(p, parse_tok(p).pos, "expected `;` after return, found " + parse_describe(parse_tok(p)));
+            }
+            b.stmts.push(AstStmt::Return(AstReturnStmt { id: parse_id(p), pos: sp, value: value }));
+            continue;
+        }
+        if k == "break" || k == "continue" {
+            parse_next(p);
+            if !parse_accept(p, ";") && !parse_at(p, "}") {
+                parse_fail(p, parse_tok(p).pos, "expected `;`, found " + parse_describe(parse_tok(p)));
+            }
+            if k == "break" {
+                b.stmts.push(AstStmt::Break(AstBreakStmt { id: parse_id(p), pos: sp }));
+            } else {
+                b.stmts.push(AstStmt::Continue(AstContinueStmt { id: parse_id(p), pos: sp }));
+            }
+            continue;
+        }
+        let mut e = AstExpr::UnitLit(AstUnitLit { id: 0, pos: sp });
+        if k == "if" || k == "match" || k == "{" {
+            // A block-like expression in statement position ends the
+            // statement unless it is followed by a method call or `?`.
+            e = parse_primary(p);
+            if parse_at(p, ".") || parse_at(p, "?") {
+                e = parse_binary_rest(p, parse_postfix(p, e), 0);
+            }
+        } else {
+            e = parse_expr(p);
+        }
+        if parse_accept(p, "=") {
+            let val = parse_expr(p);
+            parse_expect(p, ";");
+            match e {
+                AstExpr::Ident(t) => b.stmts.push(AstStmt::Assign(AstAssignStmt { id: parse_id(p), pos: sp, name: t.name, value: val })),
+                AstExpr::Field(t) => b.stmts.push(AstStmt::FieldAssign(AstFieldAssignStmt { id: parse_id(p), pos: sp, target: t, value: val })),
+                _ => parse_fail(p, sp, "invalid assignment target"),
+            }
+            continue;
+        }
+        if parse_accept(p, ";") {
+            b.stmts.push(AstStmt::Expr(AstExprStmt { id: parse_id(p), pos: sp, x: e, semi: true }));
+            continue;
+        }
+        if parse_at(p, "}") {
+            b.tail = Some(e);
+            break;
+        }
+        if parse_block_like(e) {
+            b.stmts.push(AstStmt::Expr(AstExprStmt { id: parse_id(p), pos: sp, x: e, semi: false }));
+            continue;
+        }
+        parse_fail(p, parse_tok(p).pos, "expected `;` or `}`, found " + parse_describe(parse_tok(p)));
+    }
+    b.end = parse_expect(p, "}").pos;
+    p.no_struct = saved;
+    b
+}
+
+fn parse_block_like(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::If(_) => true,
+        AstExpr::Match(_) => true,
+        AstExpr::Block(_) => true,
+        _ => false,
+    }
+}
+
+fn parse_expr(p: ParseState) -> AstExpr {
+    parse_binary(p, 0)
+}
+
+fn parse_prec(k: String) -> Int {
+    if k == "||" {
+        return 1;
+    }
+    if k == "&&" {
+        return 2;
+    }
+    if k == "==" || k == "!=" || k == "<" || k == "<=" || k == ">" || k == ">=" {
+        return 3;
+    }
+    if k == "+" || k == "-" {
+        return 4;
+    }
+    if k == "*" || k == "/" || k == "%" {
+        return 5;
+    }
+    0
+}
+
+fn parse_binary(p: ParseState, min_prec: Int) -> AstExpr {
+    let x = parse_unary(p);
+    parse_binary_rest(p, x, min_prec)
+}
+
+fn parse_binary_rest(p: ParseState, x0: AstExpr, min_prec: Int) -> AstExpr {
+    let mut x = x0;
+    while true {
+        let op = parse_tok(p).kind;
+        let prec = parse_prec(op);
+        if prec == 0 || prec <= min_prec {
+            return x;
+        }
+        let pos = parse_next(p).pos;
+        let y = parse_binary(p, prec);
+        if prec == 3 && parse_prec(parse_tok(p).kind) == 3 {
+            // comparisons are non-associative
+            parse_fail(p, parse_tok(p).pos, "comparison operators cannot be chained");
+        }
+        x = AstExpr::Binary(AstBinary { id: parse_id(p), pos: pos, op: op, x: x, y: y });
+    }
+    x
+}
+
+fn parse_unary(p: ParseState) -> AstExpr {
+    let t = parse_tok(p);
+    if t.kind == "-" || t.kind == "!" {
+        parse_next(p);
+        let x = parse_unary(p);
+        return AstExpr::Unary(AstUnary { id: parse_id(p), pos: t.pos, op: t.kind, x: x });
+    }
+    let e = parse_primary(p);
+    parse_postfix(p, e)
+}
+
+fn parse_args(p: ParseState) -> Vec<AstExpr> {
+    parse_expect(p, "(");
+    let saved = p.no_struct;
+    p.no_struct = false;
+    let args = Vec::new();
+    while !parse_at(p, ")") {
+        args.push(parse_expr(p));
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, ")");
+    p.no_struct = saved;
+    args
+}
+
+fn parse_postfix(p: ParseState, x0: AstExpr) -> AstExpr {
+    let mut x = x0;
+    while true {
+        let t = parse_tok(p);
+        if t.kind == "(" {
+            let args = parse_args(p);
+            x = AstExpr::Call(AstCall { id: parse_id(p), pos: ast_expr_pos(x), func: x, args: args });
+        } else if t.kind == "." {
+            parse_next(p);
+            let name = parse_expect(p, "IDENT");
+            if parse_at(p, "(") {
+                let args = parse_args(p);
+                x = AstExpr::Method(AstMethodCall { id: parse_id(p), pos: name.pos, recv: x, name: name.text, args: args });
+            } else {
+                x = AstExpr::Field(AstFieldExpr { id: parse_id(p), pos: name.pos, x: x, name: name.text });
+            }
+        } else if t.kind == "?" {
+            parse_next(p);
+            x = AstExpr::Try(AstTry { id: parse_id(p), pos: t.pos, x: x });
+        } else {
+            return x;
+        }
+    }
+    x
+}
+
+fn parse_is_upper(s: String) -> Bool {
+    let c = s.char_at(0).unwrap_or(0);
+    c >= 65 && c <= 90
+}
+
+// parse_int_text is strconv.ParseInt(s, 10, 64) for a string of digits.
+fn parse_int_text(s: String) -> Option<Int> {
+    let n = s.len();
+    if n == 0 {
+        return None;
+    }
+    let mut v = 0;
+    for i in 0..n {
+        let d = s.char_at(i).unwrap_or(0) - 48;
+        if v > (9223372036854775807 - d) / 10 {
+            return None;
+        }
+        v = v * 10 + d;
+    }
+    Some(v)
+}
+
+fn parse_primary(p: ParseState) -> AstExpr {
+    let t = parse_tok(p);
+    let k = t.kind;
+    if k == "INT" {
+        parse_next(p);
+        let mut v = 0;
+        match parse_int_text(t.text) {
+            Some(n) => { v = n; }
+            None => parse_fail(p, t.pos, "integer literal out of range"),
+        }
+        return AstExpr::IntLit(AstIntLit { id: parse_id(p), pos: t.pos, value: v });
+    }
+    if k == "STRING" {
+        parse_next(p);
+        return AstExpr::StrLit(AstStringLit { id: parse_id(p), pos: t.pos, value: t.text });
+    }
+    if k == "true" || k == "false" {
+        parse_next(p);
+        return AstExpr::BoolLit(AstBoolLit { id: parse_id(p), pos: t.pos, value: k == "true" });
+    }
+    if k == "(" {
+        parse_next(p);
+        if parse_accept(p, ")") {
+            return AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: t.pos });
+        }
+        let saved = p.no_struct;
+        p.no_struct = false;
+        let e = parse_expr(p);
+        p.no_struct = saved;
+        parse_expect(p, ")");
+        return e;
+    }
+    if k == "{" {
+        return AstExpr::Block(parse_block(p));
+    }
+    if k == "if" {
+        return AstExpr::If(parse_if(p));
+    }
+    if k == "match" {
+        return parse_match(p);
+    }
+    if k == "|" || k == "||" {
+        return parse_closure(p);
+    }
+    if k == "IDENT" {
+        parse_next(p);
+        if parse_at(p, "::") {
+            parse_next(p);
+            let name = parse_expect(p, "IDENT");
+            return AstExpr::Path(AstPathExpr { id: parse_id(p), pos: t.pos, ty: t.text, name: name.text });
+        }
+        if parse_at(p, "{") && !p.no_struct && parse_is_upper(t.text) {
+            return parse_struct_lit(p, t);
+        }
+        return AstExpr::Ident(AstIdent { id: parse_id(p), pos: t.pos, name: t.text });
+    }
+    parse_fail(p, t.pos, "expected expression, found " + parse_describe(t));
+    AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: t.pos })
+}
+
+fn parse_struct_lit(p: ParseState, name: Tok) -> AstExpr {
+    parse_expect(p, "{");
+    let lit = AstStructLit { id: parse_id(p), pos: name.pos, name: name.text, fields: Vec::new() };
+    while !parse_at(p, "}") {
+        let ft = parse_expect(p, "IDENT");
+        let mut value = AstExpr::UnitLit(AstUnitLit { id: 0, pos: ft.pos });
+        if parse_accept(p, ":") {
+            value = parse_expr(p);
+        } else {
+            // shorthand `Point { x, y }`
+            value = AstExpr::Ident(AstIdent { id: parse_id(p), pos: ft.pos, name: ft.text });
+        }
+        lit.fields.push(AstFieldInit { id: parse_id(p), pos: ft.pos, name: ft.text, value: value });
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, "}");
+    AstExpr::StructLit(lit)
+}
+
+fn parse_closure(p: ParseState) -> AstExpr {
+    let pos = parse_tok(p).pos;
+    let id = parse_id(p);
+    let params = Vec::new();
+    if !parse_accept(p, "||") {
+        parse_expect(p, "|");
+        while !parse_at(p, "|") {
+            let pp = parse_tok(p).pos;
+            let name = parse_expect(p, "IDENT").text;
+            let mut ty = None;
+            if parse_accept(p, ":") {
+                ty = Some(parse_type(p));
+            }
+            params.push(AstParam { id: parse_id(p), pos: pp, name: name, ty: ty });
+            if !parse_accept(p, ",") {
+                break;
+            }
+        }
+        parse_expect(p, "|");
+    }
+    let body = parse_expr(p);
+    AstExpr::Closure(AstClosure { id: id, pos: pos, params: params, body: body })
+}
+
+fn parse_if(p: ParseState) -> AstIf {
+    let pos = parse_expect(p, "if").pos;
+    let saved = p.no_struct;
+    p.no_struct = true;
+    let cond = parse_expr(p);
+    p.no_struct = saved;
+    let then = parse_block(p);
+    let e = AstIf { id: parse_id(p), pos: pos, cond: cond, then: then, els: None };
+    if parse_accept(p, "else") {
+        if parse_at(p, "if") {
+            e.els = Some(AstExpr::If(parse_if(p)));
+        } else {
+            e.els = Some(AstExpr::Block(parse_block(p)));
+        }
+    }
+    e
+}
+
+fn parse_match(p: ParseState) -> AstExpr {
+    let pos = parse_expect(p, "match").pos;
+    let saved = p.no_struct;
+    p.no_struct = true;
+    let x = parse_expr(p);
+    p.no_struct = saved;
+    let m = AstMatch { id: parse_id(p), pos: pos, x: x, arms: Vec::new() };
+    parse_expect(p, "{");
+    while !parse_at(p, "}") {
+        let ap = parse_tok(p).pos;
+        let pat = parse_pattern(p);
+        parse_expect(p, "=>");
+        let body = parse_expr(p);
+        m.arms.push(AstMatchArm { id: parse_id(p), pos: ap, pat: pat, body: body });
+        if !parse_accept(p, ",") {
+            if parse_block_like(body) && !p.failed {
+                continue;
+            }
+            break;
+        }
+    }
+    parse_expect(p, "}");
+    AstExpr::Match(m)
+}
+
+fn parse_pattern(p: ParseState) -> AstPattern {
+    let t = parse_tok(p);
+    let pat = AstPattern {
+        id: parse_id(p), pos: t.pos, wildcard: false, bind: "", ty: "", ctor: "", args: Vec::new(),
+        int_value: None, bool_lit: None, str_value: None,
+    };
+    let k = t.kind;
+    if k == "_" {
+        parse_next(p);
+        pat.wildcard = true;
+        return pat;
+    }
+    if k == "INT" || k == "-" {
+        let neg = parse_accept(p, "-");
+        let it = parse_expect(p, "INT");
+        let mut v = 0;
+        match parse_int_text(it.text) {
+            Some(n) => { v = n; }
+            None => parse_fail(p, it.pos, "integer literal out of range"),
+        }
+        if neg {
+            v = -v;
+        }
+        pat.int_value = Some(v);
+        return pat;
+    }
+    if k == "true" || k == "false" {
+        parse_next(p);
+        pat.bool_lit = Some(k == "true");
+        return pat;
+    }
+    if k == "STRING" {
+        parse_next(p);
+        pat.str_value = Some(t.text);
+        return pat;
+    }
+    if k == "IDENT" {
+        parse_next(p);
+        let mut name = t.text;
+        if parse_accept(p, "::") {
+            pat.ty = name;
+            name = parse_expect(p, "IDENT").text;
+            pat.ctor = name;
+        }
+        if parse_accept(p, "(") {
+            pat.ctor = name;
+            while !parse_at(p, ")") {
+                pat.args.push(parse_pattern(p));
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, ")");
+            return pat;
+        }
+        if pat.ctor == "" {
+            // resolved by the checker: binding or nullary constructor
+            pat.bind = name;
+        }
+        return pat;
+    }
+    parse_fail(p, t.pos, "expected pattern, found " + parse_describe(t));
+    pat
+}

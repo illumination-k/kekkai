@@ -1,0 +1,524 @@
+// AST: a port of internal/syntax/ast.go. Every node carries `id: Int`
+// (unique within a parse session) so that later passes can key Maps by
+// node.
+
+struct AstPos {
+    file: String,
+    line: Int,
+    col: Int,
+}
+
+struct AstError {
+    pos: AstPos,
+    msg: String,
+}
+
+struct AstFile {
+    structs: Vec<AstStructDecl>,
+    enums: Vec<AstEnumDecl>,
+    funcs: Vec<AstFuncDecl>,
+}
+
+// ---- types ----
+
+enum AstType {
+    Named(AstNamedType),
+    Ref(AstRefType),
+    Unit(AstUnitType),
+}
+
+struct AstNamedType {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    args: Vec<AstType>,
+}
+
+struct AstRefType {
+    id: Int,
+    pos: AstPos,
+    elem: AstType,
+}
+
+struct AstUnitType {
+    id: Int,
+    pos: AstPos,
+}
+
+// ---- declarations ----
+
+struct AstAttr {
+    pos: AstPos,
+    name: String,
+}
+
+struct AstField {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    ty: AstType,
+}
+
+struct AstStructDecl {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    fields: Vec<AstField>,
+}
+
+struct AstVariant {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    fields: Vec<AstType>,
+}
+
+struct AstEnumDecl {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    variants: Vec<AstVariant>,
+}
+
+// Param of a function (ty always present) or a closure (ty optional).
+struct AstParam {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    ty: Option<AstType>,
+}
+
+struct AstFuncDecl {
+    id: Int,
+    pos: AstPos,
+    attrs: Vec<AstAttr>,
+    name: String,
+    params: Vec<AstParam>,
+    result: Option<AstType>,
+    body: AstBlock,
+}
+
+// ---- statements ----
+
+enum AstStmt {
+    Let(AstLetStmt),
+    Assign(AstAssignStmt),
+    FieldAssign(AstFieldAssignStmt),
+    Break(AstBreakStmt),
+    Continue(AstContinueStmt),
+    While(AstWhileStmt),
+    For(AstForStmt),
+    Return(AstReturnStmt),
+    Expr(AstExprStmt),
+}
+
+struct AstLetStmt {
+    id: Int,
+    pos: AstPos,
+    mutable: Bool,
+    name: String,
+    ty: Option<AstType>,
+    init: AstExpr,
+}
+
+struct AstAssignStmt {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    value: AstExpr,
+}
+
+struct AstFieldAssignStmt {
+    id: Int,
+    pos: AstPos,
+    target: AstFieldExpr,
+    value: AstExpr,
+}
+
+struct AstBreakStmt {
+    id: Int,
+    pos: AstPos,
+}
+
+struct AstContinueStmt {
+    id: Int,
+    pos: AstPos,
+}
+
+struct AstWhileStmt {
+    id: Int,
+    pos: AstPos,
+    cond: AstExpr,
+    body: AstBlock,
+}
+
+// `for x in start..end { }` (end is Some) or `for x in vec { }`.
+struct AstForStmt {
+    id: Int,
+    pos: AstPos,
+    var: String,
+    iter: AstExpr,
+    end: Option<AstExpr>,
+    body: AstBlock,
+}
+
+struct AstReturnStmt {
+    id: Int,
+    pos: AstPos,
+    value: Option<AstExpr>,
+}
+
+struct AstExprStmt {
+    id: Int,
+    pos: AstPos,
+    x: AstExpr,
+    semi: Bool,
+}
+
+// ---- expressions ----
+
+enum AstExpr {
+    IntLit(AstIntLit),
+    BoolLit(AstBoolLit),
+    StrLit(AstStringLit),
+    UnitLit(AstUnitLit),
+    Ident(AstIdent),
+    Binary(AstBinary),
+    Unary(AstUnary),
+    Call(AstCall),
+    Method(AstMethodCall),
+    Field(AstFieldExpr),
+    Path(AstPathExpr),
+    StructLit(AstStructLit),
+    If(AstIf),
+    Match(AstMatch),
+    Block(AstBlock),
+    Try(AstTry),
+    Closure(AstClosure),
+}
+
+struct AstIntLit {
+    id: Int,
+    pos: AstPos,
+    value: Int,
+}
+
+struct AstBoolLit {
+    id: Int,
+    pos: AstPos,
+    value: Bool,
+}
+
+struct AstStringLit {
+    id: Int,
+    pos: AstPos,
+    value: String,
+}
+
+struct AstUnitLit {
+    id: Int,
+    pos: AstPos,
+}
+
+struct AstIdent {
+    id: Int,
+    pos: AstPos,
+    name: String,
+}
+
+// op is a token kind ("+", "==", "&&", ...).
+struct AstBinary {
+    id: Int,
+    pos: AstPos,
+    op: String,
+    x: AstExpr,
+    y: AstExpr,
+}
+
+// op is "-" or "!".
+struct AstUnary {
+    id: Int,
+    pos: AstPos,
+    op: String,
+    x: AstExpr,
+}
+
+struct AstCall {
+    id: Int,
+    pos: AstPos,
+    func: AstExpr,
+    args: Vec<AstExpr>,
+}
+
+struct AstMethodCall {
+    id: Int,
+    pos: AstPos,
+    recv: AstExpr,
+    name: String,
+    args: Vec<AstExpr>,
+}
+
+struct AstFieldExpr {
+    id: Int,
+    pos: AstPos,
+    x: AstExpr,
+    name: String,
+}
+
+struct AstPathExpr {
+    id: Int,
+    pos: AstPos,
+    ty: String,
+    name: String,
+}
+
+struct AstFieldInit {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    value: AstExpr,
+}
+
+struct AstStructLit {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    fields: Vec<AstFieldInit>,
+}
+
+struct AstIf {
+    id: Int,
+    pos: AstPos,
+    cond: AstExpr,
+    then: AstBlock,
+    els: Option<AstExpr>,
+}
+
+// Pattern in a match arm. Patterns nest: `Ok(Some(n))`.
+struct AstPattern {
+    id: Int,
+    pos: AstPos,
+    wildcard: Bool,
+    bind: String,
+    ty: String,
+    ctor: String,
+    args: Vec<AstPattern>,
+    int_value: Option<Int>,
+    bool_lit: Option<Bool>,
+    str_value: Option<String>,
+}
+
+struct AstMatchArm {
+    id: Int,
+    pos: AstPos,
+    pat: AstPattern,
+    body: AstExpr,
+}
+
+struct AstMatch {
+    id: Int,
+    pos: AstPos,
+    x: AstExpr,
+    arms: Vec<AstMatchArm>,
+}
+
+struct AstBlock {
+    id: Int,
+    pos: AstPos,
+    stmts: Vec<AstStmt>,
+    tail: Option<AstExpr>,
+    end: AstPos,
+}
+
+struct AstTry {
+    id: Int,
+    pos: AstPos,
+    x: AstExpr,
+}
+
+struct AstClosure {
+    id: Int,
+    pos: AstPos,
+    params: Vec<AstParam>,
+    body: AstExpr,
+}
+
+// ---- helpers ----
+
+fn ast_pos_string(p: AstPos) -> String {
+    if p.file != "" {
+        return p.file + ":" + p.line.to_string() + ":" + p.col.to_string();
+    }
+    p.line.to_string() + ":" + p.col.to_string()
+}
+
+fn ast_error_string(e: AstError) -> String {
+    ast_pos_string(e.pos) + ": " + e.msg
+}
+
+fn ast_type_pos(t: AstType) -> AstPos {
+    match t {
+        AstType::Named(n) => n.pos,
+        AstType::Ref(r) => r.pos,
+        AstType::Unit(u) => u.pos,
+    }
+}
+
+fn ast_expr_pos(e: AstExpr) -> AstPos {
+    match e {
+        AstExpr::IntLit(x) => x.pos,
+        AstExpr::BoolLit(x) => x.pos,
+        AstExpr::StrLit(x) => x.pos,
+        AstExpr::UnitLit(x) => x.pos,
+        AstExpr::Ident(x) => x.pos,
+        AstExpr::Binary(x) => x.pos,
+        AstExpr::Unary(x) => x.pos,
+        AstExpr::Call(x) => x.pos,
+        AstExpr::Method(x) => x.pos,
+        AstExpr::Field(x) => x.pos,
+        AstExpr::Path(x) => x.pos,
+        AstExpr::StructLit(x) => x.pos,
+        AstExpr::If(x) => x.pos,
+        AstExpr::Match(x) => x.pos,
+        AstExpr::Block(x) => x.pos,
+        AstExpr::Try(x) => x.pos,
+        AstExpr::Closure(x) => x.pos,
+    }
+}
+
+fn ast_expr_id(e: AstExpr) -> Int {
+    match e {
+        AstExpr::IntLit(x) => x.id,
+        AstExpr::BoolLit(x) => x.id,
+        AstExpr::StrLit(x) => x.id,
+        AstExpr::UnitLit(x) => x.id,
+        AstExpr::Ident(x) => x.id,
+        AstExpr::Binary(x) => x.id,
+        AstExpr::Unary(x) => x.id,
+        AstExpr::Call(x) => x.id,
+        AstExpr::Method(x) => x.id,
+        AstExpr::Field(x) => x.id,
+        AstExpr::Path(x) => x.id,
+        AstExpr::StructLit(x) => x.id,
+        AstExpr::If(x) => x.id,
+        AstExpr::Match(x) => x.id,
+        AstExpr::Block(x) => x.id,
+        AstExpr::Try(x) => x.id,
+        AstExpr::Closure(x) => x.id,
+    }
+}
+
+fn ast_has_attr(f: AstFuncDecl, name: String) -> Bool {
+    for a in f.attrs {
+        if a.name == name {
+            return true;
+        }
+    }
+    false
+}
+
+// ast_pos_less orders positions by (file, line, col).
+fn ast_pos_less(a: AstPos, b: AstPos) -> Bool {
+    if a.file != b.file {
+        return ast_str_less(a.file, b.file);
+    }
+    if a.line != b.line {
+        return a.line < b.line;
+    }
+    a.col < b.col
+}
+
+// ast_str_less compares strings by UTF-16 code units (equal to byte order
+// for the ASCII strings the compiler compares).
+fn ast_str_less(a: String, b: String) -> Bool {
+    let n = a.len().min(b.len());
+    for i in 0..n {
+        let x = a.char_at(i).unwrap_or(0);
+        let y = b.char_at(i).unwrap_or(0);
+        if x != y {
+            return x < y;
+        }
+    }
+    a.len() < b.len()
+}
+
+// ast_sort_errors is a stable sort by position (ErrorList.Err in Go).
+fn ast_sort_errors(errs: Vec<AstError>) -> Vec<AstError> {
+    let n = errs.len();
+    if n <= 1 {
+        return errs;
+    }
+    let mid = n / 2;
+    let left = Vec::new();
+    let right = Vec::new();
+    for i in 0..n {
+        let e = errs.get(i).unwrap_or(AstError { pos: AstPos { file: "", line: 0, col: 0 }, msg: "" });
+        if i < mid {
+            left.push(e);
+        } else {
+            right.push(e);
+        }
+    }
+    let l = ast_sort_errors(left);
+    let r = ast_sort_errors(right);
+    let out = Vec::new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < l.len() || j < r.len() {
+        if j >= r.len() {
+            out.push(ast_err_at(l, i));
+            i = i + 1;
+        } else if i >= l.len() {
+            out.push(ast_err_at(r, j));
+            j = j + 1;
+        } else if ast_pos_less(ast_err_at(r, j).pos, ast_err_at(l, i).pos) {
+            out.push(ast_err_at(r, j));
+            j = j + 1;
+        } else {
+            out.push(ast_err_at(l, i));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn ast_err_at(v: Vec<AstError>, i: Int) -> AstError {
+    match v.get(i) {
+        Some(e) => e,
+        None => AstError { pos: AstPos { file: "", line: 0, col: 0 }, msg: "" },
+    }
+}
+
+// ast_quote is the canonical string quoting of the dumps (shared with
+// internal/selfhost/dump.go).
+fn ast_quote(s: String) -> String {
+    let parts = Vec::new();
+    parts.push("\"");
+    let n = s.len();
+    let mut start = 0;
+    for i in 0..n {
+        let c = s.char_at(i).unwrap_or(0);
+        let mut esc = "";
+        if c == 92 {
+            esc = "\\\\";
+        } else if c == 34 {
+            esc = "\\\"";
+        } else if c == 10 {
+            esc = "\\n";
+        } else if c == 9 {
+            esc = "\\t";
+        } else if c == 13 {
+            esc = "\\r";
+        } else if c < 32 || c == 127 {
+            esc = "\\x" + lex_hex2(c);
+        }
+        if esc != "" {
+            parts.push(s.slice(start, i));
+            parts.push(esc);
+            start = i + 1;
+        }
+    }
+    parts.push(s.slice(start, n));
+    parts.push("\"");
+    parts.join("")
+}

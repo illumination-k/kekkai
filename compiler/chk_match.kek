@@ -1,0 +1,376 @@
+// Match checking and nested-pattern exhaustiveness (Maranget's usefulness
+// algorithm): a port of the match section of internal/types/checker.go.
+
+struct ChkCtors {
+    finite: Bool,
+    names: Vec<String>,
+    fields: Vec<Vec<Ty>>,
+}
+
+struct ChkTag {
+    tag: Int,
+    refutable: Bool,
+}
+
+fn chk_match(c: Chk, e: AstMatch) -> Ty {
+    let mut st = ty_prune(chk_expr(c, e.x));
+    if ty_is_prim(st, "<invalid>") {
+        st = chk_new_var(c);
+    }
+    if ty_is_var(st) {
+        chk_errorf(c, e.pos, "type annotations needed for match scrutinee");
+        return ty_invalid();
+    }
+    let mut result = ty_never();
+    let rows: Vec<Vec<AstPattern>> = Vec::new();
+    for arm in e.arms {
+        chk_push(c, false);
+        chk_pattern(c, arm.pat, st);
+        if rows.len() > 0 && chk_exhaustive(c.info, rows, chk_tys1(st)) {
+            chk_errorf(c, arm.pos, "unreachable pattern");
+        }
+        let row = Vec::new();
+        row.push(arm.pat);
+        rows.push(row);
+        let at = chk_expr(c, arm.body);
+        if !ty_unify(result, at) {
+            let s1 = ty_str(ty_resolve(result));
+            chk_errorf(c, ast_expr_pos(arm.body), "match arms have incompatible types: expected `" + s1 + "`, found `" + ty_str(ty_resolve(at)) + "`");
+        }
+        result = ty_join(result, at);
+        chk_pop(c);
+    }
+    if !chk_exhaustive(c.info, rows, chk_tys1(st)) {
+        let s1 = ty_str(ty_resolve(st));
+        chk_errorf(c, e.pos, "non-exhaustive patterns in match on `" + s1 + "`" + chk_missing(c.info, rows, st));
+    }
+    result
+}
+
+// chk_ctors returns the constructor names and field types of a finite
+// type (finite is false for Int, String, ...).
+fn chk_ctors(t: Ty) -> ChkCtors {
+    let out = ChkCtors { finite: true, names: Vec::new(), fields: Vec::new() };
+    match ty_prune(t) {
+        Ty::Result(ok, err) => {
+            out.names.push("Ok(_)");
+            out.names.push("Err(_)");
+            out.fields.push(chk_tys1(ok));
+            out.fields.push(chk_tys1(err));
+        }
+        Ty::Option(el) => {
+            out.names.push("None");
+            out.names.push("Some(_)");
+            out.fields.push(Vec::new());
+            out.fields.push(chk_tys1(el));
+        }
+        Ty::Enum(en) => {
+            for v in en.variants {
+                let mut n = en.name + "::" + v.name;
+                if v.fields.len() > 0 {
+                    n = n + "(..)";
+                }
+                out.names.push(n);
+                out.fields.push(v.fields);
+            }
+        }
+        Ty::Prim(n) => {
+            if n == "Bool" {
+                out.names.push("false");
+                out.names.push("true");
+                out.fields.push(Vec::new());
+                out.fields.push(Vec::new());
+            } else {
+                out.finite = false;
+            }
+        }
+        _ => { out.finite = false; }
+    }
+    out
+}
+
+// chk_pat_tag: refutable with the tag if p tests a constructor (or bool
+// literal); other literal patterns have tag -1.
+fn chk_pat_tag(info: ChkInfo, p: AstPattern) -> ChkTag {
+    match info.patterns.get(p.id) {
+        None => ChkTag { tag: 0, refutable: false },
+        Some(pi) => {
+            if pi.kind == "ctor" {
+                return ChkTag { tag: pi.tag, refutable: true };
+            }
+            if pi.kind == "bool" {
+                if p.bool_lit.unwrap_or(false) {
+                    return ChkTag { tag: 1, refutable: true };
+                }
+                return ChkTag { tag: 0, refutable: true };
+            }
+            if pi.kind == "int" || pi.kind == "string" {
+                return ChkTag { tag: -1, refutable: true };
+            }
+            ChkTag { tag: 0, refutable: false }
+        }
+    }
+}
+
+fn chk_wild_pat() -> AstPattern {
+    AstPattern {
+        id: -1, pos: chk_dummy_pos(), wildcard: true, bind: "", ty: "", ctor: "", args: Vec::new(),
+        int_value: None, bool_lit: None, str_value: None,
+    }
+}
+
+fn chk_pat_at(r: Vec<AstPattern>, i: Int) -> AstPattern {
+    match r.get(i) {
+        Some(p) => p,
+        None => chk_wild_pat(),
+    }
+}
+
+// chk_append_rest returns out ++ r[1:].
+fn chk_append_rest(out: Vec<AstPattern>, r: Vec<AstPattern>) -> Vec<AstPattern> {
+    for i in 1..r.len() {
+        out.push(chk_pat_at(r, i));
+    }
+    out
+}
+
+fn chk_pat_args(info: ChkInfo, p: AstPattern) -> Vec<AstPattern> {
+    match info.patterns.get(p.id) {
+        Some(pi) => pi.args,
+        None => Vec::new(),
+    }
+}
+
+// chk_exhaustive reports whether the pattern matrix covers every value of
+// the column types.
+fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bool {
+    if tys.len() == 0 {
+        return rows.len() > 0;
+    }
+    // A row of irrefutable patterns covers everything. Checking this first
+    // also guarantees termination on recursive types.
+    for r in rows {
+        let mut all = true;
+        for p in r {
+            if chk_pat_tag(info, p).refutable {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            return true;
+        }
+    }
+    let t0 = chk_ty_at(tys, 0);
+    let rest_tys = Vec::new();
+    for i in 1..tys.len() {
+        rest_tys.push(chk_ty_at(tys, i));
+    }
+    let cs = chk_ctors(t0);
+    if !cs.finite {
+        let def: Vec<Vec<AstPattern>> = Vec::new();
+        for r in rows {
+            if !chk_pat_tag(info, chk_pat_at(r, 0)).refutable {
+                def.push(chk_append_rest(Vec::new(), r));
+            }
+        }
+        return chk_exhaustive(info, def, rest_tys);
+    }
+    for tag in 0..cs.names.len() {
+        let fields = cs.fields.get(tag).unwrap_or(Vec::new());
+        let spec: Vec<Vec<AstPattern>> = Vec::new();
+        for r in rows {
+            let pt = chk_pat_tag(info, chk_pat_at(r, 0));
+            if !pt.refutable {
+                let row = Vec::new();
+                for f in fields {
+                    row.push(chk_wild_pat());
+                }
+                spec.push(chk_append_rest(row, r));
+            } else if pt.tag == tag {
+                let args = chk_pat_args(info, chk_pat_at(r, 0));
+                if args.len() == fields.len() {
+                    let row = Vec::new();
+                    for a in args {
+                        row.push(a);
+                    }
+                    spec.push(chk_append_rest(row, r));
+                }
+            }
+        }
+        let tys2 = Vec::new();
+        for f in fields {
+            tys2.push(f);
+        }
+        for t in rest_tys {
+            tys2.push(t);
+        }
+        if !chk_exhaustive(info, spec, tys2) {
+            return false;
+        }
+    }
+    true
+}
+
+// chk_missing names the top-level constructors that are not fully covered.
+fn chk_missing(info: ChkInfo, rows: Vec<Vec<AstPattern>>, t: Ty) -> String {
+    let cs = chk_ctors(t);
+    if !cs.finite {
+        return ": add a `_` arm";
+    }
+    let miss = Vec::new();
+    for tag in 0..cs.names.len() {
+        let fields = cs.fields.get(tag).unwrap_or(Vec::new());
+        let spec: Vec<Vec<AstPattern>> = Vec::new();
+        for r in rows {
+            let pt = chk_pat_tag(info, chk_pat_at(r, 0));
+            if !pt.refutable {
+                let row = Vec::new();
+                for f in fields {
+                    row.push(chk_wild_pat());
+                }
+                spec.push(row);
+            } else if pt.tag == tag {
+                let args = chk_pat_args(info, chk_pat_at(r, 0));
+                if args.len() == fields.len() {
+                    spec.push(args);
+                }
+            }
+        }
+        if !chk_exhaustive(info, spec, fields) {
+            miss.push("`" + cs.names.get(tag).unwrap_or("") + "`");
+        }
+    }
+    chk_sort_strings(miss);
+    ": missing " + miss.join(", ")
+}
+
+// chk_sort_strings sorts in place (insertion sort; the lists are short).
+fn chk_sort_strings(v: Vec<String>) {
+    let n = v.len();
+    for i in 1..n {
+        let mut j = i;
+        while j > 0 && ast_str_less(v.get(j).unwrap_or(""), v.get(j - 1).unwrap_or("")) {
+            let a = v.get(j).unwrap_or("");
+            v.set(j, v.get(j - 1).unwrap_or(""));
+            v.set(j - 1, a);
+            j = j - 1;
+        }
+    }
+}
+
+fn chk_subpatterns(c: Chk, p: AstPattern, pi: ChkPatInfo, fields: Vec<Ty>) {
+    if p.args.len() != fields.len() {
+        chk_errorf(c, p.pos, "pattern `" + p.ctor + "` expects " + fields.len().to_string() + " field(s), found " + p.args.len().to_string());
+    }
+    pi.args = p.args;
+    let mut i = 0;
+    for sub in p.args {
+        let t = match fields.get(i) {
+            Some(f) => f,
+            None => ty_invalid(),
+        };
+        chk_pattern(c, sub, t);
+        i = i + 1;
+    }
+}
+
+fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
+    let st = ty_prune(st0);
+    let pi = ChkPatInfo { kind: "wild", ty: st, tag: 0, bind: None, args: Vec::new() };
+    c.info.patterns.insert(p.id, pi);
+    if p.wildcard {
+        pi.kind = "wild";
+        return;
+    }
+    if p.int_value.is_some() {
+        pi.kind = "int";
+        if !ty_unify(st, ty_int()) {
+            chk_errorf(c, p.pos, "integer pattern used on `" + ty_str(st) + "`");
+        }
+        return;
+    }
+    if p.bool_lit.is_some() {
+        pi.kind = "bool";
+        if !ty_unify(st, ty_bool()) {
+            chk_errorf(c, p.pos, "boolean pattern used on `" + ty_str(st) + "`");
+        }
+        return;
+    }
+    if p.str_value.is_some() {
+        pi.kind = "string";
+        if !ty_unify(st, ty_string()) {
+            chk_errorf(c, p.pos, "string pattern used on `" + ty_str(st) + "`");
+        }
+        return;
+    }
+    let mut ctor = p.ctor;
+    if ctor == "" {
+        ctor = p.bind;
+    }
+    match st {
+        Ty::Result(ok, err) => {
+            if p.ty == "" && (ctor == "Ok" || ctor == "Err") {
+                pi.kind = "ctor";
+                if ctor == "Ok" {
+                    chk_subpatterns(c, p, pi, chk_tys1(ok));
+                } else {
+                    pi.tag = 1;
+                    chk_subpatterns(c, p, pi, chk_tys1(err));
+                }
+                return;
+            }
+        }
+        Ty::Option(el) => {
+            if p.ty == "" && ctor == "Some" {
+                pi.kind = "ctor";
+                pi.tag = 1;
+                chk_subpatterns(c, p, pi, chk_tys1(el));
+                return;
+            }
+            if p.ty == "" && ctor == "None" {
+                pi.kind = "ctor";
+                pi.tag = 0;
+                chk_subpatterns(c, p, pi, Vec::new());
+                return;
+            }
+        }
+        Ty::Enum(en) => {
+            if p.ty != "" && p.ty != en.name {
+                chk_errorf(c, p.pos, "expected a variant of `" + en.name + "`, found `" + p.ty + "::" + ctor + "`");
+                pi.kind = "wild";
+                return;
+            }
+            let mut tag = 0;
+            for v in en.variants {
+                if v.name == ctor {
+                    pi.kind = "ctor";
+                    pi.tag = tag;
+                    chk_subpatterns(c, p, pi, v.fields);
+                    return;
+                }
+                tag = tag + 1;
+            }
+            if p.ty != "" {
+                chk_errorf(c, p.pos, "no variant `" + ctor + "` in enum `" + en.name + "`");
+                pi.kind = "wild";
+                return;
+            }
+        }
+        _ => {}
+    }
+    if p.ctor != "" {
+        if !ty_is_prim(st, "<invalid>") {
+            chk_errorf(c, p.pos, "pattern `" + ctor + "` does not match type `" + ty_str(st) + "`");
+        }
+        pi.kind = "wild";
+        for sub in p.args {
+            chk_pattern(c, sub, ty_invalid());
+        }
+        return;
+    }
+    pi.kind = "bind";
+    let b = chk_new_binding(c, p.bind, st, p.pos);
+    chk_bind(c, b);
+    pi.bind = Some(b);
+}

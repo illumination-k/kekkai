@@ -1,0 +1,953 @@
+// Lowering from the checked AST to IR: a port of internal/ir/lower.go.
+
+struct LowerLoop {
+    cont: Int,
+    exit: Int,
+}
+
+// LowerExit is the exit of an enclosing transaction body (identified by the
+// id of its Tx binding).
+struct LowerExit {
+    tx_id: Int,
+    result: Int,
+    block: Int,
+}
+
+struct Lower {
+    info: ChkInfo,
+    prog: IrProgram,
+    aggs: Map<String, Int>,
+    fun: IrFunc,
+    cur: Int,
+    vars: Map<Int, Int>,
+    exits: Vec<LowerExit>,
+    loops: Vec<LowerLoop>,
+}
+
+fn lower_empty_func() -> IrFunc {
+    IrFunc { name: "", nparams: 0, locals: Vec::new(), names: Vec::new(), result: ir_ty("unit"), is_async: false, blocks: Vec::new() }
+}
+
+// lower_lower translates a type-checked program into IR (ir.Lower).
+fn lower_lower(info: ChkInfo) -> IrProgram {
+    let prog = IrProgram { types: Vec::new(), funcs: Vec::new(), handler: "", entry: "", handler_params: Vec::new() };
+    let l = Lower {
+        info: info, prog: prog, aggs: Map::new(), fun: lower_empty_func(), cur: 0, vars: Map::new(),
+        exits: Vec::new(), loops: Vec::new(),
+    };
+    for fun in info.func_list {
+        prog.funcs.push(lower_func(l, fun));
+    }
+    match info.handler {
+        Some(h) => {
+            prog.handler = h.name;
+            prog.entry = "handler";
+            if h.main {
+                prog.entry = "main";
+            }
+            for p in h.params {
+                let mut kind = "request";
+                match p.ty {
+                    Ty::Cap(k, _) => { kind = k; }
+                    Ty::Vec(_) => { kind = "args"; }
+                    _ => {}
+                }
+                prog.handler_params.push(IrHandlerParam { kind: kind, name: p.name });
+            }
+        }
+        None => {}
+    }
+    prog
+}
+
+// ---- types ----
+
+fn lower_ty(l: Lower, t0: Ty) -> IrTy {
+    let t = ty_resolve(t0);
+    match t {
+        Ty::Prim(n) => {
+            if n == "Bool" {
+                return ir_ty("bool");
+            }
+            if n == "Int" {
+                return ir_ty("int");
+            }
+            if n == "String" {
+                return ir_ty("string");
+            }
+            ir_ty("unit")
+        }
+        Ty::Opaque(n) => IrTy { kind: "ext", agg: 0, ext: n },
+        Ty::Cap(k, _) => IrTy { kind: "ext", agg: 0, ext: k },
+        _ => ir_ty_agg(lower_agg(l, t)),
+    }
+}
+
+fn lower_agg(l: Lower, t0: Ty) -> Int {
+    let key = ty_key(t0);
+    match l.aggs.get(key) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let t = ty_prune(t0);
+    let i = l.prog.types.len();
+    let td = IrTypeDef { name: key, is_variant: false, fields: Vec::new(), variants: Vec::new(), coll: "", elem: ir_ty_none(), key: ir_ty_none() };
+    l.prog.types.push(td);
+    l.aggs.insert(key, i);
+    match t {
+        Ty::Struct(st) => {
+            for f in st.fields {
+                td.fields.push(lower_ty(l, f.ty));
+            }
+        }
+        Ty::Enum(en) => {
+            td.is_variant = true;
+            for v in en.variants {
+                let fs = Vec::new();
+                for f in v.fields {
+                    fs.push(lower_ty(l, f));
+                }
+                td.variants.push(fs);
+            }
+        }
+        Ty::Result(ok, err) => {
+            td.is_variant = true;
+            let a = Vec::new();
+            a.push(lower_ty(l, ok));
+            td.variants.push(a);
+            let b = Vec::new();
+            b.push(lower_ty(l, err));
+            td.variants.push(b);
+        }
+        Ty::Option(el) => {
+            td.is_variant = true;
+            td.variants.push(Vec::new());
+            let b = Vec::new();
+            b.push(lower_ty(l, el));
+            td.variants.push(b);
+        }
+        Ty::Vec(el) => {
+            td.coll = "vec";
+            td.elem = lower_ty(l, el);
+        }
+        Ty::Map(k, v) => {
+            td.coll = "map";
+            td.key = lower_ty(l, k);
+            td.elem = lower_ty(l, v);
+        }
+        _ => {}
+    }
+    i
+}
+
+// ---- builder ----
+
+fn lower_instr(op: String) -> IrInstr {
+    IrInstr { op: op, dst: 0, args: Vec::new(), name: "", ty: 0, tag: 0, index: 0, cst: ir_const_none() }
+}
+
+fn lower_args1(a: Int) -> Vec<Int> {
+    let v = Vec::new();
+    v.push(a);
+    v
+}
+
+fn lower_args2(a: Int, b: Int) -> Vec<Int> {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn lower_new_local(l: Lower, t: IrTy, name: String) -> Int {
+    l.fun.locals.push(t);
+    l.fun.names.push(name);
+    l.fun.locals.len() - 1
+}
+
+fn lower_new_block(l: Lower) -> Int {
+    l.fun.blocks.push(IrBlock { instrs: Vec::new(), term: IrTerm { op: "", args: Vec::new(), targets: Vec::new() } });
+    l.fun.blocks.len() - 1
+}
+
+fn lower_blk(l: Lower, i: Int) -> IrBlock {
+    match l.fun.blocks.get(i) {
+        Some(b) => b,
+        None => IrBlock { instrs: Vec::new(), term: IrTerm { op: "", args: Vec::new(), targets: Vec::new() } },
+    }
+}
+
+fn lower_emit(l: Lower, ins: IrInstr) -> Int {
+    lower_blk(l, l.cur).instrs.push(ins);
+    ins.dst
+}
+
+fn lower_emit_to(l: Lower, t: IrTy, ins: IrInstr) -> Int {
+    ins.dst = lower_new_local(l, t, "");
+    lower_emit(l, ins)
+}
+
+fn lower_terminate(l: Lower, t: IrTerm) {
+    lower_blk(l, l.cur).term = t;
+    // Code after a terminator is unreachable; keep emitting into a fresh
+    // block so lowering stays simple.
+    l.cur = lower_new_block(l);
+    lower_blk(l, l.cur).term = IrTerm { op: "unreachable", args: Vec::new(), targets: Vec::new() };
+}
+
+fn lower_term(op: String, args: Vec<Int>, targets: Vec<Int>) -> IrTerm {
+    IrTerm { op: op, args: args, targets: targets }
+}
+
+fn lower_jump(l: Lower, target: Int) {
+    lower_terminate(l, lower_term("jump", Vec::new(), lower_args1(target)));
+}
+
+fn lower_br(l: Lower, c: Int, yes: Int, no: Int) {
+    lower_terminate(l, lower_term("br", lower_args1(c), lower_args2(yes, no)));
+}
+
+fn lower_set_block(l: Lower, b: Int) {
+    l.cur = b;
+    let blk = lower_blk(l, b);
+    if blk.term.op == "" {
+        blk.term = IrTerm { op: "unreachable", args: Vec::new(), targets: Vec::new() };
+    }
+}
+
+fn lower_constant(l: Lower, c: IrConst) -> Int {
+    let ins = lower_instr("const");
+    ins.cst = c;
+    lower_emit_to(l, ir_ty(c.kind), ins)
+}
+
+fn lower_unit(l: Lower) -> Int {
+    lower_constant(l, IrConst { kind: "unit", int_val: 0, bool_val: false, str_val: "" })
+}
+
+fn lower_intc(l: Lower, v: Int) -> Int {
+    lower_constant(l, IrConst { kind: "int", int_val: v, bool_val: false, str_val: "" })
+}
+
+fn lower_copy_to(l: Lower, dst: Int, src: Int) {
+    let ins = lower_instr("copy");
+    ins.dst = dst;
+    ins.args = lower_args1(src);
+    lower_emit(l, ins);
+}
+
+fn lower_var(l: Lower, b: ChkBinding) -> Int {
+    l.vars.get(b.id).unwrap_or(0)
+}
+
+// ---- functions ----
+
+fn lower_func(l: Lower, fun: ChkFunc) -> IrFunc {
+    l.fun = IrFunc {
+        name: fun.name, nparams: fun.params.len(), locals: Vec::new(), names: Vec::new(),
+        result: lower_ty(l, fun.result), is_async: fun.async, blocks: Vec::new(),
+    };
+    l.vars = Map::new();
+    l.exits = Vec::new();
+    for p in fun.params {
+        l.vars.insert(p.id, lower_new_local(l, lower_ty(l, p.ty), p.name));
+    }
+    l.cur = lower_new_block(l);
+    let v = lower_block(l, fun.decl.body);
+    lower_terminate(l, lower_term("ret", lower_args1(v), Vec::new()));
+    lower_prune(l.fun);
+    l.fun
+}
+
+fn lower_block(l: Lower, b: AstBlock) -> Int {
+    for s in b.stmts {
+        lower_stmt(l, s);
+    }
+    match b.tail {
+        Some(e) => lower_expr(l, e),
+        None => lower_unit(l),
+    }
+}
+
+fn lower_top_loop(l: Lower) -> LowerLoop {
+    l.loops.get(l.loops.len() - 1).unwrap_or(LowerLoop { cont: 0, exit: 0 })
+}
+
+fn lower_stmt(l: Lower, s0: AstStmt) {
+    match s0 {
+        AstStmt::Let(s) => {
+            let v = lower_expr(l, s.init);
+            match l.info.lets.get(s.id) {
+                Some(b) => {
+                    let dst = lower_new_local(l, lower_ty(l, b.ty), b.name);
+                    lower_copy_to(l, dst, v);
+                    l.vars.insert(b.id, dst);
+                }
+                None => {}
+            }
+        }
+        AstStmt::Assign(s) => {
+            let v = lower_expr(l, s.value);
+            match l.info.assigns.get(s.id) {
+                Some(b) => lower_copy_to(l, lower_var(l, b), v),
+                None => {}
+            }
+        }
+        AstStmt::Expr(s) => { lower_expr(l, s.x); }
+        AstStmt::While(s) => {
+            let head = lower_new_block(l);
+            let body = lower_new_block(l);
+            let exit = lower_new_block(l);
+            lower_jump(l, head);
+            lower_set_block(l, head);
+            let c = lower_expr(l, s.cond);
+            lower_br(l, c, body, exit);
+            lower_set_block(l, body);
+            l.loops.push(LowerLoop { cont: head, exit: exit });
+            lower_block(l, s.body);
+            l.loops.pop();
+            lower_jump(l, head);
+            lower_set_block(l, exit);
+        }
+        AstStmt::Break(_) => lower_jump(l, lower_top_loop(l).exit),
+        AstStmt::Continue(_) => lower_jump(l, lower_top_loop(l).cont),
+        AstStmt::FieldAssign(s) => {
+            let obj = lower_expr(l, s.target.x);
+            let v = lower_expr(l, s.value);
+            let ins = lower_instr("setfield");
+            ins.ty = lower_agg(l, lower_type_of_id(l, ast_expr_id(s.target.x)));
+            ins.index = l.info.fields.get(s.target.id).unwrap_or(0);
+            ins.args = lower_args2(obj, v);
+            lower_emit_to(l, ir_ty("unit"), ins);
+        }
+        AstStmt::For(s) => lower_for(l, s),
+        AstStmt::Return(s) => {
+            let v = match s.value {
+                Some(e) => lower_expr(l, e),
+                None => lower_unit(l),
+            };
+            let mut cl = None;
+            match l.info.returns.get(s.id) {
+                Some(ri) => { cl = ri.closure; }
+                None => {}
+            }
+            lower_ret(l, cl, v);
+        }
+    }
+}
+
+// lower_type_of_id is info.TypeOf: the resolved type of an expression.
+fn lower_type_of_id(l: Lower, id: Int) -> Ty {
+    ty_resolve(l.info.types.get(id).unwrap_or(ty_unit()))
+}
+
+fn lower_type_of(l: Lower, e: AstExpr) -> IrTy {
+    lower_ty(l, lower_type_of_id(l, ast_expr_id(e)))
+}
+
+fn lower_for(l: Lower, s: AstForStmt) {
+    let int_ty = ir_ty("int");
+    let b = l.info.fors.get(s.id).unwrap_or(ChkBinding { id: -1, name: "", ty: ty_unit(), mutable: false, pos: chk_dummy_pos(), param: false, uses: 0 });
+    let i = lower_new_local(l, int_ty, "i");
+    let mut end = 0;
+    let mut vec = 0;
+    let mut agg = 0;
+    let mut is_range = false;
+    match s.end {
+        Some(e) => {
+            is_range = true;
+            lower_copy_to(l, i, lower_expr(l, s.iter));
+            end = lower_new_local(l, int_ty, "end");
+            lower_copy_to(l, end, lower_expr(l, e));
+        }
+        None => {
+            vec = lower_expr(l, s.iter);
+            agg = lower_agg(l, lower_type_of_id(l, ast_expr_id(s.iter)));
+            lower_copy_to(l, i, lower_intc(l, 0));
+        }
+    }
+    let head = lower_new_block(l);
+    let body = lower_new_block(l);
+    let exit = lower_new_block(l);
+    lower_jump(l, head);
+    lower_set_block(l, head);
+    if !is_range {
+        let ins = lower_instr("host");
+        ins.name = "vec.len";
+        ins.ty = agg;
+        ins.args = lower_args1(vec);
+        end = lower_emit_to(l, int_ty, ins);
+    }
+    let lt = lower_instr("binop");
+    lt.name = "lt";
+    lt.args = lower_args2(i, end);
+    let c = lower_emit_to(l, ir_ty("bool"), lt);
+    lower_br(l, c, body, exit);
+    lower_set_block(l, body);
+    let x = lower_new_local(l, lower_ty(l, b.ty), b.name);
+    if is_range {
+        lower_copy_to(l, x, i);
+    } else {
+        let at = lower_instr("host");
+        at.name = "vec.at";
+        at.dst = x;
+        at.ty = agg;
+        at.args = lower_args2(vec, i);
+        lower_emit(l, at);
+    }
+    l.vars.insert(b.id, x);
+    let inc = lower_new_block(l);
+    l.loops.push(LowerLoop { cont: inc, exit: exit });
+    lower_block(l, s.body);
+    l.loops.pop();
+    lower_jump(l, inc);
+    lower_set_block(l, inc);
+    let add = lower_instr("binop");
+    add.name = "add";
+    let one = lower_intc(l, 1);
+    add.args = lower_args2(i, one);
+    lower_copy_to(l, i, lower_emit_to(l, int_ty, add));
+    lower_jump(l, head);
+    lower_set_block(l, exit);
+}
+
+// lower_ret leaves the enclosing function, or the transaction body ci.
+fn lower_ret(l: Lower, ci: Option<ChkClosureInfo>, v: Int) {
+    match ci {
+        None => lower_terminate(l, lower_term("ret", lower_args1(v), Vec::new())),
+        Some(c) => {
+            let mut i = l.exits.len() - 1;
+            while i >= 0 {
+                match l.exits.get(i) {
+                    Some(ex) => {
+                        if ex.tx_id == c.tx.id {
+                            lower_copy_to(l, ex.result, v);
+                            lower_jump(l, ex.block);
+                            return;
+                        }
+                    }
+                    None => {}
+                }
+                i = i - 1;
+            }
+        }
+    }
+}
+
+// ---- expressions ----
+
+fn lower_exprs(l: Lower, es: Vec<AstExpr>) -> Vec<Int> {
+    let out = Vec::new();
+    for e in es {
+        out.push(lower_expr(l, e));
+    }
+    out
+}
+
+fn lower_variant(l: Lower, t: IrTy, agg: Int, tag: Int, args: Vec<Int>) -> Int {
+    let ins = lower_instr("variant");
+    ins.ty = agg;
+    ins.tag = tag;
+    ins.args = args;
+    lower_emit_to(l, t, ins)
+}
+
+fn lower_expr(l: Lower, e0: AstExpr) -> Int {
+    match e0 {
+        AstExpr::IntLit(e) => lower_intc(l, e.value),
+        AstExpr::BoolLit(e) => lower_constant(l, IrConst { kind: "bool", int_val: 0, bool_val: e.value, str_val: "" }),
+        AstExpr::StrLit(e) => lower_constant(l, IrConst { kind: "string", int_val: 0, bool_val: false, str_val: e.value }),
+        AstExpr::UnitLit(_) => lower_unit(l),
+        AstExpr::Ident(e) => {
+            match l.info.calls.get(e.id) {
+                Some(ci) => {
+                    if ci.kind == "none" {
+                        return lower_variant(l, lower_type_of(l, e0), lower_agg(l, ty_resolve(ci.ty)), 0, Vec::new());
+                    }
+                }
+                None => {}
+            }
+            match l.info.uses.get(e.id) {
+                Some(b) => lower_var(l, b),
+                None => 0,
+            }
+        }
+        AstExpr::Unary(e) => {
+            let x = lower_expr(l, e.x);
+            let ins = lower_instr("unop");
+            ins.name = if e.op == "!" { "not" } else { "neg" };
+            ins.args = lower_args1(x);
+            lower_emit_to(l, lower_type_of(l, e0), ins)
+        }
+        AstExpr::Binary(e) => lower_binary(l, e, e0),
+        AstExpr::Block(b) => lower_block(l, b),
+        AstExpr::If(e) => lower_if(l, e, e0),
+        AstExpr::Match(e) => lower_match(l, e, e0),
+        AstExpr::Call(e) => {
+            let ci = l.info.calls.get(e.id).unwrap_or(chk_call_info("", ty_unit()));
+            lower_call(l, e0, ci, e.args)
+        }
+        AstExpr::Path(e) => {
+            let ci = l.info.calls.get(e.id).unwrap_or(chk_call_info("", ty_unit()));
+            lower_call(l, e0, ci, Vec::new())
+        }
+        AstExpr::Method(e) => lower_method(l, e, e0),
+        AstExpr::Field(e) => {
+            let x = lower_expr(l, e.x);
+            let ins = lower_instr("field");
+            ins.ty = lower_agg(l, lower_type_of_id(l, ast_expr_id(e.x)));
+            ins.index = l.info.fields.get(e.id).unwrap_or(0);
+            ins.args = lower_args1(x);
+            lower_emit_to(l, lower_type_of(l, e0), ins)
+        }
+        AstExpr::StructLit(e) => {
+            let st = l.info.struct_lits.get(e.id).unwrap_or(TyStruct { name: "", fields: Vec::new() });
+            let vals: Map<String, Int> = Map::new();
+            for f in e.fields {
+                vals.insert(f.name, lower_expr(l, f.value));
+            }
+            let args = Vec::new();
+            for f in st.fields {
+                args.push(vals.get(f.name).unwrap_or(0));
+            }
+            let ins = lower_instr("struct");
+            ins.ty = lower_agg(l, Ty::Struct(st));
+            ins.args = args;
+            lower_emit_to(l, lower_type_of(l, e0), ins)
+        }
+        AstExpr::Try(e) => lower_try(l, e, e0),
+        _ => 0,
+    }
+}
+
+fn lower_binop_name(op: String) -> String {
+    if op == "+" { return "add"; }
+    if op == "-" { return "sub"; }
+    if op == "*" { return "mul"; }
+    if op == "/" { return "div"; }
+    if op == "%" { return "rem"; }
+    if op == "<" { return "lt"; }
+    if op == "<=" { return "le"; }
+    if op == ">" { return "gt"; }
+    if op == ">=" { return "ge"; }
+    if op == "==" { return "eq"; }
+    if op == "!=" { return "ne"; }
+    ""
+}
+
+fn lower_binary(l: Lower, e: AstBinary, e0: AstExpr) -> Int {
+    let t = lower_type_of(l, e0);
+    if e.op == "&&" || e.op == "||" {
+        let res = lower_new_local(l, t, "");
+        let x = lower_expr(l, e.x);
+        let rhs = lower_new_block(l);
+        let short = lower_new_block(l);
+        let join = lower_new_block(l);
+        if e.op == "&&" {
+            lower_br(l, x, rhs, short);
+        } else {
+            lower_br(l, x, short, rhs);
+        }
+        lower_set_block(l, short);
+        lower_copy_to(l, res, x);
+        lower_jump(l, join);
+        lower_set_block(l, rhs);
+        lower_copy_to(l, res, lower_expr(l, e.y));
+        lower_jump(l, join);
+        lower_set_block(l, join);
+        return res;
+    }
+    let x = lower_expr(l, e.x);
+    let y = lower_expr(l, e.y);
+    let ins = lower_instr("binop");
+    ins.name = lower_binop_name(e.op);
+    if e.op == "+" && t.kind == "string" {
+        ins.name = "concat";
+    }
+    ins.args = lower_args2(x, y);
+    lower_emit_to(l, t, ins)
+}
+
+fn lower_if(l: Lower, e: AstIf, e0: AstExpr) -> Int {
+    let t = lower_type_of(l, e0);
+    let res = lower_new_local(l, t, "");
+    let c = lower_expr(l, e.cond);
+    let then = lower_new_block(l);
+    let els = lower_new_block(l);
+    let join = lower_new_block(l);
+    lower_br(l, c, then, els);
+    lower_set_block(l, then);
+    let v = lower_block(l, e.then);
+    lower_assign_result(l, res, v, e.then.id);
+    lower_jump(l, join);
+    lower_set_block(l, els);
+    match e.els {
+        Some(x) => {
+            let v2 = lower_expr(l, x);
+            lower_assign_result(l, res, v2, ast_expr_id(x));
+        }
+        None => lower_copy_to(l, res, lower_unit(l)),
+    }
+    lower_jump(l, join);
+    lower_set_block(l, join);
+    res
+}
+
+// lower_assign_result copies a branch value into the join local unless the
+// branch diverges.
+fn lower_assign_result(l: Lower, res: Int, v: Int, branch_id: Int) {
+    match l.info.types.get(branch_id) {
+        Some(t) => {
+            if ty_is_prim(ty_prune(t), "!") {
+                return;
+            }
+        }
+        None => {}
+    }
+    lower_copy_to(l, res, v);
+}
+
+fn lower_call(l: Lower, e: AstExpr, ci: ChkCallInfo, arg_exprs: Vec<AstExpr>) -> Int {
+    let t = lower_type_of(l, e);
+    let args = lower_exprs(l, arg_exprs);
+    let k = ci.kind;
+    if k == "func" {
+        let ins = lower_instr("call");
+        match ci.func {
+            Some(f) => { ins.name = f.name; }
+            None => {}
+        }
+        ins.args = args;
+        return lower_emit_to(l, t, ins);
+    }
+    if k == "ok" || k == "err" || k == "some" {
+        let tag = if k == "ok" { 0 } else { 1 };
+        return lower_variant(l, t, lower_agg(l, ty_resolve(ci.ty)), tag, args);
+    }
+    if k == "none" {
+        return lower_variant(l, t, lower_agg(l, ty_resolve(ci.ty)), 0, Vec::new());
+    }
+    if k == "variant" {
+        let en = ci.enm.unwrap_or(TyEnum { name: "", variants: Vec::new() });
+        return lower_variant(l, t, lower_agg(l, Ty::Enum(en)), ci.tag, args);
+    }
+    if k == "static" {
+        match ci.builtin {
+            Some(b) => { return lower_host(l, t, b, args); }
+            None => {}
+        }
+    }
+    // collection
+    let ins = lower_instr("host");
+    ins.name = ci.op;
+    ins.ty = lower_agg(l, ty_resolve(ci.ty));
+    lower_emit_to(l, t, ins)
+}
+
+fn lower_host(l: Lower, t: IrTy, b: ChkBuiltin, args: Vec<Int>) -> Int {
+    let ins = lower_instr(if b.async { "await" } else { "host" });
+    ins.name = b.op;
+    ins.args = args;
+    lower_emit_to(l, t, ins)
+}
+
+fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
+    let mi = l.info.methods.get(e.id).unwrap_or(ChkMethodInfo { kind: "", builtin: None, op: "", recv_ty: ty_unit(), closure: None });
+    let t = lower_type_of(l, e0);
+    if mi.kind == "transaction" {
+        match mi.closure {
+            Some(ci) => { return lower_transaction(l, e, ci); }
+            None => {}
+        }
+    }
+    if mi.kind == "builtin" {
+        let args = lower_args1(lower_expr(l, e.recv));
+        for a in lower_exprs(l, e.args) {
+            args.push(a);
+        }
+        match mi.builtin {
+            Some(b) => { return lower_host(l, t, b, args); }
+            None => {}
+        }
+    }
+    let recv = lower_expr(l, e.recv);
+    let rt = ty_resolve(mi.recv_ty);
+    let agg = lower_agg(l, rt);
+    let mut is_coll = false;
+    let mut is_opt = false;
+    match rt {
+        Ty::Vec(_) => { is_coll = true; }
+        Ty::Map(_, _) => { is_coll = true; }
+        Ty::Option(_) => { is_opt = true; }
+        _ => {}
+    }
+    if is_coll {
+        let args = lower_args1(recv);
+        for a in lower_exprs(l, e.args) {
+            args.push(a);
+        }
+        let ins = lower_instr("host");
+        ins.name = mi.op;
+        ins.ty = agg;
+        ins.args = args;
+        return lower_emit_to(l, t, ins);
+    }
+    // compiler-implemented Result/Option methods
+    let ti = lower_instr("tag");
+    ti.ty = agg;
+    ti.args = lower_args1(recv);
+    let tag = lower_emit_to(l, ir_ty("int"), ti);
+    let op = mi.op;
+    if op == "is_ok" || op == "is_none" || op == "is_err" || op == "is_some" {
+        let want = if op == "is_ok" || op == "is_none" { 0 } else { 1 };
+        let ins = lower_instr("binop");
+        ins.name = "eq";
+        let k = lower_intc(l, want);
+        ins.args = lower_args2(tag, k);
+        return lower_emit_to(l, t, ins);
+    }
+    // unwrap_or
+    let def = lower_expr(l, e.args.get(0).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: e.pos })));
+    let res = lower_new_local(l, t, "");
+    let ok_tag = if is_opt { 1 } else { 0 };
+    let eq = lower_instr("binop");
+    eq.name = "eq";
+    let k = lower_intc(l, ok_tag);
+    eq.args = lower_args2(tag, k);
+    let is_ok = lower_emit_to(l, ir_ty("bool"), eq);
+    let yes = lower_new_block(l);
+    let no = lower_new_block(l);
+    let join = lower_new_block(l);
+    lower_br(l, is_ok, yes, no);
+    lower_set_block(l, yes);
+    let vf = lower_instr("vfield");
+    vf.ty = agg;
+    vf.tag = ok_tag;
+    vf.index = 0;
+    vf.args = lower_args1(recv);
+    lower_copy_to(l, res, lower_emit_to(l, t, vf));
+    lower_jump(l, join);
+    lower_set_block(l, no);
+    lower_copy_to(l, res, def);
+    lower_jump(l, join);
+    lower_set_block(l, join);
+    res
+}
+
+// lower_transaction lowers `db.transaction(|tx| body)`:
+//
+//	tx = await db.begin(db)
+//	r  = body            // `?` and `return` inside jump to exit with r set
+//	exit: await tx.finish(tx)   // rolls back if still open
+//	value = r
+fn lower_transaction(l: Lower, e: AstMethodCall, ci: ChkClosureInfo) -> Int {
+    let db = lower_expr(l, e.recv);
+    let tx_ty = IrTy { kind: "ext", agg: 0, ext: "Tx" };
+    let bi = lower_instr("await");
+    bi.name = "db.begin";
+    bi.args = lower_args1(db);
+    let tx = lower_emit_to(l, tx_ty, bi);
+    l.vars.insert(ci.tx.id, tx);
+    let rt = lower_ty(l, ci.result);
+    let result = lower_new_local(l, rt, "txresult");
+    let ex = LowerExit { tx_id: ci.tx.id, result: result, block: lower_new_block(l) };
+    l.exits.push(ex);
+    let body = match e.args.get(0) {
+        Some(AstExpr::Closure(cl)) => cl.body,
+        _ => AstExpr::UnitLit(AstUnitLit { id: 0, pos: e.pos }),
+    };
+    let saved_loops = l.loops;
+    l.loops = Vec::new();
+    let v = lower_expr(l, body);
+    l.loops = saved_loops;
+    lower_assign_result(l, ex.result, v, ast_expr_id(body));
+    lower_jump(l, ex.block);
+    l.exits.pop();
+    lower_set_block(l, ex.block);
+    let fi = lower_instr("await");
+    fi.name = "tx.finish";
+    fi.args = lower_args1(tx);
+    lower_emit_to(l, ir_ty("unit"), fi);
+    ex.result
+}
+
+fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
+    let x = lower_expr(l, e.x);
+    let xt = lower_type_of_id(l, ast_expr_id(e.x));
+    let agg = lower_agg(l, xt);
+    let ti = l.info.tries.get(e.id).unwrap_or(ChkTryInfo { closure: None, target: ty_unit() });
+    let target = ty_resolve(ti.target);
+    let tg = lower_instr("tag");
+    tg.ty = agg;
+    tg.args = lower_args1(x);
+    let tag = lower_emit_to(l, ir_ty("int"), tg);
+    let cont = lower_new_block(l);
+    let fail = lower_new_block(l);
+    let mut ok_tag = 0;
+    let mut err_ty = ty_unit();
+    match xt {
+        Ty::Option(_) => { ok_tag = 1; }
+        Ty::Result(_, er) => { err_ty = er; }
+        _ => {}
+    }
+    let eq = lower_instr("binop");
+    eq.name = "eq";
+    let k = lower_intc(l, ok_tag);
+    eq.args = lower_args2(tag, k);
+    let is_ok = lower_emit_to(l, ir_ty("bool"), eq);
+    lower_br(l, is_ok, cont, fail);
+
+    lower_set_block(l, fail);
+    let mut out = 0;
+    if ok_tag == 1 {
+        out = lower_variant(l, lower_ty(l, target), lower_agg(l, target), 0, Vec::new());
+    } else {
+        let vf = lower_instr("vfield");
+        vf.ty = agg;
+        vf.tag = 1;
+        vf.index = 0;
+        vf.args = lower_args1(x);
+        let err = lower_emit_to(l, lower_ty(l, err_ty), vf);
+        out = lower_variant(l, lower_ty(l, target), lower_agg(l, target), 1, lower_args1(err));
+    }
+    lower_ret(l, ti.closure, out);
+
+    lower_set_block(l, cont);
+    let r = lower_instr("vfield");
+    r.ty = agg;
+    r.tag = ok_tag;
+    r.index = 0;
+    r.args = lower_args1(x);
+    lower_emit_to(l, lower_type_of(l, e0), r)
+}
+
+fn lower_match(l: Lower, e: AstMatch, e0: AstExpr) -> Int {
+    let t = lower_type_of(l, e0);
+    let res = lower_new_local(l, t, "");
+    let x = lower_expr(l, e.x);
+    let join = lower_new_block(l);
+    for arm in e.arms {
+        let next = lower_new_block(l);
+        lower_pattern(l, x, arm.pat, next);
+        let v = lower_expr(l, arm.body);
+        lower_assign_result(l, res, v, ast_expr_id(arm.body));
+        lower_jump(l, join);
+        lower_set_block(l, next);
+    }
+    // Falling off the last arm is impossible for exhaustive matches.
+    lower_terminate(l, lower_term("unreachable", Vec::new(), Vec::new()));
+    lower_set_block(l, join);
+    res
+}
+
+fn lower_test(l: Lower, cond: Int, fail: Int) {
+    let ok = lower_new_block(l);
+    lower_br(l, cond, ok, fail);
+    lower_set_block(l, ok);
+}
+
+fn lower_eq(l: Lower, a: Int, b: Int) -> Int {
+    let ins = lower_instr("binop");
+    ins.name = "eq";
+    ins.args = lower_args2(a, b);
+    lower_emit_to(l, ir_ty("bool"), ins)
+}
+
+// lower_pattern emits code testing local x against p; on mismatch control
+// goes to fail, otherwise it continues with p's variables bound.
+fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
+    let pi = match l.info.patterns.get(p.id) {
+        Some(pi) => pi,
+        None => { return; }
+    };
+    let k = pi.kind;
+    if k == "bind" {
+        match pi.bind {
+            Some(b) => {
+                let dst = lower_new_local(l, lower_ty(l, b.ty), b.name);
+                lower_copy_to(l, dst, x);
+                l.vars.insert(b.id, dst);
+            }
+            None => {}
+        }
+    } else if k == "int" {
+        let c = lower_intc(l, p.int_value.unwrap_or(0));
+        lower_test(l, lower_eq(l, x, c), fail);
+    } else if k == "string" {
+        let s = lower_constant(l, IrConst { kind: "string", int_val: 0, bool_val: false, str_val: p.str_value.unwrap_or("") });
+        lower_test(l, lower_eq(l, x, s), fail);
+    } else if k == "bool" {
+        if p.bool_lit.unwrap_or(false) {
+            lower_test(l, x, fail);
+        } else {
+            let ins = lower_instr("unop");
+            ins.name = "not";
+            ins.args = lower_args1(x);
+            lower_test(l, lower_emit_to(l, ir_ty("bool"), ins), fail);
+        }
+    } else if k == "ctor" {
+        let st = ty_resolve(pi.ty);
+        let agg = lower_agg(l, st);
+        let tg = lower_instr("tag");
+        tg.ty = agg;
+        tg.args = lower_args1(x);
+        let tag = lower_emit_to(l, ir_ty("int"), tg);
+        let c = lower_intc(l, pi.tag);
+        lower_test(l, lower_eq(l, tag, c), fail);
+        let mut i = 0;
+        for sub in pi.args {
+            match l.info.patterns.get(sub.id) {
+                Some(spi) => {
+                    if spi.kind != "wild" {
+                        let vf = lower_instr("vfield");
+                        vf.ty = agg;
+                        vf.tag = pi.tag;
+                        vf.index = i;
+                        vf.args = lower_args1(x);
+                        let v = lower_emit_to(l, lower_ty(l, spi.ty), vf);
+                        lower_pattern(l, v, sub, fail);
+                    }
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+    }
+}
+
+// lower_prune removes unreachable blocks and renumbers the rest.
+fn lower_prune(f: IrFunc) {
+    let order = Vec::new();
+    let index: Map<Int, Int> = Map::new();
+    lower_visit(f, 0, order, index);
+    let blocks = Vec::new();
+    for b in order {
+        let blk = match f.blocks.get(b) {
+            Some(x) => x,
+            None => IrBlock { instrs: Vec::new(), term: IrTerm { op: "", args: Vec::new(), targets: Vec::new() } },
+        };
+        let n = blk.term.targets.len();
+        for j in 0..n {
+            let t = blk.term.targets.get(j).unwrap_or(0);
+            blk.term.targets.set(j, index.get(t).unwrap_or(0));
+        }
+        blocks.push(blk);
+    }
+    f.blocks = blocks;
+}
+
+fn lower_visit(f: IrFunc, b: Int, order: Vec<Int>, index: Map<Int, Int>) {
+    if index.contains(b) {
+        return;
+    }
+    index.insert(b, order.len());
+    order.push(b);
+    match f.blocks.get(b) {
+        Some(blk) => {
+            for t in blk.term.targets {
+                lower_visit(f, t, order, index);
+            }
+        }
+        None => {}
+    }
+}

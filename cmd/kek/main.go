@@ -51,6 +51,8 @@ func main() {
 		err = runSearch(args)
 	case "lsp":
 		err = runLSP(args)
+	case "tokens", "ast":
+		err = runDump(cmd, args)
 	case "fmt":
 		err = runFmt(args)
 	case "test":

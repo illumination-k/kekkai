@@ -1,0 +1,195 @@
+// Text form of IR programs (ir.Program.String, printed by `kek ir`).
+
+fn lower_hex(v: Int, digits: Int) -> String {
+    let parts = Vec::new();
+    let mut i = digits - 1;
+    while i >= 0 {
+        let d = v.shr(i * 4).bit_and(15);
+        parts.push("0123456789abcdef".slice(d, d + 1));
+        i = i - 1;
+    }
+    parts.join("")
+}
+
+// lower_go_quote is strconv.Quote (Go's %q) for a JS string.
+fn lower_go_quote(s: String) -> String {
+    let parts = Vec::new();
+    parts.push("\"");
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        let mut r = c;
+        let mut width = 1;
+        if c >= 55296 && c <= 56319 {
+            let d = s.char_at(i + 1).unwrap_or(0);
+            if d >= 56320 && d <= 57343 {
+                r = 65536 + (c - 55296) * 1024 + (d - 56320);
+                width = 2;
+            } else {
+                r = 65533;
+            }
+        } else if c >= 56320 && c <= 57343 {
+            r = 65533;
+        }
+        if r == 34 {
+            parts.push("\\\"");
+        } else if r == 92 {
+            parts.push("\\\\");
+        } else if r == 7 {
+            parts.push("\\a");
+        } else if r == 8 {
+            parts.push("\\b");
+        } else if r == 12 {
+            parts.push("\\f");
+        } else if r == 10 {
+            parts.push("\\n");
+        } else if r == 13 {
+            parts.push("\\r");
+        } else if r == 9 {
+            parts.push("\\t");
+        } else if r == 11 {
+            parts.push("\\v");
+        } else if r < 32 || r == 127 {
+            parts.push("\\x" + lower_hex(r, 2));
+        } else if r < 127 {
+            parts.push(s.slice(i, i + 1));
+        } else if r <= 160 || r == 173 || r == 8232 || r == 8233 || r == 65279 || (r >= 8203 && r <= 8207) {
+            parts.push("\\u" + lower_hex(r, 4));
+        } else if r == 65533 && width == 1 && c != 65533 {
+            parts.push("\\ufffd");
+        } else {
+            parts.push(s.slice(i, i + width));
+        }
+        i = i + width;
+    }
+    parts.push("\"");
+    parts.join("")
+}
+
+fn lower_ty_str(t: IrTy) -> String {
+    if t.kind == "agg" {
+        return "agg" + t.agg.to_string();
+    }
+    if t.kind == "ext" {
+        return "ext:" + t.ext;
+    }
+    t.kind
+}
+
+fn lower_tys_str(ts: Vec<IrTy>) -> String {
+    let parts = Vec::new();
+    for t in ts {
+        parts.push(lower_ty_str(t));
+    }
+    "[" + parts.join(" ") + "]"
+}
+
+fn lower_args_str(xs: Vec<Int>) -> String {
+    let parts = Vec::new();
+    for x in xs {
+        parts.push("%" + x.to_string());
+    }
+    parts.join(", ")
+}
+
+fn lower_instr_str(ins: IrInstr) -> String {
+    let op = ins.op;
+    if op == "const" {
+        let k = ins.cst.kind;
+        if k == "int" {
+            return "const " + ins.cst.int_val.to_string();
+        }
+        if k == "bool" {
+            return "const " + ins.cst.bool_val.to_string();
+        }
+        if k == "string" {
+            return "const " + lower_go_quote(ins.cst.str_val);
+        }
+        return "const ()";
+    }
+    let ty = "agg" + ins.ty.to_string();
+    if op == "copy" {
+        return lower_args_str(ins.args);
+    }
+    if op == "unop" || op == "binop" || op == "call" || op == "host" || op == "await" {
+        return op + " " + ins.name + "(" + lower_args_str(ins.args) + ")";
+    }
+    if op == "struct" {
+        return "struct " + ty + "{" + lower_args_str(ins.args) + "}";
+    }
+    if op == "field" {
+        return "field " + ty + " " + lower_args_str(ins.args) + "." + ins.index.to_string();
+    }
+    if op == "variant" {
+        return "variant " + ty + "." + ins.tag.to_string() + "(" + lower_args_str(ins.args) + ")";
+    }
+    if op == "tag" {
+        return "tag " + ty + " " + lower_args_str(ins.args);
+    }
+    if op == "vfield" {
+        return "vfield " + ty + " " + lower_args_str(ins.args) + "." + ins.tag.to_string() + "." + ins.index.to_string();
+    }
+    op
+}
+
+fn lower_term_str(t: IrTerm) -> String {
+    let op = t.op;
+    if op == "jump" {
+        return "jump b" + t.targets.get(0).unwrap_or(0).to_string();
+    }
+    if op == "br" {
+        return "br " + lower_args_str(t.args) + " b" + t.targets.get(0).unwrap_or(0).to_string() + " b" + t.targets.get(1).unwrap_or(0).to_string();
+    }
+    if op == "switch" {
+        let ts = Vec::new();
+        for x in t.targets {
+            ts.push("b" + x.to_string());
+        }
+        return "switch " + lower_args_str(t.args) + " [" + ts.join(" ") + "]";
+    }
+    if op == "ret" {
+        return "ret " + lower_args_str(t.args);
+    }
+    op
+}
+
+// lower_program_text renders the program like `kek ir`.
+fn lower_program_text(p: IrProgram) -> String {
+    let b = Vec::new();
+    let mut i = 0;
+    for t in p.types {
+        if t.is_variant {
+            let vs = Vec::new();
+            for v in t.variants {
+                vs.push(lower_tys_str(v));
+            }
+            b.push("type agg" + i.to_string() + " " + t.name + " = variant [" + vs.join(" ") + "]\n");
+        } else {
+            b.push("type agg" + i.to_string() + " " + t.name + " = struct " + lower_tys_str(t.fields) + "\n");
+        }
+        i = i + 1;
+    }
+    for f in p.funcs {
+        let prefix = if f.is_async { "async " } else { "" };
+        b.push("\n" + prefix + "fn " + f.name + "(");
+        for j in 0..f.nparams {
+            if j > 0 {
+                b.push(", ");
+            }
+            b.push("%" + j.to_string() + " " + f.names.get(j).unwrap_or("") + ": " + lower_ty_str(f.locals.get(j).unwrap_or(ir_ty_none())));
+        }
+        b.push(") -> " + lower_ty_str(f.result) + " {\n");
+        let mut bi = 0;
+        for blk in f.blocks {
+            b.push("  b" + bi.to_string() + ":\n");
+            for ins in blk.instrs {
+                b.push("    %" + ins.dst.to_string() + " = " + lower_instr_str(ins) + "\n");
+            }
+            b.push("    " + lower_term_str(blk.term) + "\n");
+            bi = bi + 1;
+        }
+        b.push("}\n");
+    }
+    b.join("")
+}

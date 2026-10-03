@@ -1,0 +1,395 @@
+// Linearity check for transactions: a port of internal/types/linear.go.
+// A state maps each live linear binding (by id) to whether it has been
+// consumed; None means the current point is unreachable.
+
+struct LinState {
+    m: Map<Int, Bool>,
+    names: Map<Int, String>,
+}
+
+struct LinChecker {
+    info: ChkInfo,
+    errs: Vec<AstError>,
+    // states at the entry of enclosing loops
+    loops: Vec<LinState>,
+}
+
+fn lin_new_state() -> LinState {
+    LinState { m: Map::new(), names: Map::new() }
+}
+
+fn lin_clone(s: Option<LinState>) -> Option<LinState> {
+    match s {
+        None => None,
+        Some(st) => Some(lin_copy(st)),
+    }
+}
+
+fn lin_copy(st: LinState) -> LinState {
+    let out = lin_new_state();
+    for k in st.m.keys() {
+        out.m.insert(k, st.m.get(k).unwrap_or(false));
+        out.names.insert(k, st.names.get(k).unwrap_or(""));
+    }
+    out
+}
+
+fn lin_check(info: ChkInfo, fun: ChkFunc, errs: Vec<AstError>) {
+    let lc = LinChecker { info: info, errs: errs, loops: Vec::new() };
+    lin_block(lc, fun.decl.body, Some(lin_new_state()));
+}
+
+fn lin_errorf(lc: LinChecker, pos: AstPos, msg: String) {
+    lc.errs.push(AstError { pos: pos, msg: msg });
+}
+
+fn lin_name(st: LinState, k: Int) -> String {
+    st.names.get(k).unwrap_or("")
+}
+
+// lin_merge joins the states of two control-flow paths.
+fn lin_merge(lc: LinChecker, pos: AstPos, a: Option<LinState>, b: Option<LinState>, what: String) -> Option<LinState> {
+    match a {
+        None => b,
+        Some(sa) => match b {
+            None => a,
+            Some(sb) => {
+                let out = lin_new_state();
+                for k in sa.m.keys() {
+                    let va = sa.m.get(k).unwrap_or(false);
+                    match sb.m.get(k) {
+                        Some(vb) => {
+                            if va != vb {
+                                lin_errorf(lc, pos, "transaction `" + lin_name(sa, k) + "` is ended in one " + what + " but not in the other: it must be committed or rolled back on every path");
+                            }
+                            out.m.insert(k, va || vb);
+                        }
+                        None => out.m.insert(k, va),
+                    }
+                    out.names.insert(k, lin_name(sa, k));
+                }
+                Some(out)
+            }
+        },
+    }
+}
+
+fn lin_block(lc: LinChecker, b: AstBlock, s0: Option<LinState>) -> Option<LinState> {
+    let mut s = s0;
+    for st in b.stmts {
+        if s.is_none() {
+            return None;
+        }
+        s = lin_stmt(lc, st, s);
+    }
+    match b.tail {
+        Some(t) => {
+            if s.is_some() {
+                s = lin_expr(lc, t, s);
+            }
+        }
+        None => {}
+    }
+    s
+}
+
+// lin_loop_check reports linear bindings whose state changed in a loop body.
+fn lin_loop_body(lc: LinChecker, pos: AstPos, body: AstBlock, s: LinState) {
+    lc.loops.push(lin_copy(s));
+    let after = lin_block(lc, body, Some(lin_copy(s)));
+    lc.loops.pop();
+    match after {
+        Some(a) => {
+            for k in a.m.keys() {
+                if s.m.get(k).unwrap_or(false) != a.m.get(k).unwrap_or(false) {
+                    lin_errorf(lc, pos, "transaction `" + lin_name(a, k) + "` cannot be committed or rolled back inside a loop");
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+fn lin_break(lc: LinChecker, pos: AstPos, s: Option<LinState>) -> Option<LinState> {
+    let n = lc.loops.len();
+    if n > 0 {
+        match s {
+            Some(st) => {
+                match lc.loops.get(n - 1) {
+                    Some(entry) => {
+                        for k in st.m.keys() {
+                            match entry.m.get(k) {
+                                Some(ev) => {
+                                    if ev != st.m.get(k).unwrap_or(false) {
+                                        lin_errorf(lc, pos, "transaction `" + lin_name(st, k) + "` cannot be committed or rolled back inside a loop");
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        }
+    }
+    None
+}
+
+fn lin_stmt(lc: LinChecker, st0: AstStmt, s0: Option<LinState>) -> Option<LinState> {
+    let mut s = s0;
+    match st0 {
+        AstStmt::Let(st) => lin_expr(lc, st.init, s),
+        AstStmt::Assign(st) => lin_expr(lc, st.value, s),
+        AstStmt::Expr(st) => lin_expr(lc, st.x, s),
+        AstStmt::FieldAssign(st) => {
+            s = lin_expr(lc, AstExpr::Field(st.target), s);
+            lin_expr(lc, st.value, s)
+        }
+        AstStmt::Break(st) => lin_break(lc, st.pos, s),
+        AstStmt::Continue(st) => lin_break(lc, st.pos, s),
+        AstStmt::While(st) => {
+            s = lin_expr(lc, st.cond, s);
+            match s {
+                None => None,
+                Some(ss) => {
+                    lin_loop_body(lc, st.pos, st.body, ss);
+                    s
+                }
+            }
+        }
+        AstStmt::For(st) => {
+            s = lin_expr(lc, st.iter, s);
+            match st.end {
+                Some(e) => { s = lin_expr(lc, e, s); }
+                None => {}
+            }
+            match s {
+                None => None,
+                Some(ss) => {
+                    lin_loop_body(lc, st.pos, st.body, ss);
+                    s
+                }
+            }
+        }
+        AstStmt::Return(st) => {
+            match st.value {
+                Some(v) => {
+                    s = lin_expr(lc, v, s);
+                    if s.is_none() {
+                        return None;
+                    }
+                }
+                None => {}
+            }
+            match lc.info.returns.get(st.id) {
+                Some(ri) => match ri.closure {
+                    Some(cl) => match s {
+                        Some(ss) => match ss.m.get(cl.tx.id) {
+                            Some(consumed) => {
+                                if !consumed {
+                                    lin_errorf(lc, st.pos, "transaction `" + cl.tx.name + "` must be committed or rolled back before `return`");
+                                }
+                            }
+                            None => {}
+                        },
+                        None => {}
+                    },
+                    None => {}
+                },
+                None => {}
+            }
+            None
+        }
+    }
+}
+
+fn lin_use(lc: LinChecker, id: AstIdent, s: LinState) {
+    match lc.info.uses.get(id.id) {
+        Some(b) => match s.m.get(b.id) {
+            Some(consumed) => {
+                if consumed {
+                    lin_errorf(lc, id.pos, "use of transaction `" + b.name + "` after it was committed or rolled back");
+                }
+            }
+            None => {}
+        },
+        None => {}
+    }
+}
+
+fn lin_exprs(lc: LinChecker, es: Vec<AstExpr>, s0: Option<LinState>) -> Option<LinState> {
+    let mut s = s0;
+    for e in es {
+        if s.is_none() {
+            return None;
+        }
+        s = lin_expr(lc, e, s);
+    }
+    s
+}
+
+fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinState> {
+    let st = match s0 {
+        None => { return None; }
+        Some(x) => x,
+    };
+    let mut s = s0;
+    match e0 {
+        AstExpr::Ident(e) => {
+            lin_use(lc, e, st);
+            s
+        }
+        AstExpr::Unary(e) => lin_expr(lc, e.x, s),
+        AstExpr::Binary(e) => {
+            s = lin_expr(lc, e.x, s);
+            if e.op == "&&" || e.op == "||" {
+                let before = lin_clone(s);
+                let after = lin_expr(lc, e.y, s);
+                match after {
+                    Some(a) => {
+                        for k in a.m.keys() {
+                            let bv = match before {
+                                Some(bs) => bs.m.get(k).unwrap_or(false),
+                                None => false,
+                            };
+                            if bv != a.m.get(k).unwrap_or(false) {
+                                lin_errorf(lc, e.pos, "transaction `" + lin_name(a, k) + "` cannot be ended in a conditionally evaluated operand");
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                return before;
+            }
+            lin_expr(lc, e.y, s)
+        }
+        AstExpr::Block(b) => lin_block(lc, b, s),
+        AstExpr::If(e) => {
+            s = lin_expr(lc, e.cond, s);
+            if s.is_none() {
+                return None;
+            }
+            let then = lin_block(lc, e.then, lin_clone(s));
+            let mut els = lin_clone(s);
+            match e.els {
+                Some(x) => { els = lin_expr(lc, x, els); }
+                None => {}
+            }
+            lin_merge(lc, e.pos, then, els, "branch of this `if`")
+        }
+        AstExpr::Match(e) => {
+            s = lin_expr(lc, e.x, s);
+            if s.is_none() {
+                return None;
+            }
+            let mut out = None;
+            let mut first = true;
+            for arm in e.arms {
+                let as_ = lin_expr(lc, arm.body, lin_clone(s));
+                if first {
+                    out = as_;
+                    first = false;
+                } else {
+                    out = lin_merge(lc, arm.pos, out, as_, "arm of this `match`");
+                }
+            }
+            out
+        }
+        AstExpr::Call(e) => lin_exprs(lc, e.args, s),
+        AstExpr::Method(e) => {
+            let mi = lc.info.methods.get(e.id);
+            match mi {
+                Some(m) => {
+                    if m.kind == "transaction" {
+                        return lin_transaction(lc, e, m, s);
+                    }
+                }
+                None => {}
+            }
+            s = lin_expr(lc, e.recv, s);
+            s = lin_exprs(lc, e.args, s);
+            match s {
+                None => { return None; }
+                Some(ss) => {
+                    match mi {
+                        Some(m) => match m.builtin {
+                            Some(b) => {
+                                if b.consumes {
+                                    match e.recv {
+                                        AstExpr::Ident(id) => match lc.info.uses.get(id.id) {
+                                            Some(bd) => match ss.m.get(bd.id) {
+                                                Some(consumed) => {
+                                                    if !consumed {
+                                                        ss.m.insert(bd.id, true);
+                                                    }
+                                                }
+                                                None => {}
+                                            },
+                                            None => {}
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            None => {}
+                        },
+                        None => {}
+                    }
+                }
+            }
+            s
+        }
+        AstExpr::Field(e) => lin_expr(lc, e.x, s),
+        AstExpr::StructLit(e) => {
+            for f in e.fields {
+                s = lin_expr(lc, f.value, s);
+            }
+            s
+        }
+        // The error path leaves the enclosing transaction body (or
+        // function); an unconsumed Tx is rolled back automatically there.
+        AstExpr::Try(e) => lin_expr(lc, e.x, s),
+        _ => s,
+    }
+}
+
+fn lin_transaction(lc: LinChecker, e: AstMethodCall, mi: ChkMethodInfo, s0: Option<LinState>) -> Option<LinState> {
+    let s = lin_expr(lc, e.recv, s0);
+    let st = match s {
+        None => { return None; }
+        Some(x) => x,
+    };
+    let cl = match e.args.get(0) {
+        Some(AstExpr::Closure(c)) => c,
+        _ => { return s; }
+    };
+    let tx = match mi.closure {
+        Some(ci) => ci.tx,
+        None => { return s; }
+    };
+    let inner = lin_copy(st);
+    inner.m.insert(tx.id, false);
+    inner.names.insert(tx.id, tx.name);
+    let saved = lc.loops;
+    lc.loops = Vec::new();
+    let after = lin_expr(lc, cl.body, Some(inner));
+    lc.loops = saved;
+    match after {
+        Some(a) => {
+            if !a.m.get(tx.id).unwrap_or(false) {
+                let mut pos = ast_expr_pos(cl.body);
+                match cl.body {
+                    AstExpr::Block(b) => {
+                        pos = chk_tail_pos(b);
+                    }
+                    _ => {}
+                }
+                lin_errorf(lc, pos, "transaction `" + tx.name + "` is never committed or rolled back: end the block with `" + tx.name + ".commit()` or call `" + tx.name + ".rollback()`");
+            }
+        }
+        None => {}
+    }
+    s
+}

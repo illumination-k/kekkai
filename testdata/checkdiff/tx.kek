@@ -1,0 +1,47 @@
+// Transaction / linearity diagnostics (compared between stage0 and stage1).
+fn t1(db: &Db, log: &Log, b: Bool) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let x = b && { tx.rollback(); true };
+        match b {
+            true => { tx.commit()?; }
+            false => {}
+        }
+        for i in 0..3 {
+            if b { tx.rollback(); break; }
+        }
+        tx.commit()
+    })
+}
+
+fn t2(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx: Int| tx.commit());
+    db.transaction(1);
+    db.transaction(|a, b| a);
+    db.transaction();
+    db.transaction(|tx| 5);
+    db.transaction(|tx| {
+        while true {
+            tx.rollback();
+            continue;
+        }
+        tx.commit()
+    })
+}
+
+fn t3(db: &Db, fs: &Fs) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let r = fs.read("x");
+        tx.put("k", "v")?;
+        if true {
+            tx.commit()?;
+            return Ok(());
+        } else {
+            tx.rollback();
+        }
+        Ok(())
+    })
+}
+
+fn t4(tx: &Tx) {
+    tx.rollback();
+}

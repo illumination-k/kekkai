@@ -9,6 +9,7 @@
 //
 //   kek <command> [args...]         run a compiler command (check, ir, build, ...)
 //   kek run <file|dir> [args...]    build a #[main] program and run it
+//   kek test [flags] <file|dir>     run #[test] functions with mocks (js/kek_test.mjs)
 //   KEK_STAGE=bootstrap kek ...     use the bootstrap compiler directly
 //
 // Maintenance:
@@ -154,11 +155,34 @@ switch (cmd) {
     }
     break;
   }
+  case "test": {
+    const { kekTest } = await import(pathToFileURL(path.join(here, "kek_test.mjs")).href);
+    const stage = await currentStage();
+    process.exitCode = await kekTest(args, { compile: (argv) => runStage(stage, argv), jsDir: here });
+    break;
+  }
   case undefined:
   case "help":
   case "-h":
   case "--help":
-    console.log("usage: kek <check|ir|build|run|lex|ast|ir2wasm|bootstrap-check|bootstrap-update> ...");
+    console.log(`kek — the Kekkai toolchain (self-hosted)
+
+Usage:
+  kek check <file|dir>            type-check (capabilities, effects, transactions)
+  kek ir <file|dir>               print the intermediate representation
+  kek build [-o dir] <file|dir>   compile to WasmGC + JS glue
+  kek run <file|dir> [args...]    compile a #[main] program and run it on Node
+  kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>
+                                  run the #[test] functions on Node with mock capabilities
+
+Compiler internals:
+  kek lex <file> | kek ast <file> token / syntax tree dumps
+  kek ir2wasm <ir.json> <out.wasm> [<meta.json>]
+  kek test-build <file|dir> <outdir> [-list | -run name...]
+
+Maintenance:
+  kek bootstrap-check             rebuild the compiler with itself; require a fixed point
+  kek bootstrap-update            replace bootstrap/ with the current compiler (after the check)`);
     break;
   default:
     process.exitCode = await runStage(await currentStage(), [cmd, ...args]);

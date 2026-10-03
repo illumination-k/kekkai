@@ -1,0 +1,27 @@
+// exit: 0
+// Aggregate arguments (Vec, struct) passed to async (state-machine) callees.
+struct Ctx {
+    count: Int,
+}
+
+fn save(args: Vec<String>, ctx: Ctx, fs: &Fs, log: &Log) -> Int {
+    let path = args.get(0).unwrap_or("kek_async_args.txt");
+    match fs.write(path, "n=" + args.len().to_string()) {
+        Ok(_) => {}
+        Err(e) => { log.error(e.message()); return 1; }
+    }
+    ctx.count = ctx.count + 1;
+    match fs.read(path) {
+        Ok(s) => log.info(s + " count=" + ctx.count.to_string()),
+        Err(e) => { log.error(e.message()); return 1; }
+    }
+    0
+}
+
+#[main]
+fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let ctx = Ctx { count: 0 };
+    let r = save(args, ctx, fs, log);
+    log.info("after count=" + ctx.count.to_string());
+    r
+}

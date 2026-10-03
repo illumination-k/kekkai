@@ -1,0 +1,9 @@
+--- stderr
+invalid value "x" for flag -limit: parse error
+Usage of search:
+  -json
+    	emit JSON
+  -limit int
+    	maximum number of results (0: unlimited) (default 20)
+invalid value "x" for flag -limit: parse error
+--- exit 1

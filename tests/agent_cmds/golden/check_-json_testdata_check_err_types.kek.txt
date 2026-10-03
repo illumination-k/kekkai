@@ -1,0 +1,97 @@
+{
+  "file": "testdata/check/err_types.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 4,
+      "col": 5,
+      "end_line": 4,
+      "end_col": 10,
+      "severity": "error",
+      "phase": "type",
+      "message": "non-exhaustive patterns in match on `Color`: missing `Color::Blue`"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 11,
+      "col": 5,
+      "end_line": 11,
+      "end_col": 6,
+      "severity": "error",
+      "phase": "type",
+      "message": "mismatched types in function result: expected `String`, found `Int`"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 15,
+      "col": 14,
+      "end_line": 15,
+      "end_col": 15,
+      "severity": "error",
+      "phase": "type",
+      "message": "`?` cannot convert the error type `TxError` into `NetError`"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 21,
+      "col": 5,
+      "end_line": 21,
+      "end_col": 6,
+      "severity": "error",
+      "phase": "type",
+      "message": "cannot assign twice to immutable variable `x` (declare it with `let mut`)"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 26,
+      "col": 6,
+      "end_line": 26,
+      "end_col": 7,
+      "severity": "error",
+      "phase": "type",
+      "message": "the `?` operator can only be used on `Option` in a function that returns `Option` (this returns `Int`)"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 30,
+      "col": 1,
+      "end_line": 30,
+      "end_col": 3,
+      "severity": "error",
+      "phase": "type",
+      "message": "a handler must return `Response`, found `Int`"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 30,
+      "col": 11,
+      "end_line": 30,
+      "end_col": 12,
+      "severity": "error",
+      "phase": "type",
+      "message": "handler parameters must be `Request` or capabilities (&Log, &Net, &Db, &Clock, &Random), found `Int`"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 35,
+      "col": 5,
+      "end_line": 35,
+      "end_col": 10,
+      "severity": "error",
+      "phase": "type",
+      "message": "non-exhaustive patterns in match on `Result<Option<Int>, String>`: missing `Ok(_)`"
+    },
+    {
+      "file": "testdata/check/err_types.kek",
+      "line": 56,
+      "col": 9,
+      "end_line": 56,
+      "end_col": 10,
+      "severity": "error",
+      "phase": "type",
+      "message": "unreachable pattern"
+    }
+  ]
+}
+--- exit 1

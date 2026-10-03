@@ -1,0 +1,37 @@
+{
+  "file": "tests/agent_cmds/parse_err.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "tests/agent_cmds/parse_err.kek",
+      "line": 5,
+      "col": 15,
+      "end_line": 5,
+      "end_col": 17,
+      "severity": "error",
+      "phase": "parse",
+      "message": "unexpected character 'é'"
+    },
+    {
+      "file": "tests/agent_cmds/parse_err.kek",
+      "line": 5,
+      "col": 18,
+      "end_line": 5,
+      "end_col": 19,
+      "severity": "error",
+      "phase": "parse",
+      "message": "expected `;`, found integer `1`"
+    },
+    {
+      "file": "tests/agent_cmds/parse_err.kek",
+      "line": 6,
+      "col": 10,
+      "end_line": 6,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "parse",
+      "message": "unknown escape sequence \\q"
+    }
+  ]
+}
+--- exit 1

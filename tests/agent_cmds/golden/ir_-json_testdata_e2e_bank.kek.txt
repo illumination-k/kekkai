@@ -1,0 +1,5208 @@
+{
+  "types": [
+    {
+      "name": "Option\u003cInt\u003e",
+      "variant": true,
+      "variants": [
+        [],
+        [
+          {
+            "kind": "int"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003cOption\u003cInt\u003e,TxError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "agg"
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "TxError"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003cOption\u003cString\u003e,TxError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "agg",
+            "agg": 3
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "TxError"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Option\u003cString\u003e",
+      "variant": true,
+      "variants": [
+        [],
+        [
+          {
+            "kind": "string"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003cInt,TransferError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "kind": "agg",
+            "agg": 5
+          }
+        ]
+      ]
+    },
+    {
+      "name": "TransferError",
+      "variant": true,
+      "variants": [
+        null,
+        [
+          {
+            "kind": "string"
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "TxError"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003cResult\u003cInt,TransferError\u003e,TxError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "agg",
+            "agg": 4
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "TxError"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003c(),TxError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "unit"
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "TxError"
+          }
+        ]
+      ]
+    }
+  ],
+  "funcs": [
+    {
+      "name": "balance_key",
+      "nparams": 1,
+      "locals": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "names": [
+        "name",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "string"
+      },
+      "async": false,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 1,
+              "const": {
+                "kind": "string",
+                "str": "balance:"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 2,
+              "args": [
+                1,
+                0
+              ],
+              "name": "concat"
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              2
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "parse_amount",
+      "nparams": 1,
+      "locals": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg"
+        }
+      ],
+      "names": [
+        "s",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "n",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "agg"
+      },
+      "async": false,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 1,
+              "args": [
+                0
+              ],
+              "name": "string.parse_int"
+            },
+            {
+              "op": "tag",
+              "dst": 2,
+              "args": [
+                1
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 3,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 4,
+              "args": [
+                2,
+                3
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              4
+            ],
+            "targets": [
+              1,
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 6,
+              "args": [
+                1
+              ],
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 7,
+              "args": [
+                6
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 9,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 10,
+              "args": [
+                7,
+                9
+              ],
+              "name": "gt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              10
+            ],
+            "targets": [
+              2,
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "variant",
+              "dst": 11,
+              "args": [
+                7
+              ],
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 8,
+              "args": [
+                11
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "variant",
+              "dst": 12
+            },
+            {
+              "op": "copy",
+              "dst": 8,
+              "args": [
+                12
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "variant",
+              "dst": 5
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              5
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "read_balance",
+      "nparams": 2,
+      "locals": [
+        {
+          "kind": "ext",
+          "ext": "Tx"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        }
+      ],
+      "names": [
+        "tx",
+        "name",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "s",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "agg",
+        "agg": 1
+      },
+      "async": true,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 3,
+              "args": [
+                1
+              ],
+              "name": "balance_key"
+            },
+            {
+              "op": "await",
+              "dst": 4,
+              "args": [
+                0,
+                3
+              ],
+              "name": "tx.get"
+            },
+            {
+              "op": "tag",
+              "dst": 5,
+              "args": [
+                4
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 6,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 7,
+              "args": [
+                5,
+                6
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              7
+            ],
+            "targets": [
+              1,
+              7
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 10,
+              "args": [
+                4
+              ],
+              "type": 2
+            },
+            {
+              "op": "tag",
+              "dst": 11,
+              "args": [
+                10
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 12,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 13,
+              "args": [
+                11,
+                12
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              13
+            ],
+            "targets": [
+              2,
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 14,
+              "args": [
+                10
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 15,
+              "args": [
+                14
+              ]
+            },
+            {
+              "op": "host",
+              "dst": 16,
+              "args": [
+                15
+              ],
+              "name": "string.parse_int"
+            },
+            {
+              "op": "variant",
+              "dst": 17,
+              "args": [
+                16
+              ],
+              "type": 1
+            },
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                17
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              2
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 18,
+              "args": [
+                10
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 19,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 20,
+              "args": [
+                18,
+                19
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              20
+            ],
+            "targets": [
+              5,
+              6
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "variant",
+              "dst": 21
+            },
+            {
+              "op": "variant",
+              "dst": 22,
+              "args": [
+                21
+              ],
+              "type": 1
+            },
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                22
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 8,
+              "args": [
+                4
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 9,
+              "args": [
+                8
+              ],
+              "type": 1,
+              "tag": 1
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              9
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "transfer",
+      "nparams": 5,
+      "locals": [
+        {
+          "kind": "ext",
+          "ext": "Db"
+        },
+        {
+          "kind": "ext",
+          "ext": "Log"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "ext",
+          "ext": "Tx"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 7
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 7
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 7
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        }
+      ],
+      "names": [
+        "db",
+        "log",
+        "from",
+        "to",
+        "amount",
+        "",
+        "txresult",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "n",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "a",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "b",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "r",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "inner",
+        "",
+        "",
+        "",
+        "",
+        "e",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "agg",
+        "agg": 4
+      },
+      "async": true,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "await",
+              "dst": 5,
+              "args": [
+                0
+              ],
+              "name": "db.begin"
+            },
+            {
+              "op": "call",
+              "dst": 8,
+              "args": [
+                5,
+                2
+              ],
+              "name": "read_balance"
+            },
+            {
+              "op": "tag",
+              "dst": 9,
+              "args": [
+                8
+              ],
+              "type": 1
+            },
+            {
+              "op": "const",
+              "dst": 10,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 11,
+              "args": [
+                9,
+                10
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              11
+            ],
+            "targets": [
+              1,
+              27
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 14,
+              "args": [
+                8
+              ],
+              "type": 1
+            },
+            {
+              "op": "tag",
+              "dst": 15,
+              "args": [
+                14
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 16,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 17,
+              "args": [
+                15,
+                16
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              17
+            ],
+            "targets": [
+              2,
+              24
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 18,
+              "args": [
+                14
+              ],
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 19,
+              "args": [
+                18
+              ]
+            },
+            {
+              "op": "copy",
+              "dst": 7,
+              "args": [
+                19
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 28,
+              "args": [
+                7
+              ]
+            },
+            {
+              "op": "binop",
+              "dst": 30,
+              "args": [
+                28,
+                4
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              30
+            ],
+            "targets": [
+              4,
+              11
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 31,
+              "args": [
+                5
+              ],
+              "name": "tx.rollback"
+            },
+            {
+              "op": "variant",
+              "dst": 32,
+              "type": 5
+            },
+            {
+              "op": "variant",
+              "dst": 33,
+              "args": [
+                32
+              ],
+              "type": 4,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 34,
+              "args": [
+                33
+              ],
+              "type": 6
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                34
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "await",
+              "dst": 96,
+              "args": [
+                5
+              ],
+              "name": "tx.finish"
+            },
+            {
+              "op": "copy",
+              "dst": 97,
+              "args": [
+                6
+              ]
+            },
+            {
+              "op": "tag",
+              "dst": 99,
+              "args": [
+                97
+              ],
+              "type": 6
+            },
+            {
+              "op": "const",
+              "dst": 100,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 101,
+              "args": [
+                99,
+                100
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              101
+            ],
+            "targets": [
+              6,
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 102,
+              "args": [
+                97
+              ],
+              "type": 6
+            },
+            {
+              "op": "copy",
+              "dst": 103,
+              "args": [
+                102
+              ]
+            },
+            {
+              "op": "copy",
+              "dst": 98,
+              "args": [
+                103
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              7
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              98
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 104,
+              "args": [
+                97
+              ],
+              "type": 6
+            },
+            {
+              "op": "const",
+              "dst": 105,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 106,
+              "args": [
+                104,
+                105
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              106
+            ],
+            "targets": [
+              9,
+              10
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 107,
+              "args": [
+                97
+              ],
+              "type": 6,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 108,
+              "args": [
+                107
+              ]
+            },
+            {
+              "op": "variant",
+              "dst": 109,
+              "args": [
+                108
+              ],
+              "type": 5,
+              "tag": 2
+            },
+            {
+              "op": "variant",
+              "dst": 110,
+              "args": [
+                109
+              ],
+              "type": 4,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 98,
+              "args": [
+                110
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              7
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 36,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 29,
+              "args": [
+                36
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              12
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 37,
+              "args": [
+                5,
+                3
+              ],
+              "name": "read_balance"
+            },
+            {
+              "op": "tag",
+              "dst": 38,
+              "args": [
+                37
+              ],
+              "type": 1
+            },
+            {
+              "op": "const",
+              "dst": 39,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 40,
+              "args": [
+                38,
+                39
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              40
+            ],
+            "targets": [
+              13,
+              23
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 43,
+              "args": [
+                37
+              ],
+              "type": 1
+            },
+            {
+              "op": "tag",
+              "dst": 44,
+              "args": [
+                43
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 45,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 47,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 48,
+              "args": [
+                44,
+                47
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              48
+            ],
+            "targets": [
+              14,
+              22
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 49,
+              "args": [
+                43
+              ],
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 46,
+              "args": [
+                49
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              15
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 50,
+              "args": [
+                46
+              ]
+            },
+            {
+              "op": "call",
+              "dst": 51,
+              "args": [
+                2
+              ],
+              "name": "balance_key"
+            },
+            {
+              "op": "binop",
+              "dst": 52,
+              "args": [
+                28,
+                4
+              ],
+              "name": "sub"
+            },
+            {
+              "op": "host",
+              "dst": 53,
+              "args": [
+                52
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "await",
+              "dst": 54,
+              "args": [
+                5,
+                51,
+                53
+              ],
+              "name": "tx.put"
+            },
+            {
+              "op": "tag",
+              "dst": 55,
+              "args": [
+                54
+              ],
+              "type": 7
+            },
+            {
+              "op": "const",
+              "dst": 56,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 57,
+              "args": [
+                55,
+                56
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              57
+            ],
+            "targets": [
+              16,
+              21
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 60,
+              "args": [
+                54
+              ],
+              "type": 7
+            },
+            {
+              "op": "call",
+              "dst": 61,
+              "args": [
+                3
+              ],
+              "name": "balance_key"
+            },
+            {
+              "op": "binop",
+              "dst": 62,
+              "args": [
+                50,
+                4
+              ],
+              "name": "add"
+            },
+            {
+              "op": "host",
+              "dst": 63,
+              "args": [
+                62
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "await",
+              "dst": 64,
+              "args": [
+                5,
+                61,
+                63
+              ],
+              "name": "tx.put"
+            },
+            {
+              "op": "tag",
+              "dst": 65,
+              "args": [
+                64
+              ],
+              "type": 7
+            },
+            {
+              "op": "const",
+              "dst": 66,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 67,
+              "args": [
+                65,
+                66
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              67
+            ],
+            "targets": [
+              17,
+              20
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 70,
+              "args": [
+                64
+              ],
+              "type": 7
+            },
+            {
+              "op": "const",
+              "dst": 71,
+              "const": {
+                "kind": "string",
+                "str": "https://hooks.example/transfer"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 72,
+              "const": {
+                "kind": "string",
+                "str": "-\u003e"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 73,
+              "args": [
+                2,
+                72
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "binop",
+              "dst": 74,
+              "args": [
+                73,
+                3
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 75,
+              "const": {
+                "kind": "string",
+                "str": ":"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 76,
+              "args": [
+                74,
+                75
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 77,
+              "args": [
+                4
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 78,
+              "args": [
+                76,
+                77
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 79,
+              "args": [
+                5,
+                71,
+                78
+              ],
+              "name": "tx.outbox"
+            },
+            {
+              "op": "const",
+              "dst": 80,
+              "const": {
+                "kind": "string",
+                "str": "transfer "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 81,
+              "args": [
+                80,
+                2
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 82,
+              "const": {
+                "kind": "string",
+                "str": " -\u003e "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 83,
+              "args": [
+                81,
+                82
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "binop",
+              "dst": 84,
+              "args": [
+                83,
+                3
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 85,
+              "args": [
+                1,
+                84
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "await",
+              "dst": 86,
+              "args": [
+                5
+              ],
+              "name": "tx.commit"
+            },
+            {
+              "op": "tag",
+              "dst": 87,
+              "args": [
+                86
+              ],
+              "type": 7
+            },
+            {
+              "op": "const",
+              "dst": 88,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 89,
+              "args": [
+                87,
+                88
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              89
+            ],
+            "targets": [
+              18,
+              19
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 92,
+              "args": [
+                86
+              ],
+              "type": 7
+            },
+            {
+              "op": "binop",
+              "dst": 93,
+              "args": [
+                28,
+                4
+              ],
+              "name": "sub"
+            },
+            {
+              "op": "variant",
+              "dst": 94,
+              "args": [
+                93
+              ],
+              "type": 4
+            },
+            {
+              "op": "variant",
+              "dst": 95,
+              "args": [
+                94
+              ],
+              "type": 6
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                95
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 90,
+              "args": [
+                86
+              ],
+              "type": 7,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 91,
+              "args": [
+                90
+              ],
+              "type": 6,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                91
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 68,
+              "args": [
+                64
+              ],
+              "type": 7,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 69,
+              "args": [
+                68
+              ],
+              "type": 6,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                69
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 58,
+              "args": [
+                54
+              ],
+              "type": 7,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 59,
+              "args": [
+                58
+              ],
+              "type": 6,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                59
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 46,
+              "args": [
+                45
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              15
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 41,
+              "args": [
+                37
+              ],
+              "type": 1,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 42,
+              "args": [
+                41
+              ],
+              "type": 6,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                42
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 20,
+              "args": [
+                14
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 21,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 22,
+              "args": [
+                20,
+                21
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              22
+            ],
+            "targets": [
+              25,
+              26
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 23,
+              "args": [
+                5
+              ],
+              "name": "tx.rollback"
+            },
+            {
+              "op": "variant",
+              "dst": 24,
+              "args": [
+                2
+              ],
+              "type": 5,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 25,
+              "args": [
+                24
+              ],
+              "type": 4,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 26,
+              "args": [
+                25
+              ],
+              "type": 6
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                26
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 12,
+              "args": [
+                8
+              ],
+              "type": 1,
+              "tag": 1
+            },
+            {
+              "op": "variant",
+              "dst": 13,
+              "args": [
+                12
+              ],
+              "type": 6,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                13
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "get_balance",
+      "nparams": 2,
+      "locals": [
+        {
+          "kind": "ext",
+          "ext": "Db"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        }
+      ],
+      "names": [
+        "db",
+        "name",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "agg",
+        "agg": 2
+      },
+      "async": true,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 2,
+              "args": [
+                1
+              ],
+              "name": "balance_key"
+            },
+            {
+              "op": "await",
+              "dst": 3,
+              "args": [
+                0,
+                2
+              ],
+              "name": "db.get"
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              3
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "handle",
+      "nparams": 3,
+      "locals": [
+        {
+          "kind": "ext",
+          "ext": "Request"
+        },
+        {
+          "kind": "ext",
+          "ext": "Db"
+        },
+        {
+          "kind": "ext",
+          "ext": "Log"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "ext",
+          "ext": "TxError"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "ext",
+          "ext": "Response"
+        }
+      ],
+      "names": [
+        "req",
+        "db",
+        "log",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "action",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "name",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "b",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "e",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "from",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "to",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "n",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "amount",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "left",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "n",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "e",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "ext",
+        "ext": "Response"
+      },
+      "async": true,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 3,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 4,
+              "args": [
+                0,
+                3
+              ],
+              "name": "request.segment"
+            },
+            {
+              "op": "tag",
+              "dst": 5,
+              "args": [
+                4
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 6,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 8,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 9,
+              "args": [
+                5,
+                8
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              9
+            ],
+            "targets": [
+              1,
+              53
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 10,
+              "args": [
+                4
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 7,
+              "args": [
+                10
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              2
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 11,
+              "args": [
+                7
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 13,
+              "const": {
+                "kind": "string",
+                "str": "balance"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 14,
+              "args": [
+                11,
+                13
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              14
+            ],
+            "targets": [
+              3,
+              16
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 15,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "host",
+              "dst": 16,
+              "args": [
+                0,
+                15
+              ],
+              "name": "request.segment"
+            },
+            {
+              "op": "tag",
+              "dst": 17,
+              "args": [
+                16
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 18,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 20,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 21,
+              "args": [
+                17,
+                20
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              21
+            ],
+            "targets": [
+              4,
+              15
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 22,
+              "args": [
+                16
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 19,
+              "args": [
+                22
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 23,
+              "args": [
+                19
+              ]
+            },
+            {
+              "op": "call",
+              "dst": 25,
+              "args": [
+                1,
+                23
+              ],
+              "name": "get_balance"
+            },
+            {
+              "op": "tag",
+              "dst": 26,
+              "args": [
+                25
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 27,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 28,
+              "args": [
+                26,
+                27
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              28
+            ],
+            "targets": [
+              6,
+              9
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 29,
+              "args": [
+                25
+              ],
+              "type": 2
+            },
+            {
+              "op": "tag",
+              "dst": 30,
+              "args": [
+                29
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 31,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 32,
+              "args": [
+                30,
+                31
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              32
+            ],
+            "targets": [
+              7,
+              9
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 33,
+              "args": [
+                29
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 34,
+              "args": [
+                33
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 35,
+              "const": {
+                "kind": "int",
+                "int": 200
+              }
+            },
+            {
+              "op": "host",
+              "dst": 36,
+              "args": [
+                35,
+                34
+              ],
+              "name": "response.text"
+            },
+            {
+              "op": "copy",
+              "dst": 24,
+              "args": [
+                36
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              24
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 37,
+              "args": [
+                25
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 38,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 39,
+              "args": [
+                37,
+                38
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              39
+            ],
+            "targets": [
+              10,
+              12
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 40,
+              "args": [
+                25
+              ],
+              "type": 2
+            },
+            {
+              "op": "tag",
+              "dst": 41,
+              "args": [
+                40
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 42,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 43,
+              "args": [
+                41,
+                42
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              43
+            ],
+            "targets": [
+              11,
+              12
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 44,
+              "name": "response.not_found"
+            },
+            {
+              "op": "copy",
+              "dst": 24,
+              "args": [
+                44
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 45,
+              "args": [
+                25
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 46,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 47,
+              "args": [
+                45,
+                46
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              47
+            ],
+            "targets": [
+              13,
+              14
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 48,
+              "args": [
+                25
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 49,
+              "args": [
+                48
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 50,
+              "const": {
+                "kind": "int",
+                "int": 500
+              }
+            },
+            {
+              "op": "host",
+              "dst": 51,
+              "args": [
+                49
+              ],
+              "name": "txError.message"
+            },
+            {
+              "op": "host",
+              "dst": 52,
+              "args": [
+                50,
+                51
+              ],
+              "name": "response.text"
+            },
+            {
+              "op": "copy",
+              "dst": 24,
+              "args": [
+                52
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 19,
+              "args": [
+                18
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 54,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 12,
+              "args": [
+                54
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              17
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 57,
+              "const": {
+                "kind": "string",
+                "str": "transfer"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 58,
+              "args": [
+                11,
+                57
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              58
+            ],
+            "targets": [
+              18,
+              52
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 59,
+              "args": [
+                0
+              ],
+              "name": "request.method"
+            },
+            {
+              "op": "const",
+              "dst": 60,
+              "const": {
+                "kind": "string",
+                "str": "POST"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 61,
+              "args": [
+                59,
+                60
+              ],
+              "name": "eq"
+            },
+            {
+              "op": "copy",
+              "dst": 56,
+              "args": [
+                61
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              19
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              56
+            ],
+            "targets": [
+              20,
+              50
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 62,
+              "const": {
+                "kind": "string",
+                "str": "from"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 63,
+              "args": [
+                0,
+                62
+              ],
+              "name": "request.query"
+            },
+            {
+              "op": "tag",
+              "dst": 64,
+              "args": [
+                63
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 65,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 67,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 68,
+              "args": [
+                64,
+                67
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              68
+            ],
+            "targets": [
+              21,
+              49
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 69,
+              "args": [
+                63
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 66,
+              "args": [
+                69
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              22
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 70,
+              "args": [
+                66
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 71,
+              "const": {
+                "kind": "string",
+                "str": "to"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 72,
+              "args": [
+                0,
+                71
+              ],
+              "name": "request.query"
+            },
+            {
+              "op": "tag",
+              "dst": 73,
+              "args": [
+                72
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 74,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 76,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 77,
+              "args": [
+                73,
+                76
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              77
+            ],
+            "targets": [
+              23,
+              48
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 78,
+              "args": [
+                72
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 75,
+              "args": [
+                78
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              24
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 79,
+              "args": [
+                75
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 81,
+              "const": {
+                "kind": "string",
+                "str": "amount"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 82,
+              "args": [
+                0,
+                81
+              ],
+              "name": "request.query"
+            },
+            {
+              "op": "tag",
+              "dst": 83,
+              "args": [
+                82
+              ],
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 84,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 86,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 87,
+              "args": [
+                83,
+                86
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              87
+            ],
+            "targets": [
+              25,
+              47
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 88,
+              "args": [
+                82
+              ],
+              "type": 3,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 85,
+              "args": [
+                88
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              26
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 89,
+              "args": [
+                85
+              ],
+              "name": "parse_amount"
+            },
+            {
+              "op": "tag",
+              "dst": 90,
+              "args": [
+                89
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 91,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 92,
+              "args": [
+                90,
+                91
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              92
+            ],
+            "targets": [
+              27,
+              44
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 93,
+              "args": [
+                89
+              ],
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 94,
+              "args": [
+                93
+              ]
+            },
+            {
+              "op": "copy",
+              "dst": 80,
+              "args": [
+                94
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              28
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 101,
+              "args": [
+                80
+              ]
+            },
+            {
+              "op": "call",
+              "dst": 103,
+              "args": [
+                1,
+                2,
+                70,
+                79,
+                101
+              ],
+              "name": "transfer"
+            },
+            {
+              "op": "tag",
+              "dst": 104,
+              "args": [
+                103
+              ],
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 105,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 106,
+              "args": [
+                104,
+                105
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              106
+            ],
+            "targets": [
+              29,
+              31
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 107,
+              "args": [
+                103
+              ],
+              "type": 4
+            },
+            {
+              "op": "copy",
+              "dst": 108,
+              "args": [
+                107
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 109,
+              "const": {
+                "kind": "int",
+                "int": 200
+              }
+            },
+            {
+              "op": "const",
+              "dst": 110,
+              "const": {
+                "kind": "string",
+                "str": "{\"left\":"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 111,
+              "args": [
+                108
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 112,
+              "args": [
+                110,
+                111
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 113,
+              "const": {
+                "kind": "string",
+                "str": "}"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 114,
+              "args": [
+                112,
+                113
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 115,
+              "args": [
+                109,
+                114
+              ],
+              "name": "response.json"
+            },
+            {
+              "op": "copy",
+              "dst": 102,
+              "args": [
+                115
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              30
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              102
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 116,
+              "args": [
+                103
+              ],
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 117,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 118,
+              "args": [
+                116,
+                117
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              118
+            ],
+            "targets": [
+              32,
+              34
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 119,
+              "args": [
+                103
+              ],
+              "type": 4,
+              "tag": 1
+            },
+            {
+              "op": "tag",
+              "dst": 120,
+              "args": [
+                119
+              ],
+              "type": 5
+            },
+            {
+              "op": "const",
+              "dst": 121,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 122,
+              "args": [
+                120,
+                121
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              122
+            ],
+            "targets": [
+              33,
+              34
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 123,
+              "const": {
+                "kind": "int",
+                "int": 409
+              }
+            },
+            {
+              "op": "const",
+              "dst": 124,
+              "const": {
+                "kind": "string",
+                "str": "insufficient funds"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 125,
+              "args": [
+                123,
+                124
+              ],
+              "name": "response.text"
+            },
+            {
+              "op": "copy",
+              "dst": 102,
+              "args": [
+                125
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              30
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 126,
+              "args": [
+                103
+              ],
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 127,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 128,
+              "args": [
+                126,
+                127
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              128
+            ],
+            "targets": [
+              35,
+              37
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 129,
+              "args": [
+                103
+              ],
+              "type": 4,
+              "tag": 1
+            },
+            {
+              "op": "tag",
+              "dst": 130,
+              "args": [
+                129
+              ],
+              "type": 5
+            },
+            {
+              "op": "const",
+              "dst": 131,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 132,
+              "args": [
+                130,
+                131
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              132
+            ],
+            "targets": [
+              36,
+              37
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 133,
+              "args": [
+                129
+              ],
+              "type": 5,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 134,
+              "args": [
+                133
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 135,
+              "const": {
+                "kind": "int",
+                "int": 404
+              }
+            },
+            {
+              "op": "const",
+              "dst": 136,
+              "const": {
+                "kind": "string",
+                "str": "no account "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 137,
+              "args": [
+                136,
+                134
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 138,
+              "args": [
+                135,
+                137
+              ],
+              "name": "response.text"
+            },
+            {
+              "op": "copy",
+              "dst": 102,
+              "args": [
+                138
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              30
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 139,
+              "args": [
+                103
+              ],
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 140,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 141,
+              "args": [
+                139,
+                140
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              141
+            ],
+            "targets": [
+              38,
+              43
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 142,
+              "args": [
+                103
+              ],
+              "type": 4,
+              "tag": 1
+            },
+            {
+              "op": "tag",
+              "dst": 143,
+              "args": [
+                142
+              ],
+              "type": 5
+            },
+            {
+              "op": "const",
+              "dst": 144,
+              "const": {
+                "kind": "int",
+                "int": 2
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 145,
+              "args": [
+                143,
+                144
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              145
+            ],
+            "targets": [
+              39,
+              43
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 146,
+              "args": [
+                142
+              ],
+              "type": 5,
+              "tag": 2
+            },
+            {
+              "op": "copy",
+              "dst": 147,
+              "args": [
+                146
+              ]
+            },
+            {
+              "op": "host",
+              "dst": 149,
+              "args": [
+                147
+              ],
+              "name": "txError.retryable"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              149
+            ],
+            "targets": [
+              40,
+              42
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 150,
+              "const": {
+                "kind": "int",
+                "int": 503
+              }
+            },
+            {
+              "op": "const",
+              "dst": 151,
+              "const": {
+                "kind": "string",
+                "str": "conflict, retry"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 152,
+              "args": [
+                150,
+                151
+              ],
+              "name": "response.text"
+            },
+            {
+              "op": "copy",
+              "dst": 148,
+              "args": [
+                152
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              41
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 102,
+              "args": [
+                148
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              30
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 153,
+              "const": {
+                "kind": "int",
+                "int": 500
+              }
+            },
+            {
+              "op": "host",
+              "dst": 154,
+              "args": [
+                147
+              ],
+              "name": "txError.message"
+            },
+            {
+              "op": "host",
+              "dst": 155,
+              "args": [
+                153,
+                154
+              ],
+              "name": "response.text"
+            },
+            {
+              "op": "copy",
+              "dst": 148,
+              "args": [
+                155
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              41
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 95,
+              "args": [
+                89
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 96,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 97,
+              "args": [
+                95,
+                96
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              97
+            ],
+            "targets": [
+              45,
+              46
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 98,
+              "const": {
+                "kind": "string",
+                "str": "bad amount"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 99,
+              "args": [
+                98
+              ],
+              "name": "response.bad_request"
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              99
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 85,
+              "args": [
+                84
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              26
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 75,
+              "args": [
+                74
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              24
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 66,
+              "args": [
+                65
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              22
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 157,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 55,
+              "args": [
+                157
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              51
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 158,
+              "name": "response.not_found"
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              158
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 56,
+              "args": [
+                58
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              19
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 7,
+              "args": [
+                6
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              2
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "handler": "handle",
+  "entry": "handler",
+  "handler_params": [
+    {
+      "kind": "request",
+      "name": "req"
+    },
+    {
+      "kind": "Db",
+      "name": "db"
+    },
+    {
+      "kind": "Log",
+      "name": "log"
+    }
+  ]
+}
+--- exit 0

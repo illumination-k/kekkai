@@ -1,0 +1,28 @@
+{
+  "query": "(String) -> Option<Int>",
+  "matches": [
+    {
+      "name": "parse_amount",
+      "kind": "function",
+      "signature": "fn parse_amount(s: String) -> Option<Int>",
+      "match": "exact",
+      "score": -1,
+      "pure": true,
+      "caps": [],
+      "builtin": false,
+      "line": 13,
+      "col": 4
+    },
+    {
+      "name": "String.parse_int",
+      "kind": "method",
+      "signature": "fn String.parse_int(self) -> Option<Int>",
+      "match": "exact",
+      "score": 0,
+      "pure": true,
+      "caps": [],
+      "builtin": true
+    }
+  ]
+}
+--- exit 0

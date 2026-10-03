@@ -1,0 +1,6 @@
+{
+  "file": "testdata/e2e/bank.kek",
+  "ok": true,
+  "diagnostics": []
+}
+--- exit 0

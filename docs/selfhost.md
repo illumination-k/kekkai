@@ -29,9 +29,16 @@ stage0 = Go 実装の `kek`（`cmd/kek`, `internal/*`）。stage1 = Kekkai で�
 | `ir2wasm <ir.json> <out.wasm> [<meta.json>]` | バックエンド（実装済み、`go test ./internal/selfhost`） | `kek ir -json` → stage0 の wasm.Compile 出力と glue.MetaJS の JSON |
 | `check <file>` | 型検査 | `kek check` の診断 |
 | `ir <file>` | lowering | `kek ir <file>` のテキスト |
-| `build <file> <outdir>` | 全体 | `kek build` |
+| `build <file> <outdir> [-target d1\|do]` | 全体（`glue_*`: `#[handler]` なら worker.js と wrangler.toml も。既存の wrangler.toml は上書きしない） | `kek build` |
+| `ir -json <path>` | `irjson_*`（Lean 参照インタプリタの入力） | `kek ir -json` |
+| `check -json <file>` | `diag_*`（tooling.Analyze の移植: 終了位置・phase・未使用 capability の lint） | `kek check -json` |
+| `caps [-json] <path>` | `caps_*` | `kek caps` |
+| `search [-json] [-limit n] '<sig>' [file]` | `search_*` | `kek search` |
 | `test-build <file> <outdir> [-list \| -run name...]` | `kek test`（`testrun_*`、ランナーは `js/kek_test.mjs`） | `testrun.Discover` / `testrun.Compile`（`go test ./internal/selfhost -run TestTestBuild`） |
 | `fmt [-w\|-check] <paths>` | フォーマッタ（`fmt_*`、`go test ./internal/selfhost -run TestFmt`、`node --test 'tests/*.test.mjs'`） | `kek fmt`（`internal/format`） |
+
+ツール系コマンドの stage0 との一致は `go test ./internal/selfhost -run 'Caps|CheckJSON|IRJSON|Search|BuildGlue'`、
+Go なしの回帰テストは `node --test tests/agent_cmds.test.mjs`（期待出力は stage0 で生成した `tests/agent_cmds/golden/`）。
 
 ## Go の撤去（self-hosting 達成後のゴール）
 

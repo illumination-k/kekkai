@@ -1,0 +1,3 @@
+Db.transaction           fn Db.transaction(&self, |tx: Tx| -> Result<T, E>) -> Result<Result<T, E>, TxError>  [unifies] (builtin)
+Ok                       Ok(T) -> Result<T, E>  [unifies] (builtin)
+--- exit 0

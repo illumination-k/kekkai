@@ -1,0 +1,3 @@
+--- stderr
+invalid query "Int ->": expected a type, found end of file
+--- exit 1

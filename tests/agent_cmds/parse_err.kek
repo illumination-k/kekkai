@@ -1,0 +1,7 @@
+// Parse-phase diagnostics: a non-ASCII character outside a string (one
+// diagnostic covering all of its bytes) and a bad escape.
+fn f() -> String {
+    let s = "héllo 🎉";
+    let t = s é 1;
+    t + "\q"
+}

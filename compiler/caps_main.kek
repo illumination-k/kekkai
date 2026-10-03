@@ -1,0 +1,146 @@
+// `caps [-json] <path>` (prefix caps_ / Caps*): the capabilities, and so
+// the effects, of every function. A port of cmd/kek/caps.go and the
+// capability reports of internal/tooling/sig.go.
+
+// CapsReport is tooling.CapReport (the JSON form of one function).
+struct CapsReport {
+    name: String,
+    signature: String,
+    line: Int,
+    col: Int,
+    handler: Bool,
+    pure: Bool,
+    async: Bool,
+    caps: Vec<ChkBinding>,
+    direct_effects: Vec<String>,
+    unused_caps: Vec<String>,
+    calls: Vec<String>,
+}
+
+// caps_func_signature renders `fn name(p: T, ...) -> R` (FuncSignature).
+fn caps_func_signature(fun: ChkFunc) -> String {
+    let ps = Vec::new();
+    for p in fun.params {
+        ps.push(p.name + ": " + ty_str(p.ty));
+    }
+    let mut s = "fn " + fun.name + "(" + ps.join(", ") + ")";
+    if !ty_is_prim(ty_prune(fun.result), "()") {
+        s = s + " -> " + ty_str(fun.result);
+    }
+    s
+}
+
+fn caps_sorted_keys(m: Map<String, Bool>) -> Vec<String> {
+    let out = m.keys();
+    chk_sort_strings(out);
+    out
+}
+
+// caps_reports summarizes every function in declaration order (CapReports).
+fn caps_reports(a: DiagAnalysis) -> Vec<CapsReport> {
+    let out = Vec::new();
+    for fun in a.info.func_list {
+        let p = diag_name_after(a, fun.decl.pos, fun.decl.name);
+        let caps = diag_caps(fun);
+        let unused = Vec::new();
+        for c in caps {
+            if c.uses == 0 {
+                unused.push(c.name);
+            }
+        }
+        out.push(CapsReport {
+            name: fun.name, signature: caps_func_signature(fun), line: p.line, col: p.col, handler: fun.handler,
+            pure: caps.len() == 0, async: fun.async, caps: caps, direct_effects: caps_sorted_keys(fun.effects),
+            unused_caps: unused, calls: caps_sorted_keys(fun.calls),
+        });
+    }
+    out
+}
+
+fn caps_report_json(r: CapsReport) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "name", IrjVal::Str(r.name));
+    irjson_set(o, "signature", IrjVal::Str(r.signature));
+    irjson_set(o, "line", irjson_int(r.line));
+    irjson_set(o, "col", irjson_int(r.col));
+    irjson_set(o, "handler", irjson_bool(r.handler));
+    irjson_set(o, "pure", irjson_bool(r.pure));
+    irjson_set(o, "async", irjson_bool(r.async));
+    let cs = Vec::new();
+    for c in r.caps {
+        let co = irjson_obj();
+        irjson_set(co, "name", IrjVal::Str(c.name));
+        irjson_set(co, "type", IrjVal::Str(ty_str(c.ty)));
+        irjson_set(co, "used", irjson_bool(c.uses > 0));
+        cs.push(irjson_val(co));
+    }
+    irjson_set(o, "caps", IrjVal::Arr(cs));
+    irjson_set(o, "direct_effects", irjson_strs(r.direct_effects));
+    irjson_set(o, "unused_caps", irjson_strs(r.unused_caps));
+    irjson_set(o, "calls", irjson_strs(r.calls));
+    irjson_val(o)
+}
+
+fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = diag_parse_flags(args, 1, "caps");
+    if fl.err != "" {
+        return diag_flag_error(fl, "caps", log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("kek caps: expected exactly one .kek file");
+        return 1;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let res = match frontend_load(path, fs, log) {
+        Some(r) => r,
+        None => { return 1; }
+    };
+    if diag_flag_bool(fl, "json") {
+        let src = match diag_read_file(path, fs, log) {
+            Some(s) => s,
+            None => { return 1; }
+        };
+        let a = diag_analyze(src);
+        let fns = Vec::new();
+        for r in caps_reports(a) {
+            fns.push(caps_report_json(r));
+        }
+        let o = irjson_obj();
+        irjson_set(o, "file", IrjVal::Str(path));
+        irjson_set(o, "functions", IrjVal::Arr(fns));
+        log.info(irjson_encode(irjson_val(o), false));
+        return 0;
+    }
+    let lines = Vec::new();
+    for fun in res.info.func_list {
+        let caps = Vec::new();
+        let unused = Vec::new();
+        for c in diag_caps(fun) {
+            caps.push(c.name + ": " + ty_str(c.ty));
+            if c.uses == 0 {
+                unused.push(c.name);
+            }
+        }
+        let mut tag = "";
+        if fun.handler {
+            tag = " #[handler]";
+        }
+        if fun.test {
+            tag = " #[test]";
+        }
+        if caps.len() == 0 {
+            lines.push(fun.name + tag + ": pure");
+            continue;
+        }
+        let ops = caps_sorted_keys(fun.effects);
+        lines.push(fun.name + tag + ": " + caps.join(", "));
+        if ops.len() > 0 {
+            lines.push("    direct effects: " + ops.join(", "));
+        }
+        if unused.len() > 0 {
+            lines.push("    warning: granted but unused: " + unused.join(", "));
+        }
+    }
+    frontend_print(log, lines);
+    0
+}

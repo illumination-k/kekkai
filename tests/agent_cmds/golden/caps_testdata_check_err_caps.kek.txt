@@ -1,0 +1,11 @@
+--- stderr
+testdata/check/err_caps.kek:2:10: capability type `&Log` is only allowed as a function parameter
+testdata/check/err_caps.kek:5:23: capability type `&Log` is only allowed as a function parameter
+testdata/check/err_caps.kek:6:5: capability `log` cannot be used as a value: capabilities are second-class and can only be passed as arguments or used as method receivers
+testdata/check/err_caps.kek:10:13: capability `log` cannot be used as a value: capabilities are second-class and can only be passed as arguments or used as method receivers
+testdata/check/err_caps.kek:13:15: capabilities are passed by borrowing: write `&Log`
+testdata/check/err_caps.kek:17:5: cannot find value `log` in this scope
+testdata/check/err_caps.kek:22:15: mismatched types in argument of `needs_log`: expected capability `&Log`, found `&Net`
+testdata/check/err_caps.kek:29:17: `&` can only be applied to capability types (Log, Net, Db, Clock, Random, Tx)
+testdata/check/err_caps.kek:33:13: closures are second-class: they can only appear as the body of `transaction`
+--- exit 1

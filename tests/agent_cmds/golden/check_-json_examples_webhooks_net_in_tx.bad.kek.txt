@@ -1,0 +1,17 @@
+{
+  "file": "examples/webhooks/net_in_tx.bad.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "examples/webhooks/net_in_tx.bad.kek",
+      "line": 18,
+      "col": 28,
+      "end_line": 18,
+      "end_col": 31,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability `net: &Net` cannot be used inside a transaction: its effects cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)"
+    }
+  ]
+}
+--- exit 1

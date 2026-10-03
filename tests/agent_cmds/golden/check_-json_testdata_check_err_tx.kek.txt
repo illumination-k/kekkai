@@ -1,0 +1,157 @@
+{
+  "file": "testdata/check/err_tx.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 4,
+      "col": 9,
+      "end_line": 4,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "type",
+      "message": "transaction `tx` is never committed or rolled back: end the block with `tx.commit()` or call `tx.rollback()`"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 11,
+      "col": 9,
+      "end_line": 11,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "type",
+      "message": "use of transaction `tx` after it was committed or rolled back"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 18,
+      "col": 9,
+      "end_line": 18,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "type",
+      "message": "use of transaction `tx` after it was committed or rolled back"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 25,
+      "col": 9,
+      "end_line": 25,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "type",
+      "message": "transaction `tx` is ended in one branch of this `if` but not in the other: it must be committed or rolled back on every path"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 35,
+      "col": 13,
+      "end_line": 35,
+      "end_col": 19,
+      "severity": "error",
+      "phase": "type",
+      "message": "transaction `tx` must be committed or rolled back before `return`"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 44,
+      "col": 9,
+      "end_line": 44,
+      "end_col": 14,
+      "severity": "error",
+      "phase": "type",
+      "message": "transaction `tx` cannot be committed or rolled back inside a loop"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 48,
+      "col": 9,
+      "end_line": 48,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "type",
+      "message": "transaction `tx` is never committed or rolled back: end the block with `tx.commit()` or call `tx.rollback()`"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 54,
+      "col": 17,
+      "end_line": 54,
+      "end_col": 20,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability `net: &Net` cannot be used inside a transaction: its effects cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 63,
+      "col": 16,
+      "end_line": 63,
+      "end_col": 19,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability `net: &Net` cannot be used inside a transaction: its effects cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 70,
+      "col": 17,
+      "end_line": 70,
+      "end_col": 19,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability `db: &Db` cannot be used inside a transaction: its effects cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 76,
+      "col": 8,
+      "end_line": 76,
+      "end_col": 14,
+      "severity": "error",
+      "phase": "type",
+      "message": "cannot call `commit` on a borrowed transaction `&Tx`: only the `transaction` block that owns the `Tx` can end it"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 79,
+      "col": 16,
+      "end_line": 79,
+      "end_col": 18,
+      "severity": "error",
+      "phase": "type",
+      "message": "a function cannot take ownership of a transaction; borrow it with `&Tx` (only a `transaction` block can commit or roll back)"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 90,
+      "col": 33,
+      "end_line": 90,
+      "end_col": 34,
+      "severity": "error",
+      "phase": "type",
+      "message": "a transaction body must evaluate to a `Result` (usually `tx.commit()`), found `Int`"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 59,
+      "col": 11,
+      "end_line": 59,
+      "end_col": 14,
+      "severity": "warning",
+      "phase": "lint",
+      "message": "capability `net: &Net` is granted to `helper` but never used; remove it to narrow the function's authority"
+    },
+    {
+      "file": "testdata/check/err_tx.kek",
+      "line": 79,
+      "col": 16,
+      "end_line": 79,
+      "end_col": 18,
+      "severity": "warning",
+      "phase": "lint",
+      "message": "capability `tx: Tx` is granted to `owned_param` but never used; remove it to narrow the function's authority"
+    }
+  ]
+}
+--- exit 1

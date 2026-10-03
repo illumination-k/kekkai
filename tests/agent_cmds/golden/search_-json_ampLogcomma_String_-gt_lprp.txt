@@ -1,0 +1,42 @@
+{
+  "query": "(&Log, String) -> ()",
+  "matches": [
+    {
+      "name": "Log.error",
+      "kind": "method",
+      "signature": "fn Log.error(&self, String)",
+      "match": "exact",
+      "score": 0,
+      "pure": false,
+      "caps": [
+        "&Log"
+      ],
+      "builtin": true
+    },
+    {
+      "name": "Log.info",
+      "kind": "method",
+      "signature": "fn Log.info(&self, String)",
+      "match": "exact",
+      "score": 0,
+      "pure": false,
+      "caps": [
+        "&Log"
+      ],
+      "builtin": true
+    },
+    {
+      "name": "Log.warn",
+      "kind": "method",
+      "signature": "fn Log.warn(&self, String)",
+      "match": "exact",
+      "score": 0,
+      "pure": false,
+      "caps": [
+        "&Log"
+      ],
+      "builtin": true
+    }
+  ]
+}
+--- exit 0

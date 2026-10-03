@@ -1,0 +1,3 @@
+--- stderr
+invalid query "Option<Int": expected `>`
+--- exit 1

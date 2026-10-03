@@ -1,0 +1,3 @@
+--- stderr
+invalid query "&Int": `&` applies only to capabilities
+--- exit 1

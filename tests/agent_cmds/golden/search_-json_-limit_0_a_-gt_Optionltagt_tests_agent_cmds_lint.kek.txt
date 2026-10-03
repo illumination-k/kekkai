@@ -1,0 +1,16 @@
+{
+  "query": "(a) -> Option<a>",
+  "matches": [
+    {
+      "name": "Some",
+      "kind": "constructor",
+      "signature": "Some(T) -> Option<T>",
+      "match": "unifies",
+      "score": 7,
+      "pure": true,
+      "caps": [],
+      "builtin": true
+    }
+  ]
+}
+--- exit 0

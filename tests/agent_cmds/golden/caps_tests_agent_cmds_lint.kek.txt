@@ -1,0 +1,6 @@
+area: pure
+report: log: &Log, clock: &Clock
+    direct effects: log.info
+    warning: granted but unused: clock
+describe: pure
+--- exit 0

@@ -1,0 +1,814 @@
+// `search [-json] [-limit n] '<signature>' [file]` (prefix search_ /
+// Search*): type-directed function search. A port of
+// internal/tooling/search.go.
+
+// SearchTerm is a type in the search language: a constructor with
+// arguments, or a type variable (v != "", namespaced "q:" for the query
+// and "c:" for candidates).
+struct SearchTerm {
+    con: String,
+    args: Vec<SearchTerm>,
+    v: String,
+}
+
+fn search_con(name: String, args: Vec<SearchTerm>) -> SearchTerm {
+    SearchTerm { con: name, args: args, v: "" }
+}
+
+fn search_con0(name: String) -> SearchTerm {
+    SearchTerm { con: name, args: Vec::new(), v: "" }
+}
+
+fn search_tvar(name: String) -> SearchTerm {
+    SearchTerm { con: "", args: Vec::new(), v: name }
+}
+
+fn search_list1(a: SearchTerm) -> Vec<SearchTerm> {
+    let v = Vec::new();
+    v.push(a);
+    v
+}
+
+fn search_list2(a: SearchTerm, b: SearchTerm) -> Vec<SearchTerm> {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn search_term_string(t: SearchTerm) -> String {
+    if t.v != "" {
+        let s = match t.v.index_of(":") {
+            Some(i) => t.v.slice(i + 1, t.v.len()),
+            None => t.v,
+        };
+        if s.starts_with("_") {
+            return "_";
+        }
+        return s;
+    }
+    if t.args.len() == 0 {
+        return t.con;
+    }
+    let parts = Vec::new();
+    for a in t.args {
+        parts.push(search_term_string(a));
+    }
+    t.con + "<" + parts.join(", ") + ">"
+}
+
+// search_term_of converts a checked type (capabilities compare by kind).
+fn search_term_of(t0: Ty) -> SearchTerm {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Result(o, e) => search_con("Result", search_list2(search_term_of(o), search_term_of(e))),
+        Ty::Option(e) => search_con("Option", search_list1(search_term_of(e))),
+        Ty::Cap(k, _) => search_con0("&" + k),
+        Ty::Var(v) => search_tvar("c:_" + v.id.to_string()),
+        _ => search_con0(ty_str(t)),
+    }
+}
+
+// search_is_cap_name is tooling.IsCapName (Fs is not included).
+fn search_is_cap_name(name: String) -> Bool {
+    name == "Log" || name == "Net" || name == "Db" || name == "Clock" || name == "Random" || name == "Tx"
+}
+
+// ---- queries ----
+
+struct SearchQuery {
+    params: Vec<SearchTerm>,
+    result: SearchTerm,
+    result_only: Bool,
+}
+
+struct SearchParser {
+    toks: Vec<Tok>,
+    i: Int,
+    anon: Int,
+    err: String,
+}
+
+fn search_query_string(q: SearchQuery) -> String {
+    if q.result_only {
+        return search_term_string(q.result);
+    }
+    let ps = Vec::new();
+    for p in q.params {
+        ps.push(search_term_string(p));
+    }
+    "(" + ps.join(", ") + ") -> " + search_term_string(q.result)
+}
+
+fn search_tok(p: SearchParser) -> Tok {
+    match p.toks.get(p.i) {
+        Some(t) => t,
+        None => p.toks.get(p.toks.len() - 1).unwrap_or(Tok { kind: "EOF", text: "", pos: AstPos { file: "", line: 1, col: 1 } }),
+    }
+}
+
+fn search_peek(p: SearchParser) -> String {
+    search_tok(p).kind
+}
+
+fn search_next(p: SearchParser) -> Tok {
+    let t = search_tok(p);
+    if t.kind != "EOF" {
+        p.i = p.i + 1;
+    }
+    t
+}
+
+fn search_fail(p: SearchParser, msg: String) {
+    if p.err == "" {
+        p.err = msg;
+    }
+}
+
+// search_parse_query parses a signature query; Err is the message.
+fn search_parse_query(s: String) -> Result<SearchQuery, String> {
+    let lr = lex_file("", s);
+    if lr.errs.len() > 0 {
+        let e = lr.errs.get(0).unwrap_or(AstError { pos: AstPos { file: "", line: 0, col: 0 }, msg: "" });
+        return Err("invalid query " + lower_go_quote(s) + ": " + e.msg);
+    }
+    let p = SearchParser { toks: lr.toks, i: 0, anon: 0, err: "" };
+    let q = search_parse(p);
+    if p.err != "" {
+        return Err("invalid query " + lower_go_quote(s) + ": " + p.err);
+    }
+    Ok(q)
+}
+
+fn search_parse(p: SearchParser) -> SearchQuery {
+    let dummy = SearchQuery { params: Vec::new(), result: search_con0("()"), result_only: true };
+    let segs: Vec<Vec<SearchTerm>> = Vec::new();
+    while true {
+        let seg = search_segment(p);
+        if p.err != "" {
+            return dummy;
+        }
+        segs.push(seg);
+        if search_peek(p) == "->" {
+            search_next(p);
+            continue;
+        }
+        break;
+    }
+    if search_peek(p) != "EOF" {
+        search_fail(p, "unexpected " + lex_kind_name(search_peek(p)));
+        return dummy;
+    }
+    let last = segs.get(segs.len() - 1).unwrap_or(Vec::new());
+    if last.len() != 1 {
+        search_fail(p, "the result must be a single type");
+        return dummy;
+    }
+    let q = SearchQuery { params: Vec::new(), result: last.get(0).unwrap_or(search_con0("()")), result_only: false };
+    if segs.len() == 1 {
+        q.result_only = true;
+        return q;
+    }
+    for k in 0..segs.len() - 1 {
+        let seg = segs.get(k).unwrap_or(Vec::new());
+        for t in seg {
+            if t.con == "()" && t.v == "" && segs.len() == 2 && seg.len() == 1 {
+                continue; // `() -> R`: no parameters
+            }
+            q.params.push(t);
+        }
+    }
+    q
+}
+
+fn search_segment(p: SearchParser) -> Vec<SearchTerm> {
+    if search_peek(p) == "(" {
+        let save = p.i;
+        search_next(p);
+        if search_peek(p) == ")" {
+            search_next(p);
+            return search_list1(search_con0("()"));
+        }
+        let list = search_list(p);
+        if p.err != "" {
+            return list;
+        }
+        if search_peek(p) != ")" {
+            p.i = save;
+            search_fail(p, "expected `)`");
+            return list;
+        }
+        search_next(p);
+        return list;
+    }
+    search_list(p)
+}
+
+fn search_list(p: SearchParser) -> Vec<SearchTerm> {
+    let out = Vec::new();
+    while true {
+        let t = search_typ(p);
+        if p.err != "" {
+            return out;
+        }
+        out.push(t);
+        if search_peek(p) != "," {
+            return out;
+        }
+        search_next(p);
+    }
+    out
+}
+
+fn search_typ(p: SearchParser) -> SearchTerm {
+    let bad = search_con0("()");
+    let t = search_next(p);
+    if t.kind == "&" {
+        let inner = search_typ(p);
+        if p.err != "" {
+            return bad;
+        }
+        if !inner.con.starts_with("&") {
+            search_fail(p, "`&` applies only to capabilities");
+            return bad;
+        }
+        return inner;
+    }
+    if t.kind == "_" {
+        p.anon = p.anon + 1;
+        return search_tvar("q:_" + p.anon.to_string());
+    }
+    if t.kind == "(" {
+        if search_next(p).kind != ")" {
+            search_fail(p, "expected `()`");
+            return bad;
+        }
+        return search_con0("()");
+    }
+    if t.kind == "IDENT" {
+        let name = t.text;
+        let c = name.char_at(0).unwrap_or(0);
+        if c >= 97 && c <= 122 {
+            return search_tvar("q:" + name);
+        }
+        if search_is_cap_name(name) {
+            return search_con0("&" + name);
+        }
+        let args = Vec::new();
+        if search_peek(p) == "<" {
+            search_next(p);
+            while true {
+                let a = search_typ(p);
+                if p.err != "" {
+                    return bad;
+                }
+                args.push(a);
+                if search_peek(p) != "," {
+                    break;
+                }
+                search_next(p);
+            }
+            if search_next(p).kind != ">" {
+                search_fail(p, "expected `>`");
+                return bad;
+            }
+        }
+        return search_con(name, args);
+    }
+    search_fail(p, "expected a type, found " + lex_kind_name(t.kind));
+    bad
+}
+
+// ---- unification (substitutions map variable names to terms) ----
+
+fn search_walk(s: Map<String, SearchTerm>, t0: SearchTerm) -> SearchTerm {
+    let mut t = t0;
+    while t.v != "" {
+        match s.get(t.v) {
+            Some(b) => { t = b; }
+            None => { return t; }
+        }
+    }
+    t
+}
+
+fn search_occurs(s: Map<String, SearchTerm>, v: String, t0: SearchTerm) -> Bool {
+    let t = search_walk(s, t0);
+    if t.v != "" {
+        return t.v == v;
+    }
+    for a in t.args {
+        if search_occurs(s, v, a) {
+            return true;
+        }
+    }
+    false
+}
+
+fn search_unify(s: Map<String, SearchTerm>, a0: SearchTerm, b0: SearchTerm) -> Bool {
+    let a = search_walk(s, a0);
+    let b = search_walk(s, b0);
+    if a.v != "" && b.v != "" && a.v == b.v {
+        return true;
+    }
+    if a.v != "" {
+        if search_occurs(s, a.v, b) {
+            return false;
+        }
+        s.insert(a.v, b);
+        return true;
+    }
+    if b.v != "" {
+        return search_unify(s, b, a);
+    }
+    if a.con != b.con || a.args.len() != b.args.len() {
+        return false;
+    }
+    for i in 0..a.args.len() {
+        if !search_unify(s, search_arg(a, i), search_arg(b, i)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn search_arg(t: SearchTerm, i: Int) -> SearchTerm {
+    t.args.get(i).unwrap_or(search_con0("()"))
+}
+
+fn search_at(ts: Vec<SearchTerm>, i: Int) -> SearchTerm {
+    ts.get(i).unwrap_or(search_con0("()"))
+}
+
+fn search_clone(s: Map<String, SearchTerm>) -> Map<String, SearchTerm> {
+    let c: Map<String, SearchTerm> = Map::new();
+    for k in s.keys() {
+        match s.get(k) {
+            Some(v) => { c.insert(k, v); }
+            None => {}
+        }
+    }
+    c
+}
+
+fn search_subst() -> Map<String, SearchTerm> {
+    Map::new()
+}
+
+// ---- candidates ----
+
+struct SearchCand {
+    name: String,
+    kind: String, // "function", "method", "static", "constructor"
+    signature: String,
+    params: Vec<SearchTerm>,
+    result: SearchTerm,
+    pure: Bool,
+    caps: Vec<String>,
+    line: Int,
+    col: Int,
+}
+
+fn search_cand(name: String, kind: String, sig: String, params: Vec<SearchTerm>, result: SearchTerm) -> SearchCand {
+    SearchCand { name: name, kind: kind, signature: sig, params: params, result: result, pure: true, caps: Vec::new(), line: 0, col: 0 }
+}
+
+fn search_is_static(bs: ChkBuiltins, b: ChkBuiltin) -> Bool {
+    bs.statics.contains(b.recv + "::" + b.name)
+}
+
+// search_builtin_signature renders a builtin (tooling.BuiltinSignature).
+fn search_builtin_signature(bs: ChkBuiltins, b: ChkBuiltin) -> String {
+    let parts = Vec::new();
+    let mut sep = ".";
+    if search_is_static(bs, b) {
+        sep = "::";
+    } else if search_is_cap_name(b.recv) {
+        parts.push("&self");
+    } else {
+        parts.push("self");
+    }
+    for p in b.params {
+        parts.push(ty_str(p));
+    }
+    let mut s = "fn " + b.recv + sep + b.name + "(" + parts.join(", ") + ")";
+    if !ty_is_prim(b.result, "()") {
+        s = s + " -> " + ty_str(b.result);
+    }
+    s
+}
+
+fn search_builtin_cands() -> Vec<SearchCand> {
+    let out = Vec::new();
+    let bs = chk_new_builtins();
+    for b in bs.all {
+        let c = search_cand("", "", search_builtin_signature(bs, b), Vec::new(), search_term_of(b.result));
+        if search_is_static(bs, b) {
+            c.kind = "static";
+            c.name = b.recv + "::" + b.name;
+        } else {
+            c.kind = "method";
+            c.name = b.recv + "." + b.name;
+            if search_is_cap_name(b.recv) {
+                c.params.push(search_con0("&" + b.recv));
+                c.pure = false;
+                c.caps.push("&" + b.recv);
+            } else {
+                c.params.push(search_con0(b.recv));
+            }
+        }
+        for p in b.params {
+            c.params.push(search_term_of(p));
+        }
+        out.push(c);
+    }
+    let opt = search_con("Option", search_list1(search_tvar("c:T")));
+    let res = search_con("Result", search_list2(search_tvar("c:T"), search_tvar("c:E")));
+    let t = search_tvar("c:T");
+    let e = search_tvar("c:E");
+    let bool_t = search_con0("Bool");
+    out.push(search_cand("Option.is_some", "method", "fn Option<T>.is_some(self) -> Bool", search_list1(opt), bool_t));
+    out.push(search_cand("Option.is_none", "method", "fn Option<T>.is_none(self) -> Bool", search_list1(opt), bool_t));
+    out.push(search_cand("Option.unwrap_or", "method", "fn Option<T>.unwrap_or(self, T) -> T", search_list2(opt, t), t));
+    out.push(search_cand("Result.is_ok", "method", "fn Result<T, E>.is_ok(self) -> Bool", search_list1(res), bool_t));
+    out.push(search_cand("Result.is_err", "method", "fn Result<T, E>.is_err(self) -> Bool", search_list1(res), bool_t));
+    out.push(search_cand("Result.unwrap_or", "method", "fn Result<T, E>.unwrap_or(self, T) -> T", search_list2(res, t), t));
+    out.push(search_cand("Some", "constructor", "Some(T) -> Option<T>", search_list1(t), opt));
+    out.push(search_cand("None", "constructor", "None : Option<T>", Vec::new(), opt));
+    out.push(search_cand("Ok", "constructor", "Ok(T) -> Result<T, E>", search_list1(t), res));
+    out.push(search_cand("Err", "constructor", "Err(E) -> Result<T, E>", search_list1(e), res));
+    let tx = search_cand("Db.transaction", "method",
+        "fn Db.transaction(&self, |tx: Tx| -> Result<T, E>) -> Result<Result<T, E>, TxError>",
+        search_list1(search_con0("&Db")), search_con("Result", search_list2(res, search_con0("TxError"))));
+    tx.pure = false;
+    tx.caps.push("&Db");
+    out.push(tx);
+    out
+}
+
+fn search_variant_text(en: TyEnum, v: TyVariant) -> String {
+    let mut s = en.name + "::" + v.name;
+    if v.fields.len() > 0 {
+        let fs = Vec::new();
+        for f in v.fields {
+            fs.push(ty_str(f));
+        }
+        s = s + "(" + fs.join(", ") + ")";
+    }
+    s
+}
+
+fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
+    let out = Vec::new();
+    for r in caps_reports(a) {
+        let fun = match a.info.funcs.get(r.name) {
+            Some(f) => f,
+            None => { continue; }
+        };
+        let c = search_cand(fun.name, "function", r.signature, Vec::new(), search_term_of(fun.result));
+        c.pure = r.pure;
+        c.line = r.line;
+        c.col = r.col;
+        for p in fun.params {
+            c.params.push(search_term_of(p.ty));
+        }
+        for cp in r.caps {
+            c.caps.push(ty_str(cp.ty));
+        }
+        out.push(c);
+    }
+    // variant positions of the first declaration of each enum
+    let vpos: Map<String, Vec<AstPos>> = Map::new();
+    for ed in a.file.enums {
+        if a.info.enums.contains(ed.name) && !vpos.contains(ed.name) {
+            let ps = Vec::new();
+            for v in ed.variants {
+                ps.push(v.pos);
+            }
+            vpos.insert(ed.name, ps);
+        }
+    }
+    let names = a.info.enums.keys();
+    chk_sort_strings(names);
+    for n in names {
+        let en = match a.info.enums.get(n) {
+            Some(e) => e,
+            None => { continue; }
+        };
+        let ps = vpos.get(n).unwrap_or(Vec::new());
+        let mut i = 0;
+        for v in en.variants {
+            let c = search_cand(en.name + "::" + v.name, "constructor", search_variant_text(en, v), Vec::new(), search_con0(en.name));
+            match ps.get(i) {
+                Some(p) => {
+                    c.line = p.line;
+                    c.col = p.col;
+                }
+                None => {}
+            }
+            for f in v.fields {
+                c.params.push(search_term_of(f));
+            }
+            out.push(c);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// ---- matching ----
+
+struct SearchMatch {
+    cand: SearchCand,
+    kind: String, // "exact", "reordered", "unifies", "result"
+    score: Int,
+    builtin: Bool,
+}
+
+// search_exactly reports structural identity without instantiation.
+fn search_exactly(a: SearchTerm, b: SearchTerm) -> Bool {
+    if a.v != "" || b.v != "" {
+        return a.v != "" && b.v != "" && a.v.slice(2, a.v.len()) == b.v.slice(2, b.v.len());
+    }
+    if a.con != b.con || a.args.len() != b.args.len() {
+        return false;
+    }
+    for i in 0..a.args.len() {
+        if !search_exactly(search_arg(a, i), search_arg(b, i)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn search_has_vars_t(t: SearchTerm) -> Bool {
+    if t.v != "" {
+        return true;
+    }
+    for a in t.args {
+        if search_has_vars_t(a) {
+            return true;
+        }
+    }
+    false
+}
+
+fn search_has_vars(result: SearchTerm, params: Vec<SearchTerm>) -> Bool {
+    if search_has_vars_t(result) {
+        return true;
+    }
+    for p in params {
+        if search_has_vars_t(p) {
+            return true;
+        }
+    }
+    false
+}
+
+fn search_generality(c: SearchCand) -> Int {
+    if search_has_vars(c.result, c.params) { 2 } else { 0 }
+}
+
+fn search_perm(s: Map<String, SearchTerm>, qs: Vec<SearchTerm>, cs: Vec<SearchTerm>, used: Vec<Bool>, i: Int) -> Bool {
+    if i == qs.len() {
+        return true;
+    }
+    for j in 0..cs.len() {
+        if used.get(j).unwrap_or(false) {
+            continue;
+        }
+        let s2 = search_clone(s);
+        if search_unify(s2, search_at(qs, i), search_at(cs, j)) {
+            used.set(j, true);
+            if search_perm(s2, qs, cs, used, i + 1) {
+                return true;
+            }
+            used.set(j, false);
+        }
+    }
+    false
+}
+
+// search_match_cand returns the match kind and score, or kind "" if c
+// does not match.
+fn search_match_cand(q: SearchQuery, c: SearchCand) -> SearchMatch {
+    let m = SearchMatch { cand: c, kind: "", score: 0, builtin: false };
+    if q.result_only {
+        if search_exactly(q.result, c.result) {
+            m.kind = "result";
+            m.score = 20;
+        } else if c.result.v == "" && search_unify(search_subst(), q.result, c.result) {
+            m.kind = "result";
+            m.score = 25;
+        }
+        return m;
+    }
+    if q.params.len() != c.params.len() {
+        return m;
+    }
+    let mut same = search_exactly(q.result, c.result);
+    for i in 0..q.params.len() {
+        same = same && search_exactly(search_at(q.params, i), search_at(c.params, i));
+    }
+    if same {
+        m.kind = "exact";
+        return m;
+    }
+    let s = search_subst();
+    if search_unify(s, q.result, c.result) {
+        let mut in_order = true;
+        let s2 = search_clone(s);
+        for i in 0..q.params.len() {
+            if !search_unify(s2, search_at(q.params, i), search_at(c.params, i)) {
+                in_order = false;
+                break;
+            }
+        }
+        if in_order {
+            m.kind = "unifies";
+            m.score = 5 + search_generality(c);
+            return m;
+        }
+        let used = Vec::new();
+        for k in 0..c.params.len() {
+            used.push(false);
+        }
+        if q.params.len() <= 6 && search_perm(s, q.params, c.params, used, 0) {
+            m.kind = "reordered";
+            m.score = 3;
+            if search_has_vars(q.result, q.params) || search_has_vars(c.result, c.params) {
+                m.kind = "unifies";
+                m.score = 8;
+            }
+            m.score = m.score + search_generality(c);
+        }
+    }
+    m
+}
+
+fn search_less(a: SearchMatch, b: SearchMatch) -> Bool {
+    if a.score != b.score {
+        return a.score < b.score;
+    }
+    ast_str_less(a.cand.name, b.cand.name)
+}
+
+// search_sort is a stable merge sort by (score, name).
+fn search_sort(xs: Vec<SearchMatch>) -> Vec<SearchMatch> {
+    let n = xs.len();
+    if n <= 1 {
+        return xs;
+    }
+    let left = Vec::new();
+    let right = Vec::new();
+    let mut i = 0;
+    for x in xs {
+        if i < n / 2 {
+            left.push(x);
+        } else {
+            right.push(x);
+        }
+        i = i + 1;
+    }
+    let l = search_sort(left);
+    let r = search_sort(right);
+    let out = Vec::new();
+    let mut a = 0;
+    let mut b = 0;
+    while a < l.len() || b < r.len() {
+        match l.get(a) {
+            Some(x) => match r.get(b) {
+                Some(y) => {
+                    if search_less(y, x) {
+                        out.push(y);
+                        b = b + 1;
+                    } else {
+                        out.push(x);
+                        a = a + 1;
+                    }
+                }
+                None => {
+                    out.push(x);
+                    a = a + 1;
+                }
+            },
+            None => {
+                match r.get(b) {
+                    Some(y) => out.push(y),
+                    None => {}
+                }
+                b = b + 1;
+            }
+        }
+    }
+    out
+}
+
+fn search_run(q: SearchQuery, a: Option<DiagAnalysis>) -> Vec<SearchMatch> {
+    let out = Vec::new();
+    match a {
+        Some(an) => {
+            for c in search_user_cands(an) {
+                let m = search_match_cand(q, c);
+                if m.kind != "" {
+                    m.score = m.score - 1; // prefer reusing project code
+                    out.push(m);
+                }
+            }
+        }
+        None => {}
+    }
+    for c in search_builtin_cands() {
+        let m = search_match_cand(q, c);
+        if m.kind != "" {
+            m.builtin = true;
+            out.push(m);
+        }
+    }
+    search_sort(out)
+}
+
+fn search_pad(s: String, w: Int) -> String {
+    let mut out = s;
+    while out.len() < w {
+        out = out + " ";
+    }
+    out
+}
+
+fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = diag_parse_flags(args, 1, "search");
+    if fl.err != "" {
+        return diag_flag_error(fl, "search", log);
+    }
+    if fl.rest.len() < 1 || fl.rest.len() > 2 {
+        log.error("usage: kek search [-json] [-limit n] '<type signature>' [file.kek]");
+        return 1;
+    }
+    let limit = fl.vals.get("limit").unwrap_or("20").parse_int().unwrap_or(20);
+    let q = match search_parse_query(fl.rest.get(0).unwrap_or("")) {
+        Ok(q) => q,
+        Err(msg) => {
+            log.error(msg);
+            return 1;
+        }
+    };
+    let file = fl.rest.get(1).unwrap_or("");
+    let mut an: Option<DiagAnalysis> = None;
+    if fl.rest.len() == 2 {
+        match diag_read_file(file, fs, log) {
+            Some(src) => { an = Some(diag_analyze(src)); }
+            None => { return 1; }
+        }
+    }
+    let all = search_run(q, an);
+    let ms = Vec::new();
+    for m in all {
+        if limit <= 0 || ms.len() < limit {
+            ms.push(m);
+        }
+    }
+    if diag_flag_bool(fl, "json") {
+        let xs = Vec::new();
+        for m in ms {
+            let o = irjson_obj();
+            irjson_set(o, "name", IrjVal::Str(m.cand.name));
+            irjson_set(o, "kind", IrjVal::Str(m.cand.kind));
+            irjson_set(o, "signature", IrjVal::Str(m.cand.signature));
+            irjson_set(o, "match", IrjVal::Str(m.kind));
+            irjson_set(o, "score", irjson_int(m.score));
+            irjson_set(o, "pure", irjson_bool(m.cand.pure));
+            irjson_set(o, "caps", irjson_strs(m.cand.caps));
+            irjson_set(o, "builtin", irjson_bool(m.builtin));
+            if m.cand.line != 0 {
+                irjson_set(o, "line", irjson_int(m.cand.line));
+            }
+            if m.cand.col != 0 {
+                irjson_set(o, "col", irjson_int(m.cand.col));
+            }
+            xs.push(irjson_val(o));
+        }
+        let r = irjson_obj();
+        irjson_set(r, "query", IrjVal::Str(search_query_string(q)));
+        irjson_set(r, "matches", IrjVal::Arr(xs));
+        log.info(irjson_encode(irjson_val(r), false));
+        return 0;
+    }
+    if ms.len() == 0 {
+        log.info("no functions match " + search_query_string(q));
+        return 0;
+    }
+    let lines = Vec::new();
+    for m in ms {
+        let mut loc = "builtin";
+        if !m.builtin {
+            loc = file + ":" + m.cand.line.to_string() + ":" + m.cand.col.to_string();
+            if m.cand.line == 0 {
+                loc = file;
+            }
+        }
+        lines.push(search_pad(m.cand.name, 24) + " " + m.cand.signature + "  [" + m.kind + "] (" + loc + ")");
+    }
+    frontend_print(log, lines);
+    0
+}

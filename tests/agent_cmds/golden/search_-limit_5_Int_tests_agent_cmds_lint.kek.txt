@@ -1,0 +1,6 @@
+area                     fn area(s: Shape) -> Int  [result] (tests/agent_cmds/lint.kek:8:4)
+Clock.now_ms             fn Clock.now_ms(&self) -> Int  [result] (builtin)
+Int.abs                  fn Int.abs(self) -> Int  [result] (builtin)
+Int.bit_and              fn Int.bit_and(self, Int) -> Int  [result] (builtin)
+Int.bit_or               fn Int.bit_or(self, Int) -> Int  [result] (builtin)
+--- exit 0

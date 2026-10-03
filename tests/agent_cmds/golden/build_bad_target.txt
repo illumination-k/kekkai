@@ -1,0 +1,4 @@
+--- stderr
+unknown target "bogus" (want d1 or do)
+--- exit 1
+--- files: 

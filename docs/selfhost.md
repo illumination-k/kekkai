@@ -30,6 +30,7 @@ stage0 = Go 実装の `kek`（`cmd/kek`, `internal/*`）。stage1 = Kekkai で�
 | `check <file>` | 型検査 | `kek check` の診断 |
 | `ir <file>` | lowering | `kek ir <file>` のテキスト |
 | `build <file> <outdir>` | 全体 | `kek build` |
+| `test-build <file> <outdir> [-list \| -run name...]` | `kek test`（`testrun_*`、ランナーは `js/kek_test.mjs`） | `testrun.Discover` / `testrun.Compile`（`go test ./internal/selfhost -run TestTestBuild`） |
 
 ## Go の撤去（self-hosting 達成後のゴール）
 

@@ -61,6 +61,8 @@ fn visits_are_counted(db: &Db, log: &Log) -> Result<(), String> {
 
 capability を受け取らないテストは純粋なので hermetic で、出力に `pure: hermetic, cacheable` と表示されます（定義ハッシュをキーにしたキャッシュは今後の課題）。
 
+セルフホスト版は `./kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>`。コンパイラの `test-build`（`compiler/testrun.kek`）がテストの発見とハーネス合成・ビルドを行い、`js/kek_test.mjs` が `-run`（JavaScript の正規表現）で選択して `js/test_runner.mjs` を実行します。テストは `node --test tests/testrun.test.mjs`。
+
 ## 開発
 
 ```sh

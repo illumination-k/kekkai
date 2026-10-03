@@ -11,6 +11,7 @@ import (
 
 	"github.com/illumination-k/kekkai/internal/driver"
 	"github.com/illumination-k/kekkai/internal/glue"
+	"github.com/illumination-k/kekkai/internal/ir"
 	"github.com/illumination-k/kekkai/internal/selfhost"
 )
 
@@ -87,10 +88,11 @@ func stage1(t *testing.T, args ...string) (string, int) {
 	return out.String(), code
 }
 
-// corpus returns every .kek file of the test data and the compiler itself.
+// corpus returns every .kek file of the test data, the compiler itself and
+// the malformed inputs of testdata/syntax.
 func corpus(t *testing.T) []string {
 	var files []string
-	for _, pat := range []string{"../../testdata/*/*.kek", "../../compiler/*.kek", "../../lean/test/*.kek"} {
+	for _, pat := range []string{"../../testdata/*/*.kek", "../../compiler/*.kek", "../../lean/test/*.kek", "testdata/syntax/*.kek"} {
 		m, _ := filepath.Glob(pat)
 		files = append(files, m...)
 	}
@@ -137,6 +139,31 @@ func stage0Check(path string) (string, bool) {
 		return err.Error() + "\n", false
 	}
 	return path + ": ok\n", true
+}
+
+// TestIR compares `ir <path>` with `kek ir <path>` (the IR text, or the
+// diagnostics for programs that do not check).
+func TestIR(t *testing.T) {
+	paths := append(corpus(t), "../../compiler")
+	for _, path := range paths {
+		name, _ := filepath.Rel("../..", path)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			want, ok := stage0Check(path)
+			if ok {
+				srcs, _ := driver.ReadSources(path)
+				info, _ := driver.CheckFiles(srcs)
+				want = ir.Lower(info).String()
+			}
+			got, code := stage1(t, "ir", path)
+			if got != want {
+				t.Errorf("stage1 ir output differs from stage0:\n%s", firstDiff(want, got))
+			}
+			if (code == 0) != ok {
+				t.Errorf("exit code %d, stage0 ok=%v", code, ok)
+			}
+		})
+	}
 }
 
 func TestCheck(t *testing.T) {

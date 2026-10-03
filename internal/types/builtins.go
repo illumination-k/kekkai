@@ -82,6 +82,8 @@ func init() {
 	// self-hosted compiler). Writes are irrevocable.
 	m(&Builtin{Recv: "Fs", Name: "read", Params: []Type{String}, Result: res(String, IoError), Async: true})
 	m(&Builtin{Recv: "Fs", Name: "write", Params: []Type{String, String}, Result: res(Unit, IoError), Async: true})
+	// list returns the entry names of a directory, sorted.
+	m(&Builtin{Recv: "Fs", Name: "list", Params: []Type{String}, Result: res(&VecT{String}, IoError), Async: true})
 	m(&Builtin{Recv: "Fs", Name: "write_bytes", Params: []Type{String, &VecT{Int}}, Result: res(Unit, IoError), Async: true})
 
 	// ---- pure data ----

@@ -58,6 +58,7 @@ export async function nodeFs() {
     read: (p) => fsp.readFile(p, "utf8"),
     write: (p, c) => fsp.writeFile(p, c),
     writeBytes: (p, b) => fsp.writeFile(p, b),
+    list: (p) => fsp.readdir(p),
   };
 }
 
@@ -544,6 +545,7 @@ export function createKekkai(module, meta) {
     "ioError.message": (e) => e.message,
     "fs.read": (fs, p) => start(asResult(fs.read(p), toIoError)),
     "fs.write": (fs, p, c) => start(asResult(fs.write(p, c), toIoError)),
+    "fs.list": (fs, p) => start(asResult(Promise.resolve(fs.list(p)).then((names) => [...names].sort()), toIoError)),
     "fs.write_bytes": (fs, p, a) => start(asResult(fs.writeBytes(p, new Uint8Array(a.map((x) => Number(BigInt.asUintN(8, x))))), toIoError)),
 
     "int.to_string": (x) => x.toString(),

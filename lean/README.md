@@ -20,6 +20,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 | `Kekkai/Linearity.lean` | 定理 3・4: `Tx` の線形性、トランザクション内で取り消せない副作用を禁止 |
 | `Kekkai/NoLeak.lean` | 定理 5: capability の非漏洩 |
 | `Kekkai/Examples.lean` | 例: 型付けの導出、インタプリタの実行結果（`rfl`）、型エラーになるプログラム |
+| `Kekkai/IR/*.lean`, `KekkaiRef.lean` | Kekkai IR の実行可能な参照インタプリタ `kekkai-ref`（下記） |
 
 ## コア計算
 
@@ -96,3 +97,46 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 - `Clock`, `Random`, 認可、PII、並行性は扱わない
 - capability の種類による権限（たとえば `fetch` は `Net` 種別の capability でしか起こらない）は、型安全性（`stuck` にならない）と型付け規則から従う。トレースに対する明示的な定理として述べているのは「渡された capability だけを使う」（定理 2）まで
 - 定理 5 の意味論版では、`fetch` の応答が `Net` capability の ID に依存しない oracle を仮定する
+
+## IR の参照インタプリタ `kekkai-ref`
+
+`kek ir -json` が出力する IR（`internal/ir/ir.go`）を実行する参照インタプリタです。WasmGC バックエンド（`internal/wasm/codegen.go`）と JS ランタイムの純粋な host 操作（`internal/glue/runtime.js`）と同じ意味論を実装し、差分テスト（`internal/difftest`）の基準になります。
+
+| ファイル | 内容 |
+| --- | --- |
+| `Kekkai/IR/Arith.lean` | 64 ビット 2 の補数算術（`wrap`、全域な `div`/`rem`、ビット演算）と、その性質の証明（`wrap_inRange`, `wrap_wrap`, `wrap_add_wrap`, `i64Div_min_neg_one` など） |
+| `Kekkai/IR/Syntax.lean`, `Value.lean` | IR の構文と実行時の値 |
+| `Kekkai/IR/Json.lean` | Go の `encoding/json` 出力（`omitempty` で省略されたゼロ値、`null` のスライス）のデコード |
+| `Kekkai/IR/Host.lean` | 純粋な host 操作（`int.*`, `bool.to_string`, `string.*`, `log.*`, `clock.now_ms`） |
+| `Kekkai/IR/Interp.lean` | 明示的なコールスタックを持つスモールステップ機械。fuel について構造的再帰なので全域 |
+| `Kekkai/IR/Cli.lean`, `KekkaiRef.lean` | コマンドライン |
+
+ビルドとスモークテスト:
+
+```sh
+cd lean && lake build kekkai-ref      # .lake/build/bin/kekkai-ref
+lean/test_ref.sh                      # lean/test/smoke.kek などで期待値と比較
+go test ./internal/difftest/          # ランダムなプログラムで WasmGC と比較（バイナリがあれば）
+```
+
+使い方: `kekkai-ref <ir.json> <関数名> <引数>...`。引数は JSON 値（`42`, `-7`, `true`, `"abc"`, unit は `null`, 集成体は `{"fields":[...]}` / `{"tag":k,"fields":[...]}`）。型が `ext`（capability）の引数には不透明な値が自動で渡され、コマンドライン引数を消費しません。出力は標準出力に 1 行の JSON で、終了コードは 0:
+
+```sh
+$ kekkai-ref basic.json add 9223372036854775807 1
+{"ok":-9223372036854775808,"log":[]}
+$ kekkai-ref basic.json parse_id '"abc"'
+{"ok":{"tag":1,"fields":[{"tag":1,"fields":["abc"]}]},"log":[]}
+$ kekkai-ref basic.json greet '{"fields":[1,"bob"]}'
+{"ok":null,"log":[["info","hello bob"]]}
+$ kekkai-ref basic.json sum_to 1000000
+{"error":"timeout"}
+```
+
+値の表現: 整数は JSON の数（i64 を正確に）、unit は `null`、variant は `{"tag":k,"fields":[...]}`（その tag のフィールドだけ）、struct は `{"fields":[...]}`、host の不透明値は `{"ext":"Log"}`、初期化されていない参照型ローカルは `{"null":true}`。エラーは `timeout`（fuel 1,000,000 ステップ。命令と終端命令が 1 ステップずつ）、`unreachable`、`null dereference`、`stack overflow`（呼び出しの深さ 10000）、`unsupported host op <名前>`、`unsupported await <名前>`（非同期操作は v1 の対象外）。使い方や IR の誤りは標準エラーに出力し、終了コード 1（使い方の誤りは 2）。
+
+意味論の要点（WasmGC と一致させている点）:
+
+- 算術は毎回 `[-2^63, 2^63)` に wrap。`x / 0 = 0`、`x / -1 = 0 - x`（したがって `MIN / -1 = MIN`）、それ以外は 0 方向への切り捨て。`x % 0 = x`、それ以外は被除数の符号を持つ剰余（`Int.tmod`）
+- ローカルは型の既定値（`0`, `false`, `ref.null`）で初期化される。`br` は真なら第 1 ターゲット、`switch` は整数の値 `k` と `0, 1, ...` を比べ、どれでもなければ最後のターゲット
+- `vfield` で値と異なる tag のスロットを読むと、そのスロットの型の既定値になる（wasm は全 tag のスロットを持ち、使わないスロットを既定値で埋めるため）
+- host の `Option` の結果は `None = 0 | Some = 1` の variant に持ち上げる。`string.len` は UTF-16 のコード単位で数え、`string.trim` は JS の空白文字を除く。`to_upper`/`to_lower` は ASCII のみ（JS は Unicode 全体を変換する）。`clock.now_ms` は固定値 `1700000000000`

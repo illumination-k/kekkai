@@ -25,8 +25,9 @@ func (s lstate) clone() lstate {
 }
 
 type linChecker struct {
-	info *Info
-	errs *syntax.ErrorList
+	info  *Info
+	errs  *syntax.ErrorList
+	loops []lstate // states at the entry of enclosing loops
 }
 
 func checkLinearity(info *Info, fn *Func, errs *syntax.ErrorList) {
@@ -78,12 +79,26 @@ func (lc *linChecker) stmt(st syntax.Stmt, s lstate) lstate {
 		return lc.expr(st.Value, s)
 	case *syntax.ExprStmt:
 		return lc.expr(st.X, s)
+	case *syntax.FieldAssignStmt:
+		s = lc.expr(st.Target, s)
+		return lc.expr(st.Value, s)
+	case *syntax.BreakStmt, *syntax.ContinueStmt:
+		if n := len(lc.loops); n > 0 {
+			for k, v := range s {
+				if entry, ok := lc.loops[n-1][k]; ok && entry != v {
+					lc.errorf(stmtPos(st), "transaction `%s` cannot be committed or rolled back inside a loop", k.Name)
+				}
+			}
+		}
+		return nil
 	case *syntax.WhileStmt:
 		s = lc.expr(st.Cond, s)
 		if s == nil {
 			return nil
 		}
+		lc.loops = append(lc.loops, s.clone())
 		after := lc.block(st.Body, s.clone())
+		lc.loops = lc.loops[:len(lc.loops)-1]
 		if after != nil {
 			for k, v := range after {
 				if s[k] != v {
@@ -100,7 +115,9 @@ func (lc *linChecker) stmt(st syntax.Stmt, s lstate) lstate {
 		if s == nil {
 			return nil
 		}
+		lc.loops = append(lc.loops, s.clone())
 		after := lc.block(st.Body, s.clone())
+		lc.loops = lc.loops[:len(lc.loops)-1]
 		if after != nil {
 			for k, v := range after {
 				if s[k] != v {
@@ -246,7 +263,10 @@ func (lc *linChecker) transaction(e *syntax.MethodCall, mi *MethodInfo, s lstate
 	tx := mi.Closure.Tx
 	inner := s.clone()
 	inner[tx] = false
+	savedLoops := lc.loops
+	lc.loops = nil
 	after := lc.expr(cl.Body, inner)
+	lc.loops = savedLoops
 	if after != nil && !after[tx] {
 		pos := syntax.ExprPos(cl.Body)
 		if b, ok := cl.Body.(*syntax.Block); ok {

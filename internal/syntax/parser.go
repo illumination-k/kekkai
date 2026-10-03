@@ -273,15 +273,17 @@ func (p *parser) parseBlock() *Block {
 			}
 			b.Stmts = append(b.Stmts, s)
 			continue
-		case TIdent:
-			if p.peekKind(1) == Assign {
-				name := p.next().Text
-				p.next()
-				val := p.parseExpr()
-				p.expect(Semi)
-				b.Stmts = append(b.Stmts, &AssignStmt{Pos: sp, Name: name, Value: val})
-				continue
+		case KwBreak, KwContinue:
+			k := p.next().Kind
+			if !p.accept(Semi) && !p.at(RBrace) {
+				p.fail(p.tok().Pos, "expected `;`, found %s", describe(p.tok()))
 			}
+			if k == KwBreak {
+				b.Stmts = append(b.Stmts, &BreakStmt{Pos: sp})
+			} else {
+				b.Stmts = append(b.Stmts, &ContinueStmt{Pos: sp})
+			}
+			continue
 		}
 		var e Expr
 		if k := p.tok().Kind; k == KwIf || k == KwMatch || k == LBrace {
@@ -293,6 +295,19 @@ func (p *parser) parseBlock() *Block {
 			}
 		} else {
 			e = p.parseExpr()
+		}
+		if p.accept(Assign) {
+			val := p.parseExpr()
+			p.expect(Semi)
+			switch t := e.(type) {
+			case *Ident:
+				b.Stmts = append(b.Stmts, &AssignStmt{Pos: sp, Name: t.Name, Value: val})
+			case *FieldExpr:
+				b.Stmts = append(b.Stmts, &FieldAssignStmt{Pos: sp, Target: t, Value: val})
+			default:
+				p.fail(sp, "invalid assignment target")
+			}
+			continue
 		}
 		if p.accept(Semi) {
 			b.Stmts = append(b.Stmts, &ExprStmt{Pos: sp, X: e, Semi: true})

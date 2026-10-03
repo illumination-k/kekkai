@@ -8,3 +8,10 @@ import Kekkai.Monitor
 import Kekkai.Linearity
 import Kekkai.NoLeak
 import Kekkai.Examples
+import Kekkai.IR.Arith
+import Kekkai.IR.Syntax
+import Kekkai.IR.Value
+import Kekkai.IR.Host
+import Kekkai.IR.Json
+import Kekkai.IR.Interp
+import Kekkai.IR.Cli

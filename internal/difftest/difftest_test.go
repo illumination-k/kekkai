@@ -100,15 +100,14 @@ func TestDifferential(t *testing.T) {
 				t.Fatalf("seed %d: kekkai-ref: %v\n%s", s, err, rout)
 			}
 			var r struct {
-				OK    json.Number `json:"ok"`
-				Error string      `json:"error"`
+				OK    json.RawMessage `json:"ok"`
+				Error string          `json:"error"`
 			}
-			dec := json.NewDecoder(strings.NewReader(string(rout)))
-			dec.UseNumber()
-			if err := dec.Decode(&r); err != nil {
+			if err := json.NewDecoder(strings.NewReader(string(rout))).Decode(&r); err != nil {
 				t.Fatalf("seed %d: bad kekkai-ref output %q", s, rout)
 			}
-			if r.Error != "" || r.OK.String() != wasmRes[i]["ok"] {
+			// all generated functions return Int: compare the exact JSON number
+			if r.Error != "" || string(r.OK) != wasmRes[i]["ok"] {
 				t.Errorf("seed %d: %s%v: wasm=%s reference=%s%s\nprogram kept at %s", s, c.Fn, c.Args, wasmRes[i]["ok"], r.OK, r.Error, dir)
 			}
 		}

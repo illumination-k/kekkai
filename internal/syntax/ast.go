@@ -118,6 +118,17 @@ type AssignStmt struct {
 	Value Expr
 }
 
+// FieldAssignStmt is `x.f = e` (struct fields are mutable; structs have
+// reference semantics).
+type FieldAssignStmt struct {
+	Pos    Pos
+	Target *FieldExpr
+	Value  Expr
+}
+
+type BreakStmt struct{ Pos Pos }
+type ContinueStmt struct{ Pos Pos }
+
 type WhileStmt struct {
 	Pos  Pos
 	Cond Expr
@@ -144,12 +155,15 @@ type ExprStmt struct {
 	Semi bool
 }
 
-func (*LetStmt) stmt()    {}
-func (*AssignStmt) stmt() {}
-func (*WhileStmt) stmt()  {}
-func (*ForStmt) stmt()    {}
-func (*ReturnStmt) stmt() {}
-func (*ExprStmt) stmt()   {}
+func (*LetStmt) stmt()         {}
+func (*AssignStmt) stmt()      {}
+func (*WhileStmt) stmt()       {}
+func (*ForStmt) stmt()         {}
+func (*FieldAssignStmt) stmt() {}
+func (*BreakStmt) stmt()       {}
+func (*ContinueStmt) stmt()    {}
+func (*ReturnStmt) stmt()      {}
+func (*ExprStmt) stmt()        {}
 
 // ---- expressions ----
 

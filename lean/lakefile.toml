@@ -1,5 +1,9 @@
 name = "Kekkai"
-defaultTargets = ["Kekkai"]
+defaultTargets = ["Kekkai", "kekkai-ref"]
 
 [[lean_lib]]
 name = "Kekkai"
+
+[[lean_exe]]
+name = "kekkai-ref"
+root = "KekkaiRef"

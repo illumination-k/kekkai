@@ -76,6 +76,7 @@ type Const struct {
 //	await    Dst = Name(Args...)            builtin operation that suspends
 //	struct   Dst = Type{Args...}
 //	field    Dst = Args[0].Index            (Type)
+//	setfield Args[0].Index := Args[1]; Dst = ()   (Type; structs are mutable references)
 //	variant  Dst = Type.Tag(Args...)
 //	tag      Dst = tag(Args[0])             (Type)
 //	vfield   Dst = Args[0].Tag.Index        (Type)

@@ -178,6 +178,7 @@ type retCtx struct {
 }
 
 type checker struct {
+	loops  int // enclosing loops in the current function / transaction body
 	info   *Info
 	errs   syntax.ErrorList
 	nextID int
@@ -573,6 +574,7 @@ func (c *checker) bind(b *Binding) {
 
 func (c *checker) checkFunc(fn *Func) {
 	c.fn = fn
+	c.loops = 0
 	c.scope = nil
 	c.push(false)
 	for _, p := range fn.Params {
@@ -583,6 +585,16 @@ func (c *checker) checkFunc(fn *Func) {
 	c.expect(tailPos(fn.Decl.Body), t, fn.Result, "function result")
 	c.pop()
 	c.fn = nil
+}
+
+func stmtPos(s syntax.Stmt) syntax.Pos {
+	switch s := s.(type) {
+	case *syntax.BreakStmt:
+		return s.Pos
+	case *syntax.ContinueStmt:
+		return s.Pos
+	}
+	return syntax.Pos{}
 }
 
 // tailPos is the position to blame for a block's value.
@@ -669,10 +681,22 @@ func (c *checker) checkStmt(s syntax.Stmt) bool {
 		c.info.Assigns[s] = b
 		c.expect(syntax.ExprPos(s.Value), t, b.Type, "assignment")
 		return false
+	case *syntax.FieldAssignStmt:
+		ft := c.checkExpr(s.Target)
+		vt := c.checkExpr(s.Value)
+		c.expect(syntax.ExprPos(s.Value), vt, ft, "field assignment")
+		return false
+	case *syntax.BreakStmt, *syntax.ContinueStmt:
+		if c.loops == 0 {
+			c.errorf(stmtPos(s), "`break`/`continue` outside of a loop")
+		}
+		return true
 	case *syntax.WhileStmt:
 		ct := c.checkExpr(s.Cond)
 		c.expect(syntax.ExprPos(s.Cond), ct, Bool, "while condition")
+		c.loops++
 		bt := c.checkBlock(s.Body)
+		c.loops--
 		c.expect(s.Body.End, bt, Unit, "while body")
 		return false
 	case *syntax.ForStmt:
@@ -692,7 +716,9 @@ func (c *checker) checkStmt(s syntax.Stmt) bool {
 		b := c.newBinding(s.Var, elem, s.Pos)
 		c.info.Fors[s] = b
 		c.bind(b)
+		c.loops++
 		bt := c.checkBlock(s.Body)
+		c.loops--
 		c.expect(s.Body.End, bt, Unit, "for body")
 		c.pop()
 		return false
@@ -1217,7 +1243,10 @@ func (c *checker) checkTransaction(e *syntax.MethodCall) Type {
 	c.push(true)
 	c.bind(tx)
 	c.rets = append(c.rets, retCtx{typ: result, closure: ci})
+	savedLoops := c.loops
+	c.loops = 0
 	bt := c.checkExprCap(cl.Body, false)
+	c.loops = savedLoops
 	c.rets = c.rets[:len(c.rets)-1]
 	c.pop()
 	if !unify(bt, result) {

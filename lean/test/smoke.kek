@@ -1,0 +1,58 @@
+// Smoke tests for the Lean reference interpreter (lean/test_ref.sh).
+enum Op {
+    Add,
+    Div(Int),
+    Neg,
+}
+
+fn div(a: Int, b: Int) -> Int { a / b }
+fn rem(a: Int, b: Int) -> Int { a % b }
+fn mul(a: Int, b: Int) -> Int { a * b }
+fn neg(a: Int) -> Int { -a }
+fn abs(a: Int) -> Int { a.abs() }
+
+fn apply(op: Op, x: Int) -> Int {
+    match op {
+        Op::Add => x + 1,
+        Op::Div(d) => x / d,
+        Op::Neg => -x,
+    }
+}
+
+fn pick(k: Int, x: Int) -> Int {
+    let op = if k == 0 { Op::Add } else if k == 1 { Op::Div(3) } else { Op::Neg };
+    apply(op, x)
+}
+
+fn fact(n: Int) -> Int {
+    if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+
+fn spin(n: Int) -> Int {
+    let mut i = 0;
+    while true { i = i + 1; }
+    i
+}
+
+fn describe(n: Int, b: Bool) -> String {
+    let s = n.to_string() + "/" + b.to_string();
+    "  [" + s.to_upper() + "]  "
+}
+
+fn strs(s: String, t: String) -> Int {
+    let mut r = 0;
+    if s.contains(t) { r = r + 1; }
+    if s.starts_with(t) { r = r + 10; }
+    if s.ends_with(t) { r = r + 100; }
+    r + 1000 * s.trim().len()
+}
+
+fn parse(s: String) -> Int {
+    s.parse_int().unwrap_or(-1)
+}
+
+fn shout(log: &Log, s: String) -> Int {
+    log.info("hi " + s);
+    log.warn(s.to_lower());
+    s.len()
+}

@@ -213,7 +213,7 @@ func (m *module) layoutTypes() {
 		case !td.IsVariant:
 			var fields []fieldType
 			for _, f := range td.Fields {
-				fields = append(fields, fieldType{t: m.val(f)})
+				fields = append(fields, fieldType{t: m.val(f), mut: true})
 			}
 			m.structs[m.aggType[i]] = compType{fields: fields}
 		default:
@@ -711,7 +711,11 @@ func (g *fnGen) instr(in ir.Instr) {
 		for k := range in.Args {
 			arg(k)
 		}
-		c.call(m.funcIdx[in.Name])
+		idx, ok := m.funcIdx[in.Name]
+		if !ok {
+			panic("codegen: call to unknown or async function " + in.Name)
+		}
+		c.call(idx)
 	case "host":
 		if isCollectionOp(in.Name) {
 			g.collOp(in)
@@ -739,6 +743,11 @@ func (g *fnGen) instr(in ir.Instr) {
 	case "field":
 		arg(0)
 		c.structGet(m.aggType[in.Type], in.Index)
+	case "setfield":
+		arg(0)
+		arg(1)
+		c.structSet(m.aggType[in.Type], in.Index)
+		c.i32(0)
 	case "variant":
 		td := m.prog.Types[in.Type]
 		c.i32(int32(in.Tag))

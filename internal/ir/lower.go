@@ -50,7 +50,10 @@ type lowerer struct {
 	cur   int // current block index
 	vars  map[*types.Binding]int
 	exits []*closureExit
+	loops []loopTargets
 }
+
+type loopTargets struct{ cont, exit int }
 
 type closureExit struct {
 	info   *types.ClosureInfo
@@ -222,9 +225,19 @@ func (l *lowerer) stmt(s syntax.Stmt) {
 		c := l.expr(s.Cond)
 		l.terminate(Term{Op: "br", Args: []int{c}, Targets: []int{body, exit}})
 		l.setBlock(body)
+		l.loops = append(l.loops, loopTargets{cont: head, exit: exit})
 		l.block(s.Body)
+		l.loops = l.loops[:len(l.loops)-1]
 		l.jump(head)
 		l.setBlock(exit)
+	case *syntax.BreakStmt:
+		l.jump(l.loops[len(l.loops)-1].exit)
+	case *syntax.ContinueStmt:
+		l.jump(l.loops[len(l.loops)-1].cont)
+	case *syntax.FieldAssignStmt:
+		obj := l.expr(s.Target.X)
+		v := l.expr(s.Value)
+		l.emitTo(Ty{Kind: TUnit}, Instr{Op: "setfield", Type: l.agg(l.info.TypeOf(s.Target.X)), Index: l.info.Fields[s.Target], Args: []int{obj, v}})
 	case *syntax.ForStmt:
 		l.forStmt(s)
 	case *syntax.ReturnStmt:
@@ -273,7 +286,12 @@ func (l *lowerer) forStmt(s *syntax.ForStmt) {
 		l.emit(Instr{Op: "host", Name: "vec.at", Dst: x, Type: agg, Args: []int{vec, i}})
 	}
 	l.vars[b] = x
+	inc := l.newBlock()
+	l.loops = append(l.loops, loopTargets{cont: inc, exit: exit})
 	l.block(s.Body)
+	l.loops = l.loops[:len(l.loops)-1]
+	l.jump(inc)
+	l.setBlock(inc)
 	l.copyTo(i, l.emitTo(intTy, Instr{Op: "binop", Name: "add", Args: []int{i, l.intc(1)}}))
 	l.jump(head)
 	l.setBlock(exit)
@@ -523,7 +541,10 @@ func (l *lowerer) transaction(e *syntax.MethodCall, ci *types.ClosureInfo) int {
 	ex := &closureExit{info: ci, result: l.newLocal(rt, "txresult"), block: l.newBlock()}
 	l.exits = append(l.exits, ex)
 	cl := e.Args[0].(*syntax.Closure)
+	savedLoops := l.loops
+	l.loops = nil
 	v := l.expr(cl.Body)
+	l.loops = savedLoops
 	if types.Prune(l.info.Types[cl.Body]) != types.Never {
 		l.copyTo(ex.result, v)
 	}

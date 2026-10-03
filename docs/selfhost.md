@@ -26,7 +26,7 @@ stage0 = Go 実装の `kek`（`cmd/kek`, `internal/*`）。stage1 = Kekkai で�
 | --- | --- | --- |
 | `lex <file>` | フロントエンド | `kek tokens <file>` |
 | `ast <file>` | フロントエンド | `kek ast <file>`（要追加） |
-| `ir2wasm <ir.json> <out.wasm>` | バックエンド | `kek ir -json` → stage0 の wasm.Compile 出力 |
+| `ir2wasm <ir.json> <out.wasm> [<meta.json>]` | バックエンド（実装済み、`go test ./internal/selfhost`） | `kek ir -json` → stage0 の wasm.Compile 出力と glue.MetaJS の JSON |
 | `check <file>` | 型検査 | `kek check` の診断 |
 | `ir <file>` | lowering | `kek ir <file>` のテキスト |
 | `build <file> <outdir>` | 全体 | `kek build` |

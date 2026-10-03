@@ -1,0 +1,92 @@
+// Back end entry: `ir2wasm <ir.json> <out.wasm> [<meta.json>]`.
+// Reads the JSON encoding of an IR program (`kek ir -json`), compiles it
+// to WasmGC and writes the module (byte-identical to stage0) and,
+// optionally, the program metadata as embedded by glue.MetaJS.
+fn backend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    if args.len() < 3 {
+        log.error("usage: ir2wasm <ir.json> <out.wasm> [<meta.json>]");
+        return 2;
+    }
+    let in_path = args.get(1).unwrap_or("");
+    let out_path = args.get(2).unwrap_or("");
+    let src = match fs.read(in_path) {
+        Ok(s) => s,
+        Err(e) => {
+            log.error(in_path + ": " + e.message());
+            return 1;
+        }
+    };
+    let doc = match json_parse(src) {
+        Ok(v) => v,
+        Err(msg) => {
+            log.error(in_path + ": " + msg);
+            return 1;
+        }
+    };
+    let prog = ir_program_from_json(doc);
+    let out = wasm_compile(prog);
+    if out.err != "" {
+        log.error(out.err);
+        return 1;
+    }
+    match fs.write_bytes(out_path, out.wasm) {
+        Ok(_) => {}
+        Err(e) => {
+            log.error(out_path + ": " + e.message());
+            return 1;
+        }
+    }
+    if args.len() > 3 {
+        let meta_path = args.get(3).unwrap_or("");
+        match fs.write(meta_path, backend_meta_json(out.strings, prog.handler_params)) {
+            Ok(_) => {}
+            Err(e) => {
+                log.error(meta_path + ": " + e.message());
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+// backend_meta_json renders glue.Meta like json.MarshalIndent(m, "", "  ").
+fn backend_meta_json(strings: Vec<String>, params: Vec<IrHandlerParam>) -> String {
+    let parts = Vec::new();
+    parts.push("{\n  \"strings\": ");
+    if strings.len() == 0 {
+        parts.push("[]");
+    } else {
+        parts.push("[");
+        let mut first = true;
+        for s in strings {
+            if first {
+                parts.push("\n    ");
+                first = false;
+            } else {
+                parts.push(",\n    ");
+            }
+            parts.push(json_quote(s));
+        }
+        parts.push("\n  ]");
+    }
+    parts.push(",\n  \"handlerParams\": ");
+    if params.len() == 0 {
+        // nil in Go (the IR JSON omits empty handler_params)
+        parts.push("null");
+    } else {
+        parts.push("[");
+        let mut first = true;
+        for p in params {
+            if first {
+                parts.push("\n    {");
+                first = false;
+            } else {
+                parts.push(",\n    {");
+            }
+            parts.push("\n      \"kind\": " + json_quote(p.kind) + ",\n      \"name\": " + json_quote(p.name) + "\n    }");
+        }
+        parts.push("\n  ]");
+    }
+    parts.push("\n}");
+    parts.join("")
+}

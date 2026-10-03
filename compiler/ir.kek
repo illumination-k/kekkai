@@ -1,0 +1,235 @@
+// IR data types (prefix Ir* / ir_), mirroring internal/ir/ir.go.
+//
+// IR nodes are identified by position: aggregates by their index in
+// IrProgram.types, functions by name, blocks by index in IrFunc.blocks and
+// locals by index in IrFunc.locals (params first).
+//
+// Optional Go fields (`*Ty`, `*Const`) are always present here; their
+// meaning is decided by the owner (`coll` for elem/key, op == "const" for
+// cst), and `ir_ty_none()` is used as the placeholder.
+
+// IrTy is a representation type. kind: unit bool int string ext agg.
+struct IrTy {
+    kind: String,
+    agg: Int, // aggregate index (kind == "agg")
+    ext: String, // host type name (kind == "ext")
+}
+
+// IrTypeDef is an aggregate layout: a struct (fields), a variant
+// (variants) or a collection (coll = "vec": Vec<elem>; "map": Map<key, elem>).
+struct IrTypeDef {
+    name: String,
+    is_variant: Bool,
+    fields: Vec<IrTy>,
+    variants: Vec<Vec<IrTy>>,
+    coll: String,
+    elem: IrTy,
+    key: IrTy,
+}
+
+// IrConst is a literal; kind selects the payload.
+struct IrConst {
+    kind: String,
+    int_val: Int,
+    bool_val: Bool,
+    str_val: String,
+}
+
+// IrInstr is one instruction (see internal/ir/ir.go for the opcode table).
+struct IrInstr {
+    op: String,
+    dst: Int,
+    args: Vec<Int>,
+    name: String,
+    ty: Int, // aggregate index ("type" in JSON)
+    tag: Int,
+    index: Int,
+    cst: IrConst, // op == "const"
+}
+
+// IrTerm ends a block: jump br switch ret unreachable.
+struct IrTerm {
+    op: String,
+    args: Vec<Int>,
+    targets: Vec<Int>,
+}
+
+struct IrBlock {
+    instrs: Vec<IrInstr>,
+    term: IrTerm,
+}
+
+struct IrFunc {
+    name: String,
+    nparams: Int,
+    locals: Vec<IrTy>, // params first
+    names: Vec<String>, // debug names of locals
+    result: IrTy,
+    is_async: Bool,
+    blocks: Vec<IrBlock>, // entry is block 0
+}
+
+// IrHandlerParam: kind is "request", "args" or a capability name.
+struct IrHandlerParam {
+    kind: String,
+    name: String,
+}
+
+struct IrProgram {
+    types: Vec<IrTypeDef>,
+    funcs: Vec<IrFunc>,
+    handler: String,
+    entry: String, // "handler", "main" or ""
+    handler_params: Vec<IrHandlerParam>,
+}
+
+fn ir_ty(kind: String) -> IrTy {
+    IrTy { kind: kind, agg: 0, ext: "" }
+}
+
+fn ir_ty_agg(agg: Int) -> IrTy {
+    IrTy { kind: "agg", agg: agg, ext: "" }
+}
+
+fn ir_ty_none() -> IrTy {
+    IrTy { kind: "", agg: 0, ext: "" }
+}
+
+fn ir_const_none() -> IrConst {
+    IrConst { kind: "", int_val: 0, bool_val: false, str_val: "" }
+}
+
+// ir_func_index returns the index of the function named name, or -1.
+fn ir_func_index(p: IrProgram, name: String) -> Int {
+    let mut i = 0;
+    for f in p.funcs {
+        if f.name == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// ---- decoding from the JSON encoding (`kek ir -json`) ----
+
+fn ir_ty_from_json(v: JsonVal) -> IrTy {
+    IrTy { kind: json_get_str(v, "kind"), agg: json_get_int(v, "agg"), ext: json_get_str(v, "ext") }
+}
+
+fn ir_tys_from_json(xs: Vec<JsonVal>) -> Vec<IrTy> {
+    let out = Vec::new();
+    for x in xs {
+        out.push(ir_ty_from_json(x));
+    }
+    out
+}
+
+fn ir_ints_from_json(xs: Vec<JsonVal>) -> Vec<Int> {
+    let out = Vec::new();
+    for x in xs {
+        out.push(json_int(x));
+    }
+    out
+}
+
+fn ir_typedef_from_json(v: JsonVal) -> IrTypeDef {
+    let variants = Vec::new();
+    for vs in json_get_items(v, "variants") {
+        variants.push(ir_tys_from_json(json_items(vs)));
+    }
+    let mut elem = ir_ty_none();
+    if json_has(v, "elem") {
+        elem = ir_ty_from_json(json_field(v, "elem"));
+    }
+    let mut key = ir_ty_none();
+    if json_has(v, "key") {
+        key = ir_ty_from_json(json_field(v, "key"));
+    }
+    IrTypeDef {
+        name: json_get_str(v, "name"),
+        is_variant: json_get_bool(v, "variant"),
+        fields: ir_tys_from_json(json_get_items(v, "fields")),
+        variants: variants,
+        coll: json_get_str(v, "coll"),
+        elem: elem,
+        key: key,
+    }
+}
+
+fn ir_instr_from_json(v: JsonVal) -> IrInstr {
+    let mut cst = ir_const_none();
+    if json_has(v, "const") {
+        let c = json_field(v, "const");
+        cst = IrConst {
+            kind: json_get_str(c, "kind"),
+            int_val: json_get_int(c, "int"),
+            bool_val: json_get_bool(c, "bool"),
+            str_val: json_get_str(c, "str"),
+        };
+    }
+    IrInstr {
+        op: json_get_str(v, "op"),
+        dst: json_get_int(v, "dst"),
+        args: ir_ints_from_json(json_get_items(v, "args")),
+        name: json_get_str(v, "name"),
+        ty: json_get_int(v, "type"),
+        tag: json_get_int(v, "tag"),
+        index: json_get_int(v, "index"),
+        cst: cst,
+    }
+}
+
+fn ir_func_from_json(v: JsonVal) -> IrFunc {
+    let blocks = Vec::new();
+    for b in json_get_items(v, "blocks") {
+        let instrs = Vec::new();
+        for i in json_get_items(b, "instrs") {
+            instrs.push(ir_instr_from_json(i));
+        }
+        let t = json_field(b, "term");
+        blocks.push(IrBlock {
+            instrs: instrs,
+            term: IrTerm {
+                op: json_get_str(t, "op"),
+                args: ir_ints_from_json(json_get_items(t, "args")),
+                targets: ir_ints_from_json(json_get_items(t, "targets")),
+            },
+        });
+    }
+    let names = Vec::new();
+    for n in json_get_items(v, "names") {
+        names.push(json_str(n));
+    }
+    IrFunc {
+        name: json_get_str(v, "name"),
+        nparams: json_get_int(v, "nparams"),
+        locals: ir_tys_from_json(json_get_items(v, "locals")),
+        names: names,
+        result: ir_ty_from_json(json_field(v, "result")),
+        is_async: json_get_bool(v, "async"),
+        blocks: blocks,
+    }
+}
+
+fn ir_program_from_json(v: JsonVal) -> IrProgram {
+    let types = Vec::new();
+    for t in json_get_items(v, "types") {
+        types.push(ir_typedef_from_json(t));
+    }
+    let funcs = Vec::new();
+    for f in json_get_items(v, "funcs") {
+        funcs.push(ir_func_from_json(f));
+    }
+    let params = Vec::new();
+    for hp in json_get_items(v, "handler_params") {
+        params.push(IrHandlerParam { kind: json_get_str(hp, "kind"), name: json_get_str(hp, "name") });
+    }
+    IrProgram {
+        types: types,
+        funcs: funcs,
+        handler: json_get_str(v, "handler"),
+        entry: json_get_str(v, "entry"),
+        handler_params: params,
+    }
+}

@@ -1,0 +1,1303 @@
+// WasmGC code generation from IR (port of internal/wasm/codegen.go).
+// The output must be byte-identical to stage0's wasm.Compile: types,
+// imports, function indices (including the lazy reservation order of
+// helpers), locals and the string literal table are produced in the same
+// order as the Go implementation. See codegen.go for the compilation scheme
+// (dispatcher loops; async functions as $new/$step state machines).
+
+struct WasmSig {
+    params: Vec<Int>,
+    results: Vec<Int>,
+}
+
+// WasmComp is a struct type, or an array type when array is set (element
+// in fields[0]).
+struct WasmComp {
+    fields: Vec<Int>,
+    muts: Vec<Bool>,
+    array: Bool,
+}
+
+struct WasmImport {
+    name: String,
+    sig: WasmSig,
+    is_async: Bool,
+}
+
+struct WasmFunc {
+    name: String,
+    sig: WasmSig,
+    locals: Vec<Int>, // excluding params
+    body: Vec<Int>,
+    export: String,
+    built: Bool,
+}
+
+struct WasmMod {
+    prog: IrProgram,
+    structs: Vec<WasmComp>,
+    agg_type: Vec<Int>, // IR aggregate index -> wasm type index (-1 for maps)
+    vec_arr: Vec<Int>, // vec aggregate index -> wasm array type index
+    agg_slots: Vec<Vec<Vec<Int>>>, // variant aggregates: [tag][field] -> struct field
+    frame: Map<String, Int>,
+    imports: Vec<WasmImport>,
+    import_idx: Map<String, Int>,
+    funcs: Vec<WasmFunc>,
+    func_idx: Map<String, Int>,
+    strings: Vec<String>,
+    string_idx: Map<String, Int>,
+    lifts: Map<Int, Int>,
+    prog_func: Map<String, Int>, // IR function name -> index in prog.funcs
+    err: String,
+}
+
+// WasmOutput is the result of compilation.
+struct WasmOutput {
+    wasm: Vec<Int>,
+    strings: Vec<String>,
+    err: String,
+}
+
+fn wasm_sig(params: Vec<Int>, results: Vec<Int>) -> WasmSig {
+    WasmSig { params: params, results: results }
+}
+
+fn wasm_sig_key(s: WasmSig) -> String {
+    let parts = Vec::new();
+    for p in s.params {
+        parts.push(p.to_string());
+    }
+    parts.push("|");
+    for r in s.results {
+        parts.push(r.to_string());
+    }
+    parts.join(",")
+}
+
+fn wasm_fail(m: WasmMod, msg: String) {
+    if m.err == "" {
+        m.err = msg;
+    }
+}
+
+fn wasm_td(m: WasmMod, i: Int) -> IrTypeDef {
+    match m.prog.types.get(i) {
+        Some(t) => t,
+        None => {
+            wasm_fail(m, "bad aggregate index " + i.to_string());
+            IrTypeDef { name: "", is_variant: false, fields: Vec::new(), variants: Vec::new(), coll: "", elem: ir_ty_none(), key: ir_ty_none() }
+        }
+    }
+}
+
+fn wasm_tys_at(v: Vec<Vec<IrTy>>, i: Int) -> Vec<IrTy> {
+    v.get(i).unwrap_or(Vec::new())
+}
+
+fn wasm_ty_at(v: Vec<IrTy>, i: Int) -> IrTy {
+    match v.get(i) {
+        Some(t) => t,
+        None => ir_ty_none(),
+    }
+}
+
+fn wasm_lookup(tbl: Map<String, Int>, k: String) -> Int {
+    tbl.get(k).unwrap_or(-1)
+}
+
+// wasm_compile translates an IR program into a WasmGC module.
+fn wasm_compile(p: IrProgram) -> WasmOutput {
+    let m = WasmMod {
+        prog: p,
+        structs: Vec::new(),
+        agg_type: Vec::new(),
+        vec_arr: Vec::new(),
+        agg_slots: Vec::new(),
+        frame: Map::new(),
+        imports: Vec::new(),
+        import_idx: Map::new(),
+        funcs: Vec::new(),
+        func_idx: Map::new(),
+        strings: Vec::new(),
+        string_idx: Map::new(),
+        lifts: Map::new(),
+        prog_func: Map::new(),
+        err: "",
+    };
+    let mut fi = 0;
+    for f in p.funcs {
+        if !m.prog_func.contains(f.name) {
+            m.prog_func.insert(f.name, fi);
+        }
+        fi = fi + 1;
+    }
+    wasm_layout_types(m);
+    wasm_collect_imports(m);
+    for f in p.funcs {
+        if f.is_async {
+            wasm_reserve(m, f.name + "$new", wasm_new_sig(m, f));
+            wasm_reserve(m, f.name + "$step", wasm_sig(wasm_v1(wasm_lookup(m.frame, f.name)), wasm_v1(wasm_i32_t())));
+        } else {
+            wasm_reserve(m, f.name, wasm_func_sig(m, f));
+        }
+    }
+    for f in p.funcs {
+        if f.is_async {
+            wasm_gen_new(m, f);
+            wasm_gen_step(m, f);
+        } else {
+            wasm_gen_sync(m, f);
+        }
+    }
+    if p.handler != "" {
+        wasm_gen_handler_exports(m);
+    }
+    wasm_gen_pure_exports(m);
+    if m.err != "" {
+        return WasmOutput { wasm: Vec::new(), strings: m.strings, err: m.err };
+    }
+    let bytes = wasm_encode(m);
+    WasmOutput { wasm: bytes, strings: m.strings, err: m.err }
+}
+
+// ---- types ----
+
+fn wasm_val(m: WasmMod, t: IrTy) -> Int {
+    let k = t.kind;
+    if k == "unit" || k == "bool" {
+        return wasm_i32_t();
+    }
+    if k == "int" {
+        return wasm_i64_t();
+    }
+    if k == "string" || k == "ext" {
+        return wasm_extern_t();
+    }
+    if k == "agg" {
+        if wasm_td(m, t.agg).coll == "map" {
+            return wasm_extern_t();
+        }
+        return wasm_at(m.agg_type, t.agg);
+    }
+    wasm_fail(m, "bad type " + k);
+    wasm_i32_t()
+}
+
+fn wasm_comp(fields: Vec<Int>, mutable: Bool, array: Bool) -> WasmComp {
+    let muts = Vec::new();
+    for f in fields {
+        muts.push(mutable);
+    }
+    WasmComp { fields: fields, muts: muts, array: array }
+}
+
+fn wasm_layout_types(m: WasmMod) {
+    let p = m.prog;
+    let n = p.types.len();
+    for i in 0..n {
+        m.agg_type.push(-1);
+        m.vec_arr.push(-1);
+        m.agg_slots.push(Vec::new());
+    }
+    // assign indices first: types may be (mutually) recursive
+    let mut next = 0;
+    for i in 0..n {
+        let td = wasm_td(m, i);
+        if td.coll == "map" {
+            continue;
+        }
+        if td.coll == "vec" {
+            m.agg_type.set(i, next);
+            m.vec_arr.set(i, next + 1);
+            next = next + 2;
+        } else {
+            m.agg_type.set(i, next);
+            next = next + 1;
+        }
+    }
+    for i in 0..next {
+        m.structs.push(wasm_comp(Vec::new(), true, false));
+    }
+    for i in 0..n {
+        let td = wasm_td(m, i);
+        if td.coll == "map" {
+            continue;
+        }
+        let at = wasm_at(m.agg_type, i);
+        if td.coll == "vec" {
+            let va = wasm_at(m.vec_arr, i);
+            m.structs.set(at, wasm_comp(wasm_v2(wasm_i32_t(), va), true, false));
+            m.structs.set(va, wasm_comp(wasm_v1(wasm_val(m, td.elem)), true, true));
+        } else if !td.is_variant {
+            let fields = Vec::new();
+            for f in td.fields {
+                fields.push(wasm_val(m, f));
+            }
+            m.structs.set(at, wasm_comp(fields, true, false));
+        } else {
+            let fields = wasm_v1(wasm_i32_t()); // tag
+            let slots = Vec::new();
+            for vs in td.variants {
+                let s = Vec::new();
+                for f in vs {
+                    s.push(fields.len());
+                    fields.push(wasm_val(m, f));
+                }
+                slots.push(s);
+            }
+            m.agg_slots.set(i, slots);
+            m.structs.set(at, wasm_comp(fields, false, false));
+        }
+    }
+    for f in p.funcs {
+        if !f.is_async {
+            continue;
+        }
+        let fields = wasm_v3(wasm_i32_t(), wasm_struct_t(), wasm_val(m, f.result));
+        for l in f.locals {
+            fields.push(wasm_val(m, l));
+        }
+        m.frame.insert(f.name, m.structs.len());
+        m.structs.push(wasm_comp(fields, true, false));
+    }
+}
+
+// frame struct fields: 0 state, 1 child, 2 ret, 3.. locals
+
+fn wasm_func_sig(m: WasmMod, f: IrFunc) -> WasmSig {
+    let params = Vec::new();
+    for i in 0..f.nparams {
+        params.push(wasm_val(m, wasm_ty_at(f.locals, i)));
+    }
+    wasm_sig(params, wasm_v1(wasm_val(m, f.result)))
+}
+
+fn wasm_new_sig(m: WasmMod, f: IrFunc) -> WasmSig {
+    let s = wasm_func_sig(m, f);
+    wasm_sig(s.params, wasm_v1(wasm_lookup(m.frame, f.name)))
+}
+
+// ---- imports and functions ----
+
+// wasm_host_result maps an IR result type to the import's wasm result type.
+fn wasm_host_result(m: WasmMod, t: IrTy) -> Vec<Int> {
+    if t.kind == "unit" {
+        return Vec::new();
+    }
+    if t.kind == "agg" {
+        return wasm_v1(wasm_extern_t());
+    }
+    wasm_v1(wasm_val(m, t))
+}
+
+fn wasm_add_import(m: WasmMod, name: String, s: WasmSig, is_async: Bool) {
+    match m.import_idx.get(name) {
+        Some(i) => {
+            match m.imports.get(i) {
+                Some(im) => {
+                    if wasm_sig_key(im.sig) != wasm_sig_key(s) {
+                        wasm_fail(m, "inconsistent signature for host operation " + name);
+                    }
+                }
+                None => {}
+            }
+            return;
+        }
+        None => {}
+    }
+    m.import_idx.insert(name, m.imports.len());
+    m.imports.push(WasmImport { name: name, sig: s, is_async: is_async });
+}
+
+fn wasm_add_helper_imports(m: WasmMod) {
+    let i32 = wasm_i32_t();
+    let i64 = wasm_i64_t();
+    let ext = wasm_extern_t();
+    wasm_add_import(m, "lit", wasm_sig(wasm_v1(i32), wasm_v1(ext)), false);
+    wasm_add_import(m, "take", wasm_sig(wasm_v0(), wasm_v1(ext)), false);
+    wasm_add_import(m, "is_null", wasm_sig(wasm_v1(ext), wasm_v1(i32)), false);
+    wasm_add_import(m, "to_i64", wasm_sig(wasm_v1(ext), wasm_v1(i64)), false);
+    wasm_add_import(m, "to_i32", wasm_sig(wasm_v1(ext), wasm_v1(i32)), false);
+    wasm_add_import(m, "res_tag", wasm_sig(wasm_v1(ext), wasm_v1(i32)), false);
+    wasm_add_import(m, "res_val", wasm_sig(wasm_v1(ext), wasm_v1(ext)), false);
+    wasm_add_import(m, "res_err", wasm_sig(wasm_v1(ext), wasm_v1(ext)), false);
+    wasm_add_import(m, "str_eq", wasm_sig(wasm_v2(ext, ext), wasm_v1(i32)), false);
+    wasm_add_import(m, "str_concat", wasm_sig(wasm_v2(ext, ext), wasm_v1(ext)), false);
+}
+
+fn wasm_collect_imports(m: WasmMod) {
+    wasm_add_helper_imports(m);
+    wasm_add_collection_imports(m);
+    for f in m.prog.funcs {
+        for b in f.blocks {
+            for ins in b.instrs {
+                if (ins.op != "host" && ins.op != "await") || wasm_is_collection_op(ins.name) || wasm_is_inline_int_op(ins.name) {
+                    continue;
+                }
+                let params = Vec::new();
+                for a in ins.args {
+                    params.push(wasm_host_param(m, wasm_ty_at(f.locals, a)));
+                }
+                let mut results = Vec::new();
+                if ins.op == "host" {
+                    results = wasm_host_result(m, wasm_ty_at(f.locals, ins.dst));
+                }
+                wasm_add_import(m, ins.name, wasm_sig(params, results), ins.op == "await");
+            }
+        }
+    }
+}
+
+fn wasm_reserve(m: WasmMod, name: String, s: WasmSig) -> Int {
+    match m.func_idx.get(name) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let i = m.imports.len() + m.funcs.len();
+    m.func_idx.insert(name, i);
+    m.funcs.push(WasmFunc { name: name, sig: s, locals: Vec::new(), body: Vec::new(), export: "", built: false });
+    i
+}
+
+fn wasm_def(m: WasmMod, name: String) -> WasmFunc {
+    match m.funcs.get(wasm_lookup(m.func_idx, name) - m.imports.len()) {
+        Some(f) => f,
+        None => {
+            wasm_fail(m, "unknown function " + name);
+            WasmFunc { name: name, sig: wasm_sig(Vec::new(), Vec::new()), locals: Vec::new(), body: Vec::new(), export: "", built: true }
+        }
+    }
+}
+
+fn wasm_imp(m: WasmMod, name: String) -> Int {
+    wasm_lookup(m.import_idx, name)
+}
+
+fn wasm_lit(m: WasmMod, s: String) -> Int {
+    match m.string_idx.get(s) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let i = m.strings.len();
+    m.string_idx.insert(s, i);
+    m.strings.push(s);
+    i
+}
+
+// ---- helpers: total division ----
+
+// wasm_div_func implements truncating division with x/0 = 0 and MIN/-1 = MIN.
+fn wasm_div_func(m: WasmMod) -> Int {
+    let name = "$div";
+    match m.func_idx.get(name) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let i64 = wasm_i64_t();
+    let i = wasm_reserve(m, name, wasm_sig(wasm_v2(i64, i64), wasm_v1(i64)));
+    let f = wasm_def(m, name);
+    let c = f.body;
+    // if y == 0 { return 0 }
+    cg_get(c, 1);
+    cg_op(c, 80); // i64.eqz
+    cg_open(c, 4); // if
+    cg_i64(c, 0);
+    cg_op(c, 15); // return
+    cg_end(c);
+    // if y == -1 { return 0 - x }
+    cg_get(c, 1);
+    cg_i64(c, -1);
+    cg_op(c, 81); // i64.eq
+    cg_open(c, 4);
+    cg_i64(c, 0);
+    cg_get(c, 0);
+    cg_op(c, 125); // i64.sub
+    cg_op(c, 15);
+    cg_end(c);
+    cg_get(c, 0);
+    cg_get(c, 1);
+    cg_op(c, 127); // i64.div_s
+    cg_end(c);
+    f.built = true;
+    i
+}
+
+// wasm_rem_func implements x rem 0 = x.
+fn wasm_rem_func(m: WasmMod) -> Int {
+    let name = "$rem";
+    match m.func_idx.get(name) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let i64 = wasm_i64_t();
+    let i = wasm_reserve(m, name, wasm_sig(wasm_v2(i64, i64), wasm_v1(i64)));
+    let f = wasm_def(m, name);
+    let c = f.body;
+    cg_get(c, 1);
+    cg_op(c, 80); // i64.eqz
+    cg_open(c, 4);
+    cg_get(c, 0);
+    cg_op(c, 15);
+    cg_end(c);
+    cg_get(c, 0);
+    cg_get(c, 1);
+    cg_op(c, 129); // i64.rem_s
+    cg_end(c);
+    f.built = true;
+    i
+}
+
+// ---- lifting host values into wasm values ----
+
+// wasm_lift_to emits code converting the externref on the stack to type t.
+fn wasm_lift_to(m: WasmMod, c: Vec<Int>, t: IrTy) {
+    let k = t.kind;
+    if k == "unit" {
+        cg_op(c, 26); // drop
+        cg_i32(c, 0);
+    } else if k == "int" {
+        cg_call(c, wasm_imp(m, "to_i64"));
+    } else if k == "bool" {
+        cg_call(c, wasm_imp(m, "to_i32"));
+    } else if k == "agg" {
+        let coll = wasm_td(m, t.agg).coll;
+        if coll == "vec" {
+            cg_call(c, wasm_vec_from_host_func(m, t.agg));
+        } else if coll != "map" {
+            cg_call(c, wasm_lift_func(m, t.agg));
+        }
+    }
+}
+
+// wasm_lift_build emits struct.new for agg with only tag's fields filled.
+// mode selects how a filled field is produced: 1 lift the parameter,
+// 2 lift res_val(param), 3 lift res_err(param).
+fn wasm_lift_build(m: WasmMod, c: Vec<Int>, agg: Int, tag: Int, mode: Int) {
+    let td = wasm_td(m, agg);
+    cg_i32(c, tag);
+    let mut t2 = 0;
+    for vs in td.variants {
+        for ft in vs {
+            if t2 == tag {
+                cg_get(c, 0);
+                if mode == 2 {
+                    cg_call(c, wasm_imp(m, "res_val"));
+                } else if mode == 3 {
+                    cg_call(c, wasm_imp(m, "res_err"));
+                }
+                wasm_lift_to(m, c, ft);
+            } else {
+                cg_default(c, wasm_val(m, ft));
+            }
+        }
+        t2 = t2 + 1;
+    }
+    cg_struct_new(c, wasm_at(m.agg_type, agg));
+}
+
+fn wasm_lift_func(m: WasmMod, agg: Int) -> Int {
+    match m.lifts.get(agg) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let name = "$lift" + agg.to_string();
+    let result = wasm_at(m.agg_type, agg);
+    let i = wasm_reserve(m, name, wasm_sig(wasm_v1(wasm_extern_t()), wasm_v1(result)));
+    m.lifts.insert(agg, i);
+    let f = wasm_def(m, name);
+    let td = wasm_td(m, agg);
+    let c = f.body;
+    let v0 = wasm_tys_at(td.variants, 0);
+    let v1 = wasm_tys_at(td.variants, 1);
+    if td.variants.len() == 2 && v0.len() == 0 && v1.len() == 1 {
+        // Option: null => None
+        cg_get(c, 0);
+        cg_call(c, wasm_imp(m, "is_null"));
+        cg_op(c, 4); // if
+        wasm_valtype(c, result);
+        wasm_lift_build(m, c, agg, 0, 1);
+        cg_op(c, 5); // else
+        wasm_lift_build(m, c, agg, 1, 1);
+        cg_end(c);
+    } else if td.variants.len() == 2 && v0.len() == 1 && v1.len() == 1 {
+        // Result: {ok, value} / {ok: false, error}
+        cg_get(c, 0);
+        cg_call(c, wasm_imp(m, "res_tag"));
+        cg_op(c, 69); // i32.eqz
+        cg_op(c, 4);
+        wasm_valtype(c, result);
+        wasm_lift_build(m, c, agg, 0, 2);
+        cg_op(c, 5);
+        wasm_lift_build(m, c, agg, 1, 3);
+        cg_end(c);
+    } else {
+        wasm_fail(m, "cannot lift host value into " + td.name);
+    }
+    cg_end(c);
+    f.built = true;
+    i
+}
+
+// ---- function bodies ----
+
+struct CgSeg {
+    block: Int,
+    start: Int, // instruction index where the segment starts
+    // resume marks a segment that begins by completing a suspension of the
+    // instruction at index start
+    resume: Bool,
+}
+
+struct CgGen {
+    m: WasmMod,
+    f: IrFunc,
+    is_async: Bool,
+    c: Vec<Int>,
+    local: Vec<Int>, // wasm local index of each IR local
+    locals: Vec<Int>, // declared wasm locals (excluding params)
+    state: Int,
+    child: Int,
+    frame_l: Int,
+    frame_t: Int,
+    segs: Vec<CgSeg>,
+    block_seg: Vec<Int>,
+    nseg: Int,
+    cur: Int,
+}
+
+fn cg_local(g: CgGen, i: Int) -> Int {
+    wasm_at(g.local, i)
+}
+
+fn cg_ty(g: CgGen, i: Int) -> IrTy {
+    wasm_ty_at(g.f.locals, i)
+}
+
+fn cg_is_suspend(g: CgGen, ins: IrInstr) -> Bool {
+    if !g.is_async {
+        return false;
+    }
+    if ins.op == "await" {
+        return true;
+    }
+    if ins.op == "call" {
+        match g.m.prog_func.get(ins.name) {
+            Some(fi) => match g.m.prog.funcs.get(fi) {
+                Some(callee) => { return callee.is_async; }
+                None => {}
+            },
+            None => {}
+        }
+    }
+    false
+}
+
+fn cg_plan_segments(g: CgGen) {
+    let mut bi = 0;
+    for b in g.f.blocks {
+        g.block_seg.push(g.segs.len());
+        g.segs.push(CgSeg { block: bi, start: 0, resume: false });
+        let mut ii = 0;
+        for ins in b.instrs {
+            if cg_is_suspend(g, ins) {
+                g.segs.push(CgSeg { block: bi, start: ii, resume: true });
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    g.nseg = g.segs.len();
+}
+
+// cg_loop_depth is the br depth of the dispatcher loop from the current segment.
+fn cg_loop_depth(g: CgGen) -> Int {
+    g.nseg - g.cur
+}
+
+fn cg_goto_seg(g: CgGen, s: Int) {
+    cg_i32(g.c, s);
+    cg_set(g.c, g.state);
+    cg_br(g.c, cg_loop_depth(g));
+}
+
+fn cg_save_all(g: CgGen) {
+    let c = g.c;
+    let mut i = 0;
+    for l in g.local {
+        cg_get(c, g.frame_l);
+        cg_get(c, l);
+        cg_struct_set(c, g.frame_t, 3 + i);
+        i = i + 1;
+    }
+    cg_get(c, g.frame_l);
+    cg_get(c, g.child);
+    cg_struct_set(c, g.frame_t, 1);
+}
+
+fn cg_suspend(g: CgGen, resume_seg: Int) {
+    let c = g.c;
+    cg_save_all(g);
+    cg_get(c, g.frame_l);
+    cg_i32(c, resume_seg);
+    cg_struct_set(c, g.frame_t, 0);
+    cg_i32(c, 1);
+    cg_op(c, 15); // return
+}
+
+fn cg_body(g: CgGen) {
+    let c = g.c;
+    cg_plan_segments(g);
+    cg_open(c, 3); // loop
+    for i in 0..(g.nseg + 1) {
+        cg_open(c, 2); // block
+    }
+    cg_get(c, g.state);
+    cg_op(c, 14); // br_table
+    wasm_u32(c, g.nseg);
+    for i in 0..g.nseg {
+        wasm_u32(c, i);
+    }
+    wasm_u32(c, g.nseg);
+    cg_end(c); // B_0
+    for s in 0..g.nseg {
+        g.cur = s;
+        cg_segment(g, s);
+        cg_end(c);
+    }
+    cg_op(c, 0); // default: invalid state
+    cg_end(c); // loop
+    cg_op(c, 0);
+    cg_end(c); // function
+}
+
+fn cg_segment(g: CgGen, s: Int) {
+    let seg = match g.segs.get(s) {
+        Some(x) => x,
+        None => CgSeg { block: 0, start: 0, resume: false },
+    };
+    let b = match g.f.blocks.get(seg.block) {
+        Some(x) => x,
+        None => {
+            wasm_fail(g.m, "bad block");
+            return;
+        }
+    };
+    let mut i = seg.start;
+    if seg.resume {
+        match b.instrs.get(i) {
+            Some(ins) => cg_resume(g, ins, s),
+            None => {}
+        }
+        i = i + 1;
+    }
+    let n = b.instrs.len();
+    while i < n {
+        match b.instrs.get(i) {
+            Some(ins) => {
+                if cg_is_suspend(g, ins) {
+                    cg_start_suspend(g, ins, s + 1);
+                    return;
+                }
+                cg_instr(g, ins);
+            }
+            None => {}
+        }
+        i = i + 1;
+    }
+    cg_term(g, b.term);
+}
+
+fn cg_start_suspend(g: CgGen, ins: IrInstr, resume_seg: Int) {
+    let c = g.c;
+    for a in ins.args {
+        cg_get(c, cg_local(g, a));
+        if ins.op == "await" {
+            wasm_to_host(g.m, c, cg_ty(g, a));
+        }
+    }
+    if ins.op == "await" {
+        cg_call(c, wasm_imp(g.m, ins.name));
+        cg_suspend(g, resume_seg);
+        return;
+    }
+    // async call: allocate the callee frame, then step it in the resume segment
+    cg_call(c, wasm_lookup(g.m.func_idx, ins.name + "$new"));
+    cg_set(c, g.child);
+    cg_goto_seg(g, resume_seg);
+}
+
+fn cg_resume(g: CgGen, ins: IrInstr, s: Int) {
+    let c = g.c;
+    let dst_ty = cg_ty(g, ins.dst);
+    if ins.op == "await" {
+        cg_call(c, wasm_imp(g.m, "take"));
+        wasm_lift_to(g.m, c, dst_ty);
+        cg_set(c, cg_local(g, ins.dst));
+        return;
+    }
+    let ft = wasm_lookup(g.m.frame, ins.name);
+    cg_get(c, g.child);
+    cg_cast_null(c, ft);
+    cg_call(c, wasm_lookup(g.m.func_idx, ins.name + "$step"));
+    cg_open(c, 4); // if
+    // still suspended: propagate
+    cg_suspend(g, s);
+    cg_end(c);
+    cg_get(c, g.child);
+    cg_cast_null(c, ft);
+    cg_struct_get(c, ft, 2);
+    cg_set(c, cg_local(g, ins.dst));
+}
+
+fn cg_arg(g: CgGen, ins: IrInstr, k: Int) {
+    cg_get(g.c, cg_local(g, wasm_at(ins.args, k)));
+}
+
+fn cg_instr(g: CgGen, ins: IrInstr) {
+    let c = g.c;
+    let m = g.m;
+    let dst = cg_local(g, ins.dst);
+    let dst_ty = cg_ty(g, ins.dst);
+    let op = ins.op;
+    if op == "const" {
+        let k = ins.cst.kind;
+        if k == "int" {
+            cg_i64(c, ins.cst.int_val);
+        } else if k == "bool" {
+            if ins.cst.bool_val {
+                cg_i32(c, 1);
+            } else {
+                cg_i32(c, 0);
+            }
+        } else if k == "string" {
+            cg_i32(c, wasm_lit(m, ins.cst.str_val));
+            cg_call(c, wasm_imp(m, "lit"));
+        } else {
+            cg_i32(c, 0);
+        }
+    } else if op == "copy" {
+        cg_arg(g, ins, 0);
+    } else if op == "unop" {
+        if ins.name == "neg" {
+            cg_i64(c, 0);
+            cg_arg(g, ins, 0);
+            cg_op(c, 125); // i64.sub
+        } else {
+            cg_arg(g, ins, 0);
+            cg_op(c, 69); // i32.eqz
+        }
+    } else if op == "binop" {
+        cg_binop(g, ins);
+    } else if op == "call" {
+        for k in 0..ins.args.len() {
+            cg_arg(g, ins, k);
+        }
+        match m.func_idx.get(ins.name) {
+            Some(idx) => cg_call(c, idx),
+            None => wasm_fail(m, "codegen: call to unknown or async function " + ins.name),
+        }
+    } else if op == "host" {
+        if wasm_is_collection_op(ins.name) {
+            cg_coll_op(g, ins);
+        } else if !cg_int_op(g, ins) {
+            for k in 0..ins.args.len() {
+                cg_arg(g, ins, k);
+                wasm_to_host(m, c, cg_ty(g, wasm_at(ins.args, k)));
+            }
+            cg_call(c, wasm_imp(m, ins.name));
+            if dst_ty.kind == "unit" {
+                cg_i32(c, 0);
+            } else if dst_ty.kind == "agg" {
+                wasm_lift_to(m, c, dst_ty);
+            }
+        }
+    } else if op == "struct" {
+        for k in 0..ins.args.len() {
+            cg_arg(g, ins, k);
+        }
+        cg_struct_new(c, wasm_at(m.agg_type, ins.ty));
+    } else if op == "field" {
+        cg_arg(g, ins, 0);
+        cg_struct_get(c, wasm_at(m.agg_type, ins.ty), ins.index);
+    } else if op == "setfield" {
+        cg_arg(g, ins, 0);
+        cg_arg(g, ins, 1);
+        cg_struct_set(c, wasm_at(m.agg_type, ins.ty), ins.index);
+        cg_i32(c, 0);
+    } else if op == "variant" {
+        let td = wasm_td(m, ins.ty);
+        cg_i32(c, ins.tag);
+        let mut tag = 0;
+        for vs in td.variants {
+            let mut k = 0;
+            for ft in vs {
+                if tag == ins.tag {
+                    cg_arg(g, ins, k);
+                } else {
+                    cg_default(c, wasm_val(m, ft));
+                }
+                k = k + 1;
+            }
+            tag = tag + 1;
+        }
+        cg_struct_new(c, wasm_at(m.agg_type, ins.ty));
+    } else if op == "tag" {
+        cg_arg(g, ins, 0);
+        cg_struct_get(c, wasm_at(m.agg_type, ins.ty), 0);
+        cg_op(c, 173); // i64.extend_i32_u
+    } else if op == "vfield" {
+        cg_arg(g, ins, 0);
+        let slots = m.agg_slots.get(ins.ty).unwrap_or(Vec::new());
+        cg_struct_get(c, wasm_at(m.agg_type, ins.ty), wasm_at(slots.get(ins.tag).unwrap_or(Vec::new()), ins.index));
+    } else {
+        wasm_fail(m, "codegen: unknown instruction " + op);
+    }
+    cg_set(c, dst);
+}
+
+fn cg_binop(g: CgGen, ins: IrInstr) {
+    let c = g.c;
+    let m = g.m;
+    let x = cg_local(g, wasm_at(ins.args, 0));
+    let y = cg_local(g, wasm_at(ins.args, 1));
+    let kind = cg_ty(g, wasm_at(ins.args, 0)).kind;
+    let name = ins.name;
+    cg_get(c, x);
+    cg_get(c, y);
+    if kind == "int" {
+        match name {
+            "add" => cg_op(c, 124),
+            "sub" => cg_op(c, 125),
+            "mul" => cg_op(c, 126),
+            "div" => cg_call(c, wasm_div_func(m)),
+            "rem" => cg_call(c, wasm_rem_func(m)),
+            "lt" => cg_op(c, 83),
+            "le" => cg_op(c, 87),
+            "gt" => cg_op(c, 85),
+            "ge" => cg_op(c, 89),
+            "eq" => cg_op(c, 81),
+            "ne" => cg_op(c, 82),
+            _ => wasm_fail(m, "codegen: bad int binop " + name),
+        }
+    } else if kind == "bool" || kind == "unit" {
+        match name {
+            "eq" => cg_op(c, 70),
+            "ne" => cg_op(c, 71),
+            _ => wasm_fail(m, "codegen: bad bool binop " + name),
+        }
+    } else if kind == "string" {
+        match name {
+            "eq" => cg_call(c, wasm_imp(m, "str_eq")),
+            "ne" => {
+                cg_call(c, wasm_imp(m, "str_eq"));
+                cg_op(c, 69); // i32.eqz
+            }
+            "concat" => cg_call(c, wasm_imp(m, "str_concat")),
+            _ => wasm_fail(m, "codegen: bad string binop " + name),
+        }
+    } else {
+        wasm_fail(m, "codegen: binop on " + kind);
+    }
+}
+
+fn cg_target_seg(g: CgGen, t: IrTerm, k: Int) -> Int {
+    wasm_at(g.block_seg, wasm_at(t.targets, k))
+}
+
+fn cg_term(g: CgGen, t: IrTerm) {
+    let c = g.c;
+    let op = t.op;
+    if op == "jump" {
+        cg_goto_seg(g, cg_target_seg(g, t, 0));
+    } else if op == "br" {
+        cg_i32(c, cg_target_seg(g, t, 0));
+        cg_i32(c, cg_target_seg(g, t, 1));
+        cg_get(c, cg_local(g, wasm_at(t.args, 0)));
+        cg_op(c, 27); // select
+        cg_set(c, g.state);
+        cg_br(c, cg_loop_depth(g));
+    } else if op == "switch" {
+        cg_goto_seg_dyn(g, t);
+    } else if op == "ret" {
+        if g.is_async {
+            cg_get(c, g.frame_l);
+            cg_get(c, cg_local(g, wasm_at(t.args, 0)));
+            cg_struct_set(c, g.frame_t, 2);
+            cg_i32(c, 0);
+            cg_op(c, 15);
+        } else {
+            cg_get(c, cg_local(g, wasm_at(t.args, 0)));
+            cg_op(c, 15);
+        }
+    } else {
+        cg_op(c, 0); // unreachable
+    }
+}
+
+// cg_goto_seg_dyn compiles a switch terminator as a chain of comparisons.
+fn cg_goto_seg_dyn(g: CgGen, t: IrTerm) {
+    let c = g.c;
+    let n = t.targets.len() - 1;
+    cg_i32(c, cg_target_seg(g, t, n));
+    cg_set(c, g.state);
+    for k in 0..n {
+        cg_i32(c, cg_target_seg(g, t, k));
+        cg_get(c, g.state);
+        cg_get(c, cg_local(g, wasm_at(t.args, 0)));
+        cg_i64(c, k);
+        cg_op(c, 81); // i64.eq
+        cg_op(c, 27); // select
+        cg_set(c, g.state);
+    }
+    cg_br(c, cg_loop_depth(g));
+}
+
+fn cg_alloc(g: CgGen, next: Int, t: Int) -> Int {
+    g.locals.push(t);
+    next
+}
+
+fn cg_new_gen(m: WasmMod, f: IrFunc, is_async: Bool, nparams: Int) -> CgGen {
+    let g = CgGen {
+        m: m, f: f, is_async: is_async, c: Vec::new(), local: Vec::new(), locals: Vec::new(),
+        state: 0, child: 0, frame_l: 0, frame_t: 0, segs: Vec::new(), block_seg: Vec::new(), nseg: 0, cur: 0,
+    };
+    let mut next = nparams;
+    let mut i = 0;
+    for t in f.locals {
+        if !is_async && i < f.nparams {
+            g.local.push(i);
+        } else {
+            g.local.push(cg_alloc(g, next, wasm_val(m, t)));
+            next = next + 1;
+        }
+        i = i + 1;
+    }
+    g.state = cg_alloc(g, next, wasm_i32_t());
+    next = next + 1;
+    g.child = cg_alloc(g, next, wasm_struct_t());
+    g
+}
+
+fn wasm_gen_sync(m: WasmMod, f: IrFunc) {
+    let g = cg_new_gen(m, f, false, f.nparams);
+    cg_body(g);
+    let d = wasm_def(m, f.name);
+    d.locals = g.locals;
+    d.body = g.c;
+    d.built = true;
+}
+
+fn wasm_gen_new(m: WasmMod, f: IrFunc) {
+    let d = wasm_def(m, f.name + "$new");
+    let c = d.body;
+    cg_i32(c, 0); // state
+    cg_ref_null(c, 107); // structref
+    cg_default(c, wasm_val(m, f.result));
+    let mut i = 0;
+    for t in f.locals {
+        if i < f.nparams {
+            cg_get(c, i);
+        } else {
+            cg_default(c, wasm_val(m, t));
+        }
+        i = i + 1;
+    }
+    cg_struct_new(c, wasm_lookup(m.frame, f.name));
+    cg_end(c);
+    d.built = true;
+}
+
+fn wasm_gen_step(m: WasmMod, f: IrFunc) {
+    let g = cg_new_gen(m, f, true, 1);
+    g.frame_l = 0;
+    g.frame_t = wasm_lookup(m.frame, f.name);
+    let c = g.c;
+    // load the frame into locals
+    let mut i = 0;
+    for l in g.local {
+        cg_get(c, 0);
+        cg_struct_get(c, g.frame_t, 3 + i);
+        cg_set(c, l);
+        i = i + 1;
+    }
+    cg_get(c, 0);
+    cg_struct_get(c, g.frame_t, 1);
+    cg_set(c, g.child);
+    cg_get(c, 0);
+    cg_struct_get(c, g.frame_t, 0);
+    cg_set(c, g.state);
+    cg_body(g);
+    let d = wasm_def(m, f.name + "$step");
+    d.locals = g.locals;
+    d.body = c;
+    d.built = true;
+}
+
+// wasm_gen_handler_exports exports handler_new / handler_step /
+// handler_result using anyref so that frames are opaque to JS.
+fn wasm_gen_handler_exports(m: WasmMod) {
+    let fi = wasm_lookup(m.prog_func, m.prog.handler);
+    let f = match m.prog.funcs.get(fi) {
+        Some(x) => x,
+        None => {
+            wasm_fail(m, "handler \"" + m.prog.handler + "\" must be compiled as async");
+            return;
+        }
+    };
+    if !f.is_async {
+        wasm_fail(m, "handler \"" + m.prog.handler + "\" must be compiled as async");
+        return;
+    }
+    let ft = wasm_lookup(m.frame, f.name);
+    let params = Vec::new();
+    for i in 0..f.nparams {
+        params.push(wasm_host_param(m, wasm_ty_at(f.locals, i)));
+    }
+    wasm_reserve(m, "$handler_new", wasm_sig(params, wasm_v1(wasm_any_t())));
+    let d = wasm_def(m, "$handler_new");
+    for i in 0..f.nparams {
+        cg_get(d.body, i);
+        let t = wasm_ty_at(f.locals, i);
+        if t.kind == "agg" {
+            wasm_lift_to(m, d.body, t); // command-line arguments: JS array -> Vec<String>
+        }
+    }
+    cg_call(d.body, wasm_lookup(m.func_idx, f.name + "$new"));
+    cg_end(d.body);
+    d.export = "handler_new";
+    d.built = true;
+
+    wasm_reserve(m, "$handler_step", wasm_sig(wasm_v1(wasm_any_t()), wasm_v1(wasm_i32_t())));
+    let d2 = wasm_def(m, "$handler_step");
+    cg_get(d2.body, 0);
+    cg_cast_null(d2.body, ft);
+    cg_call(d2.body, wasm_lookup(m.func_idx, f.name + "$step"));
+    cg_end(d2.body);
+    d2.export = "handler_step";
+    d2.built = true;
+
+    wasm_reserve(m, "$handler_result", wasm_sig(wasm_v1(wasm_any_t()), wasm_v1(wasm_val(m, f.result))));
+    let d3 = wasm_def(m, "$handler_result");
+    cg_get(d3.body, 0);
+    cg_cast_null(d3.body, ft);
+    cg_struct_get(d3.body, ft, 2);
+    cg_end(d3.body);
+    d3.export = "handler_result";
+    d3.built = true;
+}
+
+// wasm_gen_pure_exports exports synchronous functions whose signature only
+// uses Int/Bool/String.
+fn wasm_gen_pure_exports(m: WasmMod) {
+    for f in m.prog.funcs {
+        if f.is_async || f.name == m.prog.handler {
+            continue;
+        }
+        let mut ok = true;
+        for i in 0..f.nparams {
+            let k = wasm_ty_at(f.locals, i).kind;
+            if k == "agg" || k == "ext" {
+                ok = false;
+            }
+        }
+        if f.result.kind == "agg" || f.result.kind == "ext" {
+            ok = false;
+        }
+        if ok {
+            wasm_def(m, f.name).export = "fn_" + f.name;
+        }
+    }
+}
+
+// ---- encoding ----
+
+fn wasm_str_less(a: String, b: String) -> Bool {
+    let n = a.len();
+    let k = b.len();
+    let mut i = 0;
+    while i < n && i < k {
+        let x = a.char_at(i).unwrap_or(0);
+        let y = b.char_at(i).unwrap_or(0);
+        if x != y {
+            return x < y;
+        }
+        i = i + 1;
+    }
+    n < k
+}
+
+fn wasm_type_of(sigs: Vec<WasmSig>, sig_idx: Map<String, Int>, base: Int, s: WasmSig) -> Int {
+    let k = wasm_sig_key(s);
+    match sig_idx.get(k) {
+        Some(i) => { return i; }
+        None => {}
+    }
+    let i = base + sigs.len();
+    sig_idx.insert(k, i);
+    sigs.push(s);
+    i
+}
+
+fn wasm_sig_body(b: Vec<Int>, s: WasmSig) {
+    wasm_u32(b, s.params.len());
+    for p in s.params {
+        wasm_valtype(b, p);
+    }
+    wasm_u32(b, s.results.len());
+    for r in s.results {
+        wasm_valtype(b, r);
+    }
+}
+
+fn wasm_encode(m: WasmMod) -> Vec<Int> {
+    // function types (after the rec group of struct types)
+    let sigs: Vec<WasmSig> = Vec::new();
+    let sig_idx: Map<String, Int> = Map::new();
+    let base = m.structs.len();
+    let import_types = Vec::new();
+    for im in m.imports {
+        import_types.push(wasm_type_of(sigs, sig_idx, base, im.sig));
+    }
+    let func_types = Vec::new();
+    for f in m.funcs {
+        if !f.built {
+            wasm_fail(m, "function body not generated: " + f.name);
+        }
+        func_types.push(wasm_type_of(sigs, sig_idx, base, f.sig));
+    }
+
+    let out = Vec::new();
+    out.push(0);
+    out.push(97);
+    out.push(115);
+    out.push(109);
+    out.push(1);
+    out.push(0);
+    out.push(0);
+    out.push(0);
+
+    let ts = Vec::new();
+    let mut n = sigs.len();
+    if m.structs.len() > 0 {
+        n = n + 1;
+    }
+    wasm_u32(ts, n);
+    if m.structs.len() > 0 {
+        ts.push(78); // 0x4e rec
+        wasm_u32(ts, m.structs.len());
+        for st in m.structs {
+            if st.array {
+                ts.push(94); // 0x5e array
+            } else {
+                ts.push(95); // 0x5f struct
+                wasm_u32(ts, st.fields.len());
+            }
+            let mut i = 0;
+            for f in st.fields {
+                wasm_valtype(ts, f);
+                if st.muts.get(i).unwrap_or(false) {
+                    ts.push(1);
+                } else {
+                    ts.push(0);
+                }
+                i = i + 1;
+            }
+        }
+    }
+    for s in sigs {
+        ts.push(96); // 0x60 func
+        wasm_sig_body(ts, s);
+    }
+    wasm_section(out, 1, ts);
+
+    let is = Vec::new();
+    wasm_u32(is, m.imports.len());
+    let mut i = 0;
+    for im in m.imports {
+        wasm_name(is, "kek");
+        wasm_name(is, im.name);
+        is.push(0);
+        wasm_u32(is, wasm_at(import_types, i));
+        i = i + 1;
+    }
+    wasm_section(out, 2, is);
+
+    let fs = Vec::new();
+    wasm_u32(fs, m.funcs.len());
+    for t in func_types {
+        wasm_u32(fs, t);
+    }
+    wasm_section(out, 3, fs);
+
+    // exports sorted by name (insertion sort; names are unique)
+    let exports = Vec::new();
+    let names = Vec::new();
+    let mut fi = 0;
+    for f in m.funcs {
+        if f.export != "" {
+            let mut j = exports.len();
+            exports.push(fi);
+            names.push(f.export);
+            while j > 0 && wasm_str_less(f.export, names.get(j - 1).unwrap_or("")) {
+                exports.set(j, wasm_at(exports, j - 1));
+                names.set(j, names.get(j - 1).unwrap_or(""));
+                j = j - 1;
+            }
+            exports.set(j, fi);
+            names.set(j, f.export);
+        }
+        fi = fi + 1;
+    }
+    let es = Vec::new();
+    wasm_u32(es, exports.len());
+    let mut k = 0;
+    for e in exports {
+        wasm_name(es, names.get(k).unwrap_or(""));
+        es.push(0);
+        wasm_u32(es, m.imports.len() + e);
+        k = k + 1;
+    }
+    wasm_section(out, 7, es);
+
+    let cs = Vec::new();
+    wasm_u32(cs, m.funcs.len());
+    for f in m.funcs {
+        let body = Vec::new();
+        wasm_u32(body, f.locals.len());
+        for l in f.locals {
+            wasm_u32(body, 1);
+            wasm_valtype(body, l);
+        }
+        wasm_append(body, f.body);
+        wasm_u32(cs, body.len());
+        wasm_append(cs, body);
+    }
+    wasm_section(out, 10, cs);
+
+    // name section (function names) for readable stack traces
+    let names_sec = Vec::new();
+    wasm_name(names_sec, "name");
+    let sub = Vec::new();
+    wasm_u32(sub, m.imports.len() + m.funcs.len());
+    let mut ii = 0;
+    for im in m.imports {
+        wasm_u32(sub, ii);
+        wasm_name(sub, "kek." + im.name);
+        ii = ii + 1;
+    }
+    for f in m.funcs {
+        wasm_u32(sub, ii);
+        let mut nm = f.name;
+        if nm.starts_with("$") {
+            nm = nm.slice(1, nm.len());
+        }
+        wasm_name(sub, nm);
+        ii = ii + 1;
+    }
+    names_sec.push(1);
+    wasm_u32(names_sec, sub.len());
+    wasm_append(names_sec, sub);
+    wasm_section(out, 0, names_sec);
+    out
+}

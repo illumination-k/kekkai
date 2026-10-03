@@ -404,6 +404,14 @@ func stmtPos(s syntax.Stmt) syntax.Pos {
 		return s.Pos
 	case *syntax.WhileStmt:
 		return s.Pos
+	case *syntax.ForStmt:
+		return s.Pos
+	case *syntax.FieldAssignStmt:
+		return s.Pos
+	case *syntax.BreakStmt:
+		return s.Pos
+	case *syntax.ContinueStmt:
+		return s.Pos
 	case *syntax.ReturnStmt:
 		return s.Pos
 	case *syntax.ExprStmt:
@@ -431,6 +439,21 @@ func (p *printer) stmt(s syntax.Stmt, ind int) string {
 		return h + p.expr(s.Value, ind, col+len(h), false) + ";"
 	case *syntax.WhileStmt:
 		return "while " + p.expr(s.Cond, ind, col+6, true) + " " + p.block(s.Body, ind)
+	case *syntax.ForStmt:
+		h := "for " + s.Var + " in "
+		h += p.expr(s.Iter, ind, col+len(h), true)
+		if s.End != nil {
+			h += ".."
+			h += p.expr(s.End, ind, advance(col, h), true)
+		}
+		return h + " " + p.block(s.Body, ind)
+	case *syntax.FieldAssignStmt:
+		h := p.stmtExpr(s.Target, ind) + " = "
+		return h + p.expr(s.Value, ind, advance(col, h), false) + ";"
+	case *syntax.BreakStmt:
+		return "break;"
+	case *syntax.ContinueStmt:
+		return "continue;"
 	case *syntax.ReturnStmt:
 		if s.Value == nil {
 			return "return;"
@@ -483,7 +506,7 @@ func needsStmtParens(e syntax.Expr) bool {
 func leftChild(e syntax.Expr) syntax.Expr {
 	switch e := e.(type) {
 	case *syntax.BinaryExpr:
-		if prec(e.X) < precedence[e.Op] {
+		if leftParen(e.X, e.Op) {
 			return nil // parenthesized
 		}
 		return e.X
@@ -615,9 +638,9 @@ func (p *printer) expr(e syntax.Expr, ind, col int, ns bool) string {
 		// Operators are laid out by the outermost binary expression: nested
 		// ones stay flat while it tries a single line.
 		p.flat++
-		l := p.sub(e.X, ind, col, ns, prec(e.X) < pr || (pr == 3 && prec(e.X) == 3))
+		l := p.sub(e.X, ind, col, ns, leftParen(e.X, e.Op))
 		op := " " + opText[e.Op] + " "
-		r := p.sub(e.Y, ind, advance(col, l)+len(op), ns, prec(e.Y) <= pr)
+		r := p.sub(e.Y, ind, advance(col, l)+len(op), ns, rightParen(e.Y, e.Op))
 		p.flat--
 		s := l + op + r
 		if p.flat > 0 || strings.Contains(s, "\n") || col+len(s) <= maxWidth {
@@ -637,11 +660,11 @@ func (p *printer) expr(e syntax.Expr, ind, col int, ns bool) string {
 			ops = append([]syntax.TokenKind{b.Op}, ops...)
 			x = b.X
 		}
-		s = p.sub(x, ind, col, ns, prec(x) < pr || (pr == 3 && prec(x) == 3))
+		s = p.sub(x, ind, col, ns, leftParen(x, e.Op))
 		ccol := len(indent(ind + 1))
 		for i, y := range operands {
 			h := opText[ops[i]] + " "
-			s += "\n" + indent(ind+1) + h + p.sub(y, ind+1, ccol+len(h), ns, prec(y) <= pr)
+			s += "\n" + indent(ind+1) + h + p.sub(y, ind+1, ccol+len(h), ns, rightParen(y, ops[i]))
 		}
 		return s
 	case *syntax.UnaryExpr:
@@ -729,7 +752,9 @@ func (p *printer) list(open, close, pad string, n int, elem func(i, ind, col int
 		firstLine = inline[:k]
 	}
 	fits := col+len(firstLine) <= maxWidth
-	if multi < 0 && fits {
+	// Inside a binary expression being tried on one line, stay flat: the
+	// outermost operator chain decides where to break.
+	if multi < 0 && (fits || p.flat > 0) {
 		return inline
 	}
 	if multi == n-1 && fits && last != nil && overflows(last) {
@@ -947,4 +972,22 @@ func (p *printer) strText(pos syntax.Pos) string {
 		j = len(p.src) - 1
 	}
 	return p.src[i : j+1]
+}
+
+// mixedLogic reports an `&&` operand of `||`: parenthesized for clarity
+// (the AST does not record source parentheses).
+func mixedLogic(x syntax.Expr, op syntax.TokenKind) bool {
+	b, ok := x.(*syntax.BinaryExpr)
+	return ok && op == syntax.PipePipe && b.Op == syntax.AmpAmp
+}
+
+// leftParen reports whether the left operand of op needs parentheses.
+func leftParen(x syntax.Expr, op syntax.TokenKind) bool {
+	pr := precedence[op]
+	return prec(x) < pr || (pr == 3 && prec(x) == 3) || mixedLogic(x, op)
+}
+
+// rightParen reports whether the right operand of op needs parentheses.
+func rightParen(y syntax.Expr, op syntax.TokenKind) bool {
+	return prec(y) <= precedence[op] || mixedLogic(y, op)
 }

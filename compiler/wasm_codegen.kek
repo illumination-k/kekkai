@@ -298,7 +298,11 @@ fn wasm_layout_types(m: WasmMod) {
     m.box_t = next + 2;
     next = next + 3;
     let map_agg = wasm_agg_named(m, "__Map");
-    m.map_t = if map_agg >= 0 { wasm_at(m.agg_type, map_agg) } else { m.box_t };
+    m.map_t = if map_agg >= 0 {
+        wasm_at(m.agg_type, map_agg)
+    } else {
+        m.box_t
+    };
     for i in 0..next {
         m.structs.push(wasm_comp(Vec::new(), true, false));
     }
@@ -635,7 +639,10 @@ fn wasm_collect_imports(m: WasmMod) {
                 }
                 if name.starts_with("__Js.") {
                     if m.target != "workers" {
-                        wasm_fail(m, "the JS host is not available to command-line programs (" + f.name + ")");
+                        wasm_fail(
+                            m,
+                            "the JS host is not available to command-line programs (" + f.name + ")",
+                        );
                     }
                     let j = name.slice(5, name.len());
                     wasm_add_import(m, "kek", j, wasm_js_intrinsic_sig(j), false);
@@ -1215,21 +1222,33 @@ fn cg_call_prelude(g: CgGen, ins: IrInstr, fname: String) {
         None => {
             wasm_fail(
                 m,
-                "`" + ins.name + "` is not available to "
-                    + if m.target == "wasi" { "command-line programs" } else { "Workers programs" }
-                    + " (in " + g.f.name + ")",
+                "`" + ins.name + "` is not available to " + if m.target == "wasi" {
+                    "command-line programs"
+                } else {
+                    "Workers programs"
+                } + " (in " + g.f.name + ")",
             );
             return;
         }
     };
     if pf.nparams != ins.args.len() {
-        wasm_fail(m, "runtime prelude: " + fname + " takes " + pf.nparams.to_string() + " arguments");
+        wasm_fail(
+            m,
+            "runtime prelude: " + fname + " takes " + pf.nparams.to_string() + " arguments",
+        );
         return;
     }
     for k in 0..ins.args.len() {
         let at = cg_ty(g, wasm_at(ins.args, k));
         if wasm_val(m, at) != wasm_val(m, wasm_ty_at(pf.locals, k)) {
-            wasm_fail(m, "runtime prelude: parameter " + k.to_string() + " of " + fname + " has the wrong type");
+            wasm_fail(
+                m,
+                "runtime prelude: parameter "
+                    + k.to_string()
+                    + " of "
+                    + fname
+                    + " has the wrong type",
+            );
         }
         cg_arg(g, ins, k);
     }
@@ -1411,7 +1430,9 @@ fn cg_intrinsic(g: CgGen, ins: IrInstr) {
     } else if name == "__Int.rem_u" || name == "__Int.div_u" || name == "__Int.lt_u" {
         cg_arg(g, ins, 0);
         cg_arg(g, ins, 1);
-        cg_op(c, if name == "__Int.rem_u" { 130 } else if name == "__Int.div_u" { 128 } else { 84 });
+        cg_op(c, if name == "__Int.rem_u" {
+            130
+        } else if name == "__Int.div_u" { 128 } else { 84 });
     } else if name.starts_with("__Mem.load") {
         cg_wrap_arg(g, ins, 0);
         let w = name.slice(10, name.len());

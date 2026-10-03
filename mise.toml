@@ -1,18 +1,16 @@
 [tools]
-node = "26.7.0"
-wasm-tools = "1.261.0"
-"github:leanprover/lean4" = "4.34.1"
-"npm:wrangler" = "4.147.0"
 wasmtime = "49.0.2"
+wasm-tools = "1.261.0"
 workerd = "1.20261002.1"
+"github:leanprover/lean4" = "4.34.1"
 
 [tasks.test]
-description = "Run all tests with Node and ./kek only (bootstrap fixed point, check, run, e2e, adapters, difftest, fmt, workerd, node:test files); args: node tests/run.mjs --help"
-run = "node tests/run.mjs"
+description = "Run all tests (bootstrap fixed point, check, run, kek test, agent commands, fmt, difftest, e2e on workerd); args: tests/run.sh --help"
+run = "tests/run.sh"
 
 [tasks.difftest]
 description = "Differential test against the Lean reference interpreter (mise run lean first; usage: mise run difftest -- -n 500)"
-run = "node tests/run.mjs difftest"
+run = "tests/run.sh difftest"
 
 [tasks.lean]
 description = "Build and check the Lean formalization"
@@ -21,36 +19,28 @@ run = "lake build"
 
 [tasks.fmt]
 description = "Format Kekkai sources"
-run = "./kek fmt -w compiler testdata/e2e testdata/run testdata/test examples"
+run = "./kek fmt -w compiler lib testdata/e2e testdata/run testdata/test examples tests/difftest"
 
 [tasks.fmt-check]
 description = "Check that Kekkai sources are formatted"
-run = "./kek fmt -check compiler testdata/e2e testdata/run testdata/test examples"
+run = "./kek fmt -check compiler lib testdata/e2e testdata/run testdata/test examples tests/difftest"
 
-[tasks.test-node]
-description = "Run the Node tests of the self-hosted toolchain"
-run = "node --test 'tests/*.test.mjs'"
+[tasks.prelude]
+description = "Regenerate compiler/prelude_src.kek from lib/prelude (./kek also does this when it rebuilds the compiler)"
+run = "./kek embed-prelude lib/prelude compiler/prelude_src.kek"
 
 [tasks.ci]
 description = "Everything CI runs: tests (incl. bootstrap fixed point), format check, Lean proofs"
 depends = ["test", "fmt-check", "lean"]
 
 [tasks.e2e]
-description = "Run the Node e2e tests and the store adapter conformance suite"
-run = "node tests/run.mjs e2e adapters bad-examples"
-
-[tasks.e2e-workers]
-description = "Run a compiled program on workerd (wrangler dev --local, local D1 + Durable Objects) and drive it over HTTP"
-run = "node tests/run.mjs -v workers"
-
-[tasks.dev]
-description = "Build a .kek file and serve it locally with wrangler dev (usage: mise run dev -- examples/todo/todo.kek)"
-run = "scripts/dev.sh"
+description = "Run the Workers programs and the store adapter conformance suite on workerd"
+run = "tests/run.sh e2e"
 
 [tasks.bootstrap-check]
 description = "Rebuild the self-hosted compiler with itself and require a fixed point"
 run = "./kek bootstrap-check"
 
 [tasks.bootstrap-update]
-description = "Replace bootstrap/ with the current self-hosted compiler (after the fixed-point check)"
+description = "Replace bootstrap/kek.wasm with the current self-hosted compiler (after the fixed-point check)"
 run = "./kek bootstrap-update"

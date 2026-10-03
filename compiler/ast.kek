@@ -442,7 +442,7 @@ fn ast_str_less(a: String, b: String) -> Bool {
     a.len() < b.len()
 }
 
-// ast_sort_errors is a stable sort by position (ErrorList.Err in Go).
+// ast_sort_errors is a stable sort by position.
 fn ast_sort_errors(errs: Vec<AstError>) -> Vec<AstError> {
     let n = errs.len();
     if n <= 1 {

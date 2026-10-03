@@ -47,7 +47,7 @@ fn __hash_str(s: String) -> Int {
     let mut h = -3750763034362895579;
     let mut i = 0;
     while i < n {
-        h = (h.bit_xor(x.get(i))) * 1099511628211;
+        h = h.bit_xor(x.get(i)) * 1099511628211;
         i = i + 1;
     }
     h.bit_xor(h.ushr(29))

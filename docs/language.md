@@ -84,10 +84,23 @@ fn transfer(db: &Db, from: String, to: String, n: Int) -> Result<(), TxError> {
 
 範囲外アクセスは `Option` で表され、panic は起きない。
 
+文字列は UTF-16 のコード単位の列で、`len`・`char_at`・`slice`・`index_of` はコード単位で数える。
+
+- `split("")` はコードポイントごとに分ける。
+- `trim` は Unicode の空白と改行（U+0009–000D、U+0020、U+00A0、U+1680、U+2000–200A、U+2028、U+2029、U+202F、U+205F、U+3000、U+FEFF）を除く。
+- `to_upper` / `to_lower` は ASCII だけを変換する。
+- `to_bytes` は UTF-8 に符号化する（孤立したサロゲートは U+FFFD）。
+- `from_bytes` は WHATWG の規則で復号する（不正な列は U+FFFD、先頭の BOM は除く）。
+
 `for x in v` は毎回 `v.len()` を読み直す。本体で `v`（やその別名）に `push` すると終わらないので注意する。
 
 ## 実行モデル
 
 - I/O に到達する関数は、コンパイラがステートマシンに変換する。async/await の色分けはない。
 - それ以外の関数は普通の wasm 関数になる。
+- `#[handler]` のプログラムは Workers で動き、capability は Worker のバインディングから作られる（[runtime.md](runtime.md)）。
+- `#[main]` のプログラムは WASI のコマンドになる（`kek run` は wasmtime で実行する）。
+  - `&Fs`・`&Log`・`&Clock`・`&Random` は WASI で実装される。`&Log` の `info` は標準出力、`warn` と `error` は標準エラーに書く。
+  - `&Db` はプロセス内のインメモリのストアで、outbox の内容は標準エラーに表示される。
+  - `&Net` は使えず、常に `NetError` を返す。
 - 意味論の基準は Lean で書いた IR の参照インタプリタ（`lean/`）で、コンパイラとは差分テストで突き合わせる。

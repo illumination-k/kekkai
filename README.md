@@ -1,6 +1,6 @@
 # Kekkai
 
-Kekkai（結界）は、サーバーサイドの典型的なバグ（トランザクション不整合、隠れた副作用など）を型検査で排除するための言語です。Rust 風の構文（拡張子 `.kek`）で書き、コンパイラ `kek` は **Kekkai 自身で書かれており（セルフホスト、`compiler/`）**、WasmGC に変換して Cloudflare Workers で動かします。コンパイラ自身も WasmGC として Node 上で動きます。
+Kekkai（結界）は、サーバーサイドの典型的なバグ（トランザクション不整合、隠れた副作用など）を型検査で排除するための言語です。Rust 風の構文（拡張子 `.kek`）で書き、コンパイラ `kek` は **Kekkai 自身で書かれており（セルフホスト、`compiler/`）**、WasmGC に変換して Cloudflare Workers で動かします。`#[main]` のプログラムは WASI のコマンドになり、コンパイラ自身もそうして wasmtime 上で動きます。
 
 - **capability 渡し**：`&Log` `&Net` `&Db` `&Clock` `&Random` を引数で受け取らない関数は副作用を持てない（第二級値なので保存も返却もできない）
 - **線形なトランザクション**：`db.transaction(|tx| ...)` の `Tx` は必ず一度だけ commit / rollback される。トランザクション内で取り消せない副作用は書けない（`tx.outbox` で commit 後に送る）
@@ -10,7 +10,7 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 
 ## クイックスタート
 
-ツールチェーン（Node、wasm-tools、Lean、wrangler）は [mise](https://mise.jdx.dev/) で揃えます。Go は不要です。
+ツールチェーン（wasmtime、workerd、wasm-tools、Lean）は [mise](https://mise.jdx.dev/) で揃えます。
 
 ```sh
 mise install          # mise.toml のツールを入れる
@@ -18,10 +18,15 @@ mise install          # mise.toml のツールを入れる
 ./kek test testdata/test/counter.kek
 ./kek run testdata/run/recursive_enum.kek
 ./kek build -o out testdata/e2e/bank.kek   # out/ に worker.js・module.wasm・wrangler.toml
-cd out && wrangler dev
+scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 ```
 
-`./kek` は `bootstrap/kek.wasm`（コンパイラ自身をコンパイルした WasmGC）で現在の `compiler/` をビルドし（`.kek-cache/` にキャッシュ）、そのコンパイラでコマンドを実行します。詳しくは [bootstrap/README.md](bootstrap/README.md) と [docs/selfhost.md](docs/selfhost.md)。
+`./kek` はシェルスクリプトで、`bootstrap/kek.wasm`（コンパイラ自身をコンパイルした WasmGC + WASI のモジュール）で現在の `compiler/` をビルドし（`.kek-cache/` にキャッシュ）、そのコンパイラを wasmtime で実行します。詳しくは [bootstrap/README.md](bootstrap/README.md) と [docs/selfhost.md](docs/selfhost.md)。
+
+生成されるモジュールは自己完結しています。文字列・`Vec`・`Map`・`Response` などの組み込み操作は、Kekkai で書いたランタイムの prelude（`lib/prelude`）として一緒にコンパイルされます。外とつながるのは capability の操作だけです。
+
+- `#[main]`：WASI のコマンド（`_start`）。ファイル・ログ・時計・乱数は WASI で実装されています
+- `#[handler]`：Workers のモジュール。capability の操作だけを JS のランタイム（`js/kekkai_runtime.js`）から import します
 
 ## コマンド
 
@@ -30,9 +35,10 @@ cd out && wrangler dev
 | `kek check <file>` | 型検査（capability、エフェクト、トランザクション） |
 | `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧 |
 | `kek ir [-json] <file>` | 中間表現を表示（`-json` は Lean 参照インタプリタの入力形式） |
-| `kek build [-o dir] <file>` | Workers 向けモジュール（WasmGC + JS グルー）を出力 |
+| `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力 |
+| `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
-| `kek test [-run re] <file>` | `#[test]` 関数を Node 上の WasmGC で実行 |
+| `kek test [-run re] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス） |
 
 ### テスト（`kek test`）
 
@@ -63,17 +69,17 @@ fn visits_are_counted(db: &Db, log: &Log) -> Result<(), String> {
 
 capability を受け取らないテストは純粋なので hermetic で、出力に `pure: hermetic, cacheable` と表示されます（定義ハッシュをキーにしたキャッシュは今後の課題）。
 
-セルフホスト版は `./kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>`。コンパイラの `test-build`（`compiler/testrun.kek`）がテストの発見とハーネス合成・ビルドを行い、`js/kek_test.mjs` が `-run`（JavaScript の正規表現）で選択して `js/test_runner.mjs` を実行します。テストは `node --test tests/testrun.test.mjs`。
+オプションは `./kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>`（`-run` は拡張正規表現）。コンパイラの `test-build`（`compiler/testrun.kek`）がテストを発見し、テスト名で 1 つを実行する `#[main]` を合成してビルドします。モックは prelude（`lib/prelude/test.kek`）にあり、`./kek` がテストごとに wasmtime のプロセスを起動します。トラップ（スタックの使い切りなど）はそのテストだけの失敗になります。
 
 ## 開発
 
 ```sh
-mise run test        # node tests/run.mjs（不動点・check・run・e2e・差分テスト・fmt・workerd）
-mise run fmt         # kek fmt -w compiler testdata/{e2e,run,test} examples
+mise run test        # tests/run.sh（不動点・check・run・kek test・fmt・差分テスト・workerd での e2e）
+mise run fmt         # kek fmt -w compiler lib testdata/{e2e,run,test} examples tests/difftest
 mise run fmt-check   # フォーマット検査
 mise run lean        # Lean の証明をビルド
 mise run ci          # test・fmt-check・lean をまとめて実行（CI と同じ）
 ./kek bootstrap-update  # 不動点を確認して bootstrap/ を更新
 ```
 
-CI（`.github/workflows/ci.yml`）は `jdx/mise-action` でツールを入れ、`node tests/run.mjs`・`kek fmt -check`・`mise run lean` を実行します。
+CI（`.github/workflows/ci.yml`）は `jdx/mise-action` でツールを入れ、`mise run lean`・`tests/run.sh --short`・`mise run fmt-check` を実行します。

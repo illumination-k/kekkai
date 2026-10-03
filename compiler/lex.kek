@@ -2,9 +2,9 @@
 //
 // Token kinds are strings: "EOF", "IDENT", "INT", "STRING" for the token
 // classes, and the source spelling for keywords and punctuation ("fn",
-// "(", "->", ...). The lexer scans the UTF-8 bytes of the source (like the
-// Go implementation, columns count bytes) and keeps a parallel UTF-16
-// offset so that token texts can be sliced from the JS source string.
+// "(", "->", ...). The lexer scans the UTF-8 bytes of the source (columns
+// count bytes) and keeps a parallel UTF-16 offset so that token texts can
+// be sliced from the source string.
 
 struct Tok {
     kind: String,
@@ -23,7 +23,7 @@ struct LexState {
     file: String,
     toks: Vec<Tok>,
     errs: Vec<AstError>,
-    // comment capture (opt-in, for `fmt`): LexWithComments in Go
+    // comment capture (opt-in, for `fmt`)
     keep_comments: Bool,
     comments: Vec<TokComment>,
 }
@@ -46,7 +46,7 @@ struct LexResult {
     errs: Vec<AstError>,
 }
 
-// lex_kind_name is TokenKind.String() in Go.
+// lex_kind_name is the name of a token kind in diagnostics.
 fn lex_kind_name(k: String) -> String {
     if k == "EOF" {
         return "end of file";

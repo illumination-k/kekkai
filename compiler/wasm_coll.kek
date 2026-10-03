@@ -186,7 +186,11 @@ fn cg_coll_op(g: CgGen, ins: IrInstr) {
     let dst_ty = cg_ty(g, ins.dst);
     let name = ins.name;
     if td.coll == "map" {
-        let sfx = if td.key.kind == "string" { "_str" } else { "_int" };
+        let sfx = if td.key.kind == "string" {
+            "_str"
+        } else {
+            "_int"
+        };
         if name == "map.new" {
             cg_i32(c, if td.key.kind == "string" { 1 } else { 0 });
             cg_call(c, wasm_prelude_func(m, "__map_new"));
@@ -277,7 +281,11 @@ fn wasm_map_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
         None => {}
     }
     let td = wasm_td(m, agg);
-    let sfx = if td.key.kind == "string" { "_str" } else { "_int" };
+    let sfx = if td.key.kind == "string" {
+        "_str"
+    } else {
+        "_int"
+    };
     let rt = wasm_at(m.agg_type, opt);
     let d = wasm_helper_begin(
         m,

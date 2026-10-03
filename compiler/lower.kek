@@ -36,7 +36,7 @@ fn lower_empty_func() -> IrFunc {
     }
 }
 
-// lower_lower translates a type-checked program into IR (ir.Lower).
+// lower_lower translates a type-checked program into IR.
 fn lower_lower(info: ChkInfo) -> IrProgram {
     let prog = IrProgram {
         types: Vec::new(),

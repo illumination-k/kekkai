@@ -1,3 +1,3 @@
-testdata/run/strings.kek -> OUT (2692 bytes of wasm)
+testdata/run/strings.kek -> OUT (N bytes of wasm)
 --- exit 0
---- files: kekkai_meta.js kekkai_runtime.js module.wasm
+--- files: module.wasm

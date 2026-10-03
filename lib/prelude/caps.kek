@@ -80,19 +80,34 @@ fn __random_int(r: __Any, lo: Int, hi: Int) -> Int {
         return lo;
     }
     let rt = __Rt::get();
-    let x = if rt.test { __splitmix(rt) } else { __random_u64() };
+    let x = if rt.test {
+        __splitmix(rt)
+    } else {
+        __random_u64()
+    };
     lo + __Int::rem_u(x, hi - lo)
 }
 
 // ---- &Net ----
 
-fn __net_request(method: String, url: String, body: String, has_body: Bool) -> Result<String, NetError> {
+fn __net_request(
+    method: String,
+    url: String,
+    body: String,
+    has_body: Bool,
+) -> Result<String, NetError> {
     let rt = __Rt::get();
     if !rt.test {
         return Err(NetError { message: "network access is not available to command-line programs" });
     }
     let key = method + " " + url;
-    rt.lines.push("net: " + key + if has_body { " " + __json_quote(body) } else { "" });
+    rt.lines.push(
+        "net: " + key + if has_body {
+            " " + __json_quote(body)
+        } else {
+            ""
+        },
+    );
     match rt.net_err.get(key) {
         Some(m) => {
             return Err(NetError { message: m });
@@ -101,7 +116,9 @@ fn __net_request(method: String, url: String, body: String, has_body: Bool) -> R
     }
     match rt.net.get(key) {
         Some(v) => Ok(v),
-        None => Err(NetError { message: "network access is mocked in tests: no canned response for " + key }),
+        None => Err(NetError {
+            message: "network access is mocked in tests: no canned response for " + key,
+        }),
     }
 }
 
@@ -169,13 +186,10 @@ fn __tx_get(t: __Any, key: String) -> Result<Option<String>, TxError> {
     }
     let e = __Rt::get().store.data.get(key);
     if !tx.reads.contains(key) {
-        tx.reads.insert(
-            key,
-            match e {
-                Some(x) => x.version,
-                None => 0,
-            },
-        );
+        tx.reads.insert(key, match e {
+            Some(x) => x.version,
+            None => 0,
+        });
     }
     match e {
         Some(x) => Ok(Some(x.value)),

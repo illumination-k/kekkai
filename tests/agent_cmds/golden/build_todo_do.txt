@@ -1,4 +1,4 @@
-examples/todo/todo.kek -> OUT (40373 bytes of wasm)
+examples/todo/todo.kek -> OUT (N bytes of wasm)
 --- exit 0
 --- files: kekkai_meta.js kekkai_runtime.js module.wasm worker.js wrangler.toml
 --- worker.js

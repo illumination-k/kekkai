@@ -11,7 +11,12 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "search" {
         return search_main(args, fs, log);
     }
-    if cmd == "prelude-check" || cmd == "lex" || cmd == "ast" || cmd == "check" || cmd == "ir" || cmd == "build" {
+    if cmd == "prelude-check"
+        || cmd == "lex"
+        || cmd == "ast"
+        || cmd == "check"
+        || cmd == "ir"
+        || cmd == "build" {
         return frontend_main(args, fs, log);
     }
     if cmd == "test-build" {

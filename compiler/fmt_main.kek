@@ -1,14 +1,13 @@
-// `fmt [-w] [-check] <paths...>`. Directories are
-// searched recursively for *.kek (skipping `.*` and node_modules below the
-// root); without -w or -check the formatted sources go to stdout.
+// `fmt [-w] [-check] <paths...>`. Directories are searched recursively
+// for *.kek (skipping `.*` below the root); without -w or -check the
+// formatted sources are printed.
 
 struct FmtFile {
     path: String,
     text: String,
 }
 
-// fmt_join is filepath.Join(dir, name) for the cleaned directories that
-// fmt walks.
+// fmt_join joins a directory that fmt walks and an entry name.
 fn fmt_join(dir: String, name: String) -> String {
     let d = frontend_clean_dir(dir);
     if d == "." {
@@ -21,14 +20,14 @@ fn fmt_join(dir: String, name: String) -> String {
 }
 
 // fmt_walk appends the .kek files below dir (whose sorted entries are
-// names) in filepath.WalkDir order. A path is a directory iff Fs.list
+// names) in lexical order, depth first. A path is a directory iff Fs.list
 // succeeds on it.
 fn fmt_walk(dir: String, names: Vec<String>, fs: &Fs, files: Vec<String>) {
     for name in names {
         let path = fmt_join(dir, name);
         match fs.list(path) {
             Ok(sub) => {
-                if !name.starts_with(".") && name != "node_modules" {
+                if !name.starts_with(".") {
                     fmt_walk(path, sub, fs, files);
                 }
             }

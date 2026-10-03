@@ -23,8 +23,7 @@ fn testrun_main_name() -> String {
     "__kek_test_main"
 }
 
-// testrun_discover lists the #[test] functions of a checked program
-// (testrun.Discover).
+// testrun_discover lists the #[test] functions of a checked program.
 fn testrun_discover(info: ChkInfo) -> Vec<TestrunTest> {
     let tests = Vec::new();
     for fun in info.func_list {
@@ -112,7 +111,12 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
         let who = json_quote(t.name) + ", " + json_quote(testrun_kind(t));
         b = b + "    if __name == " + json_quote(t.name) + " {\n";
         if t.result == "bool" {
-            b = b + "        if " + call + " {\n            return __test_ok(" + who + ");\n        }\n";
+            b = b
+                + "        if "
+                + call
+                + " {\n            return __test_ok("
+                + who
+                + ");\n        }\n";
             b = b + "        return __test_false(" + who + ");\n";
         } else if t.result == "result" {
             b = b + "        return match " + call + " {\n";

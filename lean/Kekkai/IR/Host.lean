@@ -4,9 +4,9 @@ import Kekkai.IR.Value
 /-!
 # Pure host operations
 
-Reimplements the synchronous, deterministic part of the `host` object in
-`js/kekkai_runtime.js`. Strings are Lean strings; lengths are counted
-in UTF-16 code units like JavaScript's `String.prototype.length`.
+Reimplements the synchronous, deterministic builtin operations (in wasm
+they are functions of the runtime prelude, `lib/prelude`). Strings are
+Lean strings; lengths are counted in UTF-16 code units.
 -/
 
 namespace Kekkai.IR
@@ -14,11 +14,11 @@ namespace Kekkai.IR
 /-- `clock.now_ms` returns this fixed instant so runs are reproducible. -/
 def fixedNowMs : Int := 1700000000000
 
-/-- Length in UTF-16 code units (JavaScript `s.length`). -/
+/-- Length in UTF-16 code units. -/
 def utf16Length (s : String) : Nat :=
   s.toList.foldl (fun n c => n + (if c.val > 0xFFFF then 2 else 1)) 0
 
-/-- JavaScript `WhiteSpace` and `LineTerminator` code points (used by `trim`). -/
+/-- Unicode white space and line terminator code points (used by `trim`). -/
 def isJsSpace (c : Char) : Bool :=
   let v := c.val
   v == 0x09 || v == 0x0A || v == 0x0B || v == 0x0C || v == 0x0D || v == 0x20 ||
@@ -28,7 +28,7 @@ def isJsSpace (c : Char) : Bool :=
 def jsTrim (s : String) : String :=
   String.ofList ((s.toList.dropWhile isJsSpace).reverse.dropWhile isJsSpace).reverse
 
-/-- ASCII-only case mapping (JS maps all of Unicode; tests stay ASCII). -/
+/-- ASCII-only case mapping. -/
 def asciiUpper (s : String) : String :=
   String.ofList (s.toList.map fun c => if 'a' ≤ c && c ≤ 'z' then Char.ofNat (c.toNat - 32) else c)
 
@@ -58,7 +58,7 @@ def parseI64 (s : String) : Option Int :=
     let v : Int := if neg then -(mag : Int) else mag
     if inRange v then some v else none
 
-/-! ## UTF-16 / UTF-8 helpers (JavaScript strings are UTF-16) -/
+/-! ## UTF-16 / UTF-8 helpers (strings are UTF-16 in wasm) -/
 
 def utf16Units (s : String) : Array Nat :=
   s.toList.foldl (fun acc c =>
@@ -68,7 +68,7 @@ def utf16Units (s : String) : Array Nat :=
       let w := v - 0x10000
       (acc.push (0xD800 + w / 0x400)).push (0xDC00 + w % 0x400)) #[]
 
-/-- Decode UTF-16 code units. A lone surrogate (which a JS string can hold
+/-- Decode UTF-16 code units. A lone surrogate (which a wasm string can hold
 but a Lean string cannot) becomes U+FFFD. -/
 def ofUtf16Units (us : List Nat) : String :=
   let rec go : List Nat → List Char → List Char
@@ -82,7 +82,7 @@ def ofUtf16Units (us : List Nat) : String :=
 where
   unit1 (u : Nat) : Char := if 0xD800 ≤ u && u < 0xE000 then '\uFFFD' else Char.ofNat u
 
-/-- The WHATWG UTF-8 decoder (`new TextDecoder().decode`): invalid
+/-- The WHATWG UTF-8 decoder: invalid
 sequences become U+FFFD (maximal subparts), and a leading BOM is removed. -/
 def utf8DecodeWhatwg (bytes : List Nat) : String :=
   let bytes := match bytes with
@@ -115,7 +115,7 @@ def utf8DecodeWhatwg (bytes : List Nat) : String :=
 def utf8Encode (s : String) : List Nat := s.toUTF8.toList.map (·.toNat)
 
 def listSplitOn (sep : List Char) (s : List Char) : List (List Char) :=
-  -- JS `s.split(sep)` for a non-empty separator
+  -- `s.split(sep)` for a non-empty separator
   let rec go (fuel : Nat) (s cur : List Char) (acc : List (List Char)) : List (List Char) :=
     match fuel with
     | 0 => (cur.reverse :: acc).reverse
@@ -128,13 +128,13 @@ def listSplitOn (sep : List Char) (s : List Char) : List (List Char) :=
   go (s.length + 1) s [] []
 
 def jsSplit (s sep : String) : List String :=
-  if sep.isEmpty then s.toList.map fun c => String.singleton c   -- `[...s]`: code points
+  if sep.isEmpty then s.toList.map fun c => String.singleton c   -- code points
   else (listSplitOn sep.toList s.toList).map String.ofList
 
 def jsReplaceAll (s a b : String) : String :=
   if a.isEmpty then s else b.intercalate (jsSplit s a)
 
-/-- `s.indexOf(t)` in UTF-16 code units. -/
+/-- The first index of `t` in `s`, in UTF-16 code units. -/
 def jsIndexOf (s t : String) : Option Nat :=
   let su := (utf16Units s).toList
   let tu := (utf16Units t).toList
@@ -152,7 +152,7 @@ def jsSlice (s : String) (a b : Int) : String :=
   let hi := clamp b
   if hi ≤ lo then "" else ofUtf16Units (us.extract lo.toNat hi.toNat).toList
 
-/-- `String.fromCharCode(c mod 2^16)`. -/
+/-- The one-code-unit string `c mod 2^16`. -/
 def jsFromCharCode (c : Int) : String :=
   ofUtf16Units [(c % 65536).toNat]
 
@@ -170,7 +170,7 @@ def vecElems (v : Val) : HM (Array Val) := do
   | .vec xs => pure xs
   | o => throw s!"type error: expected a Vec, got {repr o}"
 
-/-- Evaluate a synchronous host operation implemented by the JS runtime. -/
+/-- Evaluate a synchronous builtin operation (implemented by the runtime prelude). -/
 def evalHost (name : String) (args : Array Val) : HM Val := do
   let bad : HM Val := throw s!"host op {name}: bad arguments"
   let int2 (f : Int → Int → Int) : HM Val :=

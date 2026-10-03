@@ -27,7 +27,8 @@ fn frontend_print_errors(log: &Log, errs: Vec<AstError>) {
     }
 }
 
-// frontend_clean_dir approximates filepath.Clean for directory arguments.
+// frontend_clean_dir drops leading "./" and trailing "/" of a directory
+// argument.
 fn frontend_clean_dir(d: String) -> String {
     let mut s = d;
     while s.starts_with("./") && s.len() > 2 {
@@ -40,7 +41,7 @@ fn frontend_clean_dir(d: String) -> String {
 }
 
 // frontend_read_sources reads a .kek file, or every .kek file of a
-// directory sorted by name (driver.ReadSources). Errors are reported.
+// directory sorted by name. Errors are reported.
 fn frontend_read_sources(path: String, fs: &Fs, log: &Log) -> Option<Vec<FeSource>> {
     let srcs = Vec::new();
     let names = Vec::new();
@@ -75,8 +76,7 @@ fn frontend_read_sources(path: String, fs: &Fs, log: &Log) -> Option<Vec<FeSourc
     Some(srcs)
 }
 
-// frontend_parse_all parses the files of one program into a single AstFile
-// (syntax.ParseFiles).
+// frontend_parse_all parses the files of one program into a single AstFile.
 fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
     let ids = AstIds { next: 0 };
     let out = AstFile { structs: Vec::new(), enums: Vec::new(), funcs: Vec::new() };

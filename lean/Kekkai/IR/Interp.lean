@@ -107,8 +107,7 @@ def typeDef (p : Program) (ty : Nat) : M TypeDef :=
 
 /-! ## Collections -/
 
-/-- Key equality of a JS `Map` (SameValueZero on the boxed keys: numbers
-and strings by value, GC references by identity). -/
+/-- Key equality of a `Map`: Int, String and Bool keys by value. -/
 def keyEq : Val → Val → Bool
   | .int a, .int b => a == b
   | .str a, .str b => a == b

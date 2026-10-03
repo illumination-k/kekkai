@@ -47,15 +47,16 @@ fn prelude_embed_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
                 return 1;
             }
         };
-        src = src + "    prelude_file(v, \"" + n + "\", \"" + prelude_escape(text) + "\");\n";
+        // the shape `kek fmt` gives to a call with a long string argument
+        src = src
+            + "    prelude_file(\n        v,\n        \""
+            + n
+            + "\",\n        \""
+            + prelude_escape(text)
+            + "\",\n    );\n";
     }
     src = src + "    v\n}\n";
-    let res = fmt_source(src);
-    if res.errs.len() > 0 {
-        log.error("embed-prelude: generated source does not parse");
-        return 1;
-    }
-    let out = res.out;
+    let out = src;
     if check {
         match fs.read(out_path) {
             Ok(cur) => {
@@ -65,7 +66,9 @@ fn prelude_embed_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             }
             Err(_) => {}
         }
-        log.error(out_path + " is out of date: run `kek embed-prelude " + dir + " " + out_path + "`");
+        log.error(
+            out_path + " is out of date: run `kek embed-prelude " + dir + " " + out_path + "`",
+        );
         return 1;
     }
     match fs.write(out_path, out) {

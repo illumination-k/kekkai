@@ -12,8 +12,8 @@
 //     arguments) are hoisted above the unit, so no comment is ever lost;
 //   - comments after the last unit of a block stay before its `}`.
 //
-// Like the Go implementation, widths count UTF-8 bytes and positions are
-// (line, byte column); source slices use UTF-16 offsets (fmt_offset).
+// Widths count UTF-8 bytes and positions are (line, byte column); source
+// slices use UTF-16 offsets (fmt_offset).
 
 struct FmtPrinter {
     src: String,
@@ -175,7 +175,7 @@ fn fmt_advance(p: FmtPrinter, col: Int, s: String) -> Int {
     col + fmt_w(p, s)
 }
 
-// fmt_is_space is unicode.IsSpace.
+// fmt_is_space reports Unicode white space.
 fn fmt_is_space(c: Int) -> Bool {
     (c >= 9 && c <= 13)
         || c == 32

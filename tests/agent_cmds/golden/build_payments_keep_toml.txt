@@ -1,4 +1,4 @@
-examples/payments/payments.kek -> OUT (35361 bytes of wasm)
+examples/payments/payments.kek -> OUT (N bytes of wasm)
 --- exit 0
 --- files: kekkai_meta.js kekkai_runtime.js module.wasm worker.js wrangler.toml
 --- worker.js

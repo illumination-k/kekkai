@@ -55,8 +55,8 @@ fn irjson_ints(xs: Vec<Int>) -> IrjVal {
     IrjVal::Arr(out)
 }
 
-// irjson_quote renders a string like encoding/json; html selects the
-// HTML-safe escaping of <, > and & (json.Marshal, Encoder by default).
+// irjson_quote renders a JSON string; html selects the HTML-safe escaping
+// of <, > and & as \u003c, \u003e and \u0026.
 fn irjson_quote(s: String, html: Bool) -> String {
     if html {
         return json_quote(s);
@@ -194,8 +194,8 @@ fn irjson_typedef(td: IrTypeDef) -> IrjVal {
         irjson_set(o, "fields", irjson_tys(td.fields));
     }
     if td.variants.len() > 0 {
-        // A variant without fields is a nil slice (null) for enums, and an
-        // empty one ([]) for Option's None.
+        // A variant without fields is null for enums, and an empty list
+        // ([]) for Option's None.
         let option = td.name.starts_with("Option<");
         let vs = Vec::new();
         for v in td.variants {
@@ -257,7 +257,7 @@ fn irjson_func(f: IrFunc) -> IrjVal {
     let o = irjson_obj();
     irjson_set(o, "name", IrjVal::Str(f.name));
     irjson_set(o, "nparams", irjson_int(f.nparams));
-    // nil slices (no locals, no instructions) are null
+    // empty lists (no locals, no instructions) are null
     if f.locals.len() == 0 {
         irjson_set(o, "locals", IrjVal::Null);
         irjson_set(o, "names", IrjVal::Null);

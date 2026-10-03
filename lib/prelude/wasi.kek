@@ -67,7 +67,7 @@ fn __mem_len(a: Int) -> Int {
 }
 
 // __mem_string decodes n bytes of UTF-8 at address a (a byte order mark
-// is kept, like Node's readFile).
+// is kept).
 fn __mem_string(a: Int, n: Int) -> String {
     let d = __utf8_dec_new(n);
     let mut i = 0;

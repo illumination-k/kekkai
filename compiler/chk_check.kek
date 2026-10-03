@@ -553,7 +553,7 @@ fn chk_test_sig(c: Chk, fun: ChkFunc) {
 }
 
 // chk_type_args resolves the type arguments of a named type, reporting an
-// arity mismatch (the `args` closure in Go).
+// arity mismatch.
 fn chk_type_args(c: Chk, te: AstNamedType, n: Int) -> Vec<Ty> {
     if te.args.len() != n {
         chk_errorf(
@@ -1850,7 +1850,7 @@ fn chk_compute_async(c: Chk) {
         }
     }
     for fun in c.info.func_list {
-        // Entry points are driven by the JS event loop.
+        // Entry points are state machines driven by the host.
         fun.async = fun.handler || fun.main;
         for op in fun.effects.keys() {
             if async_ops.contains(op) {

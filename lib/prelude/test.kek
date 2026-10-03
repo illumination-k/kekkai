@@ -137,11 +137,7 @@ fn __json_hex(c: Int) -> Int {
         c - 48
     } else if c >= 97 && c <= 102 {
         c - 87
-    } else if c >= 65 && c <= 70 {
-        c - 55
-    } else {
-        -1
-    }
+    } else if c >= 65 && c <= 70 { c - 55 } else { -1 }
 }
 
 // __json_string reads a string literal (the opening quote is current).
@@ -237,7 +233,11 @@ fn __json_error_obj(p: __Json) -> Option<String> {
         }
         p.i = p.i + 1;
         __json_ws(p);
-        let v = if __json_peek(p) == 34 { __json_string(p)? } else { __json_scalar(p)? };
+        let v = if __json_peek(p) == 34 {
+            __json_string(p)?
+        } else {
+            __json_scalar(p)?
+        };
         if k == "error" {
             msg = v;
         }
@@ -260,7 +260,11 @@ fn __json_error_obj(p: __Json) -> Option<String> {
 fn __json_object(p: __Json, rt: __Rt, file: String, db: Bool) -> Bool {
     __json_ws(p);
     if __json_peek(p) != 123 {
-        return __json_fail(p, if db { "expected a JSON object of strings" } else { "expected a JSON object" });
+        return __json_fail(p, if db {
+            "expected a JSON object of strings"
+        } else {
+            "expected a JSON object"
+        });
     }
     p.i = p.i + 1;
     __json_ws(p);

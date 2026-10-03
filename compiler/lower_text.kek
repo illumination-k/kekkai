@@ -1,4 +1,4 @@
-// Text form of IR programs (ir.Program.String, printed by `kek ir`).
+// Text form of IR programs (printed by `kek ir`).
 
 fn lower_hex(v: Int, digits: Int) -> String {
     let parts = Vec::new();

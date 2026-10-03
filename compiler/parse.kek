@@ -1,8 +1,8 @@
 // Parser.
 //
-// The Go parser bails out on the first syntax error with a panic. Here a
-// failure sets `failed`; from then on the parser sees only EOF (so every
-// loop terminates quickly) and further errors are suppressed.
+// The parser stops at the first syntax error: a failure sets `failed`;
+// from then on the parser sees only EOF (so every loop terminates
+// quickly) and further errors are suppressed.
 
 struct AstIds {
     next: Int,
@@ -86,7 +86,7 @@ fn parse_describe(t: Tok) -> String {
     lex_kind_name(t.kind)
 }
 
-// parse_file parses one source file (ParseFile in Go): lexer errors plus at
+// parse_file parses one source file: lexer errors plus at
 // most one syntax error, sorted by position.
 fn parse_file(name: String, src: String, ids: AstIds) -> ParseResult {
     let lr = lex_file(name, src);
@@ -557,12 +557,17 @@ fn parse_postfix(p: ParseState, x0: AstExpr) -> AstExpr {
 
 fn parse_is_upper(s: String) -> Bool {
     // runtime prelude types are spelled `__Name`
-    let t = if s.starts_with("__") { s.slice(2, s.len()) } else { s };
+    let t = if s.starts_with("__") {
+        s.slice(2, s.len())
+    } else {
+        s
+    };
     let c = t.char_at(0).unwrap_or(0);
     c >= 65 && c <= 90
 }
 
-// parse_int_text is strconv.ParseInt(s, 10, 64) for a string of digits.
+// parse_int_text parses a string of decimal digits as an Int (None when
+// out of range).
 fn parse_int_text(s: String) -> Option<Int> {
     let n = s.len();
     if n == 0 {

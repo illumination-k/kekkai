@@ -181,7 +181,7 @@ fn json_string(p: JsonParser) -> String {
                 }
                 p.pos = p.pos + 4;
                 // surrogate halves are kept as UTF-16 code units, so pairs
-                // recombine naturally in the JS string
+                // recombine naturally in the string
                 parts.push(String::from_char(u));
             } else {
                 json_fail(p, "bad escape");
@@ -265,7 +265,7 @@ fn json_object(p: JsonParser) -> JsonVal {
     JsonVal::Obj(keys, tbl)
 }
 
-// ---- accessors (missing fields read as zero values, like Go omitempty) ----
+// ---- accessors (missing fields read as zero values) ----
 
 fn json_field(v: JsonVal, key: String) -> JsonVal {
     match v {
@@ -367,8 +367,8 @@ fn json_quote(s: String) -> String {
                 + json_hex_digit(c.shr(4).bit_and(15))
                 + json_hex_digit(c.bit_and(15));
         } else if c >= 55296 && c <= 57343 {
-            // surrogates: a valid pair passes through, a lone half is invalid
-            // UTF-8 in Go and becomes U+FFFD
+            // surrogates: a valid pair passes through, a lone half becomes
+            // U+FFFD
             let d = s.char_at(i + 1).unwrap_or(0);
             if c <= 56319 && d >= 56320 && d <= 57343 {
                 i = i + 1;

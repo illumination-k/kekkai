@@ -305,7 +305,8 @@ fn diag_flag_usage(cmd: String) -> String {
     "Usage of ir:\n  -json\n    \temit JSON (input format of the Lean reference interpreter)"
 }
 
-// diag_parse_bool is strconv.ParseBool.
+// diag_parse_bool parses a flag value: 1 t T TRUE true True, 0 f F
+// FALSE false False.
 fn diag_parse_bool(s: String) -> Option<Bool> {
     if s == "1" || s == "t" || s == "T" || s == "true" || s == "TRUE" || s == "True" {
         return Some(true);
@@ -429,8 +430,7 @@ fn diag_json_requested(args: Vec<String>) -> Bool {
     a.starts_with("-") && a != "-"
 }
 
-// diag_read_file reads a single source file (os.ReadFile: a directory is
-// an error).
+// diag_read_file reads a single source file (a directory is an error).
 fn diag_read_file(path: String, fs: &Fs, log: &Log) -> Option<String> {
     match fs.list(path) {
         Ok(_) => {

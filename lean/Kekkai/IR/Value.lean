@@ -4,7 +4,7 @@ import Kekkai.IR.Syntax
 # Runtime values and the heap
 
 Structs, `Vec`s and `Map`s are mutable objects with reference semantics
-(wasm GC structs/arrays and JS `Map`s), so they live in a heap and values
+(wasm GC structs and arrays), so they live in a heap and values
 refer to them by address. Variants are immutable in wasm, so they are
 represented directly (their fields may hold references).
 -/
@@ -30,7 +30,7 @@ inductive Val where
 inductive HeapObj where
   | struct (fields : Array Val)
   | vec (elems : Array Val)
-  /-- insertion-ordered like a JS `Map` -/
+  /-- insertion-ordered -/
   | map (entries : Array (Val × Val))
   deriving Repr, Inhabited
 

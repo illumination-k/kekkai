@@ -53,7 +53,7 @@ check smoke "$(ok 12)" parse '"+12"'
 check smoke "$(ok -1)" parse '"9223372036854775808"'
 check smoke "$(ok 5 '[["info","hi HeLLo"],["warn","hello"]]')" shout '"HeLLo"'
 
-# collections, mutable structs, aliasing (expected values checked against WasmGC on Node)
+# collections, mutable structs, aliasing (expected values checked against the WasmGC output)
 check coll "$(ok 426)" alias 3
 check coll "$(ok 15751)" vecs 30
 check coll "$(ok -10)" vecs 0

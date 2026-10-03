@@ -1,4 +1,4 @@
-testdata/e2e/bank.kek -> OUT (19644 bytes of wasm)
+testdata/e2e/bank.kek -> OUT (N bytes of wasm)
 --- exit 0
 --- files: kekkai_meta.js kekkai_runtime.js module.wasm worker.js wrangler.toml
 --- worker.js

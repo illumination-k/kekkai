@@ -331,14 +331,22 @@ fn __string_to_lower(s: String) -> String {
 
 fn __string_char_at(s: String, i: Int) -> Option<Int> {
     let x = __Chars::of(s);
-    if i >= 0 && i < x.len() { Some(x.get(i)) } else { None }
+    if i >= 0 && i < x.len() {
+        Some(x.get(i))
+    } else {
+        None
+    }
 }
 
 // Indices are clamped to [0, len].
 fn __string_slice(s: String, a: Int, b: Int) -> String {
     let n = __Chars::of(s).len();
-    let lo = if a < 0 { 0 } else if a > n { n } else { a };
-    let hi = if b < 0 { 0 } else if b > n { n } else { b };
+    let lo = if a < 0 {
+        0
+    } else if a > n { n } else { a };
+    let hi = if b < 0 {
+        0
+    } else if b > n { n } else { b };
     if hi <= lo {
         return "";
     }
@@ -421,11 +429,7 @@ fn __utf8_len(cp: Int) -> Int {
         1
     } else if cp < 2048 {
         2
-    } else if cp < 65536 {
-        3
-    } else {
-        4
-    }
+    } else if cp < 65536 { 3 } else { 4 }
 }
 
 fn __string_to_bytes(s: String) -> Vec<Int> {

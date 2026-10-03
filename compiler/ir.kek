@@ -4,9 +4,9 @@
 // IrProgram.types, functions by name, blocks by index in IrFunc.blocks and
 // locals by index in IrFunc.locals (params first).
 //
-// Optional Go fields (`*Ty`, `*Const`) are always present here; their
-// meaning is decided by the owner (`coll` for elem/key, op == "const" for
-// cst), and `ir_ty_none()` is used as the placeholder.
+// Optional fields are always present; their meaning is decided by the
+// owner (`coll` for elem/key, op == "const" for cst), and `ir_ty_none()`
+// is used as the placeholder.
 
 // IrTy is a representation type. kind: unit bool int string ext agg.
 struct IrTy {

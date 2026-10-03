@@ -30,6 +30,7 @@ stage0 = Go 実装の `kek`（`cmd/kek`, `internal/*`）。stage1 = Kekkai で�
 | `check <file>` | 型検査 | `kek check` の診断 |
 | `ir <file>` | lowering | `kek ir <file>` のテキスト |
 | `build <file> <outdir>` | 全体 | `kek build` |
+| `fmt [-w\|-check] <paths>` | フォーマッタ（`fmt_*`、`go test ./internal/selfhost -run TestFmt`、`node --test 'tests/*.test.mjs'`） | `kek fmt`（`internal/format`） |
 
 ## Go の撤去（self-hosting 達成後のゴール）
 

@@ -1,0 +1,1288 @@
+// Formatter: a port of internal/format/format.go (`kek fmt`), the
+// canonical layout of Kekkai source (4-space indentation, rustfmt-like).
+//
+// The printer works from the AST. Comments are not part of the AST: they
+// are collected separately by the lexer (lex_file_comments) and re-attached
+// by position:
+//
+//   - every "unit" (top-level item, struct field, enum variant, statement,
+//     match arm) owns the comments that precede it on their own lines
+//     (leading), and those after its last token on the same line
+//     (trailing);
+//   - comments inside a unit that no nested unit claims (e.g. between call
+//     arguments) are hoisted above the unit, so no comment is ever lost;
+//   - comments after the last unit of a block stay before its `}`.
+//
+// Like the Go implementation, widths count UTF-8 bytes and positions are
+// (line, byte column); source slices use UTF-16 offsets (fmt_offset).
+
+struct FmtPrinter {
+    src: String,
+    // the source is ASCII: UTF-16 lengths are byte lengths
+    ascii: Bool,
+    // UTF-16 offset of the start of each line
+    line_start: Vec<Int>,
+    toks: Vec<Tok>,
+    tok_at: Map<Int, Int>,
+    comments: Vec<TokComment>,
+    used: Vec<Bool>,
+    // > 0 while trying to print a binary expression on one line
+    flat: Int,
+}
+
+struct FmtResult {
+    out: String,
+    errs: Vec<AstError>,
+}
+
+// FmtUnit is a line-level element of a container: an item, field, variant,
+// statement, block tail or match arm.
+enum FmtUnitKind {
+    Struct(AstStructDecl),
+    Enum(AstEnumDecl),
+    Func(AstFuncDecl),
+    Field(AstField),
+    Variant(AstVariant),
+    Stmt(AstStmt),
+    Tail(AstExpr),
+    Arm(AstMatchArm),
+}
+
+struct FmtUnit {
+    start: AstPos,
+    kind: FmtUnitKind,
+}
+
+// FmtList is the element source of fmt_list.
+enum FmtList {
+    Args(Vec<AstExpr>),
+    Fields(AstStructLit),
+}
+
+// FmtBuf accumulates the lines of a container.
+struct FmtBuf {
+    parts: Vec<String>,
+    first: Bool,
+    ind: String,
+}
+
+fn fmt_max_width() -> Int {
+    100
+}
+
+// fmt_max_single_line_if is the widest `if c { a } else { b }` kept on one
+// line.
+fn fmt_max_single_line_if() -> Int {
+    50
+}
+
+// fmt_source formats a complete .kek file. It fails (errs) if the file does
+// not parse.
+fn fmt_source(src: String) -> FmtResult {
+    let pr = parse_file("", src, AstIds { next: 0 });
+    if pr.errs.len() > 0 {
+        return FmtResult { out: "", errs: pr.errs };
+    }
+    let lr = lex_file_comments("", src);
+    let line_start = Vec::new();
+    line_start.push(0);
+    let mut ascii = true;
+    let n = src.len();
+    for i in 0..n {
+        let c = src.char_at(i).unwrap_or(0);
+        if c == 10 {
+            line_start.push(i + 1);
+        } else if c >= 128 {
+            ascii = false;
+        }
+    }
+    let used = Vec::new();
+    for c in lr.comments {
+        used.push(false);
+    }
+    let p = FmtPrinter {
+        src: src,
+        ascii: ascii,
+        line_start: line_start,
+        toks: lr.toks,
+        tok_at: Map::new(),
+        comments: lr.comments,
+        used: used,
+        flat: 0,
+    };
+    let mut i = 0;
+    for t in p.toks {
+        p.tok_at.insert(fmt_pos_key(t.pos), i);
+        i = i + 1;
+    }
+    FmtResult { out: fmt_file(p, pr.file), errs: Vec::new() }
+}
+
+// ---- strings ----
+
+// fmt_w is the length of s in UTF-8 bytes (Go's len).
+fn fmt_w(p: FmtPrinter, s: String) -> Int {
+    if p.ascii {
+        return s.len();
+    }
+    let n = s.len();
+    let mut w = 0;
+    let mut i = 0;
+    while i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        if c < 128 {
+            w = w + 1;
+        } else if c < 2048 {
+            w = w + 2;
+        } else if c >= 55296 && c < 56320 && i + 1 < n {
+            // surrogate pair: one 4-byte sequence
+            w = w + 4;
+            i = i + 1;
+        } else {
+            w = w + 3;
+        }
+        i = i + 1;
+    }
+    w
+}
+
+fn fmt_indent(n: Int) -> String {
+    let mut s = "";
+    for i in 0..n {
+        s = s + "    ";
+    }
+    s
+}
+
+// fmt_last_line_len is the width of the last line of s, or -1 if s is a
+// single line.
+fn fmt_last_line_len(p: FmtPrinter, s: String) -> Int {
+    let mut i = s.len() - 1;
+    while i >= 0 {
+        if s.char_at(i).unwrap_or(0) == 10 {
+            return fmt_w(p, s.slice(i + 1, s.len()));
+        }
+        i = i - 1;
+    }
+    -1
+}
+
+// fmt_advance returns the column after printing s starting at col.
+fn fmt_advance(p: FmtPrinter, col: Int, s: String) -> Int {
+    let n = fmt_last_line_len(p, s);
+    if n >= 0 {
+        return n;
+    }
+    col + fmt_w(p, s)
+}
+
+// fmt_is_space is unicode.IsSpace.
+fn fmt_is_space(c: Int) -> Bool {
+    (c >= 9 && c <= 13)
+        || c == 32
+        || c == 133
+        || c == 160
+        || c == 5760
+        || (c >= 8192 && c <= 8202)
+        || c == 8232
+        || c == 8233
+        || c == 8239
+        || c == 8287
+        || c == 12288
+}
+
+// ---- positions and comments ----
+
+fn fmt_before(a: AstPos, b: AstPos) -> Bool {
+    a.line < b.line || (a.line == b.line && a.col < b.col)
+}
+
+fn fmt_pos_key(pos: AstPos) -> Int {
+    pos.line * 1048576 + pos.col
+}
+
+fn fmt_tok(p: FmtPrinter, i: Int) -> Tok {
+    match p.toks.get(i) {
+        Some(t) => t,
+        None => Tok { kind: "EOF", text: "", pos: AstPos { file: "", line: 0, col: 0 } },
+    }
+}
+
+fn fmt_line_start(p: FmtPrinter, i: Int) -> Int {
+    p.line_start.get(i).unwrap_or(0)
+}
+
+// fmt_offset is the UTF-16 offset of a (line, byte column) position.
+fn fmt_offset(p: FmtPrinter, pos: AstPos) -> Int {
+    if pos.line < 1 || pos.line > p.line_start.len() {
+        return p.src.len();
+    }
+    let base = fmt_line_start(p, pos.line - 1);
+    if p.ascii {
+        return base + pos.col - 1;
+    }
+    let n = p.src.len();
+    let mut bytes = pos.col - 1;
+    let mut i = base;
+    while bytes > 0 && i < n {
+        let c = p.src.char_at(i).unwrap_or(0);
+        if c < 128 {
+            bytes = bytes - 1;
+        } else if c < 2048 {
+            bytes = bytes - 2;
+        } else if c >= 55296 && c < 56320 {
+            bytes = bytes - 4;
+            i = i + 1;
+        } else {
+            bytes = bytes - 3;
+        }
+        i = i + 1;
+    }
+    i
+}
+
+// fmt_blank_before reports whether the source line before `line` is blank.
+fn fmt_blank_before(p: FmtPrinter, line: Int) -> Bool {
+    if line < 2 || line > p.line_start.len() {
+        return false;
+    }
+    let start = fmt_line_start(p, line - 2);
+    let end = fmt_line_start(p, line - 1);
+    for i in start..end {
+        if !fmt_is_space(p.src.char_at(i).unwrap_or(0)) {
+            return false;
+        }
+    }
+    true
+}
+
+// fmt_tok_index returns the index of the token starting at pos. Opening
+// parentheses directly before it are included, so that a unit starting
+// with a parenthesized expression owns its `(`.
+fn fmt_tok_index(p: FmtPrinter, pos: AstPos) -> Int {
+    let mut i = match p.tok_at.get(fmt_pos_key(pos)) {
+        Some(i) => i,
+        None => {
+            // Should not happen for positions produced by the parser; fall
+            // back to the first token at or after pos.
+            let mut j = 0;
+            while j < p.toks.len() - 1 && fmt_before(fmt_tok(p, j).pos, pos) {
+                j = j + 1;
+            }
+            j
+        }
+    };
+    while i > 0 && fmt_tok(p, i - 1).kind == "(" {
+        i = i - 1;
+    }
+    i
+}
+
+fn fmt_save(p: FmtPrinter) -> Vec<Bool> {
+    let s = Vec::new();
+    for u in p.used {
+        s.push(u);
+    }
+    s
+}
+
+fn fmt_restore(p: FmtPrinter, s: Vec<Bool>) {
+    let mut i = 0;
+    for u in s {
+        p.used.set(i, u);
+        i = i + 1;
+    }
+}
+
+// fmt_take marks and returns the unused comments strictly after lo (if
+// has_lo), strictly before hi (if has_hi) and on `line` (if line > 0).
+fn fmt_take(
+    p: FmtPrinter,
+    has_lo: Bool,
+    lo: AstPos,
+    has_hi: Bool,
+    hi: AstPos,
+    line: Int,
+) -> Vec<TokComment> {
+    let out = Vec::new();
+    let mut i = 0;
+    for c in p.comments {
+        if !p.used.get(i).unwrap_or(true)
+            && (!has_lo || fmt_before(lo, c.pos))
+            && (!has_hi || fmt_before(c.pos, hi))
+            && (line == 0 || c.pos.line == line) {
+            p.used.set(i, true);
+            out.push(c);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// fmt_has_comments reports whether an unused comment lies in [from, to).
+fn fmt_has_comments(p: FmtPrinter, from: AstPos, to: AstPos) -> Bool {
+    let mut i = 0;
+    for c in p.comments {
+        if !p.used.get(i).unwrap_or(true) && !fmt_before(c.pos, from) && fmt_before(c.pos, to) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// ---- containers ----
+
+fn fmt_piece(b: FmtBuf, text: String, blank: Bool) {
+    if blank && !b.first {
+        b.parts.push("\n");
+    }
+    b.first = false;
+    b.parts.push(b.ind);
+    b.parts.push(text);
+    b.parts.push("\n");
+}
+
+fn fmt_own_line(p: FmtPrinter, b: FmtBuf, cs: Vec<TokComment>, force_blank: Bool) {
+    let mut i = 0;
+    for c in cs {
+        fmt_piece(b, c.text, (i == 0 && force_blank) || fmt_blank_before(p, c.pos.line));
+        i = i + 1;
+    }
+}
+
+fn fmt_unit_at(units: Vec<FmtUnit>, i: Int) -> FmtUnit {
+    match units.get(i) {
+        Some(u) => u,
+        None => FmtUnit {
+            start: AstPos { file: "", line: 0, col: 0 },
+            kind: FmtUnitKind::Stmt(
+                AstStmt::Break(AstBreakStmt { id: 0, pos: AstPos { file: "", line: 0, col: 0 } }),
+            ),
+        },
+    }
+}
+
+// fmt_container lays out units one per line. For a braced container, open
+// and close are the token indices of `{` and `}` and the units are indented
+// one level deeper than ind; the top level uses open = -1.
+fn fmt_container(p: FmtPrinter, open: Int, close: Int, units: Vec<FmtUnit>, ind: Int) -> String {
+    let top = open < 0;
+    let content_ind = if top { 0 } else { ind + 1 };
+    let close_pos = fmt_tok(p, close).pos;
+    let mut first_start = close_pos;
+    if units.len() > 0 {
+        first_start = fmt_unit_at(units, 0).start;
+    }
+    let open_pos = if top { close_pos } else { fmt_tok(p, open).pos };
+    let b = FmtBuf { parts: Vec::new(), first: true, ind: fmt_indent(content_ind) };
+    let mut head = "";
+    if !top {
+        head = "{";
+        for c in fmt_take(p, true, open_pos, true, first_start, open_pos.line) {
+            head = head + " " + c.text;
+        }
+    }
+    let n = units.len();
+    for i in 0..n {
+        let u = fmt_unit_at(units, i);
+        let lead = fmt_take(p, !top, open_pos, true, u.start, 0);
+        fmt_own_line(p, b, lead, top && i > 0);
+        let mut blank = fmt_blank_before(p, u.start.line) || (top && i > 0 && lead.len() == 0);
+
+        let mut text = fmt_render(p, u, content_ind);
+
+        let mut next_start = close_pos;
+        let mut next_idx = close;
+        if i + 1 < n {
+            next_start = fmt_unit_at(units, i + 1).start;
+            next_idx = fmt_tok_index(p, next_start);
+        }
+        let mut end_idx = next_idx - 1;
+        if end_idx < 0 {
+            end_idx = 0;
+        }
+        let end = fmt_tok(p, end_idx).pos;
+        let mut j = 0;
+        for c in fmt_take(p, true, u.start, true, end, 0) {
+            fmt_piece(b, c.text, j == 0 && blank);
+            blank = false;
+            j = j + 1;
+        }
+        for c in fmt_take(p, true, end, true, next_start, end.line) {
+            text = text + " " + c.text;
+        }
+        fmt_piece(b, text, blank);
+    }
+    let rest = if top {
+        fmt_take(p, false, close_pos, false, close_pos, 0)
+    } else {
+        fmt_take(p, true, open_pos, true, close_pos, 0)
+    };
+    fmt_own_line(p, b, rest, false);
+
+    if top {
+        return b.parts.join("");
+    }
+    if b.parts.len() == 0 {
+        if head == "{" {
+            return "{}";
+        }
+        return head + "\n" + fmt_indent(ind) + "}";
+    }
+    head + "\n" + b.parts.join("") + fmt_indent(ind) + "}"
+}
+
+fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
+    match u.kind {
+        FmtUnitKind::Struct(d) => fmt_struct_decl(p, d, ind),
+        FmtUnitKind::Enum(d) => fmt_enum_decl(p, d, ind),
+        FmtUnitKind::Func(d) => fmt_func_decl(p, d, ind),
+        FmtUnitKind::Field(f) => f.name + ": " + fmt_typ(f.ty) + ",",
+        FmtUnitKind::Variant(v) => {
+            let mut s = v.name;
+            if v.fields.len() > 0 {
+                let ts = Vec::new();
+                for t in v.fields {
+                    ts.push(fmt_typ(t));
+                }
+                s = s + "(" + ts.join(", ") + ")";
+            }
+            s + ","
+        }
+        FmtUnitKind::Stmt(s) => fmt_stmt(p, s, ind),
+        FmtUnitKind::Tail(e) => fmt_stmt_expr(p, e, ind),
+        FmtUnitKind::Arm(a) => {
+            let h = fmt_pat(p, a.pat) + " => ";
+            let body = fmt_expr(p, a.body, ind, ind * 4 + fmt_w(p, h), false);
+            match a.body {
+                AstExpr::Block(_) => h + body,
+                _ => h + body + ",",
+            }
+        }
+    }
+}
+
+// fmt_match_close returns the index of the bracket closing the one at open.
+fn fmt_match_close(p: FmtPrinter, open: Int) -> Int {
+    let mut depth = 0;
+    let n = p.toks.len();
+    for i in open..n {
+        let k = fmt_tok(p, i).kind;
+        if k == "{" || k == "(" || k == "[" {
+            depth = depth + 1;
+        } else if k == "}" || k == ")" || k == "]" {
+            depth = depth - 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+    }
+    n - 1
+}
+
+// fmt_next_brace returns the index of the first `{` at or after token i.
+fn fmt_next_brace(p: FmtPrinter, i: Int) -> Int {
+    let mut j = i;
+    while j < p.toks.len() - 1 {
+        if fmt_tok(p, j).kind == "{" {
+            return j;
+        }
+        j = j + 1;
+    }
+    j
+}
+
+// ---- items ----
+
+fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
+    let items = Vec::new();
+    for d in f.structs {
+        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Struct(d) });
+    }
+    for d in f.enums {
+        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Enum(d) });
+    }
+    for d in f.funcs {
+        let mut start = d.pos;
+        match d.attrs.get(0) {
+            Some(a) => {
+                start = a.pos;
+            }
+            None => {}
+        }
+        items.push(FmtUnit { start: start, kind: FmtUnitKind::Func(d) });
+    }
+    // restore source order
+    let n = items.len();
+    for i in 1..n {
+        let mut j = i;
+        while j > 0 && fmt_before(fmt_unit_at(items, j).start, fmt_unit_at(items, j - 1).start) {
+            let a = fmt_unit_at(items, j);
+            items.set(j, fmt_unit_at(items, j - 1));
+            items.set(j - 1, a);
+            j = j - 1;
+        }
+    }
+    fmt_container(p, -1, p.toks.len() - 1, items, 0)
+}
+
+fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
+    let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
+    let units = Vec::new();
+    for fd in d.fields {
+        units.push(FmtUnit { start: fd.pos, kind: FmtUnitKind::Field(fd) });
+    }
+    "struct " + d.name + " " + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+}
+
+fn fmt_enum_decl(p: FmtPrinter, d: AstEnumDecl, ind: Int) -> String {
+    let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
+    let units = Vec::new();
+    for v in d.variants {
+        units.push(FmtUnit { start: v.pos, kind: FmtUnitKind::Variant(v) });
+    }
+    "enum " + d.name + " " + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+}
+
+fn fmt_opt_typ(t: Option<AstType>) -> String {
+    match t {
+        Some(t) => fmt_typ(t),
+        None => "?",
+    }
+}
+
+fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
+    let mut s = "";
+    for a in d.attrs {
+        s = s + "#[" + a.name + "]\n" + fmt_indent(ind);
+    }
+    let params = Vec::new();
+    for prm in d.params {
+        params.push(prm.name + ": " + fmt_opt_typ(prm.ty));
+    }
+    let ret = match d.result {
+        Some(t) => " -> " + fmt_typ(t),
+        None => "",
+    };
+    let mut head = "fn " + d.name + "(" + params.join(", ") + ")" + ret;
+    if ind * 4 + fmt_w(p, head) + 2 > fmt_max_width() && params.len() > 0 {
+        head = "fn " + d.name + "(\n";
+        for ps in params {
+            head = head + fmt_indent(ind + 1) + ps + ",\n";
+        }
+        head = head + fmt_indent(ind) + ")" + ret;
+    }
+    s + head + " " + fmt_block(p, d.body, ind)
+}
+
+fn fmt_typ(t: AstType) -> String {
+    match t {
+        AstType::Unit(_) => "()",
+        AstType::Ref(r) => "&" + fmt_typ(r.elem),
+        AstType::Named(n) => {
+            if n.args.len() == 0 {
+                return n.name;
+            }
+            let as_ = Vec::new();
+            for a in n.args {
+                as_.push(fmt_typ(a));
+            }
+            n.name + "<" + as_.join(", ") + ">"
+        }
+    }
+}
+
+// ---- statements ----
+
+fn fmt_block(p: FmtPrinter, b: AstBlock, ind: Int) -> String {
+    let flat = p.flat;
+    p.flat = 0;
+    let units = Vec::new();
+    for s in b.stmts {
+        units.push(FmtUnit { start: fmt_stmt_pos(s), kind: FmtUnitKind::Stmt(s) });
+    }
+    match b.tail {
+        Some(t) => {
+            units.push(FmtUnit { start: fmt_start_pos(t), kind: FmtUnitKind::Tail(t) });
+        }
+        None => {}
+    }
+    let mut open = fmt_tok_index(p, b.pos);
+    // fmt_tok_index may have stepped back over `(`; the block starts at `{`.
+    while open < p.toks.len() && fmt_tok(p, open).kind != "{" {
+        open = open + 1;
+    }
+    let close = p.tok_at.get(fmt_pos_key(b.end)).unwrap_or(0);
+    let s = fmt_container(p, open, close, units, ind);
+    p.flat = flat;
+    s
+}
+
+fn fmt_stmt_pos(s: AstStmt) -> AstPos {
+    match s {
+        AstStmt::Let(x) => x.pos,
+        AstStmt::Assign(x) => x.pos,
+        AstStmt::FieldAssign(x) => x.pos,
+        AstStmt::Break(x) => x.pos,
+        AstStmt::Continue(x) => x.pos,
+        AstStmt::While(x) => x.pos,
+        AstStmt::For(x) => x.pos,
+        AstStmt::Return(x) => x.pos,
+        AstStmt::Expr(x) => x.pos,
+    }
+}
+
+fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
+    let col = ind * 4;
+    match s {
+        AstStmt::Let(x) => {
+            let mut h = "let ";
+            if x.mutable {
+                h = h + "mut ";
+            }
+            h = h + x.name;
+            match x.ty {
+                Some(t) => {
+                    h = h + ": " + fmt_typ(t);
+                }
+                None => {}
+            }
+            h = h + " = ";
+            h + fmt_expr(p, x.init, ind, col + fmt_w(p, h), false) + ";"
+        }
+        AstStmt::Assign(x) => {
+            let h = x.name + " = ";
+            h + fmt_expr(p, x.value, ind, col + fmt_w(p, h), false) + ";"
+        }
+        AstStmt::While(x) => "while "
+            + fmt_expr(p, x.cond, ind, col + 6, true)
+            + " "
+            + fmt_block(p, x.body, ind),
+        AstStmt::For(x) => {
+            let mut h = "for " + x.var + " in ";
+            h = h + fmt_expr(p, x.iter, ind, col + fmt_w(p, h), true);
+            match x.end {
+                Some(e) => {
+                    h = h + "..";
+                    h = h + fmt_expr(p, e, ind, fmt_advance(p, col, h), true);
+                }
+                None => {}
+            }
+            h + " " + fmt_block(p, x.body, ind)
+        }
+        AstStmt::FieldAssign(x) => {
+            let h = fmt_stmt_expr(p, AstExpr::Field(x.target), ind) + " = ";
+            h + fmt_expr(p, x.value, ind, fmt_advance(p, col, h), false) + ";"
+        }
+        AstStmt::Break(_) => "break;",
+        AstStmt::Continue(_) => "continue;",
+        AstStmt::Return(x) => match x.value {
+            Some(v) => "return " + fmt_expr(p, v, ind, col + 7, false) + ";",
+            None => "return;",
+        },
+        AstStmt::Expr(x) => {
+            let t = fmt_stmt_expr(p, x.x, ind);
+            if x.semi {
+                return t + ";";
+            }
+            t
+        }
+    }
+}
+
+// fmt_stmt_expr prints an expression in statement position, where a
+// leading `if`/`match`/block ends the statement unless followed by `.` or
+// `?`.
+fn fmt_stmt_expr(p: FmtPrinter, e: AstExpr, ind: Int) -> String {
+    let col = ind * 4;
+    if fmt_needs_stmt_parens(e) {
+        return "(" + fmt_expr(p, e, ind, col + 1, false) + ")";
+    }
+    fmt_expr(p, e, ind, col, false)
+}
+
+fn fmt_is_block_like(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::If(_) => true,
+        AstExpr::Match(_) => true,
+        AstExpr::Block(_) => true,
+        _ => false,
+    }
+}
+
+fn fmt_is_binary(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Binary(_) => true,
+        _ => false,
+    }
+}
+
+fn fmt_needs_stmt_parens(e: AstExpr) -> Bool {
+    let mut parent_bin = false;
+    let mut cur = e;
+    while true {
+        if fmt_is_block_like(cur) {
+            return parent_bin;
+        }
+        match fmt_left_child(cur) {
+            Some(next) => {
+                parent_bin = fmt_is_binary(cur);
+                cur = next;
+            }
+            None => {
+                return false;
+            }
+        }
+    }
+    false
+}
+
+// fmt_left_child returns the operand printed first (without parentheses).
+fn fmt_left_child(e: AstExpr) -> Option<AstExpr> {
+    match e {
+        AstExpr::Binary(b) => if fmt_left_paren(b.x, b.op) {
+            None
+        } else {
+            Some(b.x)
+        },
+        AstExpr::Method(m) => if fmt_prec(m.recv) < 7 {
+            None
+        } else {
+            Some(m.recv)
+        },
+        AstExpr::Field(f) => if fmt_prec(f.x) < 7 { None } else { Some(f.x) },
+        AstExpr::Try(t) => if fmt_prec(t.x) < 7 { None } else { Some(t.x) },
+        AstExpr::Call(c) => Some(c.func),
+        _ => None,
+    }
+}
+
+// fmt_start_pos returns the position of the first token of an expression.
+fn fmt_start_pos(e: AstExpr) -> AstPos {
+    let mut cur = e;
+    while true {
+        match cur {
+            AstExpr::Binary(x) => {
+                cur = x.x;
+            }
+            AstExpr::Method(x) => {
+                cur = x.recv;
+            }
+            AstExpr::Field(x) => {
+                cur = x.x;
+            }
+            AstExpr::Try(x) => {
+                cur = x.x;
+            }
+            AstExpr::Call(x) => {
+                cur = x.func;
+            }
+            _ => {
+                return ast_expr_pos(cur);
+            }
+        }
+    }
+    ast_expr_pos(cur)
+}
+
+// ---- expressions ----
+
+// precedences: closure 0, binary 1..5, unary 6, postfix 7, primary 8
+fn fmt_precedence(op: String) -> Int {
+    if op == "||" {
+        return 1;
+    }
+    if op == "&&" {
+        return 2;
+    }
+    if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+        return 3;
+    }
+    if op == "+" || op == "-" {
+        return 4;
+    }
+    if op == "*" || op == "/" || op == "%" {
+        return 5;
+    }
+    0
+}
+
+fn fmt_prec(e: AstExpr) -> Int {
+    match e {
+        AstExpr::Closure(_) => 0,
+        AstExpr::Binary(b) => fmt_precedence(b.op),
+        AstExpr::Unary(_) => 6,
+        AstExpr::Call(_) => 7,
+        AstExpr::Method(_) => 7,
+        AstExpr::Field(_) => 7,
+        AstExpr::Try(_) => 7,
+        _ => 8,
+    }
+}
+
+// fmt_sub prints an operand, parenthesized when paren is set.
+fn fmt_sub(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool, paren: Bool) -> String {
+    if paren {
+        return "(" + fmt_expr(p, e, ind, col + 1, false) + ")";
+    }
+    fmt_expr(p, e, ind, col, ns)
+}
+
+// fmt_expr prints e starting at column col; continuation lines carry their
+// own indentation. ns is set where struct literals are not allowed (the
+// heads of `if`, `while` and `match`).
+fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
+    match e {
+        AstExpr::IntLit(x) => fmt_int_text(p, x.pos),
+        AstExpr::StrLit(x) => fmt_str_text(p, x.pos),
+        AstExpr::BoolLit(x) => if x.value { "true" } else { "false" },
+        AstExpr::UnitLit(_) => "()",
+        AstExpr::Ident(x) => x.name,
+        AstExpr::Path(x) => x.ty + "::" + x.name,
+        AstExpr::Binary(x) => fmt_binary(p, x, ind, col, ns),
+        AstExpr::Unary(x) => x.op + fmt_sub(p, x.x, ind, col + 1, ns, fmt_prec(x.x) < 6),
+        AstExpr::Call(x) => {
+            let f = fmt_sub(p, x.func, ind, col, ns, fmt_prec(x.func) < 7);
+            f + fmt_args(p, x.args, ind, fmt_advance(p, col, f))
+        }
+        AstExpr::Method(x) => {
+            let r = fmt_sub(p, x.recv, ind, col, ns, fmt_prec(x.recv) < 7);
+            let h = r + "." + x.name;
+            h + fmt_args(p, x.args, ind, fmt_advance(p, col, h))
+        }
+        AstExpr::Field(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "." + x.name,
+        AstExpr::Try(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "?",
+        AstExpr::StructLit(x) => {
+            if ns {
+                return "(" + fmt_struct_lit(p, x, ind, col + 1) + ")";
+            }
+            fmt_struct_lit(p, x, ind, col)
+        }
+        AstExpr::If(x) => fmt_if(p, x, ind, col),
+        AstExpr::Match(x) => fmt_match(p, x, ind, col),
+        AstExpr::Block(x) => fmt_block(p, x, ind),
+        AstExpr::Closure(x) => {
+            let mut h = "||";
+            if x.params.len() > 0 {
+                let ps = Vec::new();
+                for prm in x.params {
+                    match prm.ty {
+                        Some(t) => ps.push(prm.name + ": " + fmt_typ(t)),
+                        None => ps.push(prm.name),
+                    }
+                }
+                h = "|" + ps.join(", ") + "|";
+            }
+            h = h + " ";
+            h + fmt_expr(p, x.body, ind, col + fmt_w(p, h), ns)
+        }
+    }
+}
+
+fn fmt_binary(p: FmtPrinter, e: AstBinary, ind: Int, col: Int, ns: Bool) -> String {
+    let pr = fmt_precedence(e.op);
+    let saved = fmt_save(p);
+    // Operators are laid out by the outermost binary expression: nested
+    // ones stay flat while it tries a single line.
+    p.flat = p.flat + 1;
+    let l = fmt_sub(p, e.x, ind, col, ns, fmt_left_paren(e.x, e.op));
+    let op = " " + e.op + " ";
+    let r = fmt_sub(p, e.y, ind, fmt_advance(p, col, l) + op.len(), ns, fmt_right_paren(e.y, e.op));
+    p.flat = p.flat - 1;
+    let s = l + op + r;
+    if p.flat > 0 || s.contains("\n") || col + fmt_w(p, s) <= fmt_max_width() {
+        return s;
+    }
+    // Too long: break before each operator of this precedence chain.
+    fmt_restore(p, saved);
+    let operands = Vec::new();
+    let ops = Vec::new();
+    let mut x = AstExpr::Binary(e);
+    while true {
+        match x {
+            AstExpr::Binary(b) => {
+                if fmt_precedence(b.op) != pr || (b.id != e.id && pr == 3) {
+                    break;
+                }
+                operands.push(b.y);
+                ops.push(b.op);
+                x = b.x;
+            }
+            _ => {
+                break;
+            }
+        }
+    }
+    let mut out = fmt_sub(p, x, ind, col, ns, fmt_left_paren(x, e.op));
+    let ccol = (ind + 1) * 4;
+    let mut i = ops.len() - 1;
+    while i >= 0 {
+        let o = ops.get(i).unwrap_or("");
+        match operands.get(i) {
+            Some(y) => {
+                let h = o + " ";
+                out = out
+                    + "\n"
+                    + fmt_indent(ind + 1)
+                    + h
+                    + fmt_sub(p, y, ind + 1, ccol + h.len(), ns, fmt_right_paren(y, o));
+            }
+            None => {}
+        }
+        i = i - 1;
+    }
+    out
+}
+
+// fmt_overflows reports whether e may start on the line of a call and
+// continue below it (a trailing closure or block-like argument).
+fn fmt_overflows(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Closure(_) => true,
+        AstExpr::Block(_) => true,
+        AstExpr::If(_) => true,
+        AstExpr::Match(_) => true,
+        AstExpr::StructLit(_) => true,
+        _ => false,
+    }
+}
+
+fn fmt_elem(p: FmtPrinter, l: FmtList, i: Int, ind: Int, col: Int) -> String {
+    match l {
+        FmtList::Args(args) => match args.get(i) {
+            Some(a) => fmt_expr(p, a, ind, col, false),
+            None => "",
+        },
+        FmtList::Fields(e) => match e.fields.get(i) {
+            Some(f) => {
+                match f.value {
+                    AstExpr::Ident(id) => {
+                        if id.name == f.name && id.pos.line == f.pos.line && id.pos.col == f.pos.col {
+                            return f.name; // shorthand `Point { x, y }`
+                        }
+                    }
+                    _ => {}
+                }
+                f.name + ": " + fmt_expr(p, f.value, ind, col + f.name.len() + 2, false)
+            }
+            None => "",
+        },
+    }
+}
+
+// fmt_list prints a delimited, comma-separated list: on one line when it
+// fits, with the last element overflowing when only it spans lines, and
+// one element per line (with a trailing comma) otherwise. pad is put
+// inside the delimiters on one line (`{ a }` vs `(a)`).
+fn fmt_list(
+    p: FmtPrinter,
+    open: String,
+    close: String,
+    pad: String,
+    n: Int,
+    l: FmtList,
+    last: Option<AstExpr>,
+    ind: Int,
+    col: Int,
+) -> String {
+    if n == 0 {
+        return open + close;
+    }
+    let saved = fmt_save(p);
+    let parts = Vec::new();
+    parts.push(open + pad);
+    let mut c = col + open.len() + pad.len();
+    let mut multi = -1;
+    for i in 0..n {
+        if i > 0 {
+            parts.push(", ");
+            c = c + 2;
+        }
+        let s = fmt_elem(p, l, i, ind, c);
+        if multi < 0 && s.contains("\n") {
+            multi = i;
+        }
+        parts.push(s);
+        c = fmt_advance(p, c, s);
+    }
+    parts.push(pad + close);
+    let inline = parts.join("");
+    let first_line = match inline.index_of("\n") {
+        Some(k) => inline.slice(0, k),
+        None => inline,
+    };
+    let fits = col + fmt_w(p, first_line) <= fmt_max_width();
+    // Inside a binary expression being tried on one line, stay flat: the
+    // outermost operator chain decides where to break.
+    if multi < 0 && (fits || p.flat > 0) {
+        return inline;
+    }
+    if multi == n - 1 && fits {
+        match last {
+            Some(le) => {
+                if fmt_overflows(le) {
+                    return inline;
+                }
+            }
+            None => {}
+        }
+    }
+    fmt_restore(p, saved);
+    let flat = p.flat;
+    p.flat = 0;
+    let out = Vec::new();
+    out.push(open + "\n");
+    for i in 0..n {
+        out.push(fmt_indent(ind + 1));
+        out.push(fmt_elem(p, l, i, ind + 1, (ind + 1) * 4));
+        out.push(",\n");
+    }
+    out.push(fmt_indent(ind) + close);
+    p.flat = flat;
+    out.join("")
+}
+
+fn fmt_args(p: FmtPrinter, args: Vec<AstExpr>, ind: Int, col: Int) -> String {
+    let last = args.get(args.len() - 1);
+    fmt_list(p, "(", ")", "", args.len(), FmtList::Args(args), last, ind, col)
+}
+
+fn fmt_struct_lit(p: FmtPrinter, e: AstStructLit, ind: Int, col: Int) -> String {
+    let h = e.name + " ";
+    let n = e.fields.len();
+    if n == 0 {
+        return h + "{}";
+    }
+    let last = match e.fields.get(n - 1) {
+        Some(f) => Some(f.value),
+        None => None,
+    };
+    h + fmt_list(p, "{", "}", " ", n, FmtList::Fields(e), last, ind, col + h.len())
+}
+
+fn fmt_if(p: FmtPrinter, e: AstIf, ind: Int, col: Int) -> String {
+    match fmt_single_line_if(p, e, ind, col) {
+        Some(s) => {
+            return s;
+        }
+        None => {}
+    }
+    let cond = fmt_expr(p, e.cond, ind, col + 3, true);
+    let s = "if " + cond + " " + fmt_block(p, e.then, ind);
+    match e.els {
+        Some(AstExpr::If(el)) => s + " else " + fmt_if(p, el, ind, ind * 4 + 7),
+        Some(AstExpr::Block(el)) => s + " else " + fmt_block(p, el, ind),
+        _ => s,
+    }
+}
+
+fn fmt_simple_block(p: FmtPrinter, b: AstBlock) -> Option<AstExpr> {
+    if b.stmts.len() > 0 {
+        return None;
+    }
+    match b.tail {
+        Some(t) => {
+            if fmt_has_comments(p, b.pos, b.end) || fmt_contains_block(t) {
+                return None;
+            }
+            Some(t)
+        }
+        None => None,
+    }
+}
+
+// fmt_single_line_if prints `if c { a } else { b }` on one line when both
+// branches are a single short expression.
+fn fmt_single_line_if(p: FmtPrinter, e: AstIf, ind: Int, col: Int) -> Option<String> {
+    let els = match e.els {
+        Some(AstExpr::Block(b)) => b,
+        _ => {
+            return None;
+        }
+    };
+    let ta = match fmt_simple_block(p, e.then) {
+        Some(t) => t,
+        None => {
+            return None;
+        }
+    };
+    let tb = match fmt_simple_block(p, els) {
+        Some(t) => t,
+        None => {
+            return None;
+        }
+    };
+    if fmt_contains_block(e.cond) {
+        return None;
+    }
+    let saved = fmt_save(p);
+    let cond = fmt_expr(p, e.cond, ind, col + 3, true);
+    let a = fmt_expr(p, ta, ind, col, false);
+    let b = fmt_expr(p, tb, ind, col, false);
+    let s = "if " + cond + " { " + a + " } else { " + b + " }";
+    let w = fmt_w(p, s);
+    if s.contains("\n") || w > fmt_max_single_line_if() || col + w > fmt_max_width() {
+        fmt_restore(p, saved);
+        return None;
+    }
+    Some(s)
+}
+
+// fmt_contains_block reports whether e contains a block-like expression or
+// a closure (which always print across lines or would be ambiguous inline).
+fn fmt_contains_block(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::If(_) => true,
+        AstExpr::Match(_) => true,
+        AstExpr::Block(_) => true,
+        AstExpr::Closure(_) => true,
+        AstExpr::Binary(x) => fmt_contains_block(x.x) || fmt_contains_block(x.y),
+        AstExpr::Unary(x) => fmt_contains_block(x.x),
+        AstExpr::Call(x) => fmt_contains_block(x.func) || fmt_any_block(x.args),
+        AstExpr::Method(x) => fmt_contains_block(x.recv) || fmt_any_block(x.args),
+        AstExpr::Field(x) => fmt_contains_block(x.x),
+        AstExpr::Try(x) => fmt_contains_block(x.x),
+        AstExpr::StructLit(x) => {
+            for f in x.fields {
+                if fmt_contains_block(f.value) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn fmt_any_block(es: Vec<AstExpr>) -> Bool {
+    for a in es {
+        if fmt_contains_block(a) {
+            return true;
+        }
+    }
+    false
+}
+
+fn fmt_match(p: FmtPrinter, e: AstMatch, ind: Int, col: Int) -> String {
+    let x = fmt_expr(p, e.x, ind, col + 6, true);
+    let mut open = 0;
+    match e.arms.get(0) {
+        Some(a) => {
+            open = fmt_tok_index(p, a.pos) - 1;
+            while open > 0 && fmt_tok(p, open).kind != "{" {
+                open = open - 1;
+            }
+        }
+        None => {
+            open = fmt_next_brace(p, fmt_tok_index(p, fmt_start_pos(e.x)) + 1);
+        }
+    }
+    let units = Vec::new();
+    for a in e.arms {
+        units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Arm(a) });
+    }
+    "match " + x + " " + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+}
+
+fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
+    if pt.wildcard {
+        return "_";
+    }
+    if pt.int_value.is_some() {
+        return fmt_int_text(p, pt.pos);
+    }
+    match pt.bool_lit {
+        Some(b) => {
+            return if b { "true" } else { "false" };
+        }
+        None => {}
+    }
+    if pt.str_value.is_some() {
+        return fmt_str_text(p, pt.pos);
+    }
+    if pt.ctor != "" {
+        let mut s = pt.ctor;
+        if pt.ty != "" {
+            s = pt.ty + "::" + s;
+            if pt.args.len() == 0 {
+                return s;
+            }
+        }
+        let as_ = Vec::new();
+        for a in pt.args {
+            as_.push(fmt_pat(p, a));
+        }
+        return s + "(" + as_.join(", ") + ")";
+    }
+    pt.bind
+}
+
+// ---- literals keep their source spelling ----
+
+fn fmt_src_at(p: FmtPrinter, i: Int) -> Int {
+    p.src.char_at(i).unwrap_or(0)
+}
+
+// fmt_int_text returns the integer literal at pos as written (with `_`
+// separators and, for patterns, a leading `-`).
+fn fmt_int_text(p: FmtPrinter, pos: AstPos) -> String {
+    let n = p.src.len();
+    let mut i = fmt_offset(p, pos);
+    let mut neg = "";
+    if i < n && fmt_src_at(p, i) == 45 {
+        neg = "-";
+        i = i + 1;
+        while i < n
+            && (fmt_src_at(p, i) == 32
+                || fmt_src_at(p, i) == 9
+                || fmt_src_at(p, i) == 10
+                || fmt_src_at(p, i) == 13) {
+            i = i + 1;
+        }
+    }
+    let mut j = i;
+    while j < n && (fmt_src_at(p, j) == 95 || lex_is_digit(fmt_src_at(p, j))) {
+        j = j + 1;
+    }
+    neg + p.src.slice(i, j)
+}
+
+// fmt_str_text returns the string literal at pos as written (escapes
+// intact).
+fn fmt_str_text(p: FmtPrinter, pos: AstPos) -> String {
+    let n = p.src.len();
+    let i = fmt_offset(p, pos);
+    let mut j = i + 1;
+    while j < n && fmt_src_at(p, j) != 34 && fmt_src_at(p, j) != 10 {
+        if fmt_src_at(p, j) == 92 {
+            j = j + 1;
+        }
+        j = j + 1;
+    }
+    if j >= n {
+        j = n - 1;
+    }
+    p.src.slice(i, j + 1)
+}
+
+// fmt_mixed_logic reports an `&&` operand of `||`: parenthesized for
+// clarity (the AST does not record source parentheses).
+fn fmt_mixed_logic(x: AstExpr, op: String) -> Bool {
+    match x {
+        AstExpr::Binary(b) => op == "||" && b.op == "&&",
+        _ => false,
+    }
+}
+
+// fmt_left_paren reports whether the left operand of op needs parentheses.
+fn fmt_left_paren(x: AstExpr, op: String) -> Bool {
+    let pr = fmt_precedence(op);
+    fmt_prec(x) < pr || (pr == 3 && fmt_prec(x) == 3) || fmt_mixed_logic(x, op)
+}
+
+// fmt_right_paren reports whether the right operand of op needs
+// parentheses.
+fn fmt_right_paren(y: AstExpr, op: String) -> Bool {
+    fmt_prec(y) <= fmt_precedence(op) || fmt_mixed_logic(y, op)
+}

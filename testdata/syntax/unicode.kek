@@ -1,0 +1,6 @@
+// コメント with ünïcödé
+fn f() -> String {
+    let s = "héllo 🎉 wörld"; let t = s;
+    /* block
+       ブロック */ t + "\u"
+}

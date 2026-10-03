@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let s = "tab\there \q and \0 nul";
+    let x = 1 @ 2;
+    let y = $;
+    0
+}

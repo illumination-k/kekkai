@@ -48,6 +48,8 @@ func main() {
 		err = runSearch(args)
 	case "lsp":
 		err = runLSP(args)
+	case "tokens", "ast":
+		err = runDump(cmd, args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

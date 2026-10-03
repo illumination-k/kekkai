@@ -1,0 +1,13 @@
+#[main]
+fn f(_: Int, x: &Log) -> Result<(), String> {
+    let _ = || 1;
+    let c = |a, b: Int| a + b;
+    for _ in 0..3 { break; continue }
+    if (Foo { x: 1 }).y { } else if true { }
+    let p = Foo { x, y: Bar { z: 1 } };
+    Ok(())?.z;
+    { 1 }.to_string();
+    match p { A::B(_, -1, "s", true) => {} C => {} }
+    p.q.r = 1_000;
+    -!x.y.z(1, 2,)
+}

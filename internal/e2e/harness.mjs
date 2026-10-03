@@ -11,6 +11,7 @@ const runtime = await import(url(path.join(outDir, "kekkai_runtime.js")));
 const meta = (await import(url(path.join(outDir, "kekkai_meta.js")))).default;
 const module = new WebAssembly.Module(await readFile(path.join(outDir, "module.wasm")));
 const test = await import(url(testFile));
+const fakes = await import(new URL("./fakes.mjs", import.meta.url).href);
 
 // Helpers shared by tests.
 function recordingLog() {
@@ -23,6 +24,18 @@ function recordingOutbox() {
   deliver.sent = sent;
   return deliver;
 }
+// A Net capability that records requests and answers from a table of
+// url -> body (or a function url -> body); unknown URLs fail.
+function fakeNet(routes = {}) {
+  const calls = [];
+  const answer = async (method, u, body) => {
+    calls.push({ method, url: u, body });
+    const r = typeof routes === "function" ? routes(u, body) : routes[u];
+    if (r === undefined) throw new Error(`fakeNet: no route for ${u}`);
+    return r;
+  };
+  return { calls, get: (u) => answer("GET", u), post: (u, b) => answer("POST", u, b) };
+}
 async function call(app, caps, method, pathAndQuery, body) {
   const req = new Request("http://test" + pathAndQuery, { method, body });
   const res = await app.handle(req, caps);
@@ -31,6 +44,8 @@ async function call(app, caps, method, pathAndQuery, body) {
 
 await test.default({
   createApp: () => runtime.createKekkai(module, meta),
-  runtime, meta, module, assert, recordingLog, recordingOutbox, call,
+  runtime, meta, module, assert, recordingLog, recordingOutbox, call, fakeNet, fakes,
+  // One seeded instance of every store adapter: [{ name, store, ... }].
+  allStores: (initial) => fakes.allStores(runtime, initial),
 });
 console.log("ok");

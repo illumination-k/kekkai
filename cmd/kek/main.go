@@ -19,7 +19,8 @@ Usage:
   kek check <file.kek>            type-check (capabilities, effects, transactions)
   kek caps <file.kek>             list the capabilities (effects) of every function
   kek ir [-json] <file.kek>       print the intermediate representation
-  kek build [-o dir] <file.kek>   compile to a Cloudflare Workers module (WasmGC + JS glue)
+  kek build [-o dir] [-target d1|do] <file.kek>
+                                  compile to a Cloudflare Workers module (WasmGC + JS glue)
 `
 
 func main() {

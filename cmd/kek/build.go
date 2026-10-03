@@ -14,6 +14,7 @@ import (
 func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	outDir := fs.String("o", "out", "output directory")
+	target := fs.String("target", "d1", "storage backend bound in the generated wrangler.toml: d1 or do (Durable Objects)")
 	path, err := oneFile(fs, args)
 	if err != nil {
 		return err
@@ -43,7 +44,11 @@ func runBuild(args []string) error {
 		wt := filepath.Join(*outDir, "wrangler.toml")
 		if _, err := os.Stat(wt); os.IsNotExist(err) {
 			name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			files["wrangler.toml"] = []byte(glue.WranglerToml(name, a.IR.HandlerParams))
+			toml, err := glue.WranglerTomlFor(name, a.IR.HandlerParams, glue.Target(*target))
+			if err != nil {
+				return err
+			}
+			files["wrangler.toml"] = []byte(toml)
 		}
 	}
 	for name, data := range files {

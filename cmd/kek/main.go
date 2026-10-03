@@ -22,8 +22,11 @@ Usage:
                                   find functions by type, e.g. 'String -> Option<Int>'
   kek lsp                         run the language server over stdio
   kek ir [-json] <file.kek>       print the intermediate representation
-  kek build [-o dir] <file.kek>   compile to a Cloudflare Workers module (WasmGC + JS glue)
+  kek build [-o dir] [-target d1|do] <file.kek>
+                                  compile to a Cloudflare Workers module (WasmGC + JS glue)
   kek run <file.kek> [args...]    compile a #[main] program and run it on Node
+  kek fmt [-w|-check] <paths>     format source files (directories are searched for *.kek)
+  kek test [-run re] <file.kek>   run the #[test] functions on Node with mock capabilities
 `
 
 func main() {
@@ -50,6 +53,10 @@ func main() {
 		err = runLSP(args)
 	case "tokens", "ast":
 		err = runDump(cmd, args)
+	case "fmt":
+		err = runFmt(args)
+	case "test":
+		err = runTest(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

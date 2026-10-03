@@ -1,0 +1,113 @@
+// A visit counter with tests. Run with: kek test testdata/test/counter.kek
+//
+// Tests are ordinary functions marked #[test]. They receive capabilities
+// as parameters, and `kek test` passes mocks: a recording &Log, a fixed
+// &Clock, a seeded &Random, an in-memory &Db and a &Net without network.
+
+fn counter_key(page: String) -> String {
+    "visits:" + page
+}
+
+fn parse_count(s: Option<String>) -> Int {
+    match s {
+        Some(v) => v.parse_int().unwrap_or(0),
+        None => 0,
+    }
+}
+
+fn visit(db: &Db, log: &Log, page: String) -> Result<Int, TxError> {
+    db.transaction(|tx| {
+        let n = parse_count(tx.get(counter_key(page))?) + 1;
+        tx.put(counter_key(page), n.to_string())?;
+        log.info("visit " + page + " #" + n.to_string());
+        tx.commit()?;
+        Ok(n)
+    })
+}
+
+fn fetch_greeting(net: &Net) -> String {
+    match net.get("https://greeting.example/") {
+        Ok(body) => body,
+        Err(_) => "offline",
+    }
+}
+
+fn day_of(clock: &Clock) -> Int {
+    clock.now_ms() / 86400000
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, log: &Log) -> Response {
+    let page = req.segment(0).unwrap_or("index");
+    match visit(db, log, page) {
+        Ok(n) => Response::text(200, n.to_string()),
+        Err(e) => Response::text(500, e.message()),
+    }
+}
+
+// ---- tests ----
+
+// Pure tests take no capabilities: they are hermetic and cacheable.
+#[test]
+fn key_format() -> Bool {
+    counter_key("home") == "visits:home"
+}
+
+#[test]
+fn parse_count_defaults_to_zero() -> Result<(), String> {
+    if parse_count(None) != 0 {
+        return Err("None should count as 0");
+    }
+    if parse_count(Some("x")) != 0 {
+        return Err("garbage should count as 0");
+    }
+    if parse_count(Some("41")) != 41 {
+        return Err("expected 41");
+    }
+    Ok(())
+}
+
+// The mock &Db is a fresh in-memory store for every test.
+#[test]
+fn visits_are_counted(db: &Db, log: &Log) -> Result<(), String> {
+    let first = match visit(db, log, "home") {
+        Ok(n) => n,
+        Err(e) => {
+            return Err(e.message());
+        }
+    };
+    let second = match visit(db, log, "home") {
+        Ok(n) => n,
+        Err(e) => {
+            return Err(e.message());
+        }
+    };
+    if first != 1 || second != 2 {
+        return Err("expected 1 then 2, got " + first.to_string() + " then " + second.to_string());
+    }
+    match db.get(counter_key("home")) {
+        Ok(Some(v)) => if v == "2" { Ok(()) } else { Err("stored " + v) },
+        Ok(None) => Err("nothing stored"),
+        Err(e) => Err(e.message()),
+    }
+}
+
+// The mock &Net has no network: requests fail unless a canned response is
+// given with `kek test -net responses.json`.
+#[test]
+fn greeting_falls_back_offline(net: &Net) -> Bool {
+    fetch_greeting(net) == "offline"
+}
+
+// The mock &Clock is fixed (2026-01-01T00:00:00Z by default).
+#[test]
+fn clock_is_fixed(clock: &Clock) -> Bool {
+    day_of(clock) == 20454
+}
+
+// The mock &Random is seeded, so this is deterministic too.
+#[test]
+fn random_in_range(random: &Random) -> Bool {
+    let n = random.int(1, 7);
+    n >= 1 && n < 7
+}

@@ -1,0 +1,24 @@
+// kek check: cannot be used inside a transaction
+//
+// The tempting version of webhooks.kek's publish(): notify subscribers
+// directly from inside the transaction. `kek check` rejects it:
+//
+//   capability `net: &Net` cannot be used inside a transaction: its effects
+//   cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)
+//
+// If the commit then failed (an optimistic conflict, a storage error), the
+// subscribers would already have been told about an event that does not
+// exist, and the client's retry would notify them a second time.
+
+fn publish(db: &Db, net: &Net, payload: String) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.put("event:1", payload)?;
+        match tx.get("sub:0")? {
+            Some(url) => {
+                let sent = net.post(url, payload);
+            }
+            None => {}
+        }
+        tx.commit()
+    })
+}

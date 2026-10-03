@@ -1,4 +1,4 @@
-export default async function ({ createApp, runtime, assert, recordingLog, recordingOutbox, call }) {
+export default async function ({ createApp, runtime, assert, recordingLog, recordingOutbox, call, allStores }) {
   const { MemoryStore, TxConflict, TxError, dbCap } = runtime;
   const app = createApp();
 
@@ -74,4 +74,36 @@ export default async function ({ createApp, runtime, assert, recordingLog, recor
   await t1.put("balance:bob", "1"); await t2.put("balance:bob", "2");
   await t1.commit();
   await assert.rejects(t2.commit(), (e) => e.retryable === true);
+
+  // The same program against every store adapter (D1 on node:sqlite,
+  // Durable Object storage, remote OCC gateway): sequential transfers,
+  // then concurrent transfers that race on the same balances.
+  const { list, close } = await allStores({ "balance:alice": "100", "balance:bob": "5" });
+  try {
+    for (const { name, store } of list) {
+      const ob = recordingOutbox();
+      const c = { db: dbCap(store, ob), log: recordingLog() };
+      r = await call(app, c, "POST", "/transfer?from=alice&to=bob&amount=30");
+      assert.deepEqual([name, r.status, r.body], [name, 200, '{"left":70}']);
+      r = await call(app, c, "POST", "/transfer?from=bob&to=alice&amount=1000");
+      assert.deepEqual([name, r.status], [name, 409]);
+      const N = 10;
+      const results = await Promise.all(Array.from({ length: N }, (_, i) =>
+        call(app, c, "POST", i % 2 ? "/transfer?from=alice&to=bob&amount=1" : "/transfer?from=bob&to=alice&amount=2")));
+      const statuses = results.map((x) => x.status);
+      assert.ok(statuses.every((s) => s === 200 || s === 503), `${name}: ${statuses}`);
+      let alice = 70, bob = 35;
+      results.forEach((x, i) => {
+        if (x.status !== 200) return;
+        if (i % 2) { alice -= 1; bob += 1; } else { bob -= 2; alice += 2; }
+      });
+      const a = (await call(app, c, "GET", "/balance/alice")).body;
+      const b = (await call(app, c, "GET", "/balance/bob")).body;
+      assert.deepEqual([name, a, b], [name, String(alice), String(bob)], "every committed transfer applied exactly once");
+      assert.equal(ob.sent.length, 1 + statuses.filter((s) => s === 200).length, `${name}: one outbox entry per commit`);
+      console.log(`  bank on ${name}: concurrent statuses ${statuses.join(",")}`);
+    }
+  } finally {
+    await close();
+  }
 }

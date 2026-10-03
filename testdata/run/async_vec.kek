@@ -1,0 +1,28 @@
+// exit: 0
+// Vec arguments passed to (and returned from) asynchronous user functions.
+fn write_all(fs: &Fs, log: &Log, path: String, lines: Vec<String>) -> Vec<Int> {
+    let lens = Vec::new();
+    for l in lines {
+        lens.push(l.len());
+    }
+    match fs.write(path, lines.join("\n")) {
+        Ok(_) => log.info("wrote " + lines.len().to_string() + " lines"),
+        Err(e) => log.error(e.message()),
+    }
+    lens
+}
+
+#[main]
+fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let lines = Vec::new();
+    lines.push("alpha");
+    lines.push("be");
+    let path = args.get(0).unwrap_or("kek_async_vec.txt");
+    let lens = write_all(fs, log, path, lines);
+    log.info("lens " + lens.get(0).unwrap_or(-1).to_string() + " " + lens.get(1).unwrap_or(-1).to_string());
+    match fs.read(path) {
+        Ok(s) => log.info("read " + s.len().to_string()),
+        Err(e) => log.error(e.message()),
+    }
+    0
+}

@@ -1,0 +1,31 @@
+struct Counter {
+    n: Int,
+    names: Vec<String>,
+}
+
+#[main]
+fn main(log: &Log, args: Vec<String>) -> Int {
+    let c = Counter { n: 0, names: Vec::new() };
+    let m: Map<String, Int> = Map::new();
+    for i in 0..10 {
+        if i % 2 == 0 {
+            continue;
+        }
+        c.n = c.n + i; // odd only
+        if c.n > 20 {
+            break;
+        }
+    }
+    for a in args {
+        c.names.push(a);
+    }
+    for _ in c.n - 1..c.n + 1 {}
+    let s = String::from_char(65);
+    let mut i = 0;
+    while i < c.names.len()
+        && (c.names.get(i).unwrap_or("").len() > 3 || c.names.get(i).unwrap_or("").len() == 0) {
+        i = i + 1;
+    }
+    let ok = (c.n >= 1 && c.n <= 9) || c.n == 25;
+    c.n
+}

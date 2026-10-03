@@ -17,3 +17,37 @@ run = "go test ./..."
 description = "Build and check the Lean formalization"
 dir = "lean"
 run = "lake build"
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.fmt]
+description = "Format Go and Kekkai sources"
+run = [
+  "gofmt -w cmd internal",
+  "go run ./cmd/kek fmt -w testdata/test",
+]
+
+[tasks.fmt-check]
+description = "Check that Go and Kekkai sources are formatted"
+run = [
+  "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; exit 1)",
+  "go run ./cmd/kek fmt -check testdata/test compiler",
+]
+
+[tasks.ci]
+description = "Everything CI runs: vet, tests, format check, Lean proofs"
+depends = ["vet", "test", "fmt-check", "lean"]
+
+[tasks.e2e]
+description = "Run the Node e2e tests and the store adapter conformance suite"
+run = "go test ./internal/e2e -run 'TestE2E|TestAdapters|TestBadExamples' -v"
+
+[tasks.e2e-workers]
+description = "Run a compiled program on workerd (wrangler dev --local, local D1 + Durable Objects) and drive it over HTTP"
+run = "go test ./internal/e2e -run TestWorkers -v -count=1"
+
+[tasks.dev]
+description = "Build a .kek file and serve it locally with wrangler dev (usage: mise run dev -- examples/todo/todo.kek)"
+run = "scripts/dev.sh"

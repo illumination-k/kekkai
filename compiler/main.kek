@@ -8,9 +8,12 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "test-build" {
         return testrun_main(args, fs, log);
     }
+    if cmd == "fmt" {
+        return fmt_main(args, fs, log);
+    }
     if cmd == "ir2wasm" {
         return backend_main(args, fs, log);
     }
-    log.error("usage: kek-stage1 (lex|ast|check|ir|build|ir2wasm|test-build) ...");
+    log.error("usage: kek-stage1 (lex|ast|check|ir|build|ir2wasm|test-build|fmt) ...");
     2
 }

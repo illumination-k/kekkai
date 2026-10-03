@@ -23,6 +23,22 @@ struct LexState {
     file: String,
     toks: Vec<Tok>,
     errs: Vec<AstError>,
+    // comment capture (opt-in, for `fmt`): LexWithComments in Go
+    keep_comments: Bool,
+    comments: Vec<TokComment>,
+}
+
+// TokComment is a comment with its delimiters (`//`, `/* */`), without the
+// newline or trailing `\r`.
+struct TokComment {
+    pos: AstPos,
+    text: String,
+}
+
+struct LexCommentsResult {
+    toks: Vec<Tok>,
+    comments: Vec<TokComment>,
+    errs: Vec<AstError>,
 }
 
 struct LexResult {
@@ -147,10 +163,32 @@ fn lex_file(file: String, src: String) -> LexResult {
     let bytes = src.to_bytes();
     let lx = LexState {
         src: src, bytes: bytes, n: bytes.len(), off: 0, uoff: 0, line: 1, col: 1, file: file,
-        toks: Vec::new(), errs: Vec::new(),
+        toks: Vec::new(), errs: Vec::new(), keep_comments: false, comments: Vec::new(),
     };
     lex_run(lx);
     LexResult { toks: lx.toks, errs: lx.errs }
+}
+
+// lex_file_comments is lex_file that also returns the comments, in source
+// order.
+fn lex_file_comments(file: String, src: String) -> LexCommentsResult {
+    let bytes = src.to_bytes();
+    let lx = LexState {
+        src: src, bytes: bytes, n: bytes.len(), off: 0, uoff: 0, line: 1, col: 1, file: file,
+        toks: Vec::new(), errs: Vec::new(), keep_comments: true, comments: Vec::new(),
+    };
+    lex_run(lx);
+    LexCommentsResult { toks: lx.toks, comments: lx.comments, errs: lx.errs }
+}
+
+fn lex_comment(lx: LexState, pos: AstPos, ustart: Int) {
+    if lx.keep_comments {
+        let mut end = lx.uoff;
+        while end > ustart && lx.src.char_at(end - 1).unwrap_or(0) == 13 {
+            end = end - 1;
+        }
+        lx.comments.push(TokComment { pos: pos, text: lx.src.slice(ustart, end) });
+    }
 }
 
 fn lex_run(lx: LexState) {
@@ -160,10 +198,13 @@ fn lex_run(lx: LexState) {
         if c == 32 || c == 9 || c == 13 || c == 10 {
             lex_advance(lx);
         } else if c == 47 && lex_peek(lx, 1) == 47 {
+            let ustart = lx.uoff;
             while lx.off < lx.n && lex_peek(lx, 0) != 10 {
                 lex_advance(lx);
             }
+            lex_comment(lx, pos, ustart);
         } else if c == 47 && lex_peek(lx, 1) == 42 {
+            let ustart = lx.uoff;
             lex_advance(lx);
             lex_advance(lx);
             while lx.off < lx.n && !(lex_peek(lx, 0) == 42 && lex_peek(lx, 1) == 47) {
@@ -174,6 +215,7 @@ fn lex_run(lx: LexState) {
             } else {
                 lex_advance(lx);
                 lex_advance(lx);
+                lex_comment(lx, pos, ustart);
             }
         } else if lex_is_ident_start(c) {
             let start = lx.uoff;

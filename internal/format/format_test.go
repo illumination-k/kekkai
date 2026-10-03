@@ -18,9 +18,9 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-// TestGolden formats testdata/*.in.kek and compares with *.golden.
+// TestGolden formats tests/fmt/*.in.kek and compares with *.golden.
 func TestGolden(t *testing.T) {
-	files, _ := filepath.Glob("testdata/*.in.kek")
+	files, _ := filepath.Glob("../../tests/fmt/*.in.kek")
 	if len(files) == 0 {
 		t.Fatal("no golden inputs")
 	}

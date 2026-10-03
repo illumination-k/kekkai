@@ -26,19 +26,23 @@ run = "go vet ./..."
 description = "Format Go and Kekkai sources"
 run = [
   "gofmt -w cmd internal",
-  "go run ./cmd/kek fmt -w testdata/test",
+  "./kek fmt -w testdata/test",
 ]
 
 [tasks.fmt-check]
 description = "Check that Go and Kekkai sources are formatted"
 run = [
   "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; exit 1)",
-  "go run ./cmd/kek fmt -check testdata/test compiler",
+  "./kek fmt -check testdata/test compiler",
 ]
+
+[tasks.test-node]
+description = "Run the Node tests of the self-hosted toolchain (no Go)"
+run = "node --test 'tests/*.test.mjs'"
 
 [tasks.ci]
 description = "Everything CI runs: vet, tests, format check, Lean proofs"
-depends = ["vet", "test", "fmt-check", "lean"]
+depends = ["vet", "test", "test-node", "fmt-check", "lean"]
 
 [tasks.e2e]
 description = "Run the Node e2e tests and the store adapter conformance suite"

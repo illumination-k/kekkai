@@ -16,8 +16,11 @@ import (
 const usage = `kek — the Kekkai toolchain
 
 Usage:
-  kek check <file.kek>            type-check (capabilities, effects, transactions)
-  kek caps <file.kek>             list the capabilities (effects) of every function
+  kek check [-json] <file.kek>    type-check (capabilities, effects, transactions)
+  kek caps [-json] <file.kek>     list the capabilities (effects) of every function
+  kek search [-json] [-limit n] '<signature>' [file.kek]
+                                  find functions by type, e.g. 'String -> Option<Int>'
+  kek lsp                         run the language server over stdio
   kek ir [-json] <file.kek>       print the intermediate representation
   kek build [-o dir] <file.kek>   compile to a Cloudflare Workers module (WasmGC + JS glue)
 `
@@ -38,6 +41,10 @@ func main() {
 		err = runIR(args)
 	case "build":
 		err = runBuild(args)
+	case "search":
+		err = runSearch(args)
+	case "lsp":
+		err = runLSP(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -45,7 +52,9 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if err != errSilent {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
@@ -88,8 +97,17 @@ func oneFile(fs *flag.FlagSet, args []string) (string, error) {
 }
 
 func runCheck(args []string) error {
-	path, err := oneFile(flag.NewFlagSet("check", flag.ExitOnError), args)
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emit diagnostics as JSON (exit status 1 if there are errors)")
+	path, err := oneFile(fs, args)
 	if err != nil {
+		return err
+	}
+	if *asJSON {
+		ok, err := checkJSON(os.Stdout, path)
+		if err == nil && !ok {
+			err = errSilent
+		}
 		return err
 	}
 	if _, err := load(path); err != nil {

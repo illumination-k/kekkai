@@ -2,6 +2,11 @@
 package driver
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+
 	"github.com/illumination-k/kekkai/internal/glue"
 	"github.com/illumination-k/kekkai/internal/ir"
 	"github.com/illumination-k/kekkai/internal/syntax"
@@ -22,16 +27,52 @@ type Artifacts struct {
 
 // Check parses and type-checks source text.
 func Check(src string) (*types.Info, error) {
-	f, err := syntax.Parse(src)
+	return CheckFiles([]syntax.Source{{Text: src}})
+}
+
+// CheckFiles parses and type-checks a multi-file program.
+func CheckFiles(srcs []syntax.Source) (*types.Info, error) {
+	f, err := syntax.ParseFiles(srcs)
 	if err != nil {
 		return nil, err
 	}
 	return types.Check(f)
 }
 
+// ReadSources reads a .kek file, or every .kek file of a directory (one
+// program per directory).
+func ReadSources(path string) ([]syntax.Source, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	files := []string{path}
+	if st.IsDir() {
+		files, _ = filepath.Glob(filepath.Join(path, "*.kek"))
+		sort.Strings(files)
+		if len(files) == 0 {
+			return nil, fmt.Errorf("%s: no .kek files", path)
+		}
+	}
+	var srcs []syntax.Source
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		srcs = append(srcs, syntax.Source{Name: f, Text: string(b)})
+	}
+	return srcs, nil
+}
+
 // Compile compiles source text to WasmGC plus JS glue.
 func Compile(src string) (*Artifacts, error) {
-	info, err := Check(src)
+	return CompileFiles([]syntax.Source{{Text: src}})
+}
+
+// CompileFiles compiles a multi-file program.
+func CompileFiles(srcs []syntax.Source) (*Artifacts, error) {
+	info, err := CheckFiles(srcs)
 	if err != nil {
 		return nil, err
 	}

@@ -78,7 +78,10 @@ def decodeTypeDef (j : Json) : P TypeDef := do
     name := ← strD j "name"
     isVariant := ← boolD j "variant"
     fields := ← decodeTys (← arrD j "fields")
-    variants }
+    variants
+    coll := ← strD j "coll"
+    elem := ← (field? j "elem").mapM decodeTy
+    key := ← (field? j "key").mapM decodeTy }
 
 def decodeConst (j : Json) : P Const := do
   match ← decodeTyKind (← strD j "kind") with
@@ -124,10 +127,11 @@ def decodeInstr (j : Json) : P Instr := do
   | "unop" => return .unop dst (← decodeUnOp name) (← arg args 0 op)
   | "binop" => return .binop dst (← decodeBinOp name) (← arg args 0 op) (← arg args 1 op)
   | "call" => return .call dst name args
-  | "host" => return .host dst name args
+  | "host" => return .host dst name ty args
   | "await" => return .await dst name args
   | "struct" => return .struct dst ty args
   | "field" => return .field dst ty index (← arg args 0 op)
+  | "setfield" => return .setfield dst ty index (← arg args 0 op) (← arg args 1 op)
   | "variant" => return .variant dst ty tag args
   | "tag" => return .tag dst ty (← arg args 0 op)
   | "vfield" => return .vfield dst ty tag index (← arg args 0 op)

@@ -1,0 +1,13 @@
+// Kekkai compiler written in Kekkai (stage1). See docs/selfhost.md.
+#[main]
+fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let cmd = args.get(0).unwrap_or("");
+    if cmd == "lex" || cmd == "ast" || cmd == "check" || cmd == "ir" {
+        return frontend_main(args, fs, log);
+    }
+    if cmd == "ir2wasm" {
+        return backend_main(args, fs, log);
+    }
+    log.error("usage: kek-stage1 (lex|ast|check|ir|ir2wasm) ...");
+    2
+}

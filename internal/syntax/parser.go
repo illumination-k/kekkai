@@ -5,11 +5,39 @@ import (
 )
 
 // Parse parses a complete source file.
-func Parse(src string) (*File, error) {
-	toks, lexErrs := Lex(src)
+func Parse(src string) (*File, error) { return ParseFile("", src) }
+
+// ParseFile parses a source file, recording name in positions.
+func ParseFile(name, src string) (*File, error) {
+	toks, lexErrs := LexFile(name, src)
 	p := &parser{toks: toks, errs: lexErrs}
 	f := p.parseFile()
 	return f, p.errs.Err()
+}
+
+// Source is a named source text.
+type Source struct {
+	Name string
+	Text string
+}
+
+// ParseFiles parses several files of one program into a single File (all
+// files share one namespace).
+func ParseFiles(srcs []Source) (*File, error) {
+	out := &File{}
+	var errs ErrorList
+	for _, s := range srcs {
+		f, err := ParseFile(s.Name, s.Text)
+		if err != nil {
+			errs = append(errs, err.(ErrorList)...)
+		}
+		if f != nil {
+			out.Structs = append(out.Structs, f.Structs...)
+			out.Enums = append(out.Enums, f.Enums...)
+			out.Funcs = append(out.Funcs, f.Funcs...)
+		}
+	}
+	return out, errs.Err()
 }
 
 type parser struct {

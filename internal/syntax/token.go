@@ -7,9 +7,15 @@ import "fmt"
 // Pos is a source position (1-based line and column).
 type Pos struct {
 	Line, Col int
+	File      string // empty for single-source parses
 }
 
-func (p Pos) String() string { return fmt.Sprintf("%d:%d", p.Line, p.Col) }
+func (p Pos) String() string {
+	if p.File != "" {
+		return fmt.Sprintf("%s:%d:%d", p.File, p.Line, p.Col)
+	}
+	return fmt.Sprintf("%d:%d", p.Line, p.Col)
+}
 
 type TokenKind int
 

@@ -26,6 +26,9 @@ func (l ErrorList) Err() error {
 		return nil
 	}
 	sort.SliceStable(l, func(i, j int) bool {
+		if l[i].Pos.File != l[j].Pos.File {
+			return l[i].Pos.File < l[j].Pos.File
+		}
 		if l[i].Pos.Line != l[j].Pos.Line {
 			return l[i].Pos.Line < l[j].Pos.Line
 		}
@@ -46,8 +49,11 @@ func (l ErrorList) Error() string {
 }
 
 // Lex converts source text into tokens. The final token is always EOF.
-func Lex(src string) ([]Token, ErrorList) {
-	lx := &lexer{src: src, line: 1, col: 1}
+func Lex(src string) ([]Token, ErrorList) { return LexFile("", src) }
+
+// LexFile is Lex with a file name recorded in every position.
+func LexFile(file, src string) ([]Token, ErrorList) {
+	lx := &lexer{src: src, line: 1, col: 1, file: file}
 	lx.run()
 	return lx.toks, lx.errs
 }
@@ -56,6 +62,7 @@ type lexer struct {
 	src       string
 	off       int
 	line, col int
+	file      string
 	toks      []Token
 	errs      ErrorList
 }
@@ -104,7 +111,7 @@ var oneCharOps = map[byte]TokenKind{
 func (lx *lexer) run() {
 	for lx.off < len(lx.src) {
 		c := lx.peek(0)
-		pos := Pos{lx.line, lx.col}
+		pos := Pos{Line: lx.line, Col: lx.col, File: lx.file}
 		switch {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			lx.advance()
@@ -161,7 +168,7 @@ func (lx *lexer) run() {
 			lx.advance()
 		}
 	}
-	lx.emit(EOF, "", Pos{lx.line, lx.col})
+	lx.emit(EOF, "", Pos{Line: lx.line, Col: lx.col, File: lx.file})
 }
 
 func (lx *lexer) lexString(pos Pos) {
@@ -198,7 +205,7 @@ func (lx *lexer) lexString(pos Pos) {
 		case '0':
 			b.WriteByte(0)
 		default:
-			lx.errs.Add(Pos{lx.line, lx.col - 2}, "unknown escape sequence \\%c", e)
+			lx.errs.Add(Pos{Line: lx.line, Col: lx.col - 2, File: lx.file}, "unknown escape sequence \\%c", e)
 		}
 	}
 	lx.emit(TString, b.String(), pos)

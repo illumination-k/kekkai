@@ -20,11 +20,11 @@ func runRun(args []string) error {
 	if _, err := load(path); err != nil {
 		return err
 	}
-	src, err := os.ReadFile(path)
+	srcs, err := driver.ReadSources(path)
 	if err != nil {
 		return err
 	}
-	a, err := driver.Compile(string(src))
+	a, err := driver.CompileFiles(srcs)
 	if err != nil {
 		return err
 	}

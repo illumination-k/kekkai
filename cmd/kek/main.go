@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/illumination-k/kekkai/internal/driver"
 	"github.com/illumination-k/kekkai/internal/ir"
-	"github.com/illumination-k/kekkai/internal/syntax"
 	"github.com/illumination-k/kekkai/internal/types"
 )
 
@@ -63,30 +63,14 @@ func main() {
 }
 
 // load parses and type-checks a file, prefixing diagnostics with the path.
+// load parses and type-checks a file or a directory of files.
+// Diagnostics carry file names.
 func load(path string) (*types.Info, error) {
-	src, err := os.ReadFile(path)
+	srcs, err := driver.ReadSources(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := syntax.Parse(string(src))
-	if err == nil {
-		var info *types.Info
-		info, err = types.Check(f)
-		if err == nil {
-			return info, nil
-		}
-	}
-	if list, ok := err.(syntax.ErrorList); ok {
-		msg := ""
-		for i, e := range list {
-			if i > 0 {
-				msg += "\n"
-			}
-			msg += fmt.Sprintf("%s:%s: %s", path, e.Pos, e.Msg)
-		}
-		return nil, fmt.Errorf("%s", msg)
-	}
-	return nil, err
+	return driver.CheckFiles(srcs)
 }
 
 func oneFile(fs *flag.FlagSet, args []string) (string, error) {

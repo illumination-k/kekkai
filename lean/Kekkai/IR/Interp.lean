@@ -9,18 +9,21 @@ A small-step abstract machine with an explicit call stack, so that the
 interpreter is total (`run` is structurally recursive on the fuel) and
 deep recursion in the interpreted program does not consume native stack.
 
-The semantics follows the WasmGC backend (`internal/wasm/codegen.go`):
+The semantics follows the WasmGC backend (`internal/wasm/codegen.go`,
+`internal/wasm/collections.go`):
 
 * every instruction writes its destination local; locals start at their
   type's default value (`0`, `false`, `ref.null`);
+* structs, `Vec`s and `Map`s are heap objects with reference semantics
+  (mutation through one alias is visible through all of them); variants
+  are immutable values;
 * `br` takes the first target when the condition is true;
 * `switch` compares the integer scrutinee with `0, 1, ...` and falls back
   to the last target;
 * `vfield` with a tag that differs from the value's tag reads the default
   value of the requested slot (wasm stores every variant's slots and fills
   the inactive ones with defaults);
-* reading through `ref.null` (`field`, `tag`, `vfield` on a default
-  aggregate local) is a trap, reported as `null dereference`;
+* reading through `ref.null` is a trap, reported as `null dereference`;
 * each instruction and each terminator costs one unit of fuel.
 -/
 
@@ -39,12 +42,12 @@ structure Machine where
   /-- innermost frame first -/
   frames : List Frame
   depth : Nat
-  log : Array LogEntry
+  store : Store
   deriving Inhabited
 
 inductive Outcome where
   | running (m : Machine)
-  | done (v : Val) (log : Array LogEntry)
+  | done (v : Val) (store : Store)
 
 /-- Maximum call depth before reporting `stack overflow`. The wasm engine
 also has a (host-dependent) stack limit; results in that regime are not
@@ -102,19 +105,103 @@ def typeDef (p : Program) (ty : Nat) : M TypeDef :=
   | some td => pure td
   | none => throw s!"malformed IR: unknown aggregate {ty}"
 
+/-! ## Collections -/
+
+/-- Key equality of a JS `Map` (SameValueZero on the boxed keys: numbers
+and strings by value, GC references by identity). -/
+def keyEq : Val → Val → Bool
+  | .int a, .int b => a == b
+  | .str a, .str b => a == b
+  | .bool a, .bool b => a == b
+  | .unit, .unit => true
+  | .ref a, .ref b => a == b
+  | .null, .null => true
+  | _, _ => false
+
+def mapEntries (v : Val) : HM (Array (Val × Val)) := do
+  match ← deref v with
+  | .map es => pure es
+  | o => throw s!"type error: expected a Map, got {repr o}"
+
+/-- Collection operations (`vec.*`, `map.*`), implemented by the backend. -/
+def evalColl (name : String) (args : Array Val) : HM Val := do
+  let bad : HM Val := throw s!"{name}: bad arguments"
+  match name, args with
+  | "vec.new", #[] => newVec #[]
+  | "vec.len", #[v] => return .int (← vecElems v).size
+  | "vec.push", #[v, x] => do
+    let xs ← vecElems v
+    store v (.vec (xs.push x)); pure .unit
+  | "vec.get", #[v, .int i] => do
+    let xs ← vecElems v
+    pure (optionVal (if 0 ≤ i ∧ i < xs.size then some xs[i.toNat]! else none))
+  | "vec.set", #[v, .int i, x] => do
+    let xs ← vecElems v
+    if 0 ≤ i ∧ i < xs.size then
+      store v (.vec (xs.set! i.toNat x)); pure (.bool true)
+    else pure (.bool false)
+  | "vec.pop", #[v] => do
+    let xs ← vecElems v
+    if xs.isEmpty then pure (optionVal none)
+    else
+      store v (.vec xs.pop); pure (optionVal (some xs.back!))
+  | "vec.at", #[v, .int i] => do
+    let xs ← vecElems v
+    if 0 ≤ i ∧ i < xs.size then pure xs[i.toNat]! else throw "trap"
+  | "vec.join", #[v, .str sep] => do
+    let xs ← vecElems v
+    let ss ← xs.toList.mapM fun
+      | .str s => pure s
+      | _ => throw "vec.join: non-string element"
+    pure (.str (sep.intercalate ss))
+  | "map.new", #[] => alloc (.map #[])
+  | "map.len", #[m] => return .int (← mapEntries m).size
+  | "map.insert", #[m, k, x] => do
+    let es ← mapEntries m
+    let es := match es.findIdx? (keyEq k ·.1) with
+      | some i => es.set! i (k, x)
+      | none => es.push (k, x)
+    store m (.map es); pure .unit
+  | "map.get", #[m, k] => do
+    let es ← mapEntries m
+    -- the host returns `null` for an absent key; a stored null reads as None too
+    match es.find? (keyEq k ·.1) with
+    | some (_, .null) | none => pure (optionVal none)
+    | some (_, x) => pure (optionVal (some x))
+  | "map.contains", #[m, k] => return .bool ((← mapEntries m).any (keyEq k ·.1))
+  | "map.remove", #[m, k] => do
+    let es ← mapEntries m
+    store m (.map (es.filter fun e => !keyEq k e.1)); pure .unit
+  | "map.keys", #[m] => do newVec ((← mapEntries m).map (·.1))
+  | _, _ => bad
+
+def isCollOp (name : String) : Bool :=
+  name.startsWith "vec." || name.startsWith "map."
+
+/-! ## The machine -/
+
 def initFrame (fn : Func) (args : Array Val) (retDst : Nat) : M Frame := do
   if args.size != fn.nparams then
     throw s!"call to {fn.name}: expected {fn.nparams} arguments, got {args.size}"
   let locals := (fn.locals.extract args.size fn.locals.size).map Ty.default
   pure { fn, locals := args ++ locals, block := 0, pc := 0, retDst }
 
+/-- Run a store computation inside the machine. -/
+def liftHM (m : Machine) (x : HM α) : M (α × Machine) := do
+  let (a, st) ← x.run m.store
+  pure (a, { m with store := st })
+
 /-- Execute one instruction in the top frame (whose `pc` has already been
 advanced). Returns the updated machine. -/
 def execInstr (p : Program) (m : Machine) (f : Frame) (rest : List Frame) (i : Instr) : M Machine := do
   let get := getLocal f
   let gets (xs : Array Nat) : M (Array Val) := xs.mapM get
-  let write (dst : Nat) (v : Val) : M Machine := do
+  let writeIn (m : Machine) (dst : Nat) (v : Val) : M Machine := do
     pure { m with frames := (← setLocal f dst v) :: rest }
+  let write := writeIn m
+  let withStore (dst : Nat) (x : HM Val) : M Machine := do
+    let (v, m') ← liftHM m x
+    writeIn m' dst v
   match i with
   | .const dst c =>
     write dst (match c with
@@ -127,20 +214,29 @@ def execInstr (p : Program) (m : Machine) (f : Frame) (rest : List Frame) (i : I
     if m.depth + 1 ≥ maxDepth then throw "stack overflow"
     let fr ← initFrame callee (← gets xs) dst
     pure { m with frames := fr :: f :: rest, depth := m.depth + 1 }
-  | .host dst name xs =>
-    let (v, out) ← evalHost name (← gets xs)
-    let m ← write dst v
-    pure { m with log := m.log ++ out }
+  | .host dst name _ xs =>
+    let args ← gets xs
+    withStore dst (if isCollOp name then evalColl name args else evalHost name args)
   | .await _ name _ => throw s!"unsupported await {name}"
-  | .struct dst _ xs => write dst (.struct (← gets xs))
+  | .struct dst _ xs => withStore dst (alloc (.struct (← gets xs)))
   | .field dst _ idx x =>
-    match ← get x with
-    | .struct fs =>
-      match fs[idx]? with
-      | some v => write dst v
-      | none => throw s!"malformed IR: field {idx} out of range"
-    | .null => throw "null dereference"
-    | v => throw s!"type error: field of {repr v}"
+    let x ← get x
+    withStore dst do
+      match ← deref x with
+      | .struct fs =>
+        match fs[idx]? with
+        | some v => pure v
+        | none => throw s!"malformed IR: field {idx} out of range"
+      | o => throw s!"type error: field of {repr o}"
+  | .setfield dst _ idx x v =>
+    let x ← get x
+    let v ← get v
+    withStore dst do
+      match ← deref x with
+      | .struct fs =>
+        if idx < fs.size then store x (.struct (fs.set! idx v)); pure .unit
+        else throw s!"malformed IR: field {idx} out of range"
+      | o => throw s!"type error: setfield of {repr o}"
   | .variant dst _ tag xs => write dst (.variant tag (← gets xs))
   | .tag dst _ x =>
     match ← get x with
@@ -181,7 +277,7 @@ def execTerm (m : Machine) (f : Frame) (rest : List Frame) : Term → M Outcome
   | .ret x => do
     let v ← getLocal f x
     match rest with
-    | [] => pure (.done v m.log)
+    | [] => pure (.done v m.store)
     | caller :: rest' =>
       let caller ← setLocal caller f.retDst v
       pure (.running { m with frames := caller :: rest', depth := m.depth - 1 })
@@ -197,20 +293,21 @@ def step (p : Program) (m : Machine) : M Outcome := do
     | none => execTerm m f rest blk.term
 
 /-- Run for at most `fuel` steps. -/
-def run (p : Program) : Nat → Machine → M (Val × Array LogEntry)
+def run (p : Program) : Nat → Machine → M (Val × Store)
   | 0, _ => throw "timeout"
   | fuel + 1, m =>
     match step p m with
     | .error e => .error e
-    | .ok (.done v log) => .ok (v, log)
+    | .ok (.done v st) => .ok (v, st)
     | .ok (.running m') => run p fuel m'
 
 def defaultFuel : Nat := 1000000
 
-/-- Call function `fn` of program `p` with the given arguments. -/
-def callFunc (p : Program) (fn : Func) (args : Array Val) (fuel : Nat := defaultFuel) :
-    M (Val × Array LogEntry) := do
+/-- Call function `fn` of program `p` with the given arguments, starting
+from store `st` (which holds the objects the arguments refer to). -/
+def callFunc (p : Program) (fn : Func) (args : Array Val) (st : Store := {})
+    (fuel : Nat := defaultFuel) : M (Val × Store) := do
   let fr ← initFrame fn args 0
-  run p fuel { frames := [fr], depth := 0, log := #[] }
+  run p fuel { frames := [fr], depth := 0, store := st }
 
 end Kekkai.IR

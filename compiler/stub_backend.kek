@@ -1,5 +1,0 @@
-// Placeholder until the back end lands (delete this file when implementing backend_main).
-fn backend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
-    log.error("back end not implemented yet");
-    1
-}

@@ -2,9 +2,9 @@ package syntax
 
 import (
 	"fmt"
-	"unicode/utf8"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Error is a diagnostic attached to a source position.

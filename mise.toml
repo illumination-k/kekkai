@@ -17,3 +17,15 @@ run = "go test ./..."
 description = "Build and check the Lean formalization"
 dir = "lean"
 run = "lake build"
+
+[tasks.e2e]
+description = "Run the Node e2e tests and the store adapter conformance suite"
+run = "go test ./internal/e2e -run 'TestE2E|TestAdapters|TestBadExamples' -v"
+
+[tasks.e2e-workers]
+description = "Run a compiled program on workerd (wrangler dev --local, local D1 + Durable Objects) and drive it over HTTP"
+run = "go test ./internal/e2e -run TestWorkers -v -count=1"
+
+[tasks.dev]
+description = "Build a .kek file and serve it locally with wrangler dev (usage: mise run dev -- examples/todo/todo.kek)"
+run = "scripts/dev.sh"

@@ -1,0 +1,213 @@
+// A todo API on the transactional key-value store.
+//
+//   POST   /todos              body = title      -> 201 {"id":N}
+//   GET    /todos                               -> {"count":N}
+//   GET    /todos/<id>                          -> {"id":N,"title":"...","done":false}
+//   POST   /todos/<id>/done                     -> 204
+//   DELETE /todos/<id>                          -> 204
+//
+// Layout: todo:next (id counter), todo:count, todo:<id>:title, todo:<id>:done.
+// Writes run in transactions; optimistic conflicts are retried a few times
+// before answering 503.
+
+enum TodoError {
+    NotFound,
+    Store(TxError),
+}
+
+fn title_key(id: Int) -> String { "todo:" + id.to_string() + ":title" }
+fn done_key(id: Int) -> String { "todo:" + id.to_string() + ":done" }
+
+// Titles are embedded in JSON responses, so refuse characters that would
+// need escaping (there is no string escaping helper yet).
+fn valid_title(t: String) -> Bool {
+    t.len() > 0 && t.len() <= 200 && !t.contains("\"") && !t.contains("\\")
+}
+
+fn read_int(tx: &Tx, key: String) -> Result<Int, TxError> {
+    match tx.get(key)? {
+        Some(s) => Ok(s.parse_int().unwrap_or(0)),
+        None => Ok(0),
+    }
+}
+
+fn create_once(db: &Db, title: String) -> Result<Int, TxError> {
+    db.transaction(|tx| {
+        let id = read_int(tx, "todo:next")? + 1;
+        let count = read_int(tx, "todo:count")?;
+        tx.put("todo:next", id.to_string())?;
+        tx.put("todo:count", (count + 1).to_string())?;
+        tx.put(title_key(id), title)?;
+        tx.put(done_key(id), "false")?;
+        tx.commit()?;
+        Ok(id)
+    })
+}
+
+fn set_done_once(db: &Db, id: Int) -> Result<Result<(), TodoError>, TxError> {
+    db.transaction(|tx| {
+        match tx.get(title_key(id))? {
+            Some(_) => {
+                tx.put(done_key(id), "true")?;
+                tx.commit()?;
+                Ok(Ok(()))
+            }
+            None => {
+                tx.rollback();
+                Ok(Err(TodoError::NotFound))
+            }
+        }
+    })
+}
+
+fn delete_once(db: &Db, id: Int) -> Result<Result<(), TodoError>, TxError> {
+    db.transaction(|tx| {
+        match tx.get(title_key(id))? {
+            Some(_) => {
+                let count = read_int(tx, "todo:count")?;
+                tx.delete(title_key(id))?;
+                tx.delete(done_key(id))?;
+                tx.put("todo:count", (count - 1).to_string())?;
+                tx.commit()?;
+                Ok(Ok(()))
+            }
+            None => {
+                tx.rollback();
+                Ok(Err(TodoError::NotFound))
+            }
+        }
+    })
+}
+
+fn should_retry_int(r: Result<Int, TxError>) -> Bool {
+    match r {
+        Ok(_) => false,
+        Err(e) => e.retryable(),
+    }
+}
+
+fn should_retry_unit(r: Result<Result<(), TodoError>, TxError>) -> Bool {
+    match r {
+        Ok(_) => false,
+        Err(e) => e.retryable(),
+    }
+}
+
+// Re-run a transaction that lost an optimistic race (at most 3 attempts).
+fn create(db: &Db, title: String) -> Result<Int, TxError> {
+    let mut r = create_once(db, title);
+    let mut attempts = 1;
+    while attempts < 3 && should_retry_int(r) {
+        r = create_once(db, title);
+        attempts = attempts + 1;
+    }
+    r
+}
+
+fn set_done(db: &Db, id: Int) -> Result<(), TodoError> {
+    let mut r = set_done_once(db, id);
+    let mut attempts = 1;
+    while attempts < 3 && should_retry_unit(r) {
+        r = set_done_once(db, id);
+        attempts = attempts + 1;
+    }
+    match r {
+        Ok(inner) => inner,
+        Err(e) => Err(TodoError::Store(e)),
+    }
+}
+
+fn remove(db: &Db, id: Int) -> Result<(), TodoError> {
+    let mut r = delete_once(db, id);
+    let mut attempts = 1;
+    while attempts < 3 && should_retry_unit(r) {
+        r = delete_once(db, id);
+        attempts = attempts + 1;
+    }
+    match r {
+        Ok(inner) => inner,
+        Err(e) => Err(TodoError::Store(e)),
+    }
+}
+
+fn store_error(e: TxError) -> Response {
+    if e.retryable() {
+        Response::text(503, "busy, retry").with_header("retry-after", "1")
+    } else {
+        Response::text(500, e.message())
+    }
+}
+
+fn todo_error(e: TodoError) -> Response {
+    match e {
+        TodoError::NotFound => Response::not_found(),
+        TodoError::Store(err) => store_error(err),
+    }
+}
+
+fn show(db: &Db, id: Int) -> Response {
+    let title = match db.get(title_key(id)) {
+        Ok(Some(t)) => t,
+        Ok(None) => { return Response::not_found(); }
+        Err(e) => { return store_error(e); }
+    };
+    let done = match db.get(done_key(id)) {
+        Ok(Some(d)) => d,
+        Ok(None) => "false",
+        Err(e) => { return store_error(e); }
+    };
+    Response::json(200, "{\"id\":" + id.to_string() + ",\"title\":\"" + title + "\",\"done\":" + done + "}")
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, log: &Log) -> Response {
+    if req.segment(0).unwrap_or("") != "todos" {
+        return Response::not_found();
+    }
+    let method = req.method();
+    let id = match req.segment(1) {
+        None => {
+            if method == "POST" {
+                let title = req.body().trim();
+                if !valid_title(title) {
+                    return Response::bad_request("title must be 1-200 characters without quotes or backslashes");
+                }
+                return match create(db, title) {
+                    Ok(id) => {
+                        log.info("created todo " + id.to_string());
+                        Response::json(201, "{\"id\":" + id.to_string() + "}")
+                    }
+                    Err(e) => store_error(e),
+                };
+            }
+            if method == "GET" {
+                return match db.get("todo:count") {
+                    Ok(c) => Response::json(200, "{\"count\":" + c.unwrap_or("0") + "}"),
+                    Err(e) => store_error(e),
+                };
+            }
+            return Response::text(405, "method not allowed");
+        }
+        Some(s) => match s.parse_int() {
+            Some(n) => n,
+            None => { return Response::bad_request("bad id"); }
+        },
+    };
+    let action = req.segment(2).unwrap_or("");
+    if action == "" && method == "GET" {
+        return show(db, id);
+    }
+    if action == "" && method == "DELETE" {
+        return match remove(db, id) {
+            Ok(_) => Response::no_content(),
+            Err(e) => todo_error(e),
+        };
+    }
+    if action == "done" && method == "POST" {
+        return match set_done(db, id) {
+            Ok(_) => Response::no_content(),
+            Err(e) => todo_error(e),
+        };
+    }
+    Response::not_found()
+}

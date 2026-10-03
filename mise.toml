@@ -1,0 +1,19 @@
+[tools]
+go = "1.27.0"
+node = "26.7.0"
+wasm-tools = "1.261.0"
+"github:leanprover/lean4" = "4.34.1"
+"npm:wrangler" = "4.147.0"
+
+[tasks.build]
+description = "Build the kek compiler"
+run = "go build -o bin/kek ./cmd/kek"
+
+[tasks.test]
+description = "Run Go tests (unit, golden, e2e on Node)"
+run = "go test ./..."
+
+[tasks.lean]
+description = "Build and check the Lean formalization"
+dir = "lean"
+run = "lake build"

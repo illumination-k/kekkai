@@ -1,0 +1,94 @@
+fn missing_commit(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.delete("users")?;
+        Ok(()) // ERROR "never committed or rolled back"
+    })
+}
+
+fn double_commit(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.commit()?;
+        tx.commit() // ERROR "after it was committed or rolled back"
+    })
+}
+
+fn use_after(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.rollback();
+        tx.delete("users")?; // ERROR "after it was committed or rolled back"
+        Ok(())
+    })
+}
+
+fn branch(db: &Db, b: Bool) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        if b { // ERROR "ended in one branch of this `if` but not in the other"
+            tx.rollback();
+        }
+        Ok(())
+    })
+}
+
+fn early_return(db: &Db, b: Bool) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        if b {
+            return Ok(()); // ERROR "must be committed or rolled back before `return`"
+        }
+        tx.commit()
+    })
+}
+
+fn in_loop(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let mut i = 0;
+        while i < 3 { // ERROR "inside a loop"
+            tx.rollback();
+            i = i + 1;
+        }
+        Ok(()) // ERROR "never committed or rolled back"
+    })
+}
+
+fn net_in_tx(db: &Db, net: &Net) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let r = net.get("https://example.com"); // ERROR "cannot be used inside a transaction"
+        tx.commit()
+    })
+}
+
+fn helper(net: &Net) {}
+
+fn net_passed_in_tx(db: &Db, net: &Net) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        helper(net); // ERROR "cannot be used inside a transaction"
+        tx.commit()
+    })
+}
+
+fn nested(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let r = db.transaction(|t2| t2.commit()); // ERROR "cannot be used inside a transaction"
+        tx.commit()
+    })
+}
+
+fn borrowed_commit(tx: &Tx) -> Result<(), TxError> {
+    tx.commit() // ERROR "borrowed transaction"
+}
+
+fn owned_param(tx: Tx) { // ERROR "cannot take ownership of a transaction"
+}
+
+fn try_ok(db: &Db) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.put("a", "1")?; // auto-rollback on error: fine
+        tx.commit()
+    })
+}
+
+fn body_not_result(db: &Db) {
+    let r = db.transaction(|tx| { // ERROR "must evaluate to a `Result`"
+        tx.rollback();
+        5
+    });
+}

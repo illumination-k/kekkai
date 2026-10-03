@@ -1,0 +1,34 @@
+struct Holder {
+    log: &Log, // ERROR "capability type `&Log` is only allowed as a function parameter"
+}
+
+fn leak(log: &Log) -> &Log { // ERROR "capability type `&Log` is only allowed as a function parameter"
+    log // ERROR "cannot be used as a value"
+}
+
+fn bind(log: &Log) {
+    let l = log; // ERROR "cannot be used as a value"
+}
+
+fn owned(log: Log) { // ERROR "capabilities are passed by borrowing: write `&Log`"
+}
+
+fn pure_fn(x: Int) -> Int {
+    log.info("x"); // ERROR "cannot find value `log`"
+    x
+}
+
+fn wrong_cap(net: &Net) {
+    needs_log(net); // ERROR "expected capability `&Log`, found `&Net`"
+}
+
+fn needs_log(log: &Log) {
+    log.info("ok");
+}
+
+fn not_a_ref(x: &Int) { // ERROR "`&` can only be applied to capability types"
+}
+
+fn closure_value() {
+    let f = |x| x; // ERROR "closures are second-class"
+}

@@ -1,0 +1,83 @@
+// Well-typed program exercising the P0 features. No errors expected.
+struct User {
+    id: Int,
+    name: String,
+}
+
+enum AppError {
+    NotFound,
+    Invalid(String),
+    Db(TxError),
+}
+
+// Pure: receives no capabilities.
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn parse_id(s: String) -> Result<Int, AppError> {
+    match s.parse_int() {
+        Some(n) => if n > 0 { Ok(n) } else { Err(AppError::Invalid("non-positive")) },
+        None => Err(AppError::Invalid(s)),
+    }
+}
+
+fn greet(log: &Log, u: User) {
+    log.info("hello " + u.name);
+}
+
+fn insert(tx: &Tx, u: User) -> Result<(), TxError> {
+    let key = "user:" + u.id.to_string();
+    match tx.get(key)? {
+        Some(_) => Ok(()),
+        None => tx.put(key, u.name),
+    }
+}
+
+fn create(db: &Db, log: &Log, u: User) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        insert(tx, u)?;
+        log.info("inserted");
+        tx.outbox("https://example.com/hook", "created");
+        tx.commit()
+    })
+}
+
+fn maybe(db: &Db, flag: Bool) -> Result<Int, TxError> {
+    db.transaction(|tx| {
+        if flag {
+            tx.commit()?;
+            Ok(1)
+        } else {
+            tx.rollback();
+            Ok(0)
+        }
+    })
+}
+
+fn sum_to(n: Int) -> Int {
+    let mut i = 0;
+    let mut acc = 0;
+    while i < n {
+        i = i + 1;
+        acc = acc + i;
+    }
+    acc
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, log: &Log) -> Response {
+    let id = match req.segment(1) {
+        Some(s) => match parse_id(s) {
+            Ok(n) => n,
+            Err(_) => { return Response::bad_request("bad id"); }
+        },
+        None => { return Response::not_found(); }
+    };
+    let u = User { id: id, name: "kek" };
+    greet(log, u);
+    match create(db, log, User { id: add(id, 0), name: "x" }) {
+        Ok(_) => Response::no_content(),
+        Err(e) => if e.retryable() { Response::text(503, "retry") } else { Response::text(500, e.message()) },
+    }
+}

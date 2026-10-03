@@ -1,0 +1,32 @@
+enum Color { Red, Green, Blue }
+
+fn f(c: Color) -> Int {
+    match c { // ERROR "non-exhaustive patterns in match on `Color`: missing `Color::Blue`"
+        Red => 1,
+        Green => 2,
+    }
+}
+
+fn g(x: Int) -> String {
+    x // ERROR "expected `String`, found `Int`"
+}
+
+fn h(r: Result<Int, TxError>) -> Result<Int, NetError> {
+    let v = r?; // ERROR "cannot convert the error type `TxError` into `NetError`"
+    Ok(v)
+}
+
+fn k() -> Int {
+    let x = 1;
+    x = 2; // ERROR "cannot assign twice"
+    x
+}
+
+fn m(o: Option<Int>) -> Int {
+    o? // ERROR "can only be used on `Option` in a function that returns `Option`"
+}
+
+#[handler]
+fn handle(x: Int) -> Int { // ERROR "a handler must return `Response`" ERROR "handler parameters must be"
+    1
+} 

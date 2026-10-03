@@ -1,0 +1,9 @@
+ident:let ident:x1 punct:= int:42 punct:+ ident:foo punct:;
+ident=3;punct=3;int=1;
+a,b
+229 142 38
+total 45 args 1
+popped 38 left 2
+get(-1) true set true 7
+split 4 idx 2
+read back: written by kekkai

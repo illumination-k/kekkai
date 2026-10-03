@@ -16,6 +16,11 @@ import (
 //go:embed runtime.js
 var Runtime string
 
+// RunMJS runs a compiled #[main] program on Node.
+//
+//go:embed run.mjs
+var RunMJS string
+
 // Meta is the program metadata consumed by the runtime.
 type Meta struct {
 	Strings       []string          `json:"strings"`

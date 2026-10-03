@@ -244,6 +244,24 @@ func (p *parser) parseBlock() *Block {
 			body := p.parseBlock()
 			b.Stmts = append(b.Stmts, &WhileStmt{Pos: sp, Cond: cond, Body: body})
 			continue
+		case KwFor:
+			p.next()
+			fs := &ForStmt{Pos: sp}
+			if p.accept(Underscore) {
+				fs.Var = "_"
+			} else {
+				fs.Var = p.expect(TIdent).Text
+			}
+			p.expect(KwIn)
+			p.noStruct = true
+			fs.Iter = p.parseExpr()
+			if p.accept(DotDot) {
+				fs.End = p.parseExpr()
+			}
+			p.noStruct = false
+			fs.Body = p.parseBlock()
+			b.Stmts = append(b.Stmts, fs)
+			continue
 		case KwReturn:
 			p.next()
 			s := &ReturnStmt{Pos: sp}

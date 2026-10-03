@@ -32,6 +32,8 @@ const (
 	KwFalse
 	KwStruct
 	KwEnum
+	KwFor
+	KwIn
 
 	// punctuation
 	LParen
@@ -67,13 +69,14 @@ const (
 	Slash
 	Percent
 	Underscore
+	DotDot // ..
 )
 
 var kindNames = map[TokenKind]string{
 	EOF: "end of file", TIdent: "identifier", TInt: "integer literal", TString: "string literal",
 	KwFn: "`fn`", KwLet: "`let`", KwMut: "`mut`", KwIf: "`if`", KwElse: "`else`", KwMatch: "`match`",
 	KwWhile: "`while`", KwReturn: "`return`", KwTrue: "`true`", KwFalse: "`false`",
-	KwStruct: "`struct`", KwEnum: "`enum`",
+	KwStruct: "`struct`", KwEnum: "`enum`", KwFor: "`for`", KwIn: "`in`", DotDot: "`..`",
 	LParen: "`(`", RParen: "`)`", LBrace: "`{`", RBrace: "`}`", LBracket: "`[`", RBracket: "`]`",
 	Comma: "`,`", Semi: "`;`", Colon: "`:`", ColonColon: "`::`", Dot: "`.`", Arrow: "`->`",
 	FatArrow: "`=>`", Amp: "`&`", AmpAmp: "`&&`", Pipe: "`|`", PipePipe: "`||`", Question: "`?`",
@@ -92,7 +95,7 @@ func (k TokenKind) String() string {
 var keywords = map[string]TokenKind{
 	"fn": KwFn, "let": KwLet, "mut": KwMut, "if": KwIf, "else": KwElse, "match": KwMatch,
 	"while": KwWhile, "return": KwReturn, "true": KwTrue, "false": KwFalse,
-	"struct": KwStruct, "enum": KwEnum, "_": Underscore,
+	"struct": KwStruct, "enum": KwEnum, "_": Underscore, "for": KwFor, "in": KwIn,
 }
 
 type Token struct {

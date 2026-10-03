@@ -78,9 +78,18 @@ func init() {
 	m(&Builtin{Recv: "Tx", Name: "commit", Result: res(Unit, TxError), Async: true, Consumes: true})
 	m(&Builtin{Recv: "Tx", Name: "rollback", Result: Unit, Consumes: true})
 
+	// Fs is the file system (used by command-line programs such as the
+	// self-hosted compiler). Writes are irrevocable.
+	m(&Builtin{Recv: "Fs", Name: "read", Params: []Type{String}, Result: res(String, IoError), Async: true})
+	m(&Builtin{Recv: "Fs", Name: "write", Params: []Type{String, String}, Result: res(Unit, IoError), Async: true})
+	m(&Builtin{Recv: "Fs", Name: "write_bytes", Params: []Type{String, &VecT{Int}}, Result: res(Unit, IoError), Async: true})
+
 	// ---- pure data ----
 	m(&Builtin{Recv: "Int", Name: "to_string", Result: String})
 	m(&Builtin{Recv: "Int", Name: "abs", Result: Int})
+	for _, op := range []string{"bit_and", "bit_or", "bit_xor", "shl", "shr", "ushr", "min", "max"} {
+		m(&Builtin{Recv: "Int", Name: op, Params: []Type{Int}, Result: Int})
+	}
 	m(&Builtin{Recv: "Bool", Name: "to_string", Result: String})
 
 	m(&Builtin{Recv: "String", Name: "len", Result: Int})
@@ -91,6 +100,15 @@ func init() {
 	m(&Builtin{Recv: "String", Name: "trim", Result: String})
 	m(&Builtin{Recv: "String", Name: "to_upper", Result: String})
 	m(&Builtin{Recv: "String", Name: "to_lower", Result: String})
+	m(&Builtin{Recv: "String", Name: "char_at", Params: []Type{Int}, Result: opt(Int)})
+	m(&Builtin{Recv: "String", Name: "slice", Params: []Type{Int, Int}, Result: String})
+	m(&Builtin{Recv: "String", Name: "index_of", Params: []Type{String}, Result: opt(Int)})
+	m(&Builtin{Recv: "String", Name: "replace", Params: []Type{String, String}, Result: String})
+	m(&Builtin{Recv: "String", Name: "split", Params: []Type{String}, Result: &VecT{String}})
+	m(&Builtin{Recv: "String", Name: "to_bytes", Result: &VecT{Int}})
+	s(&Builtin{Recv: "String", Name: "from_char", Params: []Type{Int}, Result: String})
+	s(&Builtin{Recv: "String", Name: "from_bytes", Params: []Type{&VecT{Int}}, Result: String})
+	m(&Builtin{Recv: "IoError", Name: "message", Result: String})
 
 	m(&Builtin{Recv: "Request", Name: "method", Result: String})
 	m(&Builtin{Recv: "Request", Name: "path", Result: String})

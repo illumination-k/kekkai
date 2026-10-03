@@ -34,6 +34,8 @@ type Func struct {
 	Params  []*Binding
 	Result  Type
 	Handler bool
+	// Main marks the entry point of a command-line program.
+	Main bool
 	// Async is true when the function can reach an asynchronous builtin
 	// (directly or through calls) and is therefore compiled as a resumable
 	// state machine.
@@ -63,13 +65,14 @@ func (f *Func) Pure() bool { return len(f.Caps()) == 0 }
 type CallKind int
 
 const (
-	CallFunc    CallKind = iota // user function
-	CallOk                      // Ok(x)
-	CallErr                     // Err(x)
-	CallSome                    // Some(x)
-	CallNone                    // None
-	CallVariant                 // Enum::Variant(args) or Enum::Variant
-	CallStatic                  // builtin static, e.g. Response::text
+	CallFunc       CallKind = iota // user function
+	CallOk                         // Ok(x)
+	CallErr                        // Err(x)
+	CallSome                       // Some(x)
+	CallNone                       // None
+	CallVariant                    // Enum::Variant(args) or Enum::Variant
+	CallStatic                     // builtin static, e.g. Response::text
+	CallCollection                 // Vec::new(), Map::new()
 )
 
 type CallInfo struct {
@@ -78,7 +81,8 @@ type CallInfo struct {
 	Enum    *Enum
 	Tag     int
 	Builtin *Builtin
-	Type    Type // result type
+	Op      string // for CallCollection
+	Type    Type   // result type
 }
 
 // MethodKind classifies method calls.
@@ -146,6 +150,7 @@ type Info struct {
 	Uses       map[*syntax.Ident]*Binding
 	Lets       map[*syntax.LetStmt]*Binding
 	Assigns    map[*syntax.AssignStmt]*Binding
+	Fors       map[*syntax.ForStmt]*Binding
 	Calls      map[syntax.Expr]*CallInfo // *CallExpr, *PathExpr, *Ident (None)
 	Methods    map[*syntax.MethodCall]*MethodInfo
 	Fields     map[*syntax.FieldExpr]int
@@ -191,6 +196,7 @@ func Check(f *syntax.File) (*Info, error) {
 		Uses:       map[*syntax.Ident]*Binding{},
 		Lets:       map[*syntax.LetStmt]*Binding{},
 		Assigns:    map[*syntax.AssignStmt]*Binding{},
+		Fors:       map[*syntax.ForStmt]*Binding{},
 		Calls:      map[syntax.Expr]*CallInfo{},
 		Methods:    map[*syntax.MethodCall]*MethodInfo{},
 		Fields:     map[*syntax.FieldExpr]int{},
@@ -234,8 +240,8 @@ func (c *checker) newBinding(name string, t Type, pos syntax.Pos) *Binding {
 
 var reserved = map[string]bool{
 	"Int": true, "Bool": true, "String": true, "Result": true, "Option": true,
-	"Request": true, "Response": true, "TxError": true, "NetError": true,
-	"Log": true, "Net": true, "Db": true, "Clock": true, "Random": true, "Tx": true,
+	"Request": true, "Response": true, "TxError": true, "NetError": true, "IoError": true, "Vec": true, "Map": true,
+	"Log": true, "Net": true, "Db": true, "Fs": true, "Clock": true, "Random": true, "Tx": true,
 	"Ok": true, "Err": true, "Some": true, "None": true,
 }
 
@@ -298,8 +304,9 @@ func (c *checker) declare(f *syntax.File) {
 		}
 		fn := &Func{Name: fd.Name, Decl: fd, Calls: map[string]bool{}, Effects: map[string]bool{}}
 		fn.Handler = fd.HasAttr("handler")
+		fn.Main = fd.HasAttr("main")
 		for _, a := range fd.Attrs {
-			if a.Name != "handler" {
+			if a.Name != "handler" && a.Name != "main" {
 				c.errorf(a.Pos, "unknown attribute `#[%s]`", a.Name)
 			}
 		}
@@ -325,8 +332,36 @@ func (c *checker) declare(f *syntax.File) {
 		if fn.Handler {
 			c.checkHandlerSig(fn)
 		}
+		if fn.Main {
+			c.checkMainSig(fn)
+		}
 		c.info.Funcs[fd.Name] = fn
 		c.info.FuncList = append(c.info.FuncList, fn)
+	}
+}
+
+func (c *checker) checkMainSig(fn *Func) {
+	if c.info.Handler != nil {
+		c.errorf(fn.Decl.Pos, "a program has either one #[handler] or one #[main] (also defined: `%s`)", c.info.Handler.Name)
+		return
+	}
+	c.info.Handler = fn
+	nargs := 0
+	for _, p := range fn.Params {
+		if vt, ok := p.Type.(*VecT); ok && vt.Elem == String {
+			nargs++
+			if nargs > 1 {
+				c.errorf(p.Pos, "#[main] takes at most one `Vec<String>` (the command-line arguments)")
+			}
+			continue
+		}
+		if cp, ok := p.Type.(*Cap); ok && cp.Kind != CapTx {
+			continue
+		}
+		c.errorf(p.Pos, "#[main] parameters must be `Vec<String>` or capabilities (&Fs, &Log, &Net, &Db, &Clock, &Random), found `%s`", p.Type)
+	}
+	if fn.Result != Int {
+		c.errorf(fn.Decl.Pos, "#[main] must return `Int` (the exit code), found `%s`", fn.Result)
 	}
 }
 
@@ -408,8 +443,17 @@ func (c *checker) resolveType(te syntax.TypeExpr, allowCap bool) Type {
 		case "Option":
 			a := args(1)
 			return &OptionT{a[0]}
+		case "Vec":
+			a := args(1)
+			return &VecT{a[0]}
+		case "Map":
+			a := args(2)
+			if k := Prune(a[0]); k != Int && k != String {
+				c.errorf(te.Pos, "map keys must be Int or String, found `%s`", k)
+			}
+			return &MapT{a[0], a[1]}
 		}
-		for _, o := range []*Opaque{Request, Response, TxError, NetError} {
+		for _, o := range []*Opaque{Request, Response, TxError, NetError, IoError} {
 			if te.Name == o.Name {
 				args(0)
 				return o
@@ -452,6 +496,10 @@ func occurs(v *Var, t Type) bool {
 		return occurs(v, t.Ok) || occurs(v, t.Err)
 	case *OptionT:
 		return occurs(v, t.Elem)
+	case *VecT:
+		return occurs(v, t.Elem)
+	case *MapT:
+		return occurs(v, t.Key) || occurs(v, t.Val)
 	}
 	return false
 }
@@ -481,6 +529,12 @@ func unify(a, b Type) bool {
 	case *OptionT:
 		b, ok := b.(*OptionT)
 		return ok && unify(a.Elem, b.Elem)
+	case *VecT:
+		b, ok := b.(*VecT)
+		return ok && unify(a.Elem, b.Elem)
+	case *MapT:
+		b, ok := b.(*MapT)
+		return ok && unify(a.Key, b.Key) && unify(a.Val, b.Val)
 	case *Cap:
 		b, ok := b.(*Cap)
 		return ok && a.Kind == b.Kind && a.Borrowed == b.Borrowed
@@ -620,6 +674,27 @@ func (c *checker) checkStmt(s syntax.Stmt) bool {
 		c.expect(syntax.ExprPos(s.Cond), ct, Bool, "while condition")
 		bt := c.checkBlock(s.Body)
 		c.expect(s.Body.End, bt, Unit, "while body")
+		return false
+	case *syntax.ForStmt:
+		it := c.checkExpr(s.Iter)
+		var elem Type = Invalid
+		if s.End != nil {
+			et := c.checkExpr(s.End)
+			c.expect(syntax.ExprPos(s.Iter), it, Int, "range start")
+			c.expect(syntax.ExprPos(s.End), et, Int, "range end")
+			elem = Int
+		} else if vt, ok := Prune(it).(*VecT); ok {
+			elem = vt.Elem
+		} else if Prune(it) != Invalid {
+			c.errorf(syntax.ExprPos(s.Iter), "`for` iterates over a range `a..b` or a `Vec`, found `%s`", Prune(it))
+		}
+		c.push(false)
+		b := c.newBinding(s.Var, elem, s.Pos)
+		c.info.Fors[s] = b
+		c.bind(b)
+		bt := c.checkBlock(s.Body)
+		c.expect(s.Body.End, bt, Unit, "for body")
+		c.pop()
 		return false
 	case *syntax.ReturnStmt:
 		rc := c.rets[len(c.rets)-1]
@@ -883,8 +958,8 @@ func (c *checker) checkCall(e *syntax.CallExpr) Type {
 			}
 			return Invalid
 		}
-		if fn.Handler {
-			c.errorf(f.Pos, "the #[handler] `%s` cannot be called directly", fn.Name)
+		if fn.Handler || fn.Main {
+			c.errorf(f.Pos, "the entry point `%s` cannot be called directly", fn.Name)
 		}
 		params := make([]Type, len(fn.Params))
 		for i, p := range fn.Params {
@@ -928,6 +1003,20 @@ func (c *checker) checkPath(p *syntax.PathExpr, call *syntax.CallExpr) Type {
 		c.info.Calls[key] = &CallInfo{Kind: CallVariant, Enum: en, Tag: tag, Type: en}
 		return en
 	}
+	if (p.Type == "Vec" || p.Type == "Map") && p.Name == "new" {
+		if call == nil {
+			c.errorf(p.Pos, "`%s::new` is a function; call it with `()`", p.Type)
+		}
+		c.checkArgs(pos, "`"+p.Type+"::new`", args, nil)
+		var t Type
+		if p.Type == "Vec" {
+			t = &VecT{c.newVar()}
+		} else {
+			t = &MapT{c.newVar(), c.newVar()}
+		}
+		c.info.Calls[key] = &CallInfo{Kind: CallCollection, Op: lower(p.Type) + ".new", Type: t}
+		return t
+	}
 	if b := LookupStatic(p.Type, p.Name); b != nil {
 		if call == nil {
 			c.errorf(p.Pos, "`%s::%s` is a function; call it with `()`", p.Type, p.Name)
@@ -959,6 +1048,10 @@ func recvName(t Type) string {
 		return "Result"
 	case *OptionT:
 		return "Option"
+	case *VecT:
+		return "Vec"
+	case *MapT:
+		return "Map"
 	}
 	return "?"
 }
@@ -980,7 +1073,7 @@ func (c *checker) checkMethod(e *syntax.MethodCall) Type {
 		}
 	}
 	switch rt := rt.(type) {
-	case *ResultT, *OptionT:
+	case *ResultT, *OptionT, *VecT, *MapT:
 		return c.checkGenericMethod(e, rt)
 	case *Var:
 		c.errorf(e.Pos, "type annotations needed: cannot call method `%s` on a value of unknown type", e.Name)
@@ -1033,6 +1126,56 @@ func (c *checker) checkGenericMethod(e *syntax.MethodCall, rt Type) Type {
 		case "unwrap_or":
 			c.checkArgs(e.Pos, "`unwrap_or`", e.Args, []Type{rt.Elem})
 			result = rt.Elem
+		}
+	case *VecT:
+		mi.Op = "vec." + e.Name
+		var params []Type
+		switch e.Name {
+		case "push":
+			params, result = []Type{rt.Elem}, Unit
+		case "get":
+			params, result = []Type{Int}, &OptionT{rt.Elem}
+		case "set":
+			params, result = []Type{Int, rt.Elem}, Bool
+		case "len":
+			result = Int
+		case "pop":
+			result = &OptionT{rt.Elem}
+		case "join":
+			if !unify(rt.Elem, String) {
+				c.errorf(e.Pos, "`join` requires `Vec<String>`, found `%s`", rt)
+			}
+			params, result = []Type{String}, String
+		}
+		if result != nil {
+			c.checkArgs(e.Pos, "`Vec."+e.Name+"`", e.Args, params)
+		}
+	case *MapT:
+		mi.Op = "map." + e.Name
+		var params []Type
+		switch e.Name {
+		case "insert":
+			params, result = []Type{rt.Key, rt.Val}, Unit
+		case "get":
+			params, result = []Type{rt.Key}, &OptionT{rt.Val}
+		case "contains":
+			params, result = []Type{rt.Key}, Bool
+		case "remove":
+			params, result = []Type{rt.Key}, Unit
+		case "len":
+			result = Int
+		case "keys":
+			result = &VecT{rt.Key}
+		}
+		if result != nil {
+			c.checkArgs(e.Pos, "`Map."+e.Name+"`", e.Args, params)
+			switch k := Prune(rt.Key); k.(type) {
+			case *Var:
+			default:
+				if k != Int && k != String && k != Invalid {
+					c.errorf(e.Pos, "map keys must be Int or String, found `%s`", k)
+				}
+			}
 		}
 	}
 	if result == nil {
@@ -1394,8 +1537,8 @@ func (c *checker) computeAsync() {
 		}
 	}
 	for _, fn := range c.info.FuncList {
-		// The handler is the entry point driven by the JS event loop.
-		fn.Async = fn.Handler
+		// Entry points are driven by the JS event loop.
+		fn.Async = fn.Handler || fn.Main
 		for op := range fn.Effects {
 			if asyncOps[op] {
 				fn.Async = true

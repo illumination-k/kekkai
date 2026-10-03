@@ -39,6 +39,28 @@ function toTxError(e) {
   return new TxError(String(e && e.message ? e.message : e));
 }
 
+export class IoError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "IoError";
+  }
+}
+
+function toIoError(e) {
+  if (e instanceof IoError) return e;
+  return new IoError(String(e && e.message ? e.message : e));
+}
+
+/** File system capability for command-line programs (Node only). */
+export async function nodeFs() {
+  const fsp = await import("node:fs/promises");
+  return {
+    read: (p) => fsp.readFile(p, "utf8"),
+    write: (p, c) => fsp.writeFile(p, c),
+    writeBytes: (p, b) => fsp.writeFile(p, b),
+  };
+}
+
 function toNetError(e) {
   if (e instanceof NetError) return e;
   return new NetError(String(e && e.message ? e.message : e));
@@ -283,7 +305,42 @@ export function createKekkai(module, meta) {
     str_eq: (a, b) => (a === b ? 1 : 0),
     str_concat: (a, b) => a + b,
 
+    // --- collections (Vec <-> JS array conversion, Map as a JS Map) ---
+    arr_new: () => [],
+    arr_len: (a) => a.length,
+    arr_get: (a, i) => a[i],
+    arr_push: (a, x) => { a.push(x); },
+    box_i64: (x) => x,
+    box_i32: (x) => x,
+    map_new: () => new Map(),
+    map_len: (m) => BigInt(m.size),
+    map_keys: (m) => [...m.keys()],
+    map_get: (m, k) => (m.has(k) ? m.get(k) : null),
+    map_insert: (m, k, v) => { m.set(k, v); },
+    map_contains: (m, k) => (m.has(k) ? 1 : 0),
+    map_remove: (m, k) => { m.delete(k); },
+
     // --- pure data ---
+    "int.min": (a, b) => (a < b ? a : b),
+    "int.max": (a, b) => (a > b ? a : b),
+    "string.char_at": (s, i) => (i >= 0n && i < BigInt(s.length) ? BigInt(s.charCodeAt(Number(i))) : null),
+    "string.slice": (s, a, b) => {
+      const n = BigInt(s.length);
+      const clamp = (x) => (x < 0n ? 0n : x > n ? n : x);
+      const lo = clamp(a), hi = clamp(b);
+      return hi <= lo ? "" : s.slice(Number(lo), Number(hi));
+    },
+    "string.index_of": (s, t) => { const i = s.indexOf(t); return i < 0 ? null : BigInt(i); },
+    "string.replace": (s, a, b) => (a === "" ? s : s.split(a).join(b)),
+    "string.split": (s, sep) => (sep === "" ? [...s] : s.split(sep)),
+    "string.to_bytes": (s) => [...new TextEncoder().encode(s)].map(BigInt),
+    "string.from_char": (c) => String.fromCharCode(Number(BigInt.asUintN(16, c))),
+    "string.from_bytes": (a) => new TextDecoder().decode(new Uint8Array(a.map((x) => Number(BigInt.asUintN(8, x))))),
+    "ioError.message": (e) => e.message,
+    "fs.read": (fs, p) => start(asResult(fs.read(p), toIoError)),
+    "fs.write": (fs, p, c) => start(asResult(fs.write(p, c), toIoError)),
+    "fs.write_bytes": (fs, p, a) => start(asResult(fs.writeBytes(p, new Uint8Array(a.map((x) => Number(BigInt.asUintN(8, x))))), toIoError)),
+
     "int.to_string": (x) => x.toString(),
     "int.abs": (x) => i64(x < 0n ? -x : x),
     "bool.to_string": (b) => (b ? "true" : "false"),
@@ -375,6 +432,22 @@ export function createKekkai(module, meta) {
 
   return {
     exports: ex,
+    /**
+     * Run a #[main] program: `args` is an array of strings, `caps` maps
+     * parameter names to capabilities. Returns the exit code.
+     */
+    async main(argv, caps, ctx = {}) {
+      const args = [];
+      for (const p of meta.handlerParams) {
+        if (p.kind === "args") args.push(argv);
+        else {
+          const c = caps[p.name];
+          if (!c) throw new Error(`kekkai: missing capability ${p.name}: ${p.kind}`);
+          args.push(c);
+        }
+      }
+      return Number(await run(args, ctx));
+    },
     /**
      * Run the handler. `caps` maps handler parameter names to capability
      * objects (Db capabilities are { store, outbox }).

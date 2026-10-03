@@ -47,6 +47,13 @@ type fieldType struct {
 	mut bool
 }
 
+// compType is a struct type, or an array type when array is set (elem in
+// fields[0]).
+type compType struct {
+	fields []fieldType
+	array  bool
+}
+
 type sig struct {
 	params, results []ValType
 }
@@ -82,8 +89,9 @@ type defFunc struct {
 type module struct {
 	prog *ir.Program
 
-	structs  [][]fieldType
-	aggType  []int     // IR aggregate index -> wasm type index
+	structs  []compType
+	aggType  []int     // IR aggregate index -> wasm type index (struct; -1 for maps)
+	vecArr   []int     // vec aggregate index -> wasm array type index
 	aggSlots [][][]int // variant aggregates: [tag][field] -> struct field index
 	frame    map[string]int
 
@@ -166,6 +174,9 @@ func (m *module) val(t ir.Ty) ValType {
 	case ir.TString, ir.TExt:
 		return ExternRef
 	case ir.TAgg:
+		if m.prog.Types[t.Agg].Coll == "map" {
+			return ExternRef
+		}
 		return RefNull(m.aggType[t.Agg])
 	}
 	panic("bad type")
@@ -174,18 +185,39 @@ func (m *module) val(t ir.Ty) ValType {
 func (m *module) layoutTypes() {
 	p := m.prog
 	m.aggType = make([]int, len(p.Types))
+	m.vecArr = make([]int, len(p.Types))
 	m.aggSlots = make([][][]int, len(p.Types))
-	for i := range p.Types {
-		m.aggType[i] = i
-	}
+	// assign indices first: types may be (mutually) recursive
+	next := 0
 	for i, td := range p.Types {
-		var fields []fieldType
-		if !td.IsVariant {
+		m.aggType[i], m.vecArr[i] = -1, -1
+		switch td.Coll {
+		case "map":
+			continue
+		case "vec":
+			m.aggType[i] = next
+			m.vecArr[i] = next + 1
+			next += 2
+		default:
+			m.aggType[i] = next
+			next++
+		}
+	}
+	m.structs = make([]compType, next)
+	for i, td := range p.Types {
+		switch {
+		case td.Coll == "map":
+		case td.Coll == "vec":
+			m.structs[m.aggType[i]] = compType{fields: []fieldType{{I32, true}, {RefNull(m.vecArr[i]), true}}}
+			m.structs[m.vecArr[i]] = compType{array: true, fields: []fieldType{{m.val(*td.Elem), true}}}
+		case !td.IsVariant:
+			var fields []fieldType
 			for _, f := range td.Fields {
 				fields = append(fields, fieldType{t: m.val(f)})
 			}
-		} else {
-			fields = append(fields, fieldType{t: I32}) // tag
+			m.structs[m.aggType[i]] = compType{fields: fields}
+		default:
+			fields := []fieldType{{t: I32}} // tag
 			m.aggSlots[i] = make([][]int, len(td.Variants))
 			for tag, vs := range td.Variants {
 				for _, f := range vs {
@@ -193,8 +225,8 @@ func (m *module) layoutTypes() {
 					fields = append(fields, fieldType{t: m.val(f)})
 				}
 			}
+			m.structs[m.aggType[i]] = compType{fields: fields}
 		}
-		m.structs = append(m.structs, fields)
 	}
 	for _, f := range p.Funcs {
 		if !f.Async {
@@ -205,7 +237,7 @@ func (m *module) layoutTypes() {
 			fields = append(fields, fieldType{m.val(l), true})
 		}
 		m.frame[f.Name] = len(m.structs)
-		m.structs = append(m.structs, fields)
+		m.structs = append(m.structs, compType{fields: fields})
 	}
 }
 
@@ -276,15 +308,18 @@ func (m *module) collectImports() {
 	for _, h := range helperImports {
 		m.addImport(h.name, h.sig, false)
 	}
+	for _, h := range collectionImports {
+		m.addImport(h.name, h.sig, false)
+	}
 	for _, f := range m.prog.Funcs {
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
-				if in.Op != "host" && in.Op != "await" {
+				if in.Op != "host" && in.Op != "await" || isCollectionOp(in.Name) || isInlineIntOp(in.Name) {
 					continue
 				}
 				s := sig{}
 				for _, a := range in.Args {
-					s.params = append(s.params, m.val(f.Locals[a]))
+					s.params = append(s.params, m.hostParam(f.Locals[a]))
 				}
 				if in.Op == "host" {
 					s.results = m.hostResult(f.Locals[in.Dst])
@@ -396,7 +431,13 @@ func (m *module) liftTo(c *code, t ir.Ty) {
 		c.call(m.imp("to_i32"))
 	case ir.TString, ir.TExt:
 	case ir.TAgg:
-		c.call(m.liftFunc(t.Agg))
+		switch m.prog.Types[t.Agg].Coll {
+		case "vec":
+			c.call(m.vecFromHostFunc(t.Agg))
+		case "map":
+		default:
+			c.call(m.liftFunc(t.Agg))
+		}
 	}
 }
 
@@ -593,6 +634,7 @@ func (g *fnGen) startSuspend(in ir.Instr, resumeSeg int) {
 	c := g.c
 	for _, a := range in.Args {
 		c.get(g.local[a])
+		g.m.toHost(c, g.f.Locals[a])
 	}
 	if in.Op == "await" {
 		c.call(g.m.imp(in.Name))
@@ -671,15 +713,23 @@ func (g *fnGen) instr(in ir.Instr) {
 		}
 		c.call(m.funcIdx[in.Name])
 	case "host":
+		if isCollectionOp(in.Name) {
+			g.collOp(in)
+			break
+		}
+		if g.intOp(in) {
+			break
+		}
 		for k := range in.Args {
 			arg(k)
+			m.toHost(c, g.f.Locals[in.Args[k]])
 		}
 		c.call(m.imp(in.Name))
 		switch dstTy.Kind {
 		case ir.TUnit:
 			c.i32(0)
 		case ir.TAgg:
-			c.call(m.liftFunc(dstTy.Agg))
+			m.liftTo(c, dstTy)
 		}
 	case "struct":
 		for k := range in.Args {
@@ -908,12 +958,17 @@ func (m *module) genHandlerExports() error {
 		return fmt.Errorf("handler %q must be compiled as async", m.prog.Handler)
 	}
 	ft := m.frame[f.Name]
-	s := m.funcSig(f)
-	s.results = []ValType{AnyRef}
+	s := sig{results: []ValType{AnyRef}}
+	for i := 0; i < f.NParams; i++ {
+		s.params = append(s.params, m.hostParam(f.Locals[i]))
+	}
 	m.reserve("$handler_new", s)
 	d := m.def("$handler_new")
 	for i := 0; i < f.NParams; i++ {
 		d.body.get(i)
+		if t := f.Locals[i]; t.Kind == ir.TAgg {
+			m.liftTo(&d.body, t) // command-line arguments: JS array -> Vec<String>
+		}
 	}
 	d.body.call(m.funcIdx[f.Name+"$new"])
 	d.body.op(opEnd)
@@ -997,9 +1052,13 @@ func (m *module) encode() []byte {
 		ts.byte(0x4e)
 		ts.u32(uint32(len(m.structs)))
 		for _, st := range m.structs {
-			ts.byte(0x5f)
-			ts.u32(uint32(len(st)))
-			for _, f := range st {
+			if st.array {
+				ts.byte(0x5e)
+			} else {
+				ts.byte(0x5f)
+				ts.u32(uint32(len(st.fields)))
+			}
+			for _, f := range st.fields {
 				ts.valtype(f.t)
 				if f.mut {
 					ts.byte(1)

@@ -24,10 +24,16 @@ func Lower(info *types.Info) *Program {
 	}
 	if h := info.Handler; h != nil {
 		l.prog.Handler = h.Name
+		l.prog.Entry = "handler"
+		if h.Main {
+			l.prog.Entry = "main"
+		}
 		for _, p := range h.Params {
 			kind := "request"
 			if cp, ok := p.Type.(*types.Cap); ok {
 				kind = cp.Kind.String()
+			} else if _, ok := p.Type.(*types.VecT); ok {
+				kind = "args"
 			}
 			l.prog.HandlerParams = append(l.prog.HandlerParams, HandlerParam{Kind: kind, Name: p.Name})
 		}
@@ -104,6 +110,14 @@ func (l *lowerer) agg(t types.Type) int {
 	case *types.OptionT:
 		td.IsVariant = true
 		td.Variants = [][]Ty{{}, {l.ty(t.Elem)}}
+	case *types.VecT:
+		td.Coll = "vec"
+		e := l.ty(t.Elem)
+		td.Elem = &e
+	case *types.MapT:
+		td.Coll = "map"
+		k, v := l.ty(t.Key), l.ty(t.Val)
+		td.Key, td.Elem = &k, &v
 	default:
 		panic(fmt.Sprintf("no aggregate layout for %s", t))
 	}
@@ -211,6 +225,8 @@ func (l *lowerer) stmt(s syntax.Stmt) {
 		l.block(s.Body)
 		l.jump(head)
 		l.setBlock(exit)
+	case *syntax.ForStmt:
+		l.forStmt(s)
 	case *syntax.ReturnStmt:
 		var v int
 		if s.Value != nil {
@@ -220,6 +236,47 @@ func (l *lowerer) stmt(s syntax.Stmt) {
 		}
 		l.ret(l.info.Returns[s].Closure, v)
 	}
+}
+
+// forStmt lowers `for x in a..b` and `for x in vec`:
+//
+//	i = a; end = b                 i = 0
+//	head: br i < end body exit     head: n = vec.len(v); br i < n body exit
+//	body: x = i; ...; i = i + 1    body: x = vec.at(v, i); ...; i = i + 1
+func (l *lowerer) forStmt(s *syntax.ForStmt) {
+	intTy := Ty{Kind: TInt}
+	b := l.info.Fors[s]
+	i := l.newLocal(intTy, "i")
+	var end, vec, agg int
+	if s.End != nil {
+		l.copyTo(i, l.expr(s.Iter))
+		end = l.newLocal(intTy, "end")
+		l.copyTo(end, l.expr(s.End))
+	} else {
+		vec = l.expr(s.Iter)
+		agg = l.agg(types.Resolve(l.info.TypeOf(s.Iter)))
+		l.copyTo(i, l.intc(0))
+	}
+	head, body, exit := l.newBlock(), l.newBlock(), l.newBlock()
+	l.jump(head)
+	l.setBlock(head)
+	if s.End == nil {
+		end = l.emitTo(intTy, Instr{Op: "host", Name: "vec.len", Type: agg, Args: []int{vec}})
+	}
+	c := l.emitTo(Ty{Kind: TBool}, Instr{Op: "binop", Name: "lt", Args: []int{i, end}})
+	l.terminate(Term{Op: "br", Args: []int{c}, Targets: []int{body, exit}})
+	l.setBlock(body)
+	x := l.newLocal(l.ty(b.Type), b.Name)
+	if s.End != nil {
+		l.copyTo(x, i)
+	} else {
+		l.emit(Instr{Op: "host", Name: "vec.at", Dst: x, Type: agg, Args: []int{vec, i}})
+	}
+	l.vars[b] = x
+	l.block(s.Body)
+	l.copyTo(i, l.emitTo(intTy, Instr{Op: "binop", Name: "add", Args: []int{i, l.intc(1)}}))
+	l.jump(head)
+	l.setBlock(exit)
 }
 
 // ret leaves the enclosing function, or the transaction body ci.
@@ -389,6 +446,8 @@ func (l *lowerer) call(e syntax.Expr, ci *types.CallInfo, argExprs []syntax.Expr
 		return l.emitTo(t, Instr{Op: "variant", Type: l.agg(ci.Enum), Tag: ci.Tag, Args: args})
 	case types.CallStatic:
 		return l.host(t, ci.Builtin, args)
+	case types.CallCollection:
+		return l.emitTo(t, Instr{Op: "host", Name: ci.Op, Type: l.agg(types.Resolve(ci.Type))})
 	}
 	panic("lower: bad call")
 }
@@ -411,10 +470,15 @@ func (l *lowerer) method(e *syntax.MethodCall) int {
 		args := append([]int{l.expr(e.Recv)}, l.exprs(e.Args)...)
 		return l.host(t, mi.Builtin, args)
 	}
-	// compiler-implemented Result/Option methods
 	recv := l.expr(e.Recv)
 	rt := types.Resolve(mi.RecvTy)
 	agg := l.agg(rt)
+	switch rt.(type) {
+	case *types.VecT, *types.MapT:
+		args := append([]int{recv}, l.exprs(e.Args)...)
+		return l.emitTo(t, Instr{Op: "host", Name: mi.Op, Type: agg, Args: args})
+	}
+	// compiler-implemented Result/Option methods
 	tag := l.emitTo(Ty{Kind: TInt}, Instr{Op: "tag", Type: agg, Args: []int{recv}})
 	_, isOpt := rt.(*types.OptionT)
 	switch mi.Op {

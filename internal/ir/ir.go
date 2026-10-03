@@ -47,10 +47,14 @@ func (t Ty) String() string {
 // TypeDef is an aggregate layout.
 type TypeDef struct {
 	Name string `json:"name"`
-	// Struct types have Fields; variant types have Variants.
+	// Struct types have Fields; variant types have Variants; collections
+	// have Coll set ("vec": Vec<Elem>, "map": Map<Key, Elem>).
 	IsVariant bool   `json:"variant"`
 	Fields    []Ty   `json:"fields,omitempty"`
 	Variants  [][]Ty `json:"variants,omitempty"`
+	Coll      string `json:"coll,omitempty"`
+	Elem      *Ty    `json:"elem,omitempty"`
+	Key       *Ty    `json:"key,omitempty"`
 }
 
 // Const is a literal.
@@ -75,6 +79,14 @@ type Const struct {
 //	variant  Dst = Type.Tag(Args...)
 //	tag      Dst = tag(Args[0])             (Type)
 //	vfield   Dst = Args[0].Tag.Index        (Type)
+//
+// Collection operations are `host` instructions whose Name starts with
+// "vec." or "map."; Type is the collection's aggregate. They are
+// implemented by the backend (not the JS host):
+//
+//	vec.new vec.push vec.get vec.set vec.len vec.pop vec.join
+//	vec.at (unchecked read used by `for`; index proven in range)
+//	map.new map.insert map.get map.contains map.remove map.len map.keys
 type Instr struct {
 	Op    string `json:"op"`
 	Dst   int    `json:"dst"`
@@ -116,7 +128,7 @@ type Func struct {
 
 // HandlerParam describes how the runtime supplies a handler argument.
 type HandlerParam struct {
-	Kind string `json:"kind"` // "request" or a capability name: Log, Net, Db, Clock, Random
+	Kind string `json:"kind"` // "request", "args" (Vec<String>) or a capability name: Log, Net, Db, Clock, Random, Fs
 	Name string `json:"name"` // source parameter name (selects the binding)
 }
 
@@ -124,6 +136,7 @@ type Program struct {
 	Types         []*TypeDef     `json:"types"`
 	Funcs         []*Func        `json:"funcs"`
 	Handler       string         `json:"handler,omitempty"`
+	Entry         string         `json:"entry,omitempty"` // "handler" or "main"
 	HandlerParams []HandlerParam `json:"handler_params,omitempty"`
 }
 

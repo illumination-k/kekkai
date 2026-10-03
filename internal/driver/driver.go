@@ -47,7 +47,7 @@ func Compile(src string) (*Artifacts, error) {
 		MetaJS:  glue.MetaJS(glue.Meta{Strings: out.Strings, HandlerParams: prog.HandlerParams}),
 		Runtime: glue.Runtime,
 	}
-	if prog.Handler != "" {
+	if prog.Entry == "handler" {
 		a.WorkerJS = glue.WorkerJS(prog.HandlerParams)
 	}
 	return a, nil

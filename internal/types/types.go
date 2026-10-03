@@ -33,6 +33,7 @@ var (
 	Response = &Opaque{"Response"}
 	TxError  = &Opaque{"TxError"}
 	NetError = &Opaque{"NetError"}
+	IoError  = &Opaque{"IoError"}
 )
 
 func (o *Opaque) String() string { return o.Name }
@@ -86,6 +87,17 @@ type ResultT struct{ Ok, Err Type }
 
 func (r *ResultT) String() string { return fmt.Sprintf("Result<%s, %s>", r.Ok, r.Err) }
 
+// VecT is Vec<Elem>: a growable array with reference semantics.
+type VecT struct{ Elem Type }
+
+func (v *VecT) String() string { return fmt.Sprintf("Vec<%s>", v.Elem) }
+
+// MapT is Map<Key, Val> (Key is Int or String), insertion-ordered, with
+// reference semantics.
+type MapT struct{ Key, Val Type }
+
+func (m *MapT) String() string { return fmt.Sprintf("Map<%s, %s>", m.Key, m.Val) }
+
 // OptionT is Option<Elem>.
 type OptionT struct{ Elem Type }
 
@@ -101,6 +113,7 @@ const (
 	CapClock
 	CapRandom
 	CapTx
+	CapFs
 )
 
 // CapInfo describes the static properties of a capability kind.
@@ -119,10 +132,11 @@ var capInfos = map[CapKind]CapInfo{
 	CapClock:  {"Clock", true},
 	CapRandom: {"Random", true},
 	CapTx:     {"Tx", true},
+	CapFs:     {"Fs", false},
 }
 
 var capByName = map[string]CapKind{
-	"Log": CapLog, "Net": CapNet, "Db": CapDb, "Clock": CapClock, "Random": CapRandom, "Tx": CapTx,
+	"Log": CapLog, "Net": CapNet, "Db": CapDb, "Clock": CapClock, "Random": CapRandom, "Tx": CapTx, "Fs": CapFs,
 }
 
 func (k CapKind) Info() CapInfo  { return capInfos[k] }
@@ -178,6 +192,10 @@ func Resolve(t Type) Type {
 		return &ResultT{Resolve(t.Ok), Resolve(t.Err)}
 	case *OptionT:
 		return &OptionT{Resolve(t.Elem)}
+	case *VecT:
+		return &VecT{Resolve(t.Elem)}
+	case *MapT:
+		return &MapT{Resolve(t.Key), Resolve(t.Val)}
 	}
 	return t
 }
@@ -198,6 +216,12 @@ func Identical(a, b Type) bool {
 	case *OptionT:
 		b, ok := b.(*OptionT)
 		return ok && Identical(a.Elem, b.Elem)
+	case *VecT:
+		b, ok := b.(*VecT)
+		return ok && Identical(a.Elem, b.Elem)
+	case *MapT:
+		b, ok := b.(*MapT)
+		return ok && Identical(a.Key, b.Key) && Identical(a.Val, b.Val)
 	case *Cap:
 		b, ok := b.(*Cap)
 		return ok && a.Kind == b.Kind && a.Borrowed == b.Borrowed
@@ -224,6 +248,16 @@ func writeKey(b *strings.Builder, t Type) {
 	case *OptionT:
 		b.WriteString("Option<")
 		writeKey(b, t.Elem)
+		b.WriteString(">")
+	case *VecT:
+		b.WriteString("Vec<")
+		writeKey(b, t.Elem)
+		b.WriteString(">")
+	case *MapT:
+		b.WriteString("Map<")
+		writeKey(b, t.Key)
+		b.WriteString(",")
+		writeKey(b, t.Val)
 		b.WriteString(">")
 	default:
 		b.WriteString(t.String())

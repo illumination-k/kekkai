@@ -92,6 +92,23 @@ func (lc *linChecker) stmt(st syntax.Stmt, s lstate) lstate {
 			}
 		}
 		return s
+	case *syntax.ForStmt:
+		s = lc.expr(st.Iter, s)
+		if st.End != nil {
+			s = lc.expr(st.End, s)
+		}
+		if s == nil {
+			return nil
+		}
+		after := lc.block(st.Body, s.clone())
+		if after != nil {
+			for k, v := range after {
+				if s[k] != v {
+					lc.errorf(st.Pos, "transaction `%s` cannot be committed or rolled back inside a loop", k.Name)
+				}
+			}
+		}
+		return s
 	case *syntax.ReturnStmt:
 		if st.Value != nil {
 			s = lc.expr(st.Value, s)

@@ -91,7 +91,7 @@ func isDigit(c byte) bool { return '0' <= c && c <= '9' }
 
 var twoCharOps = map[string]TokenKind{
 	"::": ColonColon, "->": Arrow, "=>": FatArrow, "&&": AmpAmp, "||": PipePipe,
-	"==": Eq, "!=": Ne, "<=": Le, ">=": Ge,
+	"==": Eq, "!=": Ne, "<=": Le, ">=": Ge, "..": DotDot,
 }
 
 var oneCharOps = map[byte]TokenKind{

@@ -124,6 +124,15 @@ type WhileStmt struct {
 	Body *Block
 }
 
+// ForStmt is `for x in start..end { }` (End != nil) or `for x in vec { }`.
+type ForStmt struct {
+	Pos  Pos
+	Var  string
+	Iter Expr
+	End  Expr
+	Body *Block
+}
+
 type ReturnStmt struct {
 	Pos   Pos
 	Value Expr // optional
@@ -138,6 +147,7 @@ type ExprStmt struct {
 func (*LetStmt) stmt()    {}
 func (*AssignStmt) stmt() {}
 func (*WhileStmt) stmt()  {}
+func (*ForStmt) stmt()    {}
 func (*ReturnStmt) stmt() {}
 func (*ExprStmt) stmt()   {}
 

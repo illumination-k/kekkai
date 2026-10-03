@@ -71,7 +71,11 @@ func TestE2E(t *testing.T) {
 		name := strings.TrimSuffix(filepath.Base(file), ".kek")
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			compileTo(t, file, dir)
+			if a := compileTo(t, file, dir); a.WorkerJS != "" {
+				if out, err := exec.Command(node, "--check", filepath.Join(dir, "worker.js")).CombinedOutput(); err != nil {
+					t.Fatalf("generated worker.js does not parse: %v\n%s", err, out)
+				}
+			}
 			testFile := strings.TrimSuffix(file, ".kek") + ".test.mjs"
 			out, err := exec.Command(node, "harness.mjs", dir, testFile).CombinedOutput()
 			if err != nil {

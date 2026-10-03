@@ -1,0 +1,129 @@
+// Webhook fan-out: an event is stored and delivered to every subscriber.
+//
+//   POST /subscribers   body = https URL     -> 201 {"id":N}
+//        the URL is verified first: GET <url>?challenge=kekkai must answer "kekkai"
+//   POST /events        body = payload       -> 202 {"event":N,"deliveries":K}
+//   GET  /events/<id>                        -> the stored payload
+//
+// Why `Net` is masked inside transactions: if publish() POSTed to each
+// subscriber while the transaction was open, a later conflict or error
+// would roll the event back after subscribers had already been told about
+// it (and a retry would notify them twice). The type checker rejects that
+// program (see net_in_tx.bad.kek). Instead each delivery is queued with
+// `tx.outbox`; the runtime sends them only after the commit succeeds, so
+// subscribers only ever hear about events that exist.
+//
+// Network calls that do not depend on transactional state are fine outside
+// a transaction: subscribe() verifies the URL with `net` before it opens
+// one.
+//
+// Layout: sub:count, sub:<i> (URL), event:next, event:<id> (payload).
+
+enum HookError {
+    Invalid(String),
+    Unverified(String),
+    Store(TxError),
+}
+
+fn sub_key(i: Int) -> String { "sub:" + i.to_string() }
+fn event_key(i: Int) -> String { "event:" + i.to_string() }
+
+fn read_int(tx: &Tx, key: String) -> Result<Int, TxError> {
+    match tx.get(key)? {
+        Some(s) => Ok(s.parse_int().unwrap_or(0)),
+        None => Ok(0),
+    }
+}
+
+// Irrevocable network I/O, outside any transaction.
+fn verify(net: &Net, url: String) -> Result<(), HookError> {
+    match net.get(url + "?challenge=kekkai") {
+        Ok(body) => if body.trim() == "kekkai" { Ok(()) } else { Err(HookError::Unverified("wrong challenge answer")) },
+        Err(e) => Err(HookError::Unverified(e.message())),
+    }
+}
+
+fn subscribe(db: &Db, net: &Net, url: String) -> Result<Int, HookError> {
+    if !url.starts_with("https://") || url.contains(" ") || url.contains("\"") {
+        return Err(HookError::Invalid("subscriber URL must be https"));
+    }
+    verify(net, url)?;
+    let r = db.transaction(|tx| {
+        let n = read_int(tx, "sub:count")?;
+        tx.put(sub_key(n), url)?;
+        tx.put("sub:count", (n + 1).to_string())?;
+        tx.commit()?;
+        Ok(n)
+    });
+    match r {
+        Ok(n) => Ok(n),
+        Err(e) => Err(HookError::Store(e)),
+    }
+}
+
+// Store the event and queue one delivery per subscriber, atomically.
+fn publish(db: &Db, log: &Log, payload: String) -> Result<String, TxError> {
+    db.transaction(|tx| {
+        let id = read_int(tx, "event:next")? + 1;
+        tx.put("event:next", id.to_string())?;
+        tx.put(event_key(id), payload)?;
+        let envelope = "{\"event\":" + id.to_string() + ",\"payload\":\"" + payload + "\"}";
+        let count = read_int(tx, "sub:count")?;
+        let mut i = 0;
+        let mut deliveries = 0;
+        while i < count {
+            match tx.get(sub_key(i))? {
+                Some(url) => {
+                    // net.post(url, envelope) here would be a type error.
+                    tx.outbox(url, envelope);
+                    deliveries = deliveries + 1;
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+        log.info("event " + id.to_string() + " queued for " + deliveries.to_string() + " subscribers");
+        tx.commit()?;
+        Ok("{\"event\":" + id.to_string() + ",\"deliveries\":" + deliveries.to_string() + "}")
+    })
+}
+
+fn store_error(e: TxError) -> Response {
+    if e.retryable() { Response::text(503, "conflict, retry") } else { Response::text(500, e.message()) }
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, net: &Net, log: &Log) -> Response {
+    let section = req.segment(0).unwrap_or("");
+    let method = req.method();
+    if section == "subscribers" && method == "POST" {
+        return match subscribe(db, net, req.body().trim()) {
+            Ok(id) => Response::json(201, "{\"id\":" + id.to_string() + "}"),
+            Err(HookError::Invalid(m)) => Response::bad_request(m),
+            Err(HookError::Unverified(m)) => Response::text(422, "subscriber not verified: " + m),
+            Err(HookError::Store(e)) => store_error(e),
+        };
+    }
+    if section == "events" && method == "POST" {
+        let payload = req.body();
+        if payload.len() == 0 || payload.contains("\"") || payload.contains("\\") {
+            return Response::bad_request("payload must be non-empty text without quotes or backslashes");
+        }
+        return match publish(db, log, payload) {
+            Ok(body) => Response::json(202, body),
+            Err(e) => store_error(e),
+        };
+    }
+    if section == "events" && method == "GET" {
+        let id = match req.segment(1).unwrap_or("").parse_int() {
+            Some(n) => n,
+            None => { return Response::bad_request("bad event id"); }
+        };
+        return match db.get(event_key(id)) {
+            Ok(Some(p)) => Response::text(200, p),
+            Ok(None) => Response::not_found(),
+            Err(e) => store_error(e),
+        };
+    }
+    Response::not_found()
+}

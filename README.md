@@ -66,11 +66,12 @@ capability を受け取らないテストは純粋なので hermetic で、出�
 ## 開発
 
 ```sh
-mise run test        # go test ./...（単体・ゴールデン・Node 上の e2e・差分テスト）
+mise run test        # node tests/run.mjs（Node と ./kek だけ：不動点・check・run・e2e・差分テスト・fmt・workerd）
+mise run test-go     # go test ./...（stage0、Go の撤去まで）
 mise run fmt         # gofmt と kek fmt -w
 mise run fmt-check   # フォーマット検査
 mise run lean        # Lean の証明をビルド
 mise run ci          # vet・test・fmt-check・lean をまとめて実行（CI と同じ）
 ```
 
-CI（`.github/workflows/ci.yml`）は `jdx/mise-action` でツールを入れ、`go vet`・`go test ./...`・`mise run fmt-check`・`mise run lean` を実行します。
+CI（`.github/workflows/ci.yml`）は `jdx/mise-action` でツールを入れ、`node tests/run.mjs`（Go なし）と、`go vet`・`go test ./...`・`mise run fmt-check`・`mise run lean` を実行します。

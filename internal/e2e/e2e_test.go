@@ -77,7 +77,7 @@ func TestE2E(t *testing.T) {
 				}
 			}
 			testFile := strings.TrimSuffix(file, ".kek") + ".test.mjs"
-			out, err := exec.Command(node, "harness.mjs", dir, testFile).CombinedOutput()
+			out, err := exec.Command(node, "../../tests/e2e/harness.mjs", dir, testFile).CombinedOutput()
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
@@ -89,7 +89,7 @@ func TestE2E(t *testing.T) {
 // D1KvStore on a node:sqlite D1, DurableObjectStore, RemoteKvStore).
 func TestAdapters(t *testing.T) {
 	node := nodePath(t)
-	out, err := exec.Command(node, "adapters.test.mjs").CombinedOutput()
+	out, err := exec.Command(node, "../../tests/e2e/adapters.test.mjs").CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

@@ -39,7 +39,7 @@ func TestWorkers(t *testing.T) {
 
 	dir := t.TempDir()
 	compileTo(t, "../../testdata/e2e/bank.kek", dir)
-	tw, err := os.ReadFile("workers/test_worker.js")
+	tw, err := os.ReadFile("../../tests/workers/test_worker.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ INSERT OR IGNORE INTO kekkai_kv_clock (id, n) SELECT 0, COALESCE(MAX(ver), 0) FR
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	out, err := exec.Command(node, "workers/bank.workers.mjs", base).CombinedOutput()
+	out, err := exec.Command(node, "../../tests/workers/bank.workers.mjs", base).CombinedOutput()
 	t.Logf("%s", out)
 	if err != nil {
 		t.Fatalf("%v\n--- wrangler output ---\n%s", err, logs.String())

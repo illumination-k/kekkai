@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  node:
+    name: tests (Node + ./kek, no Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install_args: node
+          cache: true
+      - run: node tests/run.mjs
+
   go:
     name: vet / test / fmt
     runs-on: ubuntu-latest

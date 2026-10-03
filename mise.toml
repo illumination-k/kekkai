@@ -10,8 +10,16 @@ description = "Build the kek compiler"
 run = "go build -o bin/kek ./cmd/kek"
 
 [tasks.test]
-description = "Run Go tests (unit, golden, e2e on Node)"
+description = "Run all tests with Node and ./kek only (bootstrap fixed point, check, run, e2e, adapters, difftest, fmt, workerd, node:test files); args: node tests/run.mjs --help"
+run = "node tests/run.mjs"
+
+[tasks.test-go]
+description = "Run the Go tests (stage0; removed with the Go implementation)"
 run = "go test ./..."
+
+[tasks.difftest]
+description = "Differential test against the Lean reference interpreter (mise run lean first; usage: mise run difftest -- -n 500)"
+run = "node tests/run.mjs difftest"
 
 [tasks.lean]
 description = "Build and check the Lean formalization"
@@ -42,15 +50,15 @@ run = "node --test 'tests/*.test.mjs'"
 
 [tasks.ci]
 description = "Everything CI runs: vet, tests, format check, Lean proofs"
-depends = ["vet", "test", "test-node", "fmt-check", "lean"]
+depends = ["vet", "test", "test-go", "fmt-check", "lean"]
 
 [tasks.e2e]
 description = "Run the Node e2e tests and the store adapter conformance suite"
-run = "go test ./internal/e2e -run 'TestE2E|TestAdapters|TestBadExamples' -v"
+run = "node tests/run.mjs e2e adapters bad-examples"
 
 [tasks.e2e-workers]
 description = "Run a compiled program on workerd (wrangler dev --local, local D1 + Durable Objects) and drive it over HTTP"
-run = "go test ./internal/e2e -run TestWorkers -v -count=1"
+run = "node tests/run.mjs -v workers"
 
 [tasks.dev]
 description = "Build a .kek file and serve it locally with wrangler dev (usage: mise run dev -- examples/todo/todo.kek)"

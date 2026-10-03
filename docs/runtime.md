@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS kekkai_kv_clock (id INTEGER PRIMARY KEY CHECK (id = 0
 INSERT OR IGNORE INTO kekkai_kv_clock (id, n) SELECT 0, COALESCE(MAX(ver), 0) FROM kekkai_kv;
 ```
 
-初期データは `wrangler d1 execute DB --local --file seed.sql` で投入できる。上の4文の3文目と4文目の間に `INSERT INTO kekkai_kv VALUES ('balance:alice', '100', 1), ...` を入れれば、時計は既存の最大バージョンから始まる（`internal/e2e/workers_test.go` がこの手順を使う）。
+初期データは `wrangler d1 execute DB --local --file seed.sql` で投入できる。上の4文の3文目と4文目の間に `INSERT INTO kekkai_kv VALUES ('balance:alice', '100', 1), ...` を入れれば、時計は既存の最大バージョンから始まる（`tests/suites/workers.mjs` がこの手順を使う）。
 
 D1は単一ライタなので、スループットはD1データベース1つ分が上限になる。
 
@@ -104,7 +104,7 @@ Durable Object（DO）の中で、そのトランザクショナルストレー�
 
 ### RemoteKvStore（分散ストア向けの骨組み）
 
-HTTPのゲートウェイ越しに楽観的KVを使う汎用アダプタ。ゲートウェイの参照実装（スナップショット読み取り付きのMVCC）が `internal/e2e/fakes.mjs` にある。
+HTTPのゲートウェイ越しに楽観的KVを使う汎用アダプタ。ゲートウェイの参照実装（スナップショット読み取り付きのMVCC）が `tests/e2e/fakes.mjs` にある。
 
 ```
 POST {base}/begin                          -> { "readVersion": any }
@@ -173,16 +173,16 @@ TARGET=do mise run dev -- examples/todo/todo.kek  # Durable Objects
 | `mise run e2e` | Node上のe2e（`testdata/e2e/*.kek`、`examples/*/*.kek`）、アダプタ適合テスト、`*.bad.kek` が期待どおり型エラーになることの確認 |
 | `mise run e2e-workers` | `bank.kek` をビルドし、`wrangler d1 execute` でD1に初期データを入れ、`wrangler dev --local` 上でHTTPで動かす（D1とDOの両方） |
 
-- **適合テスト**（`internal/e2e/adapters.test.mjs`）：lost update、write skew、phantom、delete→再作成（ABA）、読み取りだけのトランザクションの検証、blind write、失敗したcommitの原子性、並行インクリメントの再試行を、MemoryStore／D1KvStore／DurableObjectStore／RemoteKvStoreのすべてに対して確認する。新しいアダプタはここに加える。
-- **偽のD1**（`internal/e2e/fakes.mjs` の `FakeD1`）：`node:sqlite` の上に `prepare / bind / first / run / all / raw / batch / exec` を実装する。`batch` は本物と同じく1つのSQLiteトランザクションで実行され、制約違反で全体がrollbackされる。各操作の前にイベントループへ制御を返すので、並行するトランザクションは実際に交互に実行される。`before` フックで、commitの直前に別の書き手を割り込ませることもできる。
-- **workerd**（`internal/e2e/workers_test.go`）：WasmGCモジュールがworkerdで読み込めること、`import wasm from "./module.wasm"` が動くこと、D1KvStoreとDurableObjectStoreが本物のローカルバックエンドで動くこと、commit直前に割り込ませた書き込みで競合（503）になり何も適用されないこと、24並列のリクエストで残高が保存されること、outboxがcommitしたトランザクションの分だけ配送されることを確認する。テスト用のエントリ `internal/e2e/workers/test_worker.js` は生成された `worker.js` を変更せずに包む。wranglerがない環境と `-short` ではスキップされる。
+- **適合テスト**（`tests/e2e/adapters.test.mjs`）：lost update、write skew、phantom、delete→再作成（ABA）、読み取りだけのトランザクションの検証、blind write、失敗したcommitの原子性、並行インクリメントの再試行を、MemoryStore／D1KvStore／DurableObjectStore／RemoteKvStoreのすべてに対して確認する。新しいアダプタはここに加える。
+- **偽のD1**（`tests/e2e/fakes.mjs` の `FakeD1`）：`node:sqlite` の上に `prepare / bind / first / run / all / raw / batch / exec` を実装する。`batch` は本物と同じく1つのSQLiteトランザクションで実行され、制約違反で全体がrollbackされる。各操作の前にイベントループへ制御を返すので、並行するトランザクションは実際に交互に実行される。`before` フックで、commitの直前に別の書き手を割り込ませることもできる。
+- **workerd**（`tests/suites/workers.mjs`、`node tests/run.mjs workers`）：WasmGCモジュールがworkerdで読み込めること、`import wasm from "./module.wasm"` が動くこと、D1KvStoreとDurableObjectStoreが本物のローカルバックエンドで動くこと、commit直前に割り込ませた書き込みで競合（503）になり何も適用されないこと、24並列のリクエストで残高が保存されること、outboxがcommitしたトランザクションの分だけ配送されることを確認する。テスト用のエントリ `tests/workers/test_worker.js` は生成された `worker.js` を変更せずに包む。wranglerがない環境と `--short` ではスキップされる。
 
 ## 7. 新しいアダプタを書く
 
 1. `Store` / `StoreTx` を実装する（§2）。読み取り集合の記録とcommit時の検証が基本形である。
 2. 競合は `TxConflict`、一時的な障害は `retryable: true` の `TxError` にする。
-3. `internal/e2e/fakes.mjs` の `allStores` に加え、適合テストと全e2e（例のプログラムもすべてのアダプタで動く）を通す。
-4. Workersで使うなら、`worker.js` の `capabilities(env, db)` に渡す `db(binding)` を差し替える。生成コードを編集する代わりに、`examples` と同じく生成物をimportして包むエントリを書くとよい（`internal/e2e/workers/test_worker.js` が実例）。
+3. `tests/e2e/fakes.mjs` の `allStores` に加え、適合テストと全e2e（例のプログラムもすべてのアダプタで動く）を通す。
+4. Workersで使うなら、`worker.js` の `capabilities(env, db)` に渡す `db(binding)` を差し替える。生成コードを編集する代わりに、`examples` と同じく生成物をimportして包むエントリを書くとよい（`tests/workers/test_worker.js` が実例）。
 
 ## 8. 今後の課題（言語・コンパイラ側の変更が必要なもの）
 

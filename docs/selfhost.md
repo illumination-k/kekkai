@@ -38,6 +38,6 @@ stage0 = Go 実装の `kek`（`cmd/kek`, `internal/*`）。stage1 = Kekkai で�
 1. 不動点（stage2 == stage3）を確認したら `bootstrap/kek.wasm` をコミットし、`kek` を Node 上の JS ランチャーにする。
    CI で「bootstrap から再ビルドしても不動点」を検査する。Go のコンパイラ本体は凍結。
 2. ツール（`fmt`・`test`・`caps`・`search`・`check -json`・`lsp`・`run`）を Kekkai へ移植し、移植済みの Go 版から削除する。
-3. Go のテストハーネス（e2e・difftest・selfhost・workerd）を Node スクリプト／`kek test` に置き換える。
+3. Go のテストハーネス（e2e・difftest・selfhost・workerd）を Node スクリプト／`kek test` に置き換える。→ `node tests/run.mjs`（`mise run test`）。Node と `./kek` だけで、不動点・`check` の診断・`run`・e2e・アダプタ適合・difftest・`fmt` の往復・workerd・`tests/*.test.mjs` を実行する。difftest の `ir -json` は `./kek ir -json` が使えるまで Go の stage0 で代用する（`--ir go`）。
 4. `mise.toml` から Go を外し、Go のソースを削除する（stage0 は git 履歴に残る）。
    Lean の参照インタプリタとの差分テストは stage1 を相手に続ける。

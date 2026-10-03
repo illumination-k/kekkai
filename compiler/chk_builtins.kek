@@ -1,0 +1,155 @@
+// Builtin methods and static functions: a port of internal/types/builtins.go.
+
+struct ChkBuiltin {
+    recv: String,
+    name: String,
+    params: Vec<Ty>,
+    result: Ty,
+    async: Bool,
+    consumes: Bool,
+    op: String,
+}
+
+struct ChkBuiltins {
+    methods: Map<String, ChkBuiltin>,
+    statics: Map<String, ChkBuiltin>,
+    // every builtin, in definition order
+    all: Vec<ChkBuiltin>,
+}
+
+fn chk_lower_first(s: String) -> String {
+    if s == "" {
+        return s;
+    }
+    s.slice(0, 1).to_lower() + s.slice(1, s.len())
+}
+
+fn chk_def(bs: ChkBuiltins, recv: String, name: String, params: Vec<Ty>, result: Ty, async: Bool, consumes: Bool, is_static: Bool) {
+    let b = ChkBuiltin {
+        recv: recv, name: name, params: params, result: result, async: async, consumes: consumes,
+        op: chk_lower_first(recv) + "." + name,
+    };
+    if is_static {
+        bs.statics.insert(recv + "::" + name, b);
+    } else {
+        bs.methods.insert(recv + "." + name, b);
+    }
+    bs.all.push(b);
+}
+
+fn chk_m(bs: ChkBuiltins, recv: String, name: String, params: Vec<Ty>, result: Ty) {
+    chk_def(bs, recv, name, params, result, false, false, false);
+}
+
+fn chk_ma(bs: ChkBuiltins, recv: String, name: String, params: Vec<Ty>, result: Ty) {
+    chk_def(bs, recv, name, params, result, true, false, false);
+}
+
+fn chk_s(bs: ChkBuiltins, recv: String, name: String, params: Vec<Ty>, result: Ty) {
+    chk_def(bs, recv, name, params, result, false, false, true);
+}
+
+fn chk_tys0() -> Vec<Ty> {
+    Vec::new()
+}
+
+fn chk_tys1(a: Ty) -> Vec<Ty> {
+    let v = Vec::new();
+    v.push(a);
+    v
+}
+
+fn chk_tys2(a: Ty, b: Ty) -> Vec<Ty> {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn chk_res(ok: Ty, err: Ty) -> Ty {
+    Ty::Result(ok, err)
+}
+
+fn chk_new_builtins() -> ChkBuiltins {
+    let bs = ChkBuiltins { methods: Map::new(), statics: Map::new(), all: Vec::new() };
+    let s = ty_string();
+    let i = ty_int();
+    let u = ty_unit();
+    let b = ty_bool();
+    let tx_err = Ty::Opaque("TxError");
+    let net_err = Ty::Opaque("NetError");
+    let io_err = Ty::Opaque("IoError");
+    let resp = Ty::Opaque("Response");
+
+    // ---- capabilities ----
+    chk_m(bs, "Log", "info", chk_tys1(s), u);
+    chk_m(bs, "Log", "warn", chk_tys1(s), u);
+    chk_m(bs, "Log", "error", chk_tys1(s), u);
+
+    chk_m(bs, "Clock", "now_ms", chk_tys0(), i);
+    chk_m(bs, "Random", "int", chk_tys2(i, i), i);
+
+    chk_ma(bs, "Net", "get", chk_tys1(s), chk_res(s, net_err));
+    chk_ma(bs, "Net", "post", chk_tys2(s, s), chk_res(s, net_err));
+
+    chk_ma(bs, "Db", "get", chk_tys1(s), chk_res(Ty::Option(s), tx_err));
+
+    chk_ma(bs, "Tx", "get", chk_tys1(s), chk_res(Ty::Option(s), tx_err));
+    chk_ma(bs, "Tx", "put", chk_tys2(s, s), chk_res(u, tx_err));
+    chk_ma(bs, "Tx", "delete", chk_tys1(s), chk_res(u, tx_err));
+    chk_m(bs, "Tx", "outbox", chk_tys2(s, s), u);
+    chk_def(bs, "Tx", "commit", chk_tys0(), chk_res(u, tx_err), true, true, false);
+    chk_def(bs, "Tx", "rollback", chk_tys0(), u, false, true, false);
+
+    chk_ma(bs, "Fs", "read", chk_tys1(s), chk_res(s, io_err));
+    chk_ma(bs, "Fs", "write", chk_tys2(s, s), chk_res(u, io_err));
+    chk_ma(bs, "Fs", "write_bytes", chk_tys2(s, Ty::Vec(i)), chk_res(u, io_err));
+
+    // ---- pure data ----
+    chk_m(bs, "Int", "to_string", chk_tys0(), s);
+    chk_m(bs, "Int", "abs", chk_tys0(), i);
+    let int_ops = "bit_and bit_or bit_xor shl shr ushr min max".split(" ");
+    for op in int_ops {
+        chk_m(bs, "Int", op, chk_tys1(i), i);
+    }
+    chk_m(bs, "Bool", "to_string", chk_tys0(), s);
+
+    chk_m(bs, "String", "len", chk_tys0(), i);
+    chk_m(bs, "String", "parse_int", chk_tys0(), Ty::Option(i));
+    chk_m(bs, "String", "contains", chk_tys1(s), b);
+    chk_m(bs, "String", "starts_with", chk_tys1(s), b);
+    chk_m(bs, "String", "ends_with", chk_tys1(s), b);
+    chk_m(bs, "String", "trim", chk_tys0(), s);
+    chk_m(bs, "String", "to_upper", chk_tys0(), s);
+    chk_m(bs, "String", "to_lower", chk_tys0(), s);
+    chk_m(bs, "String", "char_at", chk_tys1(i), Ty::Option(i));
+    chk_m(bs, "String", "slice", chk_tys2(i, i), s);
+    chk_m(bs, "String", "index_of", chk_tys1(s), Ty::Option(i));
+    chk_m(bs, "String", "replace", chk_tys2(s, s), s);
+    chk_m(bs, "String", "split", chk_tys1(s), Ty::Vec(s));
+    chk_m(bs, "String", "to_bytes", chk_tys0(), Ty::Vec(i));
+    chk_s(bs, "String", "from_char", chk_tys1(i), s);
+    chk_s(bs, "String", "from_bytes", chk_tys1(Ty::Vec(i)), s);
+    chk_m(bs, "IoError", "message", chk_tys0(), s);
+
+    chk_m(bs, "Request", "method", chk_tys0(), s);
+    chk_m(bs, "Request", "path", chk_tys0(), s);
+    chk_m(bs, "Request", "segment", chk_tys1(i), Ty::Option(s));
+    chk_m(bs, "Request", "query", chk_tys1(s), Ty::Option(s));
+    chk_m(bs, "Request", "header", chk_tys1(s), Ty::Option(s));
+    chk_m(bs, "Request", "body", chk_tys0(), s);
+
+    chk_m(bs, "Response", "with_header", chk_tys2(s, s), resp);
+
+    chk_m(bs, "TxError", "message", chk_tys0(), s);
+    chk_m(bs, "TxError", "retryable", chk_tys0(), b);
+    chk_m(bs, "NetError", "message", chk_tys0(), s);
+
+    chk_s(bs, "Response", "text", chk_tys2(i, s), resp);
+    chk_s(bs, "Response", "json", chk_tys2(i, s), resp);
+    chk_s(bs, "Response", "empty", chk_tys1(i), resp);
+    chk_s(bs, "Response", "no_content", chk_tys0(), resp);
+    chk_s(bs, "Response", "not_found", chk_tys0(), resp);
+    chk_s(bs, "Response", "bad_request", chk_tys1(s), resp);
+    bs
+}

@@ -1,0 +1,305 @@
+// Types: a port of internal/types/types.go (plus unification from
+// checker.go). Go compares *Prim, *Opaque, *Struct and *Enum by pointer;
+// each is unique per name, so here they compare by name.
+
+struct TyVar {
+    id: Int,
+    r: Option<Ty>,
+}
+
+struct TyField {
+    name: String,
+    ty: Ty,
+}
+
+struct TyStruct {
+    name: String,
+    fields: Vec<TyField>,
+}
+
+struct TyVariant {
+    name: String,
+    fields: Vec<Ty>,
+}
+
+struct TyEnum {
+    name: String,
+    variants: Vec<TyVariant>,
+}
+
+enum Ty {
+    // "()", "Bool", "Int", "String", "!" (never), "<invalid>"
+    Prim(String),
+    // Request, Response, TxError, NetError, IoError
+    Opaque(String),
+    Struct(TyStruct),
+    Enum(TyEnum),
+    Result(Ty, Ty),
+    Option(Ty),
+    Vec(Ty),
+    Map(Ty, Ty),
+    // capability kind name, borrowed
+    Cap(String, Bool),
+    Var(TyVar),
+}
+
+fn ty_unit() -> Ty { Ty::Prim("()") }
+fn ty_bool() -> Ty { Ty::Prim("Bool") }
+fn ty_int() -> Ty { Ty::Prim("Int") }
+fn ty_string() -> Ty { Ty::Prim("String") }
+fn ty_never() -> Ty { Ty::Prim("!") }
+fn ty_invalid() -> Ty { Ty::Prim("<invalid>") }
+
+// ty_is_prim reports whether t (unpruned) is the primitive `name`.
+fn ty_is_prim(t: Ty, name: String) -> Bool {
+    match t {
+        Ty::Prim(n) => n == name,
+        _ => false,
+    }
+}
+
+fn ty_is_opaque(t: Ty, name: String) -> Bool {
+    match t {
+        Ty::Opaque(n) => n == name,
+        _ => false,
+    }
+}
+
+fn ty_is_var(t: Ty) -> Bool {
+    match t {
+        Ty::Var(_) => true,
+        _ => false,
+    }
+}
+
+fn ty_cap_revocable(kind: String) -> Bool {
+    kind == "Log" || kind == "Clock" || kind == "Random" || kind == "Tx"
+}
+
+fn ty_is_cap_name(name: String) -> Bool {
+    name == "Log" || name == "Net" || name == "Db" || name == "Clock" || name == "Random" || name == "Tx" || name == "Fs"
+}
+
+fn ty_str(t: Ty) -> String {
+    match t {
+        Ty::Prim(n) => n,
+        Ty::Opaque(n) => n,
+        Ty::Struct(s) => s.name,
+        Ty::Enum(e) => e.name,
+        Ty::Result(a, b) => "Result<" + ty_str(a) + ", " + ty_str(b) + ">",
+        Ty::Option(a) => "Option<" + ty_str(a) + ">",
+        Ty::Vec(a) => "Vec<" + ty_str(a) + ">",
+        Ty::Map(a, b) => "Map<" + ty_str(a) + ", " + ty_str(b) + ">",
+        Ty::Cap(k, borrowed) => if borrowed { "&" + k } else { k },
+        Ty::Var(v) => match v.r {
+            Some(r) => ty_str(r),
+            None => "?" + v.id.to_string(),
+        },
+    }
+}
+
+// ty_prune follows bound inference variables.
+fn ty_prune(t: Ty) -> Ty {
+    match t {
+        Ty::Var(v) => match v.r {
+            Some(r) => ty_prune(r),
+            None => t,
+        },
+        _ => t,
+    }
+}
+
+// ty_resolve substitutes bound variables; unbound ones default to ().
+fn ty_resolve(t0: Ty) -> Ty {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Var(v) => {
+            v.r = Some(ty_unit());
+            ty_unit()
+        }
+        Ty::Result(a, b) => {
+            let ra = ty_resolve(a);
+            Ty::Result(ra, ty_resolve(b))
+        }
+        Ty::Option(a) => Ty::Option(ty_resolve(a)),
+        Ty::Vec(a) => Ty::Vec(ty_resolve(a)),
+        Ty::Map(a, b) => {
+            let ra = ty_resolve(a);
+            Ty::Map(ra, ty_resolve(b))
+        }
+        _ => t,
+    }
+}
+
+fn ty_is_cap(t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Cap(_, _) => true,
+        _ => false,
+    }
+}
+
+// ty_same is pointer identity in Go (for already pruned types).
+fn ty_same(a: Ty, b: Ty) -> Bool {
+    match a {
+        Ty::Prim(x) => match b {
+            Ty::Prim(y) => x == y,
+            _ => false,
+        },
+        Ty::Opaque(x) => match b {
+            Ty::Opaque(y) => x == y,
+            _ => false,
+        },
+        Ty::Struct(x) => match b {
+            Ty::Struct(y) => x.name == y.name,
+            _ => false,
+        },
+        Ty::Enum(x) => match b {
+            Ty::Enum(y) => x.name == y.name,
+            _ => false,
+        },
+        Ty::Var(x) => match b {
+            Ty::Var(y) => x.id == y.id,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn ty_identical(a0: Ty, b0: Ty) -> Bool {
+    let a = ty_prune(a0);
+    let b = ty_prune(b0);
+    match a {
+        Ty::Result(ao, ae) => match b {
+            Ty::Result(bo, be) => ty_identical(ao, bo) && ty_identical(ae, be),
+            _ => false,
+        },
+        Ty::Option(ae) => match b {
+            Ty::Option(be) => ty_identical(ae, be),
+            _ => false,
+        },
+        Ty::Vec(ae) => match b {
+            Ty::Vec(be) => ty_identical(ae, be),
+            _ => false,
+        },
+        Ty::Map(ak, av) => match b {
+            Ty::Map(bk, bv) => ty_identical(ak, bk) && ty_identical(av, bv),
+            _ => false,
+        },
+        Ty::Cap(ak, ab) => match b {
+            Ty::Cap(bk, bb) => ak == bk && ab == bb,
+            _ => false,
+        },
+        _ => ty_same(a, b),
+    }
+}
+
+// ty_key is the canonical string of a resolved type (used for layouts).
+fn ty_key(t: Ty) -> String {
+    let parts = Vec::new();
+    ty_write_key(parts, ty_resolve(t));
+    parts.join("")
+}
+
+fn ty_write_key(b: Vec<String>, t: Ty) {
+    match t {
+        Ty::Result(o, e) => {
+            b.push("Result<");
+            ty_write_key(b, o);
+            b.push(",");
+            ty_write_key(b, e);
+            b.push(">");
+        }
+        Ty::Option(e) => {
+            b.push("Option<");
+            ty_write_key(b, e);
+            b.push(">");
+        }
+        Ty::Vec(e) => {
+            b.push("Vec<");
+            ty_write_key(b, e);
+            b.push(">");
+        }
+        Ty::Map(k, v) => {
+            b.push("Map<");
+            ty_write_key(b, k);
+            b.push(",");
+            ty_write_key(b, v);
+            b.push(">");
+        }
+        _ => b.push(ty_str(t)),
+    }
+}
+
+// ---- unification ----
+
+fn ty_occurs(v: TyVar, t0: Ty) -> Bool {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Var(w) => w.id == v.id,
+        Ty::Result(a, b) => ty_occurs(v, a) || ty_occurs(v, b),
+        Ty::Option(a) => ty_occurs(v, a),
+        Ty::Vec(a) => ty_occurs(v, a),
+        Ty::Map(a, b) => ty_occurs(v, a) || ty_occurs(v, b),
+        _ => false,
+    }
+}
+
+fn ty_unify(a0: Ty, b0: Ty) -> Bool {
+    let a = ty_prune(a0);
+    let b = ty_prune(b0);
+    if ty_is_prim(a, "!") || ty_is_prim(b, "!") || ty_is_prim(a, "<invalid>") || ty_is_prim(b, "<invalid>") {
+        return true;
+    }
+    match a {
+        Ty::Var(va) => {
+            match b {
+                Ty::Var(vb) => {
+                    if va.id == vb.id {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+            if ty_occurs(va, b) {
+                return false;
+            }
+            va.r = Some(b);
+            return true;
+        }
+        _ => {}
+    }
+    if ty_is_var(b) {
+        return ty_unify(b, a);
+    }
+    match a {
+        Ty::Result(ao, ae) => match b {
+            Ty::Result(bo, be) => ty_unify(ao, bo) && ty_unify(ae, be),
+            _ => false,
+        },
+        Ty::Option(ae) => match b {
+            Ty::Option(be) => ty_unify(ae, be),
+            _ => false,
+        },
+        Ty::Vec(ae) => match b {
+            Ty::Vec(be) => ty_unify(ae, be),
+            _ => false,
+        },
+        Ty::Map(ak, av) => match b {
+            Ty::Map(bk, bv) => ty_unify(ak, bk) && ty_unify(av, bv),
+            _ => false,
+        },
+        Ty::Cap(ak, ab) => match b {
+            Ty::Cap(bk, bb) => ak == bk && ab == bb,
+            _ => false,
+        },
+        _ => ty_same(a, b),
+    }
+}
+
+// ty_join is the type of two branches (Never is absorbed).
+fn ty_join(a: Ty, b: Ty) -> Ty {
+    if ty_is_prim(ty_prune(a), "!") {
+        return b;
+    }
+    a
+}

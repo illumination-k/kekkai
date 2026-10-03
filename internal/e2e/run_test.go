@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,8 @@ import (
 )
 
 // TestRun runs the #[main] programs in testdata/run with a temporary file
-// path as the only argument and compares stdout with the .out file. The
-// expected exit code is given by an optional `// exit: N` line (default 3
-// for the samples, which end by reading a missing file).
+// path as the only argument and compares stdout with the .out file and the
+// exit code with the `// exit: N` comment on the first line.
 func TestRun(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -51,8 +51,10 @@ func TestRun(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			if code != 3 {
-				t.Errorf("exit code %d, want 3\n%s", code, stderr.String())
+			wantCode := 0
+			fmt.Sscanf(string(src), "// exit: %d", &wantCode)
+			if code != wantCode {
+				t.Errorf("exit code %d, want %d\n%s", code, wantCode, stderr.String())
 			}
 			if stdout.String() != string(want) {
 				t.Errorf("stdout:\n%s\nwant:\n%s\nstderr:\n%s", stdout.String(), want, stderr.String())

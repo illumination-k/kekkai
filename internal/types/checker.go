@@ -1355,6 +1355,20 @@ func exhaustive(info *Info, rows [][]*syntax.Pattern, tys []Type) bool {
 	if len(tys) == 0 {
 		return len(rows) > 0
 	}
+	// A row of irrefutable patterns covers everything. Checking this first
+	// also guarantees termination on recursive types.
+	for _, r := range rows {
+		all := true
+		for _, p := range r {
+			if _, refutable := patTag(info, p); refutable {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
 	names, fields := ctors(tys[0])
 	if names == nil {
 		var def [][]*syntax.Pattern

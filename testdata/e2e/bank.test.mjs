@@ -75,7 +75,7 @@ export default async function ({ createApp, runtime, assert, recordingLog, recor
   await t1.commit();
   await assert.rejects(t2.commit(), (e) => e.retryable === true);
 
-  // The same program against every store adapter (D1 on node:sqlite,
+  // The same program against every store adapter (D1 on SQLite,
   // Durable Object storage, remote OCC gateway): sequential transfers,
   // then concurrent transfers that race on the same balances.
   const { list, close } = await allStores({ "balance:alice": "100", "balance:bob": "5" });

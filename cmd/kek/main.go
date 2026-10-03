@@ -21,6 +21,7 @@ Usage:
   kek ir [-json] <file.kek>       print the intermediate representation
   kek build [-o dir] <file.kek>   compile to a Cloudflare Workers module (WasmGC + JS glue)
   kek fmt [-w|-check] <paths>     format source files (directories are searched for *.kek)
+  kek test [-run re] <file.kek>   run the #[test] functions on Node with mock capabilities
 `
 
 func main() {
@@ -41,6 +42,8 @@ func main() {
 		err = runBuild(args)
 	case "fmt":
 		err = runFmt(args)
+	case "test":
+		err = runTest(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

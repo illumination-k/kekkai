@@ -31,7 +31,17 @@ func Check(src string) (*types.Info, error) {
 
 // Compile compiles source text to WasmGC plus JS glue.
 func Compile(src string) (*Artifacts, error) {
-	info, err := Check(src)
+	f, err := syntax.Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	return CompileFile(f)
+}
+
+// CompileFile compiles a parsed file (tools such as `kek test` compile a
+// transformed AST).
+func CompileFile(f *syntax.File) (*Artifacts, error) {
+	info, err := types.Check(f)
 	if err != nil {
 		return nil, err
 	}

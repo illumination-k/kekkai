@@ -32,6 +32,9 @@ func runCaps(args []string) error {
 		if fn.Handler {
 			tag = " #[handler]"
 		}
+		if fn.Test {
+			tag = " #[test]"
+		}
 		if len(caps) == 0 {
 			fmt.Printf("%s%s: pure\n", fn.Name, tag)
 			continue

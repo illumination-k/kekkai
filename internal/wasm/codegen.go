@@ -634,7 +634,11 @@ func (g *fnGen) startSuspend(in ir.Instr, resumeSeg int) {
 	c := g.c
 	for _, a := range in.Args {
 		c.get(g.local[a])
-		g.m.toHost(c, g.f.Locals[a])
+		if in.Op == "await" {
+			// host operation: Vec arguments cross as JS arrays; async calls
+			// to user functions pass wasm values unchanged
+			g.m.toHost(c, g.f.Locals[a])
+		}
 	}
 	if in.Op == "await" {
 		c.call(g.m.imp(in.Name))

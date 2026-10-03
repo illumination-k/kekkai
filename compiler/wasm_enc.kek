@@ -1,0 +1,195 @@
+// Low-level WebAssembly (GC) binary encoding (port of internal/wasm/encoder.go).
+//
+// Byte buffers are Vec<Int> (one byte per element). Value types are
+// encoded as one Int: a non-negative value is `(ref null <typeidx>)`, and
+// a negative value is the negated type code:
+//   -127 i32, -126 i64, -111 externref, -110 anyref, -107 structref
+
+fn wasm_i32_t() -> Int { -127 }
+fn wasm_i64_t() -> Int { -126 }
+fn wasm_extern_t() -> Int { -111 }
+fn wasm_any_t() -> Int { -110 }
+fn wasm_struct_t() -> Int { -107 }
+
+fn wasm_u32(b: Vec<Int>, v: Int) {
+    let mut x = v;
+    while true {
+        let c = x.bit_and(127);
+        x = x.ushr(7);
+        if x != 0 {
+            b.push(c.bit_or(128));
+        } else {
+            b.push(c);
+            return;
+        }
+    }
+}
+
+fn wasm_s64(b: Vec<Int>, v: Int) {
+    let mut x = v;
+    while true {
+        let c = x.bit_and(127);
+        x = x.shr(7);
+        let done = (x == 0 && c.bit_and(64) == 0) || (x == -1 && c.bit_and(64) != 0);
+        if done {
+            b.push(c);
+            return;
+        }
+        b.push(c.bit_or(128));
+    }
+}
+
+fn wasm_append(b: Vec<Int>, src: Vec<Int>) {
+    for x in src {
+        b.push(x);
+    }
+}
+
+// wasm_name writes a length-prefixed UTF-8 string.
+fn wasm_name(b: Vec<Int>, s: String) {
+    let bytes = s.to_bytes();
+    wasm_u32(b, bytes.len());
+    wasm_append(b, bytes);
+}
+
+fn wasm_section(b: Vec<Int>, id: Int, contents: Vec<Int>) {
+    b.push(id);
+    wasm_u32(b, contents.len());
+    wasm_append(b, contents);
+}
+
+fn wasm_valtype(b: Vec<Int>, t: Int) {
+    if t >= 0 {
+        b.push(99); // 0x63 ref null
+        wasm_s64(b, t);
+    } else {
+        b.push(0 - t);
+    }
+}
+
+// ---- function bodies ----
+
+fn cg_op(c: Vec<Int>, o: Int) {
+    c.push(o);
+}
+
+fn cg_i32(c: Vec<Int>, x: Int) {
+    c.push(65); // i32.const
+    wasm_s64(c, x);
+}
+
+fn cg_i64(c: Vec<Int>, x: Int) {
+    c.push(66); // i64.const
+    wasm_s64(c, x);
+}
+
+fn cg_get(c: Vec<Int>, l: Int) {
+    c.push(32); // local.get
+    wasm_u32(c, l);
+}
+
+fn cg_set(c: Vec<Int>, l: Int) {
+    c.push(33); // local.set
+    wasm_u32(c, l);
+}
+
+fn cg_call(c: Vec<Int>, f: Int) {
+    c.push(16); // call
+    wasm_u32(c, f);
+}
+
+fn cg_br(c: Vec<Int>, depth: Int) {
+    c.push(12); // br
+    wasm_u32(c, depth);
+}
+
+fn cg_end(c: Vec<Int>) {
+    c.push(11);
+}
+
+// cg_block_void opens a block/loop/if (opcode o) with an empty block type.
+fn cg_open(c: Vec<Int>, o: Int) {
+    c.push(o);
+    c.push(64); // 0x40 void
+}
+
+fn cg_gc(c: Vec<Int>, sub: Int) {
+    c.push(251); // 0xfb
+    wasm_u32(c, sub);
+}
+
+fn cg_struct_new(c: Vec<Int>, t: Int) {
+    cg_gc(c, 0);
+    wasm_u32(c, t);
+}
+
+fn cg_struct_get(c: Vec<Int>, t: Int, f: Int) {
+    cg_gc(c, 2);
+    wasm_u32(c, t);
+    wasm_u32(c, f);
+}
+
+fn cg_struct_set(c: Vec<Int>, t: Int, f: Int) {
+    cg_gc(c, 5);
+    wasm_u32(c, t);
+    wasm_u32(c, f);
+}
+
+fn cg_cast_null(c: Vec<Int>, t: Int) {
+    cg_gc(c, 23); // ref.cast (ref null ht)
+    wasm_s64(c, t);
+}
+
+fn cg_ref_null(c: Vec<Int>, heap: Int) {
+    c.push(208); // ref.null
+    c.push(heap);
+}
+
+fn cg_ref_null_idx(c: Vec<Int>, t: Int) {
+    c.push(208);
+    wasm_s64(c, t);
+}
+
+// cg_default pushes the default value of a value type.
+fn cg_default(c: Vec<Int>, t: Int) {
+    if t >= 0 {
+        cg_ref_null_idx(c, t);
+    } else if t == -127 {
+        cg_i32(c, 0);
+    } else if t == -126 {
+        cg_i64(c, 0);
+    } else {
+        cg_ref_null(c, 0 - t); // extern 0x6f, any 0x6e, struct 0x6b
+    }
+}
+
+// ---- small vector constructors ----
+
+fn wasm_v0() -> Vec<Int> {
+    Vec::new()
+}
+
+fn wasm_v1(a: Int) -> Vec<Int> {
+    let v = Vec::new();
+    v.push(a);
+    v
+}
+
+fn wasm_v2(a: Int, b: Int) -> Vec<Int> {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn wasm_v3(a: Int, b: Int, c: Int) -> Vec<Int> {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    v
+}
+
+fn wasm_at(v: Vec<Int>, i: Int) -> Int {
+    v.get(i).unwrap_or(0)
+}

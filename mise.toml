@@ -44,3 +44,7 @@ run = "./kek bootstrap-check"
 [tasks.bootstrap-update]
 description = "Replace bootstrap/kek.wasm with the current self-hosted compiler (after the fixed-point check)"
 run = "./kek bootstrap-update"
+
+[tasks.dev]
+description = "Build a #[handler] program and serve it locally on workerd (usage: mise run dev -- examples/todo/todo.kek)"
+run = "scripts/dev.sh"

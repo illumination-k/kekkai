@@ -1,8 +1,8 @@
 # Kekkai ランタイムとストアアダプタ
 
-この文書は、コンパイル済みのKekkaiプログラムがCloudflare Workers（とテスト用のNode）でどう動くか、特にトランザクションを実際のストレージへ対応づける**ストアアダプタの契約**を説明する。言語側の設計は [design.md](design.md) を参照。
+この文書は、コンパイル済みの `#[handler]` プログラムがCloudflare Workersでどう動くか、特にトランザクションを実際のストレージへ対応づける**ストアアダプタの契約**を説明する。言語側の設計は [design.md](design.md)、`#[main]` のプログラム（WASIのコマンド）は [language.md](language.md#実行モデル) を参照。
 
-- ランタイム本体：`js/kekkai_runtime.js`（`kek build` が `kekkai_runtime.js` として出力する）
+- ランタイム本体：`js/kekkai_runtime.js`（`kek build` が `kekkai_runtime.js` として出力する）。WasmGCのモジュールは文字列や `Map` などを自前で持ち（`lib/prelude`）、JSから受け取るのはcapabilityの操作だけである。文字列は線形メモリを通してUTF-16で受け渡す
 - Workersのエントリポイント：`compiler/glue_worker.kek`（`kek build`）が `worker.js` と `wrangler.toml` を生成する
 - 例：`examples/`（todo、冪等な決済、Webhookのファンアウト）
 
@@ -160,11 +160,10 @@ commitとoutboxの記録を同じトランザクションにする本当の意�
 ### ローカルで動かす
 
 ```sh
-mise run dev -- examples/todo/todo.kek            # D1（ローカル）
-TARGET=do mise run dev -- examples/todo/todo.kek  # Durable Objects
+mise run dev -- examples/todo/todo.kek
 ```
 
-`scripts/dev.sh` は `wrangler dev --local` を使い、Cloudflareのアカウントもネットワークも要らない（Miniflare/workerdとローカルのD1・DO）。outboxはデフォルトで `log` になる。
+`scripts/dev.sh` は `-target do` でビルドし、workerd で配信する（Cloudflareのアカウントもネットワークも要らない）。`Db` はDurable ObjectのSQLiteストレージで、データは出力ディレクトリの `.state` に残る。outboxはデフォルトで `log` になる。設定は環境変数 `PORT`、`OUT`、`OUTBOX`、`SHARD` で変えられる。D1のバックエンドを使うには、生成された `wrangler.toml` でCloudflareのツールにデプロイする。
 
 ## 6. テスト
 

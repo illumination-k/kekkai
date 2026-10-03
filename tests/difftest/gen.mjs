@@ -1,17 +1,8 @@
 // Random well-typed Kekkai programs for differential testing (WasmGC vs the
 // Lean reference interpreter of the IR, see docs/design.md §検証戦略).
 //
-// This is a line-by-line port of internal/difftest/gen.go: the methods, the
-// case numbering of every `switch r.Intn(n)` and the emitted text are kept
-// identical so that changes to the Go generator can be re-applied here
-// mechanically (`fmt.Fprintf(&g.b, f, ...)` -> `this.w(...)` with a template
-// string, `g.r.Intn(n)` -> `this.r.intn(n)`). Go evaluates the arguments of
-// `g.pick(...)` / `fmt.Sprintf(...)` left to right before the call; JS
-// argument lists and template literals do the same, so expressions are
-// written inline in the same order (this matters for the random stream and
-// the fresh-name counter). Only the random source differs (Go's math/rand
-// is not reproduced), so a seed gives a different program than the Go
-// generator did; the distribution is the same.
+// Generation is driven by a seeded random source, so a seed always gives
+// the same program.
 //
 // Programs are pure functions over Int and Bool exercising arithmetic edge
 // cases, control flow, enums, Option, `?`, loops, string host operations,

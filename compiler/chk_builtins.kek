@@ -1,4 +1,4 @@
-// Builtin methods and static functions: a port of internal/types/builtins.go.
+// Builtin methods and static functions.
 
 struct ChkBuiltin {
     recv: String,
@@ -24,9 +24,23 @@ fn chk_lower_first(s: String) -> String {
     s.slice(0, 1).to_lower() + s.slice(1, s.len())
 }
 
-fn chk_def(bs: ChkBuiltins, recv: String, name: String, params: Vec<Ty>, result: Ty, async: Bool, consumes: Bool, is_static: Bool) {
+fn chk_def(
+    bs: ChkBuiltins,
+    recv: String,
+    name: String,
+    params: Vec<Ty>,
+    result: Ty,
+    async: Bool,
+    consumes: Bool,
+    is_static: Bool,
+) {
     let b = ChkBuiltin {
-        recv: recv, name: name, params: params, result: result, async: async, consumes: consumes,
+        recv: recv,
+        name: name,
+        params: params,
+        result: result,
+        async: async,
+        consumes: consumes,
         op: chk_lower_first(recv) + "." + name,
     };
     if is_static {

@@ -1,4 +1,4 @@
-// IR data types (prefix Ir* / ir_), mirroring internal/ir/ir.go.
+// IR data types (prefix Ir* / ir_).
 //
 // IR nodes are identified by position: aggregates by their index in
 // IrProgram.types, functions by name, blocks by index in IrFunc.blocks and
@@ -35,7 +35,7 @@ struct IrConst {
     str_val: String,
 }
 
-// IrInstr is one instruction (see internal/ir/ir.go for the opcode table).
+// IrInstr is one instruction.
 struct IrInstr {
     op: String,
     dst: Int,
@@ -188,14 +188,11 @@ fn ir_func_from_json(v: JsonVal) -> IrFunc {
             instrs.push(ir_instr_from_json(i));
         }
         let t = json_field(b, "term");
-        blocks.push(IrBlock {
-            instrs: instrs,
-            term: IrTerm {
-                op: json_get_str(t, "op"),
-                args: ir_ints_from_json(json_get_items(t, "args")),
-                targets: ir_ints_from_json(json_get_items(t, "targets")),
-            },
-        });
+        blocks.push(IrBlock { instrs: instrs, term: IrTerm {
+            op: json_get_str(t, "op"),
+            args: ir_ints_from_json(json_get_items(t, "args")),
+            targets: ir_ints_from_json(json_get_items(t, "targets")),
+        } });
     }
     let names = Vec::new();
     for n in json_get_items(v, "names") {
@@ -223,7 +220,10 @@ fn ir_program_from_json(v: JsonVal) -> IrProgram {
     }
     let params = Vec::new();
     for hp in json_get_items(v, "handler_params") {
-        params.push(IrHandlerParam { kind: json_get_str(hp, "kind"), name: json_get_str(hp, "name") });
+        params.push(IrHandlerParam {
+            kind: json_get_str(hp, "kind"),
+            name: json_get_str(hp, "name"),
+        });
     }
     IrProgram {
         types: types,

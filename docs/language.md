@@ -1,6 +1,6 @@
 # Kekkai 言語リファレンス（現行実装）
 
-設計の背景は [design.md](design.md)。ここでは stage0 コンパイラ（`cmd/kek`）が現在受け付ける言語を説明する。
+設計の背景は [design.md](design.md)。ここではセルフホストのコンパイラ（`compiler/`、`./kek`）が現在受け付ける言語を説明する。
 
 ## プログラムの構成
 

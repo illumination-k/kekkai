@@ -87,7 +87,7 @@
     {
       "name": "get_balance",
       "signature": "fn get_balance(db: &Db, name: String) -> Result<Option<String>, TxError>",
-      "line": 52,
+      "line": 58,
       "col": 4,
       "handler": false,
       "pure": false,
@@ -110,7 +110,7 @@
     {
       "name": "handle",
       "signature": "fn handle(req: Request, db: &Db, log: &Log) -> Response",
-      "line": 57,
+      "line": 63,
       "col": 4,
       "handler": true,
       "pure": false,

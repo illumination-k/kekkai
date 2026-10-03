@@ -25,8 +25,13 @@ enum HookError {
     Store(TxError),
 }
 
-fn sub_key(i: Int) -> String { "sub:" + i.to_string() }
-fn event_key(i: Int) -> String { "event:" + i.to_string() }
+fn sub_key(i: Int) -> String {
+    "sub:" + i.to_string()
+}
+
+fn event_key(i: Int) -> String {
+    "event:" + i.to_string()
+}
 
 fn read_int(tx: &Tx, key: String) -> Result<Int, TxError> {
     match tx.get(key)? {
@@ -38,7 +43,11 @@ fn read_int(tx: &Tx, key: String) -> Result<Int, TxError> {
 // Irrevocable network I/O, outside any transaction.
 fn verify(net: &Net, url: String) -> Result<(), HookError> {
     match net.get(url + "?challenge=kekkai") {
-        Ok(body) => if body.trim() == "kekkai" { Ok(()) } else { Err(HookError::Unverified("wrong challenge answer")) },
+        Ok(body) => if body.trim() == "kekkai" {
+            Ok(())
+        } else {
+            Err(HookError::Unverified("wrong challenge answer"))
+        },
         Err(e) => Err(HookError::Unverified(e.message())),
     }
 }
@@ -82,14 +91,20 @@ fn publish(db: &Db, log: &Log, payload: String) -> Result<String, TxError> {
             }
             i = i + 1;
         }
-        log.info("event " + id.to_string() + " queued for " + deliveries.to_string() + " subscribers");
+        log.info(
+            "event " + id.to_string() + " queued for " + deliveries.to_string() + " subscribers",
+        );
         tx.commit()?;
         Ok("{\"event\":" + id.to_string() + ",\"deliveries\":" + deliveries.to_string() + "}")
     })
 }
 
 fn store_error(e: TxError) -> Response {
-    if e.retryable() { Response::text(503, "conflict, retry") } else { Response::text(500, e.message()) }
+    if e.retryable() {
+        Response::text(503, "conflict, retry")
+    } else {
+        Response::text(500, e.message())
+    }
 }
 
 #[handler]
@@ -107,7 +122,9 @@ fn handle(req: Request, db: &Db, net: &Net, log: &Log) -> Response {
     if section == "events" && method == "POST" {
         let payload = req.body();
         if payload.len() == 0 || payload.contains("\"") || payload.contains("\\") {
-            return Response::bad_request("payload must be non-empty text without quotes or backslashes");
+            return Response::bad_request(
+                "payload must be non-empty text without quotes or backslashes",
+            );
         }
         return match publish(db, log, payload) {
             Ok(body) => Response::json(202, body),
@@ -117,7 +134,9 @@ fn handle(req: Request, db: &Db, net: &Net, log: &Log) -> Response {
     if section == "events" && method == "GET" {
         let id = match req.segment(1).unwrap_or("").parse_int() {
             Some(n) => n,
-            None => { return Response::bad_request("bad event id"); }
+            None => {
+                return Response::bad_request("bad event id");
+            }
         };
         return match db.get(event_key(id)) {
             Ok(Some(p)) => Response::text(200, p),

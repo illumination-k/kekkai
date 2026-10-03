@@ -8,12 +8,18 @@ fn save(args: Vec<String>, ctx: Ctx, fs: &Fs, log: &Log) -> Int {
     let path = args.get(0).unwrap_or("kek_async_args.txt");
     match fs.write(path, "n=" + args.len().to_string()) {
         Ok(_) => {}
-        Err(e) => { log.error(e.message()); return 1; }
+        Err(e) => {
+            log.error(e.message());
+            return 1;
+        }
     }
     ctx.count = ctx.count + 1;
     match fs.read(path) {
         Ok(s) => log.info(s + " count=" + ctx.count.to_string()),
-        Err(e) => { log.error(e.message()); return 1; }
+        Err(e) => {
+            log.error(e.message());
+            return 1;
+        }
     }
     0
 }

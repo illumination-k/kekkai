@@ -1,5 +1,5 @@
 // Match checking and nested-pattern exhaustiveness (Maranget's usefulness
-// algorithm): a port of the match section of internal/types/checker.go.
+// algorithm).
 
 struct ChkCtors {
     finite: Bool,
@@ -35,14 +35,26 @@ fn chk_match(c: Chk, e: AstMatch) -> Ty {
         let at = chk_expr(c, arm.body);
         if !ty_unify(result, at) {
             let s1 = ty_str(ty_resolve(result));
-            chk_errorf(c, ast_expr_pos(arm.body), "match arms have incompatible types: expected `" + s1 + "`, found `" + ty_str(ty_resolve(at)) + "`");
+            chk_errorf(
+                c,
+                ast_expr_pos(arm.body),
+                "match arms have incompatible types: expected `"
+                    + s1
+                    + "`, found `"
+                    + ty_str(ty_resolve(at))
+                    + "`",
+            );
         }
         result = ty_join(result, at);
         chk_pop(c);
     }
     if !chk_exhaustive(c.info, rows, chk_tys1(st)) {
         let s1 = ty_str(ty_resolve(st));
-        chk_errorf(c, e.pos, "non-exhaustive patterns in match on `" + s1 + "`" + chk_missing(c.info, rows, st));
+        chk_errorf(
+            c,
+            e.pos,
+            "non-exhaustive patterns in match on `" + s1 + "`" + chk_missing(c.info, rows, st),
+        );
     }
     result
 }
@@ -84,7 +96,9 @@ fn chk_ctors(t: Ty) -> ChkCtors {
                 out.finite = false;
             }
         }
-        _ => { out.finite = false; }
+        _ => {
+            out.finite = false;
+        }
     }
     out
 }
@@ -114,8 +128,16 @@ fn chk_pat_tag(info: ChkInfo, p: AstPattern) -> ChkTag {
 
 fn chk_wild_pat() -> AstPattern {
     AstPattern {
-        id: -1, pos: chk_dummy_pos(), wildcard: true, bind: "", ty: "", ctor: "", args: Vec::new(),
-        int_value: None, bool_lit: None, str_value: None,
+        id: -1,
+        pos: chk_dummy_pos(),
+        wildcard: true,
+        bind: "",
+        ty: "",
+        ctor: "",
+        args: Vec::new(),
+        int_value: None,
+        bool_lit: None,
+        str_value: None,
     }
 }
 
@@ -261,7 +283,16 @@ fn chk_sort_strings(v: Vec<String>) {
 
 fn chk_subpatterns(c: Chk, p: AstPattern, pi: ChkPatInfo, fields: Vec<Ty>) {
     if p.args.len() != fields.len() {
-        chk_errorf(c, p.pos, "pattern `" + p.ctor + "` expects " + fields.len().to_string() + " field(s), found " + p.args.len().to_string());
+        chk_errorf(
+            c,
+            p.pos,
+            "pattern `"
+                + p.ctor
+                + "` expects "
+                + fields.len().to_string()
+                + " field(s), found "
+                + p.args.len().to_string(),
+        );
     }
     pi.args = p.args;
     let mut i = 0;
@@ -337,7 +368,11 @@ fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
         }
         Ty::Enum(en) => {
             if p.ty != "" && p.ty != en.name {
-                chk_errorf(c, p.pos, "expected a variant of `" + en.name + "`, found `" + p.ty + "::" + ctor + "`");
+                chk_errorf(
+                    c,
+                    p.pos,
+                    "expected a variant of `" + en.name + "`, found `" + p.ty + "::" + ctor + "`",
+                );
                 pi.kind = "wild";
                 return;
             }

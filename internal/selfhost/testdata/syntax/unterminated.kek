@@ -1,5 +1,0 @@
-fn f() -> Int {
-    let s = "unterminated
-    1
-}
-/* never closed

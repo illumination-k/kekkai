@@ -30,7 +30,11 @@ fn show(e: Expr) -> String {
 }
 
 fn build(n: Int) -> Expr {
-    if n == 0 { Expr::Num(1) } else { Expr::Add(build(n - 1), Expr::Mul(Expr::Num(n), Expr::Neg(Expr::Num(2)))) }
+    if n == 0 {
+        Expr::Num(1)
+    } else {
+        Expr::Add(build(n - 1), Expr::Mul(Expr::Num(n), Expr::Neg(Expr::Num(2))))
+    }
 }
 
 #[main]

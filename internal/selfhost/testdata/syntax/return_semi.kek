@@ -1,4 +1,0 @@
-fn f() -> Int {
-    return 1 2;
-}
-impl X {}

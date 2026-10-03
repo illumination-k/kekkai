@@ -1,7 +1,7 @@
 // Back end entry: `ir2wasm <ir.json> <out.wasm> [<meta.json>]`.
 // Reads the JSON encoding of an IR program (`kek ir -json`), compiles it
-// to WasmGC and writes the module (byte-identical to stage0) and,
-// optionally, the program metadata as embedded by glue.MetaJS.
+// to WasmGC and writes the module and, optionally, the program metadata
+// (as embedded in kekkai_meta.js).
 fn backend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if args.len() < 3 {
         log.error("usage: ir2wasm <ir.json> <out.wasm> [<meta.json>]");
@@ -83,7 +83,13 @@ fn backend_meta_json(strings: Vec<String>, params: Vec<IrHandlerParam>) -> Strin
             } else {
                 parts.push(",\n    {");
             }
-            parts.push("\n      \"kind\": " + json_quote(p.kind) + ",\n      \"name\": " + json_quote(p.name) + "\n    }");
+            parts.push(
+                "\n      \"kind\": "
+                    + json_quote(p.kind)
+                    + ",\n      \"name\": "
+                    + json_quote(p.name)
+                    + "\n    }",
+            );
         }
         parts.push("\n  ]");
     }

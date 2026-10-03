@@ -1,50 +1,57 @@
-# Self-hosting 計画
+# Self-hosting
 
-stage0 = Go 実装の `kek`（`cmd/kek`, `internal/*`）。stage1 = Kekkai で書いたコンパイラ（`compiler/`）。
+Kekkai のコンパイラは Kekkai で書かれている（`compiler/`）。コンパイラ自身も WasmGC にコンパイルされ、Node 上で動く。
 
-1. stage0 で `compiler/` を WASM にする（`kek run compiler <subcommand> ...` で実行できる）
-2. stage1 の出力が stage0 と **バイト単位で一致** することをテストコーパス（`testdata/**/*.kek`）で確認する
-3. stage1 で `compiler/` 自身をコンパイルして stage2、stage2 で stage3 を作り、stage2 == stage3 を確認する
-4. 一致したら WASM のコンパイラをブートストラップ用に置き、Go 実装を凍結する
+## ブートストラップ
+
+- `bootstrap/kek.wasm` + `bootstrap/kekkai_meta.js`：コンパイラ自身をコンパイルした WasmGC モジュール（Zig と同じ方式）。
+- `./kek`（`js/kek.mjs`）は bootstrap で現在の `compiler/` をビルドし（stage1）、そのコンパイラでコマンドを実行する。
+  結果は `.kek-cache/stage-<hash>/` にキャッシュされる。キーは bootstrap とソースのハッシュで、一時ディレクトリに書いてからアトミックにリネームするため、ロックは要らない。
+- `./kek bootstrap-check`：stage1 で自分自身をもう一度ビルドし（stage2）、stage1 == stage2（不動点）を確認する。CI でも実行する。
+- `./kek bootstrap-update`：不動点を確認したうえで `bootstrap/` を更新する。
+
+コンパイラ自身に新しい言語機能を使わせるときは、先にその機能を実装し、`bootstrap-update` してから使う。
 
 ## 規約
 
-- `compiler/` は 1 つのプログラム（ディレクトリ内の全 `.kek` が 1 つの名前空間）。モジュールがないので
-  **名前にコンポーネントの接頭辞を付ける**：
-  - フロントエンド: 型 `Tok*`, `Ast*`、関数 `lex_*`, `parse_*`, `ast_*`
-  - 型検査: `Ty*`, `chk_*` / lowering: `lower_*` / IR データ: `Ir*`, `ir_*`
-  - バックエンド: `Wasm*`, `wasm_*`, `cg_*` / JSON: `Json*`, `json_*`
-  - 共通ユーティリティ: `util_*`（`compiler/util.kek`）
-- AST/型/IR のノードは識別のために `id: Int` を持つ（Map のキーは Int か String のみ、ポインタ同一性がないため）。
-- エントリは `compiler/main.kek` の `#[main]`。サブコマンドを各コンポーネントの `*_main` 関数へ振り分ける。
-- stage0 の出力順序（型・import・関数・ローカル・文字列リテラル表）を忠実に再現する。Go の実装と同じ
-  アルゴリズムで書くこと（バイト一致が検証手段）。
+- `compiler/` は 1 つのプログラムで、ディレクトリ内の全 `.kek` が 1 つの名前空間を共有する。モジュールがないので、名前にコンポーネントの接頭辞を付ける。
+  - フロントエンド：`Tok*`, `Ast*`, `lex_*`, `parse_*`, `ast_*`
+  - 型検査：`Ty*`, `chk_*`
+  - lowering：`lower_*`
+  - IR：`Ir*`, `ir_*`
+  - バックエンド：`Wasm*`, `wasm_*`, `cg_*`
+  - JSON：`Json*`, `json_*`
+  - ツール：`fmt_*`, `caps_*`, `search_*`, `diag_*`, `irjson_*`, `glue_*`, `testrun_*`
+- AST のノードは識別用に `id: Int` を持つ。Map のキーは Int か String に限られ、ポインタの同一性もないためである。
+- 出力は決定的にする。型・import・関数・ローカル・文字列リテラル表の順序は固定で、不動点の検査がこれに依存する。
 
-## サブコマンド（stage1）
+## サブコマンド
 
-| コマンド | 担当 | 比較対象（stage0） |
-| --- | --- | --- |
-| `lex <file>` | フロントエンド | `kek tokens <file>` |
-| `ast <file>` | フロントエンド | `kek ast <file>`（要追加） |
-| `ir2wasm <ir.json> <out.wasm> [<meta.json>]` | バックエンド（実装済み、`go test ./internal/selfhost`） | `kek ir -json` → stage0 の wasm.Compile 出力と glue.MetaJS の JSON |
-| `check <file>` | 型検査 | `kek check` の診断 |
-| `ir <file>` | lowering | `kek ir <file>` のテキスト |
-| `build <file> <outdir> [-target d1\|do]` | 全体（`glue_*`: `#[handler]` なら worker.js と wrangler.toml も。既存の wrangler.toml は上書きしない） | `kek build` |
-| `ir -json <path>` | `irjson_*`（Lean 参照インタプリタの入力） | `kek ir -json` |
-| `check -json <file>` | `diag_*`（tooling.Analyze の移植: 終了位置・phase・未使用 capability の lint） | `kek check -json` |
-| `caps [-json] <path>` | `caps_*` | `kek caps` |
-| `search [-json] [-limit n] '<sig>' [file]` | `search_*` | `kek search` |
-| `test-build <file> <outdir> [-list \| -run name...]` | `kek test`（`testrun_*`、ランナーは `js/kek_test.mjs`） | `testrun.Discover` / `testrun.Compile`（`go test ./internal/selfhost -run TestTestBuild`） |
-| `fmt [-w\|-check] <paths>` | フォーマッタ（`fmt_*`、`go test ./internal/selfhost -run TestFmt`、`node --test 'tests/*.test.mjs'`） | `kek fmt`（`internal/format`） |
+エントリは `compiler/main.kek` の `#[main]`。
 
-ツール系コマンドの stage0 との一致は `go test ./internal/selfhost -run 'Caps|CheckJSON|IRJSON|Search|BuildGlue'`、
-Go なしの回帰テストは `node --test tests/agent_cmds.test.mjs`（期待出力は stage0 で生成した `tests/agent_cmds/golden/`）。
+| コマンド | 内容 |
+| --- | --- |
+| `check [-json] <path>` | 型検査（`-json` は終了位置・phase・未使用 capability の lint 付き） |
+| `ir [-json] <path>` | IR のテキスト／JSON（JSON は Lean 参照インタプリタの入力） |
+| `build <path> <outdir> [-target d1\|do]` | module.wasm と kekkai_meta.js。`#[handler]` なら worker.js と wrangler.toml も出力する（既存の wrangler.toml は上書きしない） |
+| `caps [-json] <path>` | 各関数の capability（＝起こしうる副作用） |
+| `search [-json] [-limit n] '<sig>' [path]` | 型によるシグネチャ検索 |
+| `fmt [-w\|-check] <paths>` | 正準フォーマット |
+| `test-build <path> <outdir> [-list \| -run name...]` | `kek test` のテスト発見とハーネスのビルド（ランナーは `js/kek_test.mjs`） |
+| `lex <file>` / `ast <file>` | トークン列と構文木のダンプ |
+| `ir2wasm <ir.json> <out.wasm> [<meta.json>]` | IR の JSON から WasmGC を生成する |
 
-## Go の撤去（self-hosting 達成後のゴール）
+`<path>` はファイルかディレクトリで、ディレクトリなら中の `*.kek` を名前順に読む。
 
-1. 不動点（stage2 == stage3）を確認したら `bootstrap/kek.wasm` をコミットし、`kek` を Node 上の JS ランチャーにする。
-   CI で「bootstrap から再ビルドしても不動点」を検査する。Go のコンパイラ本体は凍結。
-2. ツール（`fmt`・`test`・`caps`・`search`・`check -json`・`lsp`・`run`）を Kekkai へ移植し、移植済みの Go 版から削除する。
-3. Go のテストハーネス（e2e・difftest・selfhost・workerd）を Node スクリプト／`kek test` に置き換える。→ `node tests/run.mjs`（`mise run test`）。Node と `./kek` だけで、不動点・`check` の診断・`run`・e2e・アダプタ適合・difftest・`fmt` の往復・workerd・`tests/*.test.mjs` を実行する。difftest の `ir -json` は `./kek ir -json` が使えるまで Go の stage0 で代用する（`--ir go`）。
-4. `mise.toml` から Go を外し、Go のソースを削除する（stage0 は git 履歴に残る）。
-   Lean の参照インタプリタとの差分テストは stage1 を相手に続ける。
+## テスト
+
+`node tests/run.mjs`（`mise run test`）が以下をまとめて実行する。
+
+- 不動点の検査
+- `check` の診断
+- `run`
+- E2E とストアアダプタの適合テスト
+- Lean 参照インタプリタとの差分テスト
+- `fmt` の往復
+- workerd
+- `tests/*.test.mjs`

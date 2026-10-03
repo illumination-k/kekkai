@@ -7,7 +7,7 @@ on:
 
 jobs:
   node:
-    name: tests (Node + ./kek, no Go)
+    name: tests (bootstrap fixed point, check, run, e2e, difftest, fmt)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -15,21 +15,8 @@ jobs:
         with:
           install_args: node
           cache: true
-      - run: node tests/run.mjs
-
-  go:
-    name: vet / test / fmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v3
-        with:
-          install_args: go node wasm-tools
-          cache: true
-      - run: ./kek bootstrap-check
-      - run: go vet ./...
-      - run: go test ./...
-      - run: mise run fmt-check
+      - run: node tests/run.mjs --short
+      - run: ./kek fmt -check compiler testdata/e2e testdata/run testdata/test examples
 
   lean:
     name: lean proofs

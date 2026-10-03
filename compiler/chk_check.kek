@@ -1,4 +1,4 @@
-// Type checker: a port of internal/types/checker.go. Results are recorded
+// Type checker. Results are recorded
 // in ChkInfo maps keyed by AST node id.
 
 struct ChkBinding {
@@ -123,10 +123,22 @@ fn chk_dummy_pos() -> AstPos {
 fn chk_dummy_func() -> ChkFunc {
     let p = chk_dummy_pos();
     ChkFunc {
-        name: "", params: Vec::new(), result: ty_unit(), handler: false, main: false, test: false, async: false,
-        calls: Map::new(), effects: Map::new(),
+        name: "",
+        params: Vec::new(),
+        result: ty_unit(),
+        handler: false,
+        main: false,
+        test: false,
+        async: false,
+        calls: Map::new(),
+        effects: Map::new(),
         decl: AstFuncDecl {
-            id: 0, pos: p, attrs: Vec::new(), name: "", params: Vec::new(), result: None,
+            id: 0,
+            pos: p,
+            attrs: Vec::new(),
+            name: "",
+            params: Vec::new(),
+            result: None,
             body: AstBlock { id: 0, pos: p, stmts: Vec::new(), tail: None, end: p },
         },
     }
@@ -135,14 +147,34 @@ fn chk_dummy_func() -> ChkFunc {
 // chk_check type-checks a parsed program (types.Check in Go).
 fn chk_check(f: AstFile) -> ChkResult {
     let info = ChkInfo {
-        funcs: Map::new(), func_list: Vec::new(), structs: Map::new(), enums: Map::new(), handler: None,
-        types: Map::new(), uses: Map::new(), lets: Map::new(), assigns: Map::new(), fors: Map::new(),
-        calls: Map::new(), methods: Map::new(), fields: Map::new(), struct_lits: Map::new(),
-        tries: Map::new(), returns: Map::new(), patterns: Map::new(), closures: Map::new(),
+        funcs: Map::new(),
+        func_list: Vec::new(),
+        structs: Map::new(),
+        enums: Map::new(),
+        handler: None,
+        types: Map::new(),
+        uses: Map::new(),
+        lets: Map::new(),
+        assigns: Map::new(),
+        fors: Map::new(),
+        calls: Map::new(),
+        methods: Map::new(),
+        fields: Map::new(),
+        struct_lits: Map::new(),
+        tries: Map::new(),
+        returns: Map::new(),
+        patterns: Map::new(),
+        closures: Map::new(),
     };
     let c = Chk {
-        loops: 0, info: info, errs: Vec::new(), next_id: 0, scopes: Vec::new(), rets: Vec::new(),
-        cur: chk_dummy_func(), builtins: chk_new_builtins(),
+        loops: 0,
+        info: info,
+        errs: Vec::new(),
+        next_id: 0,
+        scopes: Vec::new(),
+        rets: Vec::new(),
+        cur: chk_dummy_func(),
+        builtins: chk_new_builtins(),
     };
     chk_declare(c, f);
     for fd in f.funcs {
@@ -179,23 +211,45 @@ fn chk_new_binding(c: Chk, name: String, t: Ty, pos: AstPos) -> ChkBinding {
 // ---- declarations ----
 
 fn chk_reserved(n: String) -> Bool {
-    n == "Int" || n == "Bool" || n == "String" || n == "Result" || n == "Option"
-        || n == "Request" || n == "Response" || n == "TxError" || n == "NetError" || n == "IoError"
-        || n == "Vec" || n == "Map"
-        || n == "Log" || n == "Net" || n == "Db" || n == "Fs" || n == "Clock" || n == "Random" || n == "Tx"
-        || n == "Ok" || n == "Err" || n == "Some" || n == "None"
+    n == "Int"
+        || n == "Bool"
+        || n == "String"
+        || n == "Result"
+        || n == "Option"
+        || n == "Request"
+        || n == "Response"
+        || n == "TxError"
+        || n == "NetError"
+        || n == "IoError"
+        || n == "Vec"
+        || n == "Map"
+        || n == "Log"
+        || n == "Net"
+        || n == "Db"
+        || n == "Fs"
+        || n == "Clock"
+        || n == "Random"
+        || n == "Tx"
+        || n == "Ok"
+        || n == "Err"
+        || n == "Some"
+        || n == "None"
 }
 
 fn chk_declare(c: Chk, f: AstFile) {
     for sd in f.structs {
-        if chk_reserved(sd.name) || c.info.structs.contains(sd.name) || c.info.enums.contains(sd.name) {
+        if chk_reserved(sd.name)
+            || c.info.structs.contains(sd.name)
+            || c.info.enums.contains(sd.name) {
             chk_errorf(c, sd.pos, "type `" + sd.name + "` is already defined");
             continue;
         }
         c.info.structs.insert(sd.name, TyStruct { name: sd.name, fields: Vec::new() });
     }
     for ed in f.enums {
-        if chk_reserved(ed.name) || c.info.structs.contains(ed.name) || c.info.enums.contains(ed.name) {
+        if chk_reserved(ed.name)
+            || c.info.structs.contains(ed.name)
+            || c.info.enums.contains(ed.name) {
             chk_errorf(c, ed.pos, "type `" + ed.name + "` is already defined");
             continue;
         }
@@ -236,7 +290,11 @@ fn chk_declare(c: Chk, f: AstFile) {
                         en.variants.push(vi);
                     }
                     if en.variants.len() == 0 {
-                        chk_errorf(c, ed.pos, "enum `" + ed.name + "` must have at least one variant");
+                        chk_errorf(
+                            c,
+                            ed.pos,
+                            "enum `" + ed.name + "` must have at least one variant",
+                        );
                     }
                 }
             }
@@ -249,10 +307,16 @@ fn chk_declare(c: Chk, f: AstFile) {
             continue;
         }
         let fun = ChkFunc {
-            name: fd.name, decl: fd, params: Vec::new(), result: ty_unit(),
-            handler: ast_has_attr(fd, "handler"), main: ast_has_attr(fd, "main"), test: ast_has_attr(fd, "test"),
+            name: fd.name,
+            decl: fd,
+            params: Vec::new(),
+            result: ty_unit(),
+            handler: ast_has_attr(fd, "handler"),
+            main: ast_has_attr(fd, "main"),
+            test: ast_has_attr(fd, "test"),
             async: false,
-            calls: Map::new(), effects: Map::new(),
+            calls: Map::new(),
+            effects: Map::new(),
         };
         for a in fd.attrs {
             if a.name != "handler" && a.name != "main" && a.name != "test" {
@@ -267,13 +331,19 @@ fn chk_declare(c: Chk, f: AstFile) {
             seen.insert(p.name, true);
             let mut t = ty_unit();
             match p.ty {
-                Some(te) => { t = chk_resolve_type(c, te, true); }
+                Some(te) => {
+                    t = chk_resolve_type(c, te, true);
+                }
                 None => {}
             }
             match t {
                 Ty::Cap(k, borrowed) => {
                     if k == "Tx" && !borrowed {
-                        chk_errorf(c, p.pos, "a function cannot take ownership of a transaction; borrow it with `&Tx` (only a `transaction` block can commit or roll back)");
+                        chk_errorf(
+                            c,
+                            p.pos,
+                            "a function cannot take ownership of a transaction; borrow it with `&Tx` (only a `transaction` block can commit or roll back)",
+                        );
                     }
                 }
                 _ => {}
@@ -283,7 +353,9 @@ fn chk_declare(c: Chk, f: AstFile) {
             fun.params.push(b);
         }
         match fd.result {
-            Some(te) => { fun.result = chk_resolve_type(c, te, false); }
+            Some(te) => {
+                fun.result = chk_resolve_type(c, te, false);
+            }
             None => {}
         }
         if fun.handler {
@@ -303,7 +375,13 @@ fn chk_declare(c: Chk, f: AstFile) {
 fn chk_main_sig(c: Chk, fun: ChkFunc) {
     match c.info.handler {
         Some(h) => {
-            chk_errorf(c, fun.decl.pos, "a program has either one #[handler] or one #[main] (also defined: `" + h.name + "`)");
+            chk_errorf(
+                c,
+                fun.decl.pos,
+                "a program has either one #[handler] or one #[main] (also defined: `"
+                    + h.name
+                    + "`)",
+            );
             return;
         }
         None => {}
@@ -317,7 +395,11 @@ fn chk_main_sig(c: Chk, fun: ChkFunc) {
                 if ty_is_prim(e, "String") {
                     nargs = nargs + 1;
                     if nargs > 1 {
-                        chk_errorf(c, p.pos, "#[main] takes at most one `Vec<String>` (the command-line arguments)");
+                        chk_errorf(
+                            c,
+                            p.pos,
+                            "#[main] takes at most one `Vec<String>` (the command-line arguments)",
+                        );
                     }
                     ok = true;
                 }
@@ -330,18 +412,32 @@ fn chk_main_sig(c: Chk, fun: ChkFunc) {
             _ => {}
         }
         if !ok {
-            chk_errorf(c, p.pos, "#[main] parameters must be `Vec<String>` or capabilities (&Fs, &Log, &Net, &Db, &Clock, &Random), found `" + ty_str(p.ty) + "`");
+            chk_errorf(
+                c,
+                p.pos,
+                "#[main] parameters must be `Vec<String>` or capabilities (&Fs, &Log, &Net, &Db, &Clock, &Random), found `"
+                    + ty_str(p.ty)
+                    + "`",
+            );
         }
     }
     if !ty_is_prim(fun.result, "Int") {
-        chk_errorf(c, fun.decl.pos, "#[main] must return `Int` (the exit code), found `" + ty_str(fun.result) + "`");
+        chk_errorf(
+            c,
+            fun.decl.pos,
+            "#[main] must return `Int` (the exit code), found `" + ty_str(fun.result) + "`",
+        );
     }
 }
 
 fn chk_handler_sig(c: Chk, fun: ChkFunc) {
     match c.info.handler {
         Some(h) => {
-            chk_errorf(c, fun.decl.pos, "only one #[handler] is allowed per program (also defined: `" + h.name + "`)");
+            chk_errorf(
+                c,
+                fun.decl.pos,
+                "only one #[handler] is allowed per program (also defined: `" + h.name + "`)",
+            );
             return;
         }
         None => {}
@@ -368,11 +464,21 @@ fn chk_handler_sig(c: Chk, fun: ChkFunc) {
             _ => {}
         }
         if !ok {
-            chk_errorf(c, p.pos, "handler parameters must be `Request` or capabilities (&Log, &Net, &Db, &Clock, &Random), found `" + ty_str(p.ty) + "`");
+            chk_errorf(
+                c,
+                p.pos,
+                "handler parameters must be `Request` or capabilities (&Log, &Net, &Db, &Clock, &Random), found `"
+                    + ty_str(p.ty)
+                    + "`",
+            );
         }
     }
     if !ty_is_opaque(fun.result, "Response") {
-        chk_errorf(c, fun.decl.pos, "a handler must return `Response`, found `" + ty_str(fun.result) + "`");
+        chk_errorf(
+            c,
+            fun.decl.pos,
+            "a handler must return `Response`, found `" + ty_str(fun.result) + "`",
+        );
     }
 }
 
@@ -391,7 +497,13 @@ fn chk_test_sig(c: Chk, fun: ChkFunc) {
             _ => {}
         }
         if !ok {
-            chk_errorf(c, p.pos, "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random), found `" + ty_str(p.ty) + "`");
+            chk_errorf(
+                c,
+                p.pos,
+                "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random), found `"
+                    + ty_str(p.ty)
+                    + "`",
+            );
         }
     }
     match fun.result {
@@ -407,14 +519,29 @@ fn chk_test_sig(c: Chk, fun: ChkFunc) {
         }
         _ => {}
     }
-    chk_errorf(c, fun.decl.pos, "a test must return `()`, `Bool` or `Result<(), String>`, found `" + ty_str(fun.result) + "`");
+    chk_errorf(
+        c,
+        fun.decl.pos,
+        "a test must return `()`, `Bool` or `Result<(), String>`, found `"
+            + ty_str(fun.result)
+            + "`",
+    );
 }
 
 // chk_type_args resolves the type arguments of a named type, reporting an
 // arity mismatch (the `args` closure in Go).
 fn chk_type_args(c: Chk, te: AstNamedType, n: Int) -> Vec<Ty> {
     if te.args.len() != n {
-        chk_errorf(c, te.pos, "`" + te.name + "` expects " + n.to_string() + " type argument(s), found " + te.args.len().to_string());
+        chk_errorf(
+            c,
+            te.pos,
+            "`"
+                + te.name
+                + "` expects "
+                + n.to_string()
+                + " type argument(s), found "
+                + te.args.len().to_string(),
+        );
     }
     let out = Vec::new();
     for i in 0..n {
@@ -440,14 +567,24 @@ fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 AstType::Named(inner) => {
                     if inner.args.len() == 0 && ty_is_cap_name(inner.name) {
                         if !allow_cap {
-                            chk_errorf(c, te.pos, "capability type `&" + inner.name + "` is only allowed as a function parameter");
+                            chk_errorf(
+                                c,
+                                te.pos,
+                                "capability type `&"
+                                    + inner.name
+                                    + "` is only allowed as a function parameter",
+                            );
                         }
                         return Ty::Cap(inner.name, true);
                     }
                 }
                 _ => {}
             }
-            chk_errorf(c, te.pos, "`&` can only be applied to capability types (Log, Net, Db, Clock, Random, Tx)");
+            chk_errorf(
+                c,
+                te.pos,
+                "`&` can only be applied to capability types (Log, Net, Db, Clock, Random, Tx)",
+            );
             chk_resolve_type(c, te.elem, false)
         }
         AstType::Named(te) => {
@@ -472,22 +609,38 @@ fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 let a = chk_type_args(c, te, 2);
                 let k = ty_prune(chk_ty_at(a, 0));
                 if !ty_is_prim(k, "Int") && !ty_is_prim(k, "String") {
-                    chk_errorf(c, te.pos, "map keys must be Int or String, found `" + ty_str(k) + "`");
+                    chk_errorf(
+                        c,
+                        te.pos,
+                        "map keys must be Int or String, found `" + ty_str(k) + "`",
+                    );
                 }
                 return Ty::Map(chk_ty_at(a, 0), chk_ty_at(a, 1));
             }
-            if n == "Request" || n == "Response" || n == "TxError" || n == "NetError" || n == "IoError" {
+            if n == "Request"
+                || n == "Response"
+                || n == "TxError"
+                || n == "NetError"
+                || n == "IoError" {
                 chk_type_args(c, te, 0);
                 return Ty::Opaque(n);
             }
             if ty_is_cap_name(n) {
                 chk_type_args(c, te, 0);
                 if !allow_cap {
-                    chk_errorf(c, te.pos, "capability type `" + n + "` is only allowed as a function parameter");
+                    chk_errorf(
+                        c,
+                        te.pos,
+                        "capability type `" + n + "` is only allowed as a function parameter",
+                    );
                     return Ty::Cap(n, false);
                 }
                 if n != "Tx" {
-                    chk_errorf(c, te.pos, "capabilities are passed by borrowing: write `&" + n + "`");
+                    chk_errorf(
+                        c,
+                        te.pos,
+                        "capabilities are passed by borrowing: write `&" + n + "`",
+                    );
                     return Ty::Cap(n, true);
                 }
                 return Ty::Cap(n, false);
@@ -514,7 +667,17 @@ fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
 
 fn chk_expect(c: Chk, pos: AstPos, got: Ty, want: Ty, what: String) {
     if !ty_unify(got, want) {
-        chk_errorf(c, pos, "mismatched types in " + what + ": expected `" + ty_str(want) + "`, found `" + ty_str(got) + "`");
+        chk_errorf(
+            c,
+            pos,
+            "mismatched types in "
+                + what
+                + ": expected `"
+                + ty_str(want)
+                + "`, found `"
+                + ty_str(got)
+                + "`",
+        );
     }
 }
 
@@ -575,7 +738,15 @@ fn chk_lookup(c: Chk, name: String, pos: AstPos) -> Option<ChkBinding> {
                         match b.ty {
                             Ty::Cap(k, _) => {
                                 if crossed && !ty_cap_revocable(k) {
-                                    chk_errorf(c, pos, "capability `" + b.name + ": " + ty_str(b.ty) + "` cannot be used inside a transaction: its effects cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)");
+                                    chk_errorf(
+                                        c,
+                                        pos,
+                                        "capability `"
+                                            + b.name
+                                            + ": "
+                                            + ty_str(b.ty)
+                                            + "` cannot be used inside a transaction: its effects cannot be rolled back (use `tx.outbox(...)` to run an effect after commit)",
+                                    );
                                 }
                             }
                             _ => {}
@@ -610,7 +781,9 @@ fn chk_block(c: Chk, b: AstBlock) -> Ty {
     }
     let mut t = ty_unit();
     match b.tail {
-        Some(e) => { t = chk_expr(c, e); }
+        Some(e) => {
+            t = chk_expr(c, e);
+        }
         None => {
             if diverges {
                 t = ty_never();
@@ -657,7 +830,13 @@ fn chk_stmt(c: Chk, s0: AstStmt) -> Bool {
                         return false;
                     }
                     if !b.mutable {
-                        chk_errorf(c, s.pos, "cannot assign twice to immutable variable `" + s.name + "` (declare it with `let mut`)");
+                        chk_errorf(
+                            c,
+                            s.pos,
+                            "cannot assign twice to immutable variable `"
+                                + s.name
+                                + "` (declare it with `let mut`)",
+                        );
                     }
                     c.info.assigns.insert(s.id, b);
                     chk_expect(c, ast_expr_pos(s.value), t, b.ty, "assignment");
@@ -704,10 +883,18 @@ fn chk_stmt(c: Chk, s0: AstStmt) -> Bool {
                 }
                 None => {
                     match ty_prune(it) {
-                        Ty::Vec(e) => { elem = e; }
+                        Ty::Vec(e) => {
+                            elem = e;
+                        }
                         _ => {
                             if !ty_is_prim(ty_prune(it), "<invalid>") {
-                                chk_errorf(c, ast_expr_pos(s.iter), "`for` iterates over a range `a..b` or a `Vec`, found `" + ty_str(ty_prune(it)) + "`");
+                                chk_errorf(
+                                    c,
+                                    ast_expr_pos(s.iter),
+                                    "`for` iterates over a range `a..b` or a `Vec`, found `"
+                                        + ty_str(ty_prune(it))
+                                        + "`",
+                                );
                             }
                         }
                     }
@@ -789,7 +976,13 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     b.uses = b.uses + 1;
                     c.info.uses.insert(e.id, b);
                     if ty_is_cap(b.ty) && !allow_cap {
-                        chk_errorf(c, e.pos, "capability `" + b.name + "` cannot be used as a value: capabilities are second-class and can only be passed as arguments or used as method receivers");
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "capability `"
+                                + b.name
+                                + "` cannot be used as a value: capabilities are second-class and can only be passed as arguments or used as method receivers",
+                        );
                     }
                     chk_record(c, e.id, b.ty)
                 }
@@ -821,7 +1014,15 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 Some(els) => {
                     let et = chk_expr(c, els);
                     if !ty_unify(tt, et) {
-                        chk_errorf(c, e.pos, "`if` and `else` have incompatible types: `" + ty_str(tt) + "` vs `" + ty_str(et) + "`");
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "`if` and `else` have incompatible types: `"
+                                + ty_str(tt)
+                                + "` vs `"
+                                + ty_str(et)
+                                + "`",
+                        );
                     }
                     chk_record(c, e.id, ty_join(tt, et))
                 }
@@ -883,20 +1084,42 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                         let t = chk_expr(c, f.value);
                         match chk_struct_field(st, f.name) {
                             None => {
-                                chk_errorf(c, f.pos, "struct `" + st.name + "` has no field `" + f.name + "`");
+                                chk_errorf(
+                                    c,
+                                    f.pos,
+                                    "struct `" + st.name + "` has no field `" + f.name + "`",
+                                );
                             }
                             Some(fi) => {
                                 if seen.contains(f.name) {
-                                    chk_errorf(c, f.pos, "field `" + f.name + "` specified more than once");
+                                    chk_errorf(
+                                        c,
+                                        f.pos,
+                                        "field `" + f.name + "` specified more than once",
+                                    );
                                 }
                                 seen.insert(f.name, true);
-                                chk_expect(c, ast_expr_pos(f.value), t, fi.ty, "field `" + f.name + "`");
+                                chk_expect(
+                                    c,
+                                    ast_expr_pos(f.value),
+                                    t,
+                                    fi.ty,
+                                    "field `" + f.name + "`",
+                                );
                             }
                         }
                     }
                     for fi in st.fields {
                         if !seen.contains(fi.name) {
-                            chk_errorf(c, e.pos, "missing field `" + fi.name + "` in initializer of `" + st.name + "`");
+                            chk_errorf(
+                                c,
+                                e.pos,
+                                "missing field `"
+                                    + fi.name
+                                    + "` in initializer of `"
+                                    + st.name
+                                    + "`",
+                            );
                         }
                     }
                     chk_record(c, e.id, Ty::Struct(st))
@@ -908,7 +1131,11 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
             chk_record(c, e.id, t)
         }
         AstExpr::Closure(e) => {
-            chk_errorf(c, e.pos, "closures are second-class: they can only appear as the body of `transaction`");
+            chk_errorf(
+                c,
+                e.pos,
+                "closures are second-class: they can only appear as the body of `transaction`",
+            );
             chk_record(c, e.id, ty_invalid())
         }
     }
@@ -942,8 +1169,15 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
             return ty_bool();
         }
         let p = ty_prune(xt);
-        if !(ty_is_prim(p, "Int") || ty_is_prim(p, "Bool") || ty_is_prim(p, "String") || ty_is_prim(p, "()")) {
-            chk_errorf(c, e.pos, "`" + ty_str(p) + "` cannot be compared with `==` (only Int, Bool, String)");
+        if !(ty_is_prim(p, "Int")
+            || ty_is_prim(p, "Bool")
+            || ty_is_prim(p, "String")
+            || ty_is_prim(p, "()")) {
+            chk_errorf(
+                c,
+                e.pos,
+                "`" + ty_str(p) + "` cannot be compared with `==` (only Int, Bool, String)",
+            );
         }
         return ty_bool();
     }
@@ -966,12 +1200,23 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
 
 fn chk_args(c: Chk, pos: AstPos, what: String, args: Vec<AstExpr>, params: Vec<Ty>) {
     if args.len() != params.len() {
-        chk_errorf(c, pos, what + " takes " + params.len().to_string() + " argument(s) but " + args.len().to_string() + " were supplied");
+        chk_errorf(
+            c,
+            pos,
+            what
+                + " takes "
+                + params.len().to_string()
+                + " argument(s) but "
+                + args.len().to_string()
+                + " were supplied",
+        );
     }
     let mut i = 0;
     for a in args {
         match params.get(i) {
-            None => { chk_expr(c, a); }
+            None => {
+                chk_expr(c, a);
+            }
             Some(p) => chk_arg(c, a, p, what),
         }
         i = i + 1;
@@ -988,16 +1233,32 @@ fn chk_arg(c: Chk, a: AstExpr, want: Ty, what: String) {
                     let t = ty_prune(chk_expr_cap(c, a, true));
                     let mut ok = false;
                     match t {
-                        Ty::Cap(gk, _) => { ok = gk == wk; }
+                        Ty::Cap(gk, _) => {
+                            ok = gk == wk;
+                        }
                         _ => {}
                     }
                     if !ok {
-                        chk_errorf(c, id.pos, "mismatched types in argument of " + what + ": expected capability `" + ty_str(want) + "`, found `" + ty_str(t) + "`");
+                        chk_errorf(
+                            c,
+                            id.pos,
+                            "mismatched types in argument of "
+                                + what
+                                + ": expected capability `"
+                                + ty_str(want)
+                                + "`, found `"
+                                + ty_str(t)
+                                + "`",
+                        );
                     }
                 }
                 _ => {
                     chk_expr(c, a);
-                    chk_errorf(c, ast_expr_pos(a), "expected capability `" + ty_str(want) + "` as argument of " + what);
+                    chk_errorf(
+                        c,
+                        ast_expr_pos(a),
+                        "expected capability `" + ty_str(want) + "` as argument of " + what,
+                    );
                 }
             }
         }
@@ -1025,7 +1286,9 @@ fn chk_call(c: Chk, e: AstCall) -> Ty {
                         chk_exprs(c, e.args);
                     } else {
                         match e.args.get(0) {
-                            Some(a) => { arg = chk_expr(c, a); }
+                            Some(a) => {
+                                arg = chk_expr(c, a);
+                            }
                             None => {}
                         }
                     }
@@ -1046,7 +1309,13 @@ fn chk_call(c: Chk, e: AstCall) -> Ty {
             match c.info.funcs.get(f.name) {
                 None => {
                     match chk_lookup(c, f.name, f.pos) {
-                        Some(_) => chk_errorf(c, f.pos, "`" + f.name + "` is not a function (functions are not first-class in Kekkai)"),
+                        Some(_) => chk_errorf(
+                            c,
+                            f.pos,
+                            "`"
+                                + f.name
+                                + "` is not a function (functions are not first-class in Kekkai)",
+                        ),
                         None => chk_errorf(c, f.pos, "cannot find function `" + f.name + "`"),
                     }
                     chk_exprs(c, e.args);
@@ -1054,7 +1323,11 @@ fn chk_call(c: Chk, e: AstCall) -> Ty {
                 }
                 Some(fun) => {
                     if fun.handler || fun.main {
-                        chk_errorf(c, f.pos, "the entry point `" + fun.name + "` cannot be called directly");
+                        chk_errorf(
+                            c,
+                            f.pos,
+                            "the entry point `" + fun.name + "` cannot be called directly",
+                        );
                     }
                     let params = Vec::new();
                     for p in fun.params {
@@ -1099,7 +1372,17 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
             for v in en.variants {
                 if v.name == p.name {
                     if !is_call && v.fields.len() > 0 {
-                        chk_errorf(c, p.pos, "variant `" + en.name + "::" + v.name + "` takes " + v.fields.len().to_string() + " argument(s)");
+                        chk_errorf(
+                            c,
+                            p.pos,
+                            "variant `"
+                                + en.name
+                                + "::"
+                                + v.name
+                                + "` takes "
+                                + v.fields.len().to_string()
+                                + " argument(s)",
+                        );
                     }
                     chk_args(c, pos, "`" + en.name + "::" + v.name + "`", args, v.fields);
                     let ci = chk_call_info("variant", Ty::Enum(en));
@@ -1136,7 +1419,11 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
     match c.builtins.statics.get(p.ty + "::" + p.name) {
         Some(b) => {
             if !is_call {
-                chk_errorf(c, p.pos, "`" + p.ty + "::" + p.name + "` is a function; call it with `()`");
+                chk_errorf(
+                    c,
+                    p.pos,
+                    "`" + p.ty + "::" + p.name + "` is a function; call it with `()`",
+                );
             }
             chk_args(c, pos, "`" + p.ty + "::" + p.name + "`", args, b.params);
             let ci = chk_call_info("static", b.result);
@@ -1189,12 +1476,26 @@ fn chk_method(c: Chk, e: AstMethodCall) -> Ty {
         _ => {}
     }
     match rt {
-        Ty::Result(_, _) => { return chk_generic_method(c, e, rt); }
-        Ty::Option(_) => { return chk_generic_method(c, e, rt); }
-        Ty::Vec(_) => { return chk_generic_method(c, e, rt); }
-        Ty::Map(_, _) => { return chk_generic_method(c, e, rt); }
+        Ty::Result(_, _) => {
+            return chk_generic_method(c, e, rt);
+        }
+        Ty::Option(_) => {
+            return chk_generic_method(c, e, rt);
+        }
+        Ty::Vec(_) => {
+            return chk_generic_method(c, e, rt);
+        }
+        Ty::Map(_, _) => {
+            return chk_generic_method(c, e, rt);
+        }
         Ty::Var(_) => {
-            chk_errorf(c, e.pos, "type annotations needed: cannot call method `" + e.name + "` on a value of unknown type");
+            chk_errorf(
+                c,
+                e.pos,
+                "type annotations needed: cannot call method `"
+                    + e.name
+                    + "` on a value of unknown type",
+            );
             chk_exprs(c, e.args);
             return ty_invalid();
         }
@@ -1209,21 +1510,39 @@ fn chk_method(c: Chk, e: AstMethodCall) -> Ty {
         }
         Some(b) => {
             if b.consumes && is_cap && borrowed {
-                chk_errorf(c, e.pos, "cannot call `" + e.name + "` on a borrowed transaction `&Tx`: only the `transaction` block that owns the `Tx` can end it");
+                chk_errorf(
+                    c,
+                    e.pos,
+                    "cannot call `"
+                        + e.name
+                        + "` on a borrowed transaction `&Tx`: only the `transaction` block that owns the `Tx` can end it",
+                );
             }
             let what = "`" + name + "." + e.name + "`";
             chk_args(c, e.pos, what, e.args, b.params);
             if is_cap {
                 c.cur.effects.insert(b.op, true);
             }
-            c.info.methods.insert(e.id, ChkMethodInfo { kind: "builtin", builtin: Some(b), op: "", recv_ty: rt, closure: None });
+            c.info.methods.insert(e.id, ChkMethodInfo {
+                kind: "builtin",
+                builtin: Some(b),
+                op: "",
+                recv_ty: rt,
+                closure: None,
+            });
             b.result
         }
     }
 }
 
 fn chk_generic_method(c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
-    let mi = ChkMethodInfo { kind: "generic", builtin: None, op: e.name, recv_ty: rt, closure: None };
+    let mi = ChkMethodInfo {
+        kind: "generic",
+        builtin: None,
+        op: e.name,
+        recv_ty: rt,
+        closure: None,
+    };
     let mut result = ty_unit();
     let mut found = false;
     let n = e.name;
@@ -1269,7 +1588,11 @@ fn chk_generic_method(c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
                 result = Ty::Option(el);
             } else if n == "join" {
                 if !ty_unify(el, ty_string()) {
-                    chk_errorf(c, e.pos, "`join` requires `Vec<String>`, found `" + ty_str(rt) + "`");
+                    chk_errorf(
+                        c,
+                        e.pos,
+                        "`join` requires `Vec<String>`, found `" + ty_str(rt) + "`",
+                    );
                 }
                 params = chk_tys1(ty_string());
                 result = ty_string();
@@ -1307,8 +1630,14 @@ fn chk_generic_method(c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
                 chk_args(c, e.pos, "`Map." + n + "`", e.args, params);
                 let kp = ty_prune(k);
                 if !ty_is_var(kp) {
-                    if !ty_is_prim(kp, "Int") && !ty_is_prim(kp, "String") && !ty_is_prim(kp, "<invalid>") {
-                        chk_errorf(c, e.pos, "map keys must be Int or String, found `" + ty_str(kp) + "`");
+                    if !ty_is_prim(kp, "Int")
+                        && !ty_is_prim(kp, "String")
+                        && !ty_is_prim(kp, "<invalid>") {
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "map keys must be Int or String, found `" + ty_str(kp) + "`",
+                        );
                     }
                 }
             }
@@ -1343,7 +1672,11 @@ fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
     }
     match ocl {
         None => {
-            chk_errorf(c, ast_expr_pos(a0), "`transaction` expects a closure with one parameter: `|tx| { ... }`");
+            chk_errorf(
+                c,
+                ast_expr_pos(a0),
+                "`transaction` expects a closure with one parameter: `|tx| { ... }`",
+            );
             chk_expr(c, a0);
             ty_invalid()
         }
@@ -1354,7 +1687,11 @@ fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
                 Some(pt) => {
                     let t = chk_resolve_type(c, pt, true);
                     if !ty_identical(t, tx_type) {
-                        chk_errorf(c, p0.pos, "the transaction parameter has type `Tx`, found `" + ty_str(t) + "`");
+                        chk_errorf(
+                            c,
+                            p0.pos,
+                            "the transaction parameter has type `Tx`, found `" + ty_str(t) + "`",
+                        );
                     }
                 }
                 None => {}
@@ -1374,10 +1711,22 @@ fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
             c.rets.pop();
             chk_pop(c);
             if !ty_unify(bt, result) {
-                chk_errorf(c, ast_expr_pos(cl.body), "a transaction body must evaluate to a `Result` (usually `tx.commit()`), found `" + ty_str(bt) + "`");
+                chk_errorf(
+                    c,
+                    ast_expr_pos(cl.body),
+                    "a transaction body must evaluate to a `Result` (usually `tx.commit()`), found `"
+                        + ty_str(bt)
+                        + "`",
+                );
             }
             c.info.types.insert(cl.id, result);
-            c.info.methods.insert(e.id, ChkMethodInfo { kind: "transaction", builtin: None, op: "", recv_ty: ty_unit(), closure: Some(ci) });
+            c.info.methods.insert(e.id, ChkMethodInfo {
+                kind: "transaction",
+                builtin: None,
+                op: "",
+                recv_ty: ty_unit(),
+                closure: Some(ci),
+            });
             result
         }
     }
@@ -1402,12 +1751,26 @@ fn chk_try(c: Chk, e: AstTry) -> Ty {
                 Ty::Result(_, rerr) => {
                     if !ty_unify(terr, rerr) {
                         let s1 = ty_str(ty_resolve(terr));
-                        chk_errorf(c, e.pos, "`?` cannot convert the error type `" + s1 + "` into `" + ty_str(ty_resolve(rerr)) + "`");
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "`?` cannot convert the error type `"
+                                + s1
+                                + "` into `"
+                                + ty_str(ty_resolve(rerr))
+                                + "`",
+                        );
                     }
                     tok
                 }
                 _ => {
-                    chk_errorf(c, e.pos, "the `?` operator can only be used on `Result` in a function that returns `Result` (this returns `" + ty_str(target) + "`)");
+                    chk_errorf(
+                        c,
+                        e.pos,
+                        "the `?` operator can only be used on `Result` in a function that returns `Result` (this returns `"
+                            + ty_str(target)
+                            + "`)",
+                    );
                     tok
                 }
             }
@@ -1415,7 +1778,13 @@ fn chk_try(c: Chk, e: AstTry) -> Ty {
         Ty::Option(el) => {
             match target {
                 Ty::Option(_) => {}
-                _ => chk_errorf(c, e.pos, "the `?` operator can only be used on `Option` in a function that returns `Option` (this returns `" + ty_str(target) + "`)"),
+                _ => chk_errorf(
+                    c,
+                    e.pos,
+                    "the `?` operator can only be used on `Option` in a function that returns `Option` (this returns `"
+                        + ty_str(target)
+                        + "`)",
+                ),
             }
             el
         }
@@ -1424,7 +1793,13 @@ fn chk_try(c: Chk, e: AstTry) -> Ty {
             ty_invalid()
         }
         _ => {
-            chk_errorf(c, e.pos, "the `?` operator can only be applied to `Result` or `Option`, found `" + ty_str(t) + "`");
+            chk_errorf(
+                c,
+                e.pos,
+                "the `?` operator can only be applied to `Result` or `Option`, found `"
+                    + ty_str(t)
+                    + "`",
+            );
             ty_invalid()
         }
     }

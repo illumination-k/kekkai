@@ -5,7 +5,7 @@ import Kekkai.IR.Value
 # Pure host operations
 
 Reimplements the synchronous, deterministic part of the `host` object in
-`internal/glue/runtime.js`. Strings are Lean strings; lengths are counted
+`js/kekkai_runtime.js`. Strings are Lean strings; lengths are counted
 in UTF-16 code units like JavaScript's `String.prototype.length`.
 -/
 

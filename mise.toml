@@ -1,21 +1,12 @@
 [tools]
-go = "1.27.0"
 node = "26.7.0"
 wasm-tools = "1.261.0"
 "github:leanprover/lean4" = "4.34.1"
 "npm:wrangler" = "4.147.0"
 
-[tasks.build]
-description = "Build the kek compiler"
-run = "go build -o bin/kek ./cmd/kek"
-
 [tasks.test]
 description = "Run all tests with Node and ./kek only (bootstrap fixed point, check, run, e2e, adapters, difftest, fmt, workerd, node:test files); args: node tests/run.mjs --help"
 run = "node tests/run.mjs"
-
-[tasks.test-go]
-description = "Run the Go tests (stage0; removed with the Go implementation)"
-run = "go test ./..."
 
 [tasks.difftest]
 description = "Differential test against the Lean reference interpreter (mise run lean first; usage: mise run difftest -- -n 500)"
@@ -26,31 +17,21 @@ description = "Build and check the Lean formalization"
 dir = "lean"
 run = "lake build"
 
-[tasks.vet]
-description = "Run go vet"
-run = "go vet ./..."
-
 [tasks.fmt]
-description = "Format Go and Kekkai sources"
-run = [
-  "gofmt -w cmd internal",
-  "./kek fmt -w testdata/test",
-]
+description = "Format Kekkai sources"
+run = "./kek fmt -w compiler testdata/e2e testdata/run testdata/test examples"
 
 [tasks.fmt-check]
-description = "Check that Go and Kekkai sources are formatted"
-run = [
-  "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; exit 1)",
-  "./kek fmt -check testdata/test compiler",
-]
+description = "Check that Kekkai sources are formatted"
+run = "./kek fmt -check compiler testdata/e2e testdata/run testdata/test examples"
 
 [tasks.test-node]
-description = "Run the Node tests of the self-hosted toolchain (no Go)"
+description = "Run the Node tests of the self-hosted toolchain"
 run = "node --test 'tests/*.test.mjs'"
 
 [tasks.ci]
-description = "Everything CI runs: vet, tests, format check, Lean proofs"
-depends = ["vet", "test", "test-go", "fmt-check", "lean"]
+description = "Everything CI runs: tests (incl. bootstrap fixed point), format check, Lean proofs"
+depends = ["test", "fmt-check", "lean"]
 
 [tasks.e2e]
 description = "Run the Node e2e tests and the store adapter conformance suite"

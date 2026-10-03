@@ -11,8 +11,8 @@ fn lower_hex(v: Int, digits: Int) -> String {
     parts.join("")
 }
 
-// lower_go_quote is strconv.Quote (Go's %q) for a JS string.
-fn lower_go_quote(s: String) -> String {
+// lower_quote quotes a string literal for the IR text dump.
+fn lower_quote(s: String) -> String {
     let parts = Vec::new();
     parts.push("\"");
     let n = s.len();
@@ -54,7 +54,12 @@ fn lower_go_quote(s: String) -> String {
             parts.push("\\x" + lower_hex(r, 2));
         } else if r < 127 {
             parts.push(s.slice(i, i + 1));
-        } else if r <= 160 || r == 173 || r == 8232 || r == 8233 || r == 65279 || (r >= 8203 && r <= 8207) {
+        } else if r <= 160
+            || r == 173
+            || r == 8232
+            || r == 8233
+            || r == 65279
+            || (r >= 8203 && r <= 8207) {
             parts.push("\\u" + lower_hex(r, 4));
         } else if r == 65533 && width == 1 && c != 65533 {
             parts.push("\\ufffd");
@@ -104,7 +109,7 @@ fn lower_instr_str(ins: IrInstr) -> String {
             return "const " + ins.cst.bool_val.to_string();
         }
         if k == "string" {
-            return "const " + lower_go_quote(ins.cst.str_val);
+            return "const " + lower_quote(ins.cst.str_val);
         }
         return "const ()";
     }
@@ -128,7 +133,14 @@ fn lower_instr_str(ins: IrInstr) -> String {
         return "tag " + ty + " " + lower_args_str(ins.args);
     }
     if op == "vfield" {
-        return "vfield " + ty + " " + lower_args_str(ins.args) + "." + ins.tag.to_string() + "." + ins.index.to_string();
+        return "vfield "
+            + ty
+            + " "
+            + lower_args_str(ins.args)
+            + "."
+            + ins.tag.to_string()
+            + "."
+            + ins.index.to_string();
     }
     op
 }
@@ -139,7 +151,12 @@ fn lower_term_str(t: IrTerm) -> String {
         return "jump b" + t.targets.get(0).unwrap_or(0).to_string();
     }
     if op == "br" {
-        return "br " + lower_args_str(t.args) + " b" + t.targets.get(0).unwrap_or(0).to_string() + " b" + t.targets.get(1).unwrap_or(0).to_string();
+        return "br "
+            + lower_args_str(t.args)
+            + " b"
+            + t.targets.get(0).unwrap_or(0).to_string()
+            + " b"
+            + t.targets.get(1).unwrap_or(0).to_string();
     }
     if op == "switch" {
         let ts = Vec::new();
@@ -164,9 +181,19 @@ fn lower_program_text(p: IrProgram) -> String {
             for v in t.variants {
                 vs.push(lower_tys_str(v));
             }
-            b.push("type agg" + i.to_string() + " " + t.name + " = variant [" + vs.join(" ") + "]\n");
+            b.push(
+                "type agg" + i.to_string() + " " + t.name + " = variant [" + vs.join(" ") + "]\n",
+            );
         } else {
-            b.push("type agg" + i.to_string() + " " + t.name + " = struct " + lower_tys_str(t.fields) + "\n");
+            b.push(
+                "type agg"
+                    + i.to_string()
+                    + " "
+                    + t.name
+                    + " = struct "
+                    + lower_tys_str(t.fields)
+                    + "\n",
+            );
         }
         i = i + 1;
     }
@@ -177,7 +204,14 @@ fn lower_program_text(p: IrProgram) -> String {
             if j > 0 {
                 b.push(", ");
             }
-            b.push("%" + j.to_string() + " " + f.names.get(j).unwrap_or("") + ": " + lower_ty_str(f.locals.get(j).unwrap_or(ir_ty_none())));
+            b.push(
+                "%"
+                    + j.to_string()
+                    + " "
+                    + f.names.get(j).unwrap_or("")
+                    + ": "
+                    + lower_ty_str(f.locals.get(j).unwrap_or(ir_ty_none())),
+            );
         }
         b.push(") -> " + lower_ty_str(f.result) + " {\n");
         let mut bi = 0;

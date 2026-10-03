@@ -1,8 +1,19 @@
-// Expression-level diagnostics (compared between stage0 and stage1).
-struct Pt { x: Int, y: Int }
-enum Sh { Circle(Int), Rect(Int, Int), Dot }
+// Expression-level diagnostics.
+struct Pt {
+    x: Int,
+    y: Int,
+}
 
-fn helper(a: Int, b: String) -> Int { a }
+enum Sh {
+    Circle(Int),
+    Rect(Int, Int),
+    Dot,
+}
+
+fn helper(a: Int, b: String) -> Int {
+    a
+}
+
 fn uses_log(log: &Log) {}
 
 fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
@@ -29,7 +40,9 @@ fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
     let w = -true;
     let x = !1;
     let y = if a { 1 } else { "two" };
-    let z = if true { 1 };
+    let z = if true {
+        1
+    };
     let aa = v.push("s");
     let ab = v.join(",");
     let ac = v.nope();
@@ -43,7 +56,7 @@ fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
     let ai = Some(1, 2);
     let aj = None;
     let ak = aj.unwrap_or(5);
-    let al = (1).abs();
+    let al = 1.abs();
     let am = Vec::new();
     am.len();
     let an: Map<Pt, Int> = Map::new();
@@ -53,18 +66,22 @@ fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
     let ar = e == e;
     let at = 1 == "x";
     exprs(log, net, v, m);
-    let au = (|x| x);
+    let au = |x| x;
     let av = Sh::Dot(1);
     let aw = net.get("u");
     let ax: String = 5;
-    while 1 { }
-    for i in "abc" { }
-    for i in 0.."z" { }
-    for i in v { i = 2; }
+    while 1 {}
+    for i in "abc" {}
+    for i in 0.."z" {}
+    for i in v {
+        i = 2;
+    }
     break;
     log = 3;
     zz = 1;
-    let ay = { return "s"; };
+    let ay = {
+        return "s";
+    };
     ""
 }
 

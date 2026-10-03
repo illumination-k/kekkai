@@ -1,7 +1,6 @@
-// Source analysis for the agent tooling (prefix diag_ / Diag*): a port of
-// internal/tooling/analyze.go (tooling.Analyze), the JSON diagnostics of
-// `check -json`, and the command-line flag parsing shared by the tooling
-// commands (Go's flag package).
+// Source analysis for the agent tooling (prefix diag_ / Diag*): the JSON
+// diagnostics of `check -json`, and the command-line flag parsing shared
+// by the tooling commands.
 //
 // Positions are 1-based lines and 1-based byte columns, like the compiler
 // diagnostics; end positions are exclusive and on the same line.
@@ -56,8 +55,15 @@ fn diag_analyze(src: String) -> DiagAnalysis {
     let pr = parse_file("", src, AstIds { next: 0 });
     let res = chk_check(pr.file);
     let a = DiagAnalysis {
-        src: src, bytes: bytes, lines: lines, toks: lr.toks, tok_at: tok_at, file: pr.file, info: res.info,
-        parse_ok: pr.errs.len() == 0, diags: Vec::new(),
+        src: src,
+        bytes: bytes,
+        lines: lines,
+        toks: lr.toks,
+        tok_at: tok_at,
+        file: pr.file,
+        info: res.info,
+        parse_ok: pr.errs.len() == 0,
+        diags: Vec::new(),
     };
     diag_add_errors(a, pr.errs, "parse");
     if a.parse_ok {
@@ -118,7 +124,12 @@ fn diag_add_errors(a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
     for e in errs {
         let end = diag_token_end(a, e.pos.line, e.pos.col);
         let d = DiagDiag {
-            line: e.pos.line, col: e.pos.col, end_line: e.pos.line, end_col: end, severity: "error", phase: phase,
+            line: e.pos.line,
+            col: e.pos.col,
+            end_line: e.pos.line,
+            end_col: end,
+            severity: "error",
+            phase: phase,
             message: e.msg,
         };
         let mut skip = false;
@@ -158,9 +169,18 @@ fn diag_add_lints(a: DiagAnalysis) {
         for c in diag_caps(fun) {
             if c.uses == 0 && c.name != "_" {
                 a.diags.push(DiagDiag {
-                    line: c.pos.line, col: c.pos.col, end_line: c.pos.line,
-                    end_col: diag_token_end(a, c.pos.line, c.pos.col), severity: "warning", phase: "lint",
-                    message: "capability `" + c.name + ": " + ty_str(c.ty) + "` is granted to `" + fun.name
+                    line: c.pos.line,
+                    col: c.pos.col,
+                    end_line: c.pos.line,
+                    end_col: diag_token_end(a, c.pos.line, c.pos.col),
+                    severity: "warning",
+                    phase: "lint",
+                    message: "capability `"
+                        + c.name
+                        + ": "
+                        + ty_str(c.ty)
+                        + "` is granted to `"
+                        + fun.name
                         + "` but never used; remove it to narrow the function's authority",
                 });
             }
@@ -187,7 +207,9 @@ fn diag_token_end(a: DiagAnalysis, line: Int, col: Int) -> Int {
 fn diag_token_len(a: DiagAnalysis, i: Int) -> Int {
     let t = match a.toks.get(i) {
         Some(t) => t,
-        None => { return 0; }
+        None => {
+            return 0;
+        }
     };
     let n = a.bytes.len();
     let off = diag_offset(a, t.pos.line, t.pos.col);
@@ -234,7 +256,9 @@ fn diag_token_len(a: DiagAnalysis, i: Int) -> Int {
 fn diag_name_after(a: DiagAnalysis, p: AstPos, name: String) -> AstPos {
     let i = match a.tok_at.get(diag_pos_key(p.line, p.col)) {
         Some(i) => i,
-        None => { return p; }
+        None => {
+            return p;
+        }
     };
     let mut j = i;
     while j < a.toks.len() && j < i + 4 {
@@ -257,7 +281,7 @@ fn diag_error_count(a: DiagAnalysis) -> Int {
     n
 }
 
-// ---- flags (Go's flag package: flags precede the positional arguments) ----
+// ---- flags (flags precede the positional arguments) ----
 
 struct DiagFlags {
     // flag name -> value ("true"/"false" for booleans)
@@ -329,9 +353,15 @@ fn diag_parse_flags(args: Vec<String>, start: Int, cmd: String) -> DiagFlags {
                 value = "true";
             }
             match diag_parse_bool(value) {
-                Some(b) => { fl.vals.insert(name, if b { "true" } else { "false" }); }
+                Some(b) => {
+                    fl.vals.insert(name, if b { "true" } else { "false" });
+                }
                 None => {
-                    fl.err = "invalid boolean value " + lower_go_quote(value) + " for -" + name + ": parse error";
+                    fl.err = "invalid boolean value "
+                        + lower_quote(value)
+                        + " for -"
+                        + name
+                        + ": parse error";
                     return fl;
                 }
             }
@@ -345,7 +375,11 @@ fn diag_parse_flags(args: Vec<String>, start: Int, cmd: String) -> DiagFlags {
                 i = i + 1;
             }
             if value.parse_int().is_none() {
-                fl.err = "invalid value " + lower_go_quote(value) + " for flag -" + name + ": parse error";
+                fl.err = "invalid value "
+                    + lower_quote(value)
+                    + " for flag -"
+                    + name
+                    + ": parse error";
                 return fl;
             }
             fl.vals.insert(name, value);
@@ -410,7 +444,7 @@ fn diag_read_file(path: String, fs: &Fs, log: &Log) -> Option<String> {
         Err(e) => {
             let mut msg = e.message();
             if msg.starts_with("ENOENT: no such file or directory") {
-                msg = "no such file or directory"; // Node's message, as Go's
+                msg = "no such file or directory";
             }
             log.error("open " + path + ": " + msg);
             None
@@ -441,7 +475,9 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let src = match diag_read_file(path, fs, log) {
         Some(s) => s,
-        None => { return 1; }
+        None => {
+            return 1;
+        }
     };
     let a = diag_analyze(src);
     let ds = Vec::new();

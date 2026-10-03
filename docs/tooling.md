@@ -1,10 +1,9 @@
-# Agent and editor tooling
+# Agent tooling
 
-These `kek` commands give LLM coding agents and editors machine-readable
+These `kek` commands give LLM coding agents machine-readable
 access to the type checker. Each command reads one `.kek` file. They are
 implemented by the self-hosted compiler (`compiler/caps_*`, `diag_*`,
-`search_*`, `irjson_*`) and run with the `./kek` launcher; the Go binary
-(`mise run build`, `bin/kek`) prints the same output byte for byte.
+`search_*`, `irjson_*`) and run with the `./kek` launcher.
 
 ## `kek check -json <file.kek>`
 
@@ -88,31 +87,3 @@ first, and functions from the file rank above builtins.
 `-json` prints `{"query": ..., "matches": [{"name", "kind", "signature",
 "match", "score", "pure", "caps", "builtin", "line", "col"}]}`.
 `kind` is one of `function`, `method`, `static` or `constructor`.
-
-## `kek lsp`
-
-Runs a Language Server over stdio, using JSON-RPC 2.0 framed with
-`Content-Length` headers. It has no dependencies beyond the Go standard
-library. It supports:
-
-- `initialize`, `shutdown` and `exit`.
-- `textDocument/didOpen`, `didChange` (full sync) and `didClose`. Each
-  change publishes `textDocument/publishDiagnostics` with the same
-  diagnostics as `kek check -json`.
-- `textDocument/hover`, which shows:
-  - for a function, its signature, its capabilities (marking unused ones),
-    a **pure** marker, **async**, and its direct effects;
-  - for a local, parameter or capability binding, its type;
-  - for builtin methods and statics, the signature, whether the call is an
-    effect or pure, and whether it is async;
-  - for struct fields and enum variants, their declarations.
-- `textDocument/definition` for local bindings (including `let`, match
-  pattern and transaction `|tx|` bindings), functions, structs, enums,
-  fields and variants.
-- `textDocument/documentSymbol`.
-
-Positions use UTF-16 code units, as LSP requires. Hover and definition
-still work on the complete items of a file that has a syntax error further
-down.
-
-Any LSP client can use the server by running `kek lsp`.

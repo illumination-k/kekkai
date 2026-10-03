@@ -1,5 +1,4 @@
-// Formatter: a port of internal/format/format.go (`kek fmt`), the
-// canonical layout of Kekkai source (4-space indentation, rustfmt-like).
+// Formatter (`kek fmt`): the canonical layout of Kekkai source (4-space indentation, rustfmt-like).
 //
 // The printer works from the AST. Comments are not part of the AST: they
 // are collected separately by the lexer (lex_file_comments) and re-attached
@@ -120,7 +119,7 @@ fn fmt_source(src: String) -> FmtResult {
 
 // ---- strings ----
 
-// fmt_w is the length of s in UTF-8 bytes (Go's len).
+// fmt_w is the length of s in UTF-8 bytes.
 fn fmt_w(p: FmtPrinter, s: String) -> Int {
     if p.ascii {
         return s.len();

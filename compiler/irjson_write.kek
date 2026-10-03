@@ -84,8 +84,11 @@ fn irjson_quote(s: String, html: Bool) -> String {
         } else if c == 12 {
             esc = "\\f";
         } else if c < 32 || c == 8232 || c == 8233 {
-            esc = "\\u" + json_hex_digit(c.shr(12).bit_and(15)) + json_hex_digit(c.shr(8).bit_and(15))
-                + json_hex_digit(c.shr(4).bit_and(15)) + json_hex_digit(c.bit_and(15));
+            esc = "\\u"
+                + json_hex_digit(c.shr(12).bit_and(15))
+                + json_hex_digit(c.shr(8).bit_and(15))
+                + json_hex_digit(c.shr(4).bit_and(15))
+                + json_hex_digit(c.bit_and(15));
         } else if c >= 55296 && c <= 57343 {
             let d = s.char_at(i + 1).unwrap_or(0);
             if c <= 56319 && d >= 56320 && d <= 57343 {
@@ -161,7 +164,7 @@ fn irjson_encode(v: IrjVal, html: Bool) -> String {
     parts.join("")
 }
 
-// ---- IR programs (encoding of internal/ir with its json tags) ----
+// ---- IR programs ----
 
 fn irjson_ty(t: IrTy) -> IrjVal {
     let o = irjson_obj();

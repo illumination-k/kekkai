@@ -1,15 +1,29 @@
-// Low-level WebAssembly (GC) binary encoding (port of internal/wasm/encoder.go).
+// Low-level WebAssembly (GC) binary encoding.
 //
 // Byte buffers are Vec<Int> (one byte per element). Value types are
 // encoded as one Int: a non-negative value is `(ref null <typeidx>)`, and
 // a negative value is the negated type code:
 //   -127 i32, -126 i64, -111 externref, -110 anyref, -107 structref
 
-fn wasm_i32_t() -> Int { -127 }
-fn wasm_i64_t() -> Int { -126 }
-fn wasm_extern_t() -> Int { -111 }
-fn wasm_any_t() -> Int { -110 }
-fn wasm_struct_t() -> Int { -107 }
+fn wasm_i32_t() -> Int {
+    -127
+}
+
+fn wasm_i64_t() -> Int {
+    -126
+}
+
+fn wasm_extern_t() -> Int {
+    -111
+}
+
+fn wasm_any_t() -> Int {
+    -110
+}
+
+fn wasm_struct_t() -> Int {
+    -107
+}
 
 fn wasm_u32(b: Vec<Int>, v: Int) {
     let mut x = v;

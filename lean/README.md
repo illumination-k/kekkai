@@ -100,7 +100,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 
 ## IR の参照インタプリタ `kekkai-ref`
 
-`kek ir -json` が出力する IR（`internal/ir/ir.go`）を実行する参照インタプリタです。WasmGC バックエンド（`internal/wasm/codegen.go`）と JS ランタイムの純粋な host 操作（`internal/glue/runtime.js`）と同じ意味論を実装し、差分テスト（`internal/difftest`）の基準になります。
+`kek ir -json` が出力する IR（`compiler/ir.kek`）を実行する参照インタプリタです。WasmGC バックエンド（`compiler/wasm_codegen.kek`）と JS ランタイムの純粋な host 操作（`js/kekkai_runtime.js`）と同じ意味論を実装し、差分テスト（`node tests/run.mjs difftest`）の基準になります。
 
 | ファイル | 内容 |
 | --- | --- |
@@ -116,7 +116,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 ```sh
 cd lean && lake build kekkai-ref      # .lake/build/bin/kekkai-ref
 lean/test_ref.sh                      # lean/test/smoke.kek などで期待値と比較
-go test ./internal/difftest/          # ランダムなプログラムで WasmGC と比較（バイナリがあれば）
+node tests/run.mjs difftest           # ランダムなプログラムで WasmGC と比較（バイナリがあれば）
 ```
 
 使い方: `kekkai-ref <ir.json> <関数名> <引数>...`。引数は JSON 値（`42`, `-7`, `true`, `"abc"`, unit は `null`, 集成体は `{"fields":[...]}` / `{"tag":k,"fields":[...]}`、`{"vec":[...]}`、`{"map":[[k,v],...]}`）。型が `ext`（capability）の引数には不透明な値が自動で渡され、コマンドライン引数を消費しません。出力は標準出力に 1 行の JSON で、終了コードは 0:

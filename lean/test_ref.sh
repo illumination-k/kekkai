@@ -8,9 +8,9 @@ root="$(dirname "$here")"
 ref="$here/.lake/build/bin/kekkai-ref"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/kekkai-ref.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
-(cd "$root" && go run ./cmd/kek ir -json lean/test/smoke.kek >"$tmp/smoke.json")
-(cd "$root" && go run ./cmd/kek ir -json testdata/check/ok_basic.kek >"$tmp/basic.json")
-(cd "$root" && go run ./cmd/kek ir -json lean/test/coll.kek >"$tmp/coll.json")
+(cd "$root" && ./kek ir -json lean/test/smoke.kek >"$tmp/smoke.json")
+(cd "$root" && ./kek ir -json testdata/check/ok_basic.kek >"$tmp/basic.json")
+(cd "$root" && ./kek ir -json lean/test/coll.kek >"$tmp/coll.json")
 
 fail=0
 check() { # check <ir> <expected> <fn> <args...>

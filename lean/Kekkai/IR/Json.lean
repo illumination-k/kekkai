@@ -4,10 +4,9 @@ import Kekkai.IR.Syntax
 /-!
 # Decoding the JSON encoding of the IR
 
-The IR is produced by `kek ir -json` using Go's `encoding/json`. Fields
-tagged `omitempty` are absent when they hold their zero value (`0`,
-`false`, `""`, empty slice), and nil slices without `omitempty` are
-encoded as `null`. The decoders below therefore treat a missing field or
+The IR is produced by `kek ir -json`. Optional fields are absent when
+they hold their zero value (`0`, `false`, `""`, empty list), and some
+empty lists are encoded as `null`. The decoders below therefore treat a missing field or
 `null` as the zero value.
 -/
 

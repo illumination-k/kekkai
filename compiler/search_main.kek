@@ -1,6 +1,5 @@
 // `search [-json] [-limit n] '<signature>' [file]` (prefix search_ /
-// Search*): type-directed function search. A port of
-// internal/tooling/search.go.
+// Search*): type-directed function search.
 
 // SearchTerm is a type in the search language: a constructor with
 // arguments, or a type variable (v != "", namespaced "q:" for the query
@@ -71,7 +70,12 @@ fn search_term_of(t0: Ty) -> SearchTerm {
 
 // search_is_cap_name is tooling.IsCapName (Fs is not included).
 fn search_is_cap_name(name: String) -> Bool {
-    name == "Log" || name == "Net" || name == "Db" || name == "Clock" || name == "Random" || name == "Tx"
+    name == "Log"
+        || name == "Net"
+        || name == "Db"
+        || name == "Clock"
+        || name == "Random"
+        || name == "Tx"
 }
 
 // ---- queries ----
@@ -103,7 +107,11 @@ fn search_query_string(q: SearchQuery) -> String {
 fn search_tok(p: SearchParser) -> Tok {
     match p.toks.get(p.i) {
         Some(t) => t,
-        None => p.toks.get(p.toks.len() - 1).unwrap_or(Tok { kind: "EOF", text: "", pos: AstPos { file: "", line: 1, col: 1 } }),
+        None => p.toks.get(p.toks.len() - 1).unwrap_or(Tok { kind: "EOF", text: "", pos: AstPos {
+            file: "",
+            line: 1,
+            col: 1,
+        } }),
     }
 }
 
@@ -129,13 +137,16 @@ fn search_fail(p: SearchParser, msg: String) {
 fn search_parse_query(s: String) -> Result<SearchQuery, String> {
     let lr = lex_file("", s);
     if lr.errs.len() > 0 {
-        let e = lr.errs.get(0).unwrap_or(AstError { pos: AstPos { file: "", line: 0, col: 0 }, msg: "" });
-        return Err("invalid query " + lower_go_quote(s) + ": " + e.msg);
+        let e = lr.errs.get(0).unwrap_or(AstError {
+            pos: AstPos { file: "", line: 0, col: 0 },
+            msg: "",
+        });
+        return Err("invalid query " + lower_quote(s) + ": " + e.msg);
     }
     let p = SearchParser { toks: lr.toks, i: 0, anon: 0, err: "" };
     let q = search_parse(p);
     if p.err != "" {
-        return Err("invalid query " + lower_go_quote(s) + ": " + p.err);
+        return Err("invalid query " + lower_quote(s) + ": " + p.err);
     }
     Ok(q)
 }
@@ -164,7 +175,11 @@ fn search_parse(p: SearchParser) -> SearchQuery {
         search_fail(p, "the result must be a single type");
         return dummy;
     }
-    let q = SearchQuery { params: Vec::new(), result: last.get(0).unwrap_or(search_con0("()")), result_only: false };
+    let q = SearchQuery {
+        params: Vec::new(),
+        result: last.get(0).unwrap_or(search_con0("()")),
+        result_only: false,
+    };
     if segs.len() == 1 {
         q.result_only = true;
         return q;
@@ -285,8 +300,12 @@ fn search_walk(s: Map<String, SearchTerm>, t0: SearchTerm) -> SearchTerm {
     let mut t = t0;
     while t.v != "" {
         match s.get(t.v) {
-            Some(b) => { t = b; }
-            None => { return t; }
+            Some(b) => {
+                t = b;
+            }
+            None => {
+                return t;
+            }
         }
     }
     t
@@ -344,7 +363,9 @@ fn search_clone(s: Map<String, SearchTerm>) -> Map<String, SearchTerm> {
     let c: Map<String, SearchTerm> = Map::new();
     for k in s.keys() {
         match s.get(k) {
-            Some(v) => { c.insert(k, v); }
+            Some(v) => {
+                c.insert(k, v);
+            }
             None => {}
         }
     }
@@ -369,8 +390,24 @@ struct SearchCand {
     col: Int,
 }
 
-fn search_cand(name: String, kind: String, sig: String, params: Vec<SearchTerm>, result: SearchTerm) -> SearchCand {
-    SearchCand { name: name, kind: kind, signature: sig, params: params, result: result, pure: true, caps: Vec::new(), line: 0, col: 0 }
+fn search_cand(
+    name: String,
+    kind: String,
+    sig: String,
+    params: Vec<SearchTerm>,
+    result: SearchTerm,
+) -> SearchCand {
+    SearchCand {
+        name: name,
+        kind: kind,
+        signature: sig,
+        params: params,
+        result: result,
+        pure: true,
+        caps: Vec::new(),
+        line: 0,
+        col: 0,
+    }
 }
 
 fn search_is_static(bs: ChkBuiltins, b: ChkBuiltin) -> Bool {
@@ -402,7 +439,13 @@ fn search_builtin_cands() -> Vec<SearchCand> {
     let out = Vec::new();
     let bs = chk_new_builtins();
     for b in bs.all {
-        let c = search_cand("", "", search_builtin_signature(bs, b), Vec::new(), search_term_of(b.result));
+        let c = search_cand(
+            "",
+            "",
+            search_builtin_signature(bs, b),
+            Vec::new(),
+            search_term_of(b.result),
+        );
         if search_is_static(bs, b) {
             c.kind = "static";
             c.name = b.recv + "::" + b.name;
@@ -427,19 +470,71 @@ fn search_builtin_cands() -> Vec<SearchCand> {
     let t = search_tvar("c:T");
     let e = search_tvar("c:E");
     let bool_t = search_con0("Bool");
-    out.push(search_cand("Option.is_some", "method", "fn Option<T>.is_some(self) -> Bool", search_list1(opt), bool_t));
-    out.push(search_cand("Option.is_none", "method", "fn Option<T>.is_none(self) -> Bool", search_list1(opt), bool_t));
-    out.push(search_cand("Option.unwrap_or", "method", "fn Option<T>.unwrap_or(self, T) -> T", search_list2(opt, t), t));
-    out.push(search_cand("Result.is_ok", "method", "fn Result<T, E>.is_ok(self) -> Bool", search_list1(res), bool_t));
-    out.push(search_cand("Result.is_err", "method", "fn Result<T, E>.is_err(self) -> Bool", search_list1(res), bool_t));
-    out.push(search_cand("Result.unwrap_or", "method", "fn Result<T, E>.unwrap_or(self, T) -> T", search_list2(res, t), t));
+    out.push(
+        search_cand(
+            "Option.is_some",
+            "method",
+            "fn Option<T>.is_some(self) -> Bool",
+            search_list1(opt),
+            bool_t,
+        ),
+    );
+    out.push(
+        search_cand(
+            "Option.is_none",
+            "method",
+            "fn Option<T>.is_none(self) -> Bool",
+            search_list1(opt),
+            bool_t,
+        ),
+    );
+    out.push(
+        search_cand(
+            "Option.unwrap_or",
+            "method",
+            "fn Option<T>.unwrap_or(self, T) -> T",
+            search_list2(opt, t),
+            t,
+        ),
+    );
+    out.push(
+        search_cand(
+            "Result.is_ok",
+            "method",
+            "fn Result<T, E>.is_ok(self) -> Bool",
+            search_list1(res),
+            bool_t,
+        ),
+    );
+    out.push(
+        search_cand(
+            "Result.is_err",
+            "method",
+            "fn Result<T, E>.is_err(self) -> Bool",
+            search_list1(res),
+            bool_t,
+        ),
+    );
+    out.push(
+        search_cand(
+            "Result.unwrap_or",
+            "method",
+            "fn Result<T, E>.unwrap_or(self, T) -> T",
+            search_list2(res, t),
+            t,
+        ),
+    );
     out.push(search_cand("Some", "constructor", "Some(T) -> Option<T>", search_list1(t), opt));
     out.push(search_cand("None", "constructor", "None : Option<T>", Vec::new(), opt));
     out.push(search_cand("Ok", "constructor", "Ok(T) -> Result<T, E>", search_list1(t), res));
     out.push(search_cand("Err", "constructor", "Err(E) -> Result<T, E>", search_list1(e), res));
-    let tx = search_cand("Db.transaction", "method",
+    let tx = search_cand(
+        "Db.transaction",
+        "method",
         "fn Db.transaction(&self, |tx: Tx| -> Result<T, E>) -> Result<Result<T, E>, TxError>",
-        search_list1(search_con0("&Db")), search_con("Result", search_list2(res, search_con0("TxError"))));
+        search_list1(search_con0("&Db")),
+        search_con("Result", search_list2(res, search_con0("TxError"))),
+    );
     tx.pure = false;
     tx.caps.push("&Db");
     out.push(tx);
@@ -463,9 +558,17 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
     for r in caps_reports(a) {
         let fun = match a.info.funcs.get(r.name) {
             Some(f) => f,
-            None => { continue; }
+            None => {
+                continue;
+            }
         };
-        let c = search_cand(fun.name, "function", r.signature, Vec::new(), search_term_of(fun.result));
+        let c = search_cand(
+            fun.name,
+            "function",
+            r.signature,
+            Vec::new(),
+            search_term_of(fun.result),
+        );
         c.pure = r.pure;
         c.line = r.line;
         c.col = r.col;
@@ -493,12 +596,20 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
     for n in names {
         let en = match a.info.enums.get(n) {
             Some(e) => e,
-            None => { continue; }
+            None => {
+                continue;
+            }
         };
         let ps = vpos.get(n).unwrap_or(Vec::new());
         let mut i = 0;
         for v in en.variants {
-            let c = search_cand(en.name + "::" + v.name, "constructor", search_variant_text(en, v), Vec::new(), search_con0(en.name));
+            let c = search_cand(
+                en.name + "::" + v.name,
+                "constructor",
+                search_variant_text(en, v),
+                Vec::new(),
+                search_con0(en.name),
+            );
             match ps.get(i) {
                 Some(p) => {
                     c.line = p.line;
@@ -566,10 +677,20 @@ fn search_has_vars(result: SearchTerm, params: Vec<SearchTerm>) -> Bool {
 }
 
 fn search_generality(c: SearchCand) -> Int {
-    if search_has_vars(c.result, c.params) { 2 } else { 0 }
+    if search_has_vars(c.result, c.params) {
+        2
+    } else {
+        0
+    }
 }
 
-fn search_perm(s: Map<String, SearchTerm>, qs: Vec<SearchTerm>, cs: Vec<SearchTerm>, used: Vec<Bool>, i: Int) -> Bool {
+fn search_perm(
+    s: Map<String, SearchTerm>,
+    qs: Vec<SearchTerm>,
+    cs: Vec<SearchTerm>,
+    used: Vec<Bool>,
+    i: Int,
+) -> Bool {
     if i == qs.len() {
         return true;
     }
@@ -757,8 +878,12 @@ fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut an: Option<DiagAnalysis> = None;
     if fl.rest.len() == 2 {
         match diag_read_file(file, fs, log) {
-            Some(src) => { an = Some(diag_analyze(src)); }
-            None => { return 1; }
+            Some(src) => {
+                an = Some(diag_analyze(src));
+            }
+            None => {
+                return 1;
+            }
         }
     }
     let all = search_run(q, an);
@@ -807,7 +932,16 @@ fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
                 loc = file;
             }
         }
-        lines.push(search_pad(m.cand.name, 24) + " " + m.cand.signature + "  [" + m.kind + "] (" + loc + ")");
+        lines.push(
+            search_pad(m.cand.name, 24)
+                + " "
+                + m.cand.signature
+                + "  ["
+                + m.kind
+                + "] ("
+                + loc
+                + ")",
+        );
     }
     frontend_print(log, lines);
     0

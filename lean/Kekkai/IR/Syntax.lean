@@ -1,7 +1,7 @@
 /-!
 # Kekkai IR: abstract syntax
 
-Mirrors `internal/ir/ir.go`. Source types are erased to representation
+Mirrors `compiler/ir.kek`. Source types are erased to representation
 types; aggregates refer to `Program.types` by index.
 -/
 

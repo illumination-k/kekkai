@@ -20,7 +20,7 @@
 //   -n N          difftest: number of random programs (default 60)
 //   --fmt-gen N   fmt: number of random programs to round-trip (default 40)
 //   --seed S      difftest: first seed (default 1)
-//   --ir MODE     difftest: where `ir -json` comes from: auto|kek|go|none (default auto)
+//   --ir MODE     difftest: where `ir -json` comes from: auto|kek|none (default auto)
 //   --keep        difftest: keep the generated programs
 //   --short       skip the slow suites (workers)
 //   -v            print the output of passing cases too
@@ -61,7 +61,7 @@ for (let i = 0; i < argv.length; i++) {
   } else if (a.startsWith("-")) { console.error(`unknown option ${a}`); process.exit(2); }
   else filters.push(a);
 }
-if (!["auto", "kek", "go", "none"].includes(opts.ir)) { console.error(`--ir: unknown mode ${opts.ir}`); process.exit(2); }
+if (!["auto", "kek", "none"].includes(opts.ir)) { console.error(`--ir: unknown mode ${opts.ir}`); process.exit(2); }
 
 const suites = [
   ["bootstrap", bootstrapCases],

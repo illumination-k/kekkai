@@ -1,9 +1,9 @@
 // JSON reader and writer (prefix json_ / Json*).
 //
-// The reader handles the subset produced by Go's encoding/json for the IR
+// The reader handles the subset used for the IR
 // (objects, arrays, strings with escapes, integers, true/false/null).
 // Numbers are parsed as 64-bit integers (fractions/exponents are rejected).
-// The writer reproduces Go's json.MarshalIndent string escaping.
+// The writer produces indented JSON with HTML-safe string escaping.
 
 enum JsonVal {
     Null,
@@ -335,7 +335,7 @@ fn json_hex_digit(d: Int) -> String {
     "0123456789abcdef".slice(d, d + 1)
 }
 
-// json_quote renders a string literal the way Go's encoding/json does
+// json_quote renders a JSON string literal
 // (HTML-safe: <, > and & are escaped; U+2028/U+2029 are escaped).
 fn json_quote(s: String) -> String {
     let parts = Vec::new();
@@ -361,8 +361,11 @@ fn json_quote(s: String) -> String {
         } else if c == 12 {
             esc = "\\f";
         } else if c < 32 || c == 60 || c == 62 || c == 38 || c == 8232 || c == 8233 {
-            esc = "\\u" + json_hex_digit(c.shr(12).bit_and(15)) + json_hex_digit(c.shr(8).bit_and(15))
-                + json_hex_digit(c.shr(4).bit_and(15)) + json_hex_digit(c.bit_and(15));
+            esc = "\\u"
+                + json_hex_digit(c.shr(12).bit_and(15))
+                + json_hex_digit(c.shr(8).bit_and(15))
+                + json_hex_digit(c.shr(4).bit_and(15))
+                + json_hex_digit(c.bit_and(15));
         } else if c >= 55296 && c <= 57343 {
             // surrogates: a valid pair passes through, a lone half is invalid
             // UTF-8 in Go and becomes U+FFFD

@@ -1,5 +1,4 @@
-// Canonical dumps of tokens and syntax trees; must match
-// internal/selfhost/dump.go byte for byte.
+// Canonical dumps of tokens and syntax trees (`kek lex`, `kek ast`).
 
 struct AstDumper {
     lines: Vec<String>,
@@ -111,7 +110,11 @@ fn ast_dump_block(d: AstDumper, depth: Int, b: AstBlock) {
 fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
     match s {
         AstStmt::Let(l) => {
-            ast_line(d, depth, "let " + l.name + " mut=" + l.mutable.to_string() + " @" + ast_dump_pos(l.pos));
+            ast_line(
+                d,
+                depth,
+                "let " + l.name + " mut=" + l.mutable.to_string() + " @" + ast_dump_pos(l.pos),
+            );
             match l.ty {
                 Some(t) => ast_dump_type(d, depth + 1, t),
                 None => {}
@@ -162,9 +165,21 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
 
 fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
     match e {
-        AstExpr::IntLit(x) => ast_line(d, depth, "int " + x.value.to_string() + " @" + ast_dump_pos(x.pos)),
-        AstExpr::BoolLit(x) => ast_line(d, depth, "bool " + x.value.to_string() + " @" + ast_dump_pos(x.pos)),
-        AstExpr::StrLit(x) => ast_line(d, depth, "string " + ast_quote(x.value) + " @" + ast_dump_pos(x.pos)),
+        AstExpr::IntLit(x) => ast_line(
+            d,
+            depth,
+            "int " + x.value.to_string() + " @" + ast_dump_pos(x.pos),
+        ),
+        AstExpr::BoolLit(x) => ast_line(
+            d,
+            depth,
+            "bool " + x.value.to_string() + " @" + ast_dump_pos(x.pos),
+        ),
+        AstExpr::StrLit(x) => ast_line(
+            d,
+            depth,
+            "string " + ast_quote(x.value) + " @" + ast_dump_pos(x.pos),
+        ),
         AstExpr::UnitLit(x) => ast_line(d, depth, "unit @" + ast_dump_pos(x.pos)),
         AstExpr::Ident(x) => ast_line(d, depth, "ident " + x.name + " @" + ast_dump_pos(x.pos)),
         AstExpr::Binary(x) => {
@@ -194,7 +209,11 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             ast_line(d, depth, "field " + x.name + " @" + ast_dump_pos(x.pos));
             ast_dump_expr(d, depth + 1, x.x);
         }
-        AstExpr::Path(x) => ast_line(d, depth, "path " + x.ty + "::" + x.name + " @" + ast_dump_pos(x.pos)),
+        AstExpr::Path(x) => ast_line(
+            d,
+            depth,
+            "path " + x.ty + "::" + x.name + " @" + ast_dump_pos(x.pos),
+        ),
         AstExpr::StructLit(x) => {
             ast_line(d, depth, "struct-lit " + x.name + " @" + ast_dump_pos(x.pos));
             for f in x.fields {

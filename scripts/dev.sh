@@ -16,6 +16,6 @@ target=${TARGET:-d1}
 name=$(basename "$file" .kek)
 out=${OUT:-out/$name-$target}
 
-go run ./cmd/kek build -target "$target" -o "$out" "$file"
+./kek build -target "$target" -o "$out" "$file"
 # Stay in the repository so mise resolves the pinned wrangler.
 exec wrangler dev --local -c "$out/wrangler.toml" --persist-to "$out/.state" --var "KEKKAI_OUTBOX:${OUTBOX:-log}" "$@"

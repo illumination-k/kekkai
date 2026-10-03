@@ -22,7 +22,13 @@ fn read_balance(tx: &Tx, name: String) -> Result<Option<Int>, TxError> {
     }
 }
 
-fn transfer(db: &Db, log: &Log, from: String, to: String, amount: Int) -> Result<Int, TransferError> {
+fn transfer(
+    db: &Db,
+    log: &Log,
+    from: String,
+    to: String,
+    amount: Int,
+) -> Result<Int, TransferError> {
     let r = db.transaction(|tx| {
         let a = match read_balance(tx, from)? {
             Some(n) => n,
@@ -69,13 +75,19 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response {
         let to = req.query("to").unwrap_or("");
         let amount = match parse_amount(req.query("amount").unwrap_or("")) {
             Some(n) => n,
-            None => { return Response::bad_request("bad amount"); }
+            None => {
+                return Response::bad_request("bad amount");
+            }
         };
         return match transfer(db, log, from, to, amount) {
             Ok(left) => Response::json(200, "{\"left\":" + left.to_string() + "}"),
             Err(TransferError::Insufficient) => Response::text(409, "insufficient funds"),
             Err(TransferError::NoAccount(n)) => Response::text(404, "no account " + n),
-            Err(TransferError::Store(e)) => if e.retryable() { Response::text(503, "conflict, retry") } else { Response::text(500, e.message()) },
+            Err(TransferError::Store(e)) => if e.retryable() {
+                Response::text(503, "conflict, retry")
+            } else {
+                Response::text(500, e.message())
+            },
         };
     }
     Response::not_found()

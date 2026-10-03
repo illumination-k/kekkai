@@ -1,4 +1,4 @@
-// `kek test` support (port of internal/testrun):
+// `kek test` support:
 //
 //   test-build <file-or-dir> <outdir>              discover every #[test] and build them all
 //   test-build <file-or-dir> <outdir> -list        discover only (no build)
@@ -186,8 +186,7 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
 }
 
 // testrun_build compiles the sources plus the harness (appended to the
-// last file, as stage0 appends it to the source text) with the program's
-// own #[handler] demoted (testrun.Compile).
+// last file's source text) with the program's own #[handler] demoted.
 fn testrun_build(
     srcs: Vec<FeSource>,
     tests: Vec<TestrunTest>,

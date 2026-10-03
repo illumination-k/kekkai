@@ -33,7 +33,7 @@ function usage() {
 
 class UsageError extends Error {}
 
-// Go's strconv.ParseInt(s, 0, 64).
+// An int64 literal (decimal, or 0x/0o/0b prefixed).
 function parseInt64(s) {
   const m = /^([+-]?)(0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*|0[oO]?(?:_?[0-7])+|[1-9](?:_?[0-9])*|0)$/.exec(s);
   if (!m) throw new Error("parse error");
@@ -45,7 +45,7 @@ function parseInt64(s) {
   return v;
 }
 
-// parseArgs follows Go's flag package: -name v, -name=v, --name; parsing
+// parseArgs: -name v, -name=v, --name; parsing
 // stops at the first non-flag argument or "--".
 function parseArgs(args) {
   const opts = { run: "", seed: 0n, clock: DEFAULT_CLOCK, net: "", db: "" };
@@ -168,7 +168,7 @@ export async function kekTest(args, { compile, jsDir }) {
     }
     await copyFile(path.join(jsDir, "kekkai_runtime.js"), path.join(dir, "kekkai_runtime.js"));
     const clock = opts.clock === 0n ? DEFAULT_CLOCK : opts.clock;
-    // seed and clock are int64: written as raw JSON numbers, like Go's encoder
+    // seed and clock are int64: written as raw JSON numbers
     const plan = JSON.stringify({ file, tests: tests.map(({ name, caps, result }) => ({ name, caps, result })), seed: "@SEED@", clock: "@CLOCK@", net, db })
       .replace('"@SEED@"', String(opts.seed))
       .replace('"@CLOCK@"', String(clock));

@@ -35,12 +35,22 @@ enum PayOutcome {
     Replayed(String),
 }
 
-fn balance_key(a: String) -> String { "balance:" + a }
-fn payment_key(k: String) -> String { "payment:" + k }
+fn balance_key(a: String) -> String {
+    "balance:" + a
+}
+
+fn payment_key(k: String) -> String {
+    "payment:" + k
+}
 
 // Identifiers end up in keys and JSON: allow a conservative alphabet only.
 fn valid_id(s: String) -> Bool {
-    s.len() > 0 && s.len() <= 64 && !s.contains("\"") && !s.contains("\\") && !s.contains(":") && !s.contains(" ")
+    s.len() > 0
+        && s.len() <= 64
+        && !s.contains("\"")
+        && !s.contains("\\")
+        && !s.contains(":")
+        && !s.contains(" ")
 }
 
 fn positive(s: String) -> Option<Int> {
@@ -64,7 +74,14 @@ fn deposit(db: &Db, account: String, amount: Int) -> Result<Int, TxError> {
     })
 }
 
-fn pay(db: &Db, log: &Log, key: String, account: String, amount: Int, merchant: String) -> Result<PayOutcome, PayError> {
+fn pay(
+    db: &Db,
+    log: &Log,
+    key: String,
+    account: String,
+    amount: Int,
+    merchant: String,
+) -> Result<PayOutcome, PayError> {
     let r = db.transaction(|tx| {
         // A retry of a payment that already committed: answer with the
         // stored result and change nothing.
@@ -86,8 +103,17 @@ fn pay(db: &Db, log: &Log, key: String, account: String, amount: Int, merchant: 
             tx.rollback();
             return Ok(Err(PayError::Insufficient(balance)));
         }
-        let result = "{\"payment\":\"" + key + "\",\"account\":\"" + account + "\",\"amount\":" + amount.to_string()
-            + ",\"merchant\":\"" + merchant + "\",\"balance\":" + (balance - amount).to_string() + "}";
+        let result = "{\"payment\":\""
+            + key
+            + "\",\"account\":\""
+            + account
+            + "\",\"amount\":"
+            + amount.to_string()
+            + ",\"merchant\":\""
+            + merchant
+            + "\",\"balance\":"
+            + (balance - amount).to_string()
+            + "}";
         tx.put(balance_key(account), (balance - amount).to_string())?;
         tx.put(payment_key(key), result)?;
         // Irrevocable: runs only if the commit below succeeds.
@@ -106,11 +132,17 @@ fn error_response(e: PayError) -> Response {
     match e {
         PayError::MissingKey => Response::text(428, "Idempotency-Key header required"),
         PayError::BadRequest(m) => Response::bad_request(m),
-        PayError::Insufficient(b) => Response::json(402, "{\"error\":\"insufficient funds\",\"balance\":" + b.to_string() + "}"),
+        PayError::Insufficient(b) => Response::json(
+            402,
+            "{\"error\":\"insufficient funds\",\"balance\":" + b.to_string() + "}",
+        ),
         PayError::NoAccount => Response::not_found(),
         // Safe to retry with the same key: nothing was applied.
         PayError::Store(err) => if err.retryable() {
-            Response::text(503, "conflict, retry with the same Idempotency-Key").with_header("retry-after", "1")
+            Response::text(503, "conflict, retry with the same Idempotency-Key").with_header(
+                "retry-after",
+                "1",
+            )
         } else {
             Response::text(500, err.message())
         },
@@ -120,7 +152,9 @@ fn error_response(e: PayError) -> Response {
 fn payment_request(req: Request) -> Result<PaymentRequest, PayError> {
     let key = match req.header("idempotency-key") {
         Some(k) => k.trim(),
-        None => { return Err(PayError::MissingKey); }
+        None => {
+            return Err(PayError::MissingKey);
+        }
     };
     if !valid_id(key) {
         return Err(PayError::BadRequest("bad Idempotency-Key"));
@@ -132,7 +166,9 @@ fn payment_request(req: Request) -> Result<PaymentRequest, PayError> {
     }
     let amount = match positive(req.query("amount").unwrap_or("")) {
         Some(n) => n,
-        None => { return Err(PayError::BadRequest("bad amount")); }
+        None => {
+            return Err(PayError::BadRequest("bad amount"));
+        }
     };
     Ok(PaymentRequest { key: key, account: account, amount: amount, merchant: merchant })
 }
@@ -145,11 +181,16 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response {
     if section == "payments" && method == "POST" && req.segment(1).is_none() {
         let p = match payment_request(req) {
             Ok(p) => p,
-            Err(e) => { return error_response(e); }
+            Err(e) => {
+                return error_response(e);
+            }
         };
         return match pay(db, log, p.key, p.account, p.amount, p.merchant) {
             Ok(PayOutcome::Created(body)) => Response::json(201, body),
-            Ok(PayOutcome::Replayed(body)) => Response::json(200, body).with_header("idempotent-replay", "true"),
+            Ok(PayOutcome::Replayed(body)) => Response::json(200, body).with_header(
+                "idempotent-replay",
+                "true",
+            ),
             Err(e) => error_response(e),
         };
     }
@@ -176,7 +217,9 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response {
         if method == "POST" && req.segment(2).unwrap_or("") == "deposit" {
             let amount = match positive(req.query("amount").unwrap_or("")) {
                 Some(n) => n,
-                None => { return Response::bad_request("bad amount"); }
+                None => {
+                    return Response::bad_request("bad amount");
+                }
             };
             return match deposit(db, account, amount) {
                 Ok(b) => Response::json(200, "{\"balance\":" + b.to_string() + "}"),

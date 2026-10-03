@@ -4,12 +4,8 @@
 //   caps [-json], check -json, search [-json] [-limit n], ir -json, and the
 //   Workers glue written by build (worker.js, wrangler.toml, -target d1|do).
 //
-// The expected outputs in tests/agent_cmds/golden/ were produced by the Go
-// toolchain (cmd/kek) and are byte-identical to it.
-//
 //   node --test tests/agent_cmds.test.mjs
 //   UPDATE=1 node --test tests/agent_cmds.test.mjs   # rewrite the golden files
-//   KEK=bin/kek node --test tests/agent_cmds.test.mjs # check another kek binary
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

@@ -9,8 +9,8 @@ A small-step abstract machine with an explicit call stack, so that the
 interpreter is total (`run` is structurally recursive on the fuel) and
 deep recursion in the interpreted program does not consume native stack.
 
-The semantics follows the WasmGC backend (`internal/wasm/codegen.go`,
-`internal/wasm/collections.go`):
+The semantics follows the WasmGC backend (`compiler/wasm_codegen.kek`,
+`compiler/wasm_coll.kek`):
 
 * every instruction writes its destination local; locals start at their
   type's default value (`0`, `false`, `ref.null`);

@@ -1,4 +1,4 @@
-// `fmt [-w] [-check] <paths...>`: a port of cmd/kek/fmt.go. Directories are
+// `fmt [-w] [-check] <paths...>`. Directories are
 // searched recursively for *.kek (skipping `.*` and node_modules below the
 // root); without -w or -check the formatted sources go to stdout.
 

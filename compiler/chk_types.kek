@@ -1,6 +1,5 @@
-// Types: a port of internal/types/types.go (plus unification from
-// checker.go). Go compares *Prim, *Opaque, *Struct and *Enum by pointer;
-// each is unique per name, so here they compare by name.
+// Types and unification. Primitive, opaque, struct and enum types are
+// unique per name, so they compare by name.
 
 struct TyVar {
     id: Int,
@@ -43,12 +42,29 @@ enum Ty {
     Var(TyVar),
 }
 
-fn ty_unit() -> Ty { Ty::Prim("()") }
-fn ty_bool() -> Ty { Ty::Prim("Bool") }
-fn ty_int() -> Ty { Ty::Prim("Int") }
-fn ty_string() -> Ty { Ty::Prim("String") }
-fn ty_never() -> Ty { Ty::Prim("!") }
-fn ty_invalid() -> Ty { Ty::Prim("<invalid>") }
+fn ty_unit() -> Ty {
+    Ty::Prim("()")
+}
+
+fn ty_bool() -> Ty {
+    Ty::Prim("Bool")
+}
+
+fn ty_int() -> Ty {
+    Ty::Prim("Int")
+}
+
+fn ty_string() -> Ty {
+    Ty::Prim("String")
+}
+
+fn ty_never() -> Ty {
+    Ty::Prim("!")
+}
+
+fn ty_invalid() -> Ty {
+    Ty::Prim("<invalid>")
+}
 
 // ty_is_prim reports whether t (unpruned) is the primitive `name`.
 fn ty_is_prim(t: Ty, name: String) -> Bool {
@@ -77,7 +93,13 @@ fn ty_cap_revocable(kind: String) -> Bool {
 }
 
 fn ty_is_cap_name(name: String) -> Bool {
-    name == "Log" || name == "Net" || name == "Db" || name == "Clock" || name == "Random" || name == "Tx" || name == "Fs"
+    name == "Log"
+        || name == "Net"
+        || name == "Db"
+        || name == "Clock"
+        || name == "Random"
+        || name == "Tx"
+        || name == "Fs"
 }
 
 fn ty_str(t: Ty) -> String {
@@ -247,7 +269,10 @@ fn ty_occurs(v: TyVar, t0: Ty) -> Bool {
 fn ty_unify(a0: Ty, b0: Ty) -> Bool {
     let a = ty_prune(a0);
     let b = ty_prune(b0);
-    if ty_is_prim(a, "!") || ty_is_prim(b, "!") || ty_is_prim(a, "<invalid>") || ty_is_prim(b, "<invalid>") {
+    if ty_is_prim(a, "!")
+        || ty_is_prim(b, "!")
+        || ty_is_prim(a, "<invalid>")
+        || ty_is_prim(b, "<invalid>") {
         return true;
     }
     match a {

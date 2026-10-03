@@ -1,4 +1,4 @@
-// Collections (port of internal/wasm/collections.go).
+// Collections.
 //
 // Vec<T> is a struct { len: i32, data: (ref null (array (mut T))) } with
 // amortised doubling, implemented entirely in wasm. Map<K, V> is a JS Map
@@ -95,14 +95,21 @@ fn wasm_helper_end(m: WasmMod, d: WasmFunc) -> Int {
 fn wasm_vec_to_host_func(m: WasmMod, agg: Int) -> Int {
     let name = "$vec_to_host" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
     let at = wasm_at(m.vec_arr, agg);
     let elem = wasm_td(m, agg).elem;
     // params: 0 vec; locals: 1 arr(ext), 2 i(i32)
-    let d = wasm_helper_begin(m, name, wasm_sig(wasm_v1(vt), wasm_v1(wasm_extern_t())), wasm_v2(wasm_extern_t(), wasm_i32_t()));
+    let d = wasm_helper_begin(
+        m,
+        name,
+        wasm_sig(wasm_v1(vt), wasm_v1(wasm_extern_t())),
+        wasm_v2(wasm_extern_t(), wasm_i32_t()),
+    );
     let c = d.body;
     cg_call(c, wasm_imp(m, "arr_new"));
     cg_set(c, 1);
@@ -152,14 +159,21 @@ fn wasm_box_host_elem(m: WasmMod, c: Vec<Int>, t: IrTy) {
 fn wasm_vec_from_host_func(m: WasmMod, agg: Int) -> Int {
     let name = "$vec_from_host" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
     let at = wasm_at(m.vec_arr, agg);
     let elem = wasm_td(m, agg).elem;
     // params: 0 arr; locals: 1 n, 2 data, 3 i
-    let d = wasm_helper_begin(m, name, wasm_sig(wasm_v1(wasm_extern_t()), wasm_v1(vt)), wasm_v3(wasm_i32_t(), at, wasm_i32_t()));
+    let d = wasm_helper_begin(
+        m,
+        name,
+        wasm_sig(wasm_v1(wasm_extern_t()), wasm_v1(vt)),
+        wasm_v3(wasm_i32_t(), at, wasm_i32_t()),
+    );
     let c = d.body;
     cg_get(c, 0);
     cg_call(c, wasm_imp(m, "arr_len"));
@@ -310,7 +324,9 @@ fn cg_coll_op(g: CgGen, ins: IrInstr) {
 fn wasm_map_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
     let name = "$map_get" + agg.to_string() + "_" + opt.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let td = wasm_td(m, agg);
@@ -340,13 +356,20 @@ fn wasm_map_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
 fn wasm_vec_push_func(m: WasmMod, agg: Int) -> Int {
     let name = "$vec_push" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
     let at = wasm_at(m.vec_arr, agg);
     let elem = wasm_val(m, wasm_td(m, agg).elem);
-    let d = wasm_helper_begin(m, name, wasm_sig(wasm_v2(vt, elem), wasm_v0()), wasm_v3(at, wasm_i32_t(), at));
+    let d = wasm_helper_begin(
+        m,
+        name,
+        wasm_sig(wasm_v2(vt, elem), wasm_v0()),
+        wasm_v3(at, wasm_i32_t(), at),
+    );
     let h = d.body;
     cg_get(h, 0);
     cg_struct_get(h, vt, 1);
@@ -399,7 +422,9 @@ fn wasm_vec_push_func(m: WasmMod, agg: Int) -> Int {
 fn wasm_vec_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
     let name = "$vec_get" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
@@ -431,13 +456,20 @@ fn wasm_vec_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
 fn wasm_vec_set_func(m: WasmMod, agg: Int) -> Int {
     let name = "$vec_set" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
     let at = wasm_at(m.vec_arr, agg);
     let elem = wasm_val(m, wasm_td(m, agg).elem);
-    let d = wasm_helper_begin(m, name, wasm_sig(wasm_v3(vt, wasm_i64_t(), elem), wasm_v1(wasm_i32_t())), wasm_v0());
+    let d = wasm_helper_begin(
+        m,
+        name,
+        wasm_sig(wasm_v3(vt, wasm_i64_t(), elem), wasm_v1(wasm_i32_t())),
+        wasm_v0(),
+    );
     let h = d.body;
     cg_get(h, 1);
     cg_get(h, 0);
@@ -463,7 +495,9 @@ fn wasm_vec_set_func(m: WasmMod, agg: Int) -> Int {
 fn wasm_vec_pop_func(m: WasmMod, agg: Int, opt: Int) -> Int {
     let name = "$vec_pop" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
@@ -502,13 +536,20 @@ fn wasm_vec_pop_func(m: WasmMod, agg: Int, opt: Int) -> Int {
 fn wasm_vec_join_func(m: WasmMod, agg: Int) -> Int {
     let name = "$vec_join" + agg.to_string();
     match m.func_idx.get(name) {
-        Some(i) => { return i; }
+        Some(i) => {
+            return i;
+        }
         None => {}
     }
     let vt = wasm_at(m.agg_type, agg);
     let at = wasm_at(m.vec_arr, agg);
     let ext = wasm_extern_t();
-    let d = wasm_helper_begin(m, name, wasm_sig(wasm_v2(vt, ext), wasm_v1(ext)), wasm_v2(ext, wasm_i32_t()));
+    let d = wasm_helper_begin(
+        m,
+        name,
+        wasm_sig(wasm_v2(vt, ext), wasm_v1(ext)),
+        wasm_v2(ext, wasm_i32_t()),
+    );
     let h = d.body;
     cg_i32(h, wasm_lit(m, ""));
     cg_call(h, wasm_imp(m, "lit"));
@@ -548,8 +589,12 @@ fn wasm_vec_join_func(m: WasmMod, agg: Int) -> Int {
 }
 
 fn wasm_is_inline_int_op(name: String) -> Bool {
-    name == "int.bit_and" || name == "int.bit_or" || name == "int.bit_xor"
-        || name == "int.shl" || name == "int.shr" || name == "int.ushr"
+    name == "int.bit_and"
+        || name == "int.bit_or"
+        || name == "int.bit_xor"
+        || name == "int.shl"
+        || name == "int.shr"
+        || name == "int.ushr"
 }
 
 // cg_int_op emits Int bit operations inline; it reports false for other ops.

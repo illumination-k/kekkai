@@ -1,13 +1,21 @@
-// Transaction / linearity diagnostics (compared between stage0 and stage1).
+// Transaction / linearity diagnostics.
 fn t1(db: &Db, log: &Log, b: Bool) -> Result<(), TxError> {
     db.transaction(|tx| {
-        let x = b && { tx.rollback(); true };
+        let x = b && {
+            tx.rollback();
+            true
+        };
         match b {
-            true => { tx.commit()?; }
+            true => {
+                tx.commit()?;
+            }
             false => {}
         }
         for i in 0..3 {
-            if b { tx.rollback(); break; }
+            if b {
+                tx.rollback();
+                break;
+            }
         }
         tx.commit()
     })

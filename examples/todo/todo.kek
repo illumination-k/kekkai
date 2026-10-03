@@ -15,8 +15,13 @@ enum TodoError {
     Store(TxError),
 }
 
-fn title_key(id: Int) -> String { "todo:" + id.to_string() + ":title" }
-fn done_key(id: Int) -> String { "todo:" + id.to_string() + ":done" }
+fn title_key(id: Int) -> String {
+    "todo:" + id.to_string() + ":title"
+}
+
+fn done_key(id: Int) -> String {
+    "todo:" + id.to_string() + ":done"
+}
 
 // Titles are embedded in JSON responses, so refuse characters that would
 // need escaping (there is no string escaping helper yet).
@@ -148,15 +153,24 @@ fn todo_error(e: TodoError) -> Response {
 fn show(db: &Db, id: Int) -> Response {
     let title = match db.get(title_key(id)) {
         Ok(Some(t)) => t,
-        Ok(None) => { return Response::not_found(); }
-        Err(e) => { return store_error(e); }
+        Ok(None) => {
+            return Response::not_found();
+        }
+        Err(e) => {
+            return store_error(e);
+        }
     };
     let done = match db.get(done_key(id)) {
         Ok(Some(d)) => d,
         Ok(None) => "false",
-        Err(e) => { return store_error(e); }
+        Err(e) => {
+            return store_error(e);
+        }
     };
-    Response::json(200, "{\"id\":" + id.to_string() + ",\"title\":\"" + title + "\",\"done\":" + done + "}")
+    Response::json(
+        200,
+        "{\"id\":" + id.to_string() + ",\"title\":\"" + title + "\",\"done\":" + done + "}",
+    )
 }
 
 #[handler]
@@ -170,7 +184,9 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response {
             if method == "POST" {
                 let title = req.body().trim();
                 if !valid_title(title) {
-                    return Response::bad_request("title must be 1-200 characters without quotes or backslashes");
+                    return Response::bad_request(
+                        "title must be 1-200 characters without quotes or backslashes",
+                    );
                 }
                 return match create(db, title) {
                     Ok(id) => {
@@ -190,7 +206,9 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response {
         }
         Some(s) => match s.parse_int() {
             Some(n) => n,
-            None => { return Response::bad_request("bad id"); }
+            None => {
+                return Response::bad_request("bad id");
+            }
         },
     };
     let action = req.segment(2).unwrap_or("");

@@ -1,4 +1,4 @@
-# 保証の台帳と `kek assure plan`（Go 撤去後に着手）
+# 保証の台帳と `kek assure plan`
 
 ## 目的
 

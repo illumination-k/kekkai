@@ -3,7 +3,7 @@
 この文書は、コンパイル済みのKekkaiプログラムがCloudflare Workers（とテスト用のNode）でどう動くか、特にトランザクションを実際のストレージへ対応づける**ストアアダプタの契約**を説明する。言語側の設計は [design.md](design.md) を参照。
 
 - ランタイム本体：`js/kekkai_runtime.js`（`kek build` が `kekkai_runtime.js` として出力する）
-- Workersのエントリポイント：`internal/glue/glue.go` が `worker.js` と `wrangler.toml` を生成する
+- Workersのエントリポイント：`compiler/glue_worker.kek`（`kek build`）が `worker.js` と `wrangler.toml` を生成する
 - 例：`examples/`（todo、冪等な決済、Webhookのファンアウト）
 
 ## 1. 何を言語が決め、何をアダプタが決めるか

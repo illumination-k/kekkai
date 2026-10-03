@@ -1,4 +1,4 @@
-// AST: a port of internal/syntax/ast.go. Every node carries `id: Int`
+// AST. Every node carries `id: Int`
 // (unique within a parse session) so that later passes can key Maps by
 // node.
 
@@ -452,7 +452,10 @@ fn ast_sort_errors(errs: Vec<AstError>) -> Vec<AstError> {
     let left = Vec::new();
     let right = Vec::new();
     for i in 0..n {
-        let e = errs.get(i).unwrap_or(AstError { pos: AstPos { file: "", line: 0, col: 0 }, msg: "" });
+        let e = errs.get(i).unwrap_or(AstError {
+            pos: AstPos { file: "", line: 0, col: 0 },
+            msg: "",
+        });
         if i < mid {
             left.push(e);
         } else {
@@ -489,8 +492,7 @@ fn ast_err_at(v: Vec<AstError>, i: Int) -> AstError {
     }
 }
 
-// ast_quote is the canonical string quoting of the dumps (shared with
-// internal/selfhost/dump.go).
+// ast_quote is the canonical string quoting of the dumps.
 fn ast_quote(s: String) -> String {
     let parts = Vec::new();
     parts.push("\"");

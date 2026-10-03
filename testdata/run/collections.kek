@@ -29,7 +29,8 @@ fn lex(src: String) -> Vec<Tok> {
             toks.push(Tok { kind: "int", text: src.slice(start, i) });
         } else if is_alpha(c) {
             let start = i;
-            while i < n && (is_alpha(src.char_at(i).unwrap_or(0)) || is_digit(src.char_at(i).unwrap_or(0))) {
+            while i < n
+                && (is_alpha(src.char_at(i).unwrap_or(0)) || is_digit(src.char_at(i).unwrap_or(0))) {
                 i = i + 1;
             }
             toks.push(Tok { kind: "ident", text: src.slice(start, i) });
@@ -80,7 +81,10 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let nested: Map<Int, Vec<String>> = Map::new();
     nested.insert(1, Vec::new());
     match nested.get(1) {
-        Some(v) => { v.push("a"); v.push("b"); }
+        Some(v) => {
+            v.push("a");
+            v.push("b");
+        }
         None => {}
     }
     log.info(nested.get(1).unwrap_or(Vec::new()).join(","));
@@ -102,17 +106,35 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         Some(b) => log.info("popped " + b.to_string() + " left " + bytes.len().to_string()),
         None => log.info("empty"),
     }
-    log.info("get(-1) " + bytes.get(-1).is_none().to_string() + " set " + bytes.set(0, 7).to_string() + " " + bytes.get(0).unwrap_or(0).to_string());
-    log.info("split " + "a,b,,c".split(",").len().to_string() + " idx " + "hello".index_of("ll").unwrap_or(-1).to_string());
+    log.info(
+        "get(-1) "
+            + bytes.get(-1).is_none().to_string()
+            + " set "
+            + bytes.set(0, 7).to_string()
+            + " "
+            + bytes.get(0).unwrap_or(0).to_string(),
+    );
+    log.info(
+        "split "
+            + "a,b,,c".split(",").len().to_string()
+            + " idx "
+            + "hello".index_of("ll").unwrap_or(-1).to_string(),
+    );
 
     let path = args.get(0).unwrap_or("kek_run_test.txt");
     match fs.write(path, "written by kekkai") {
         Ok(_) => {}
-        Err(e) => { log.error(e.message()); return 1; }
+        Err(e) => {
+            log.error(e.message());
+            return 1;
+        }
     }
     match fs.read(path) {
         Ok(s) => log.info("read back: " + s),
-        Err(e) => { log.error(e.message()); return 1; }
+        Err(e) => {
+            log.error(e.message());
+            return 1;
+        }
     }
     match fs.read("/nonexistent/file") {
         Ok(_) => 1,

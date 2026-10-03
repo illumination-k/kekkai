@@ -4,16 +4,14 @@
 // KEKKAI_REF=<path>), interpreted from their `ir -json` and compared.
 //
 // Where the IR JSON comes from (--ir=MODE):
-//   auto  (default) `./kek ir -json` if the self-hosted compiler supports
-//         it, else the Go compiler if `go` and cmd/kek exist, else none
+//   auto  (default) `./kek ir -json` if it works, else none
 //   kek   `./kek ir -json <file>`
-//   go    the Go stage0 compiler (`go build ./cmd/kek`, then `kek ir -json`)
 //   none  only check that the wasm runs without traps
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Gen, argSets } from "../difftest/gen.mjs";
-import { exec, exists, kek, fail, have, node, root, runKek, withTmp } from "../lib.mjs";
+import { exec, exists, kek, fail, node, root, runKek, withTmp } from "../lib.mjs";
 
 const runPure = path.join(root, "tests/difftest/run_pure.mjs");
 
@@ -41,16 +39,7 @@ async function irSource(mode) {
     if (await irJsonWorks(node, [kek])) {
       return { mode: "kek", irJson: async (f) => runKek(["ir", "-json", f]) };
     }
-    if (mode === "kek") throw new Error("--ir=kek: `./kek ir -json` is not supported by the self-hosted compiler yet");
-  }
-  if (mode === "go" || mode === "auto") {
-    if ((await exists(path.join(root, "cmd/kek"))) && (await have("go", ["version"]))) {
-      const bin = path.join(await mkdtemp(path.join(tmpdir(), "kekkai-stage0-")), "kek");
-      const r = await exec("go", ["build", "-o", bin, "./cmd/kek"]);
-      if (r.code !== 0) throw new Error(`go build ./cmd/kek failed:\n${r.out}`);
-      return { mode: "go", irJson: async (f) => exec(bin, ["ir", "-json", f]) };
-    }
-    if (mode === "go") throw new Error("--ir=go: needs `go` and cmd/kek");
+    if (mode === "kek") throw new Error("--ir=kek: `./kek ir -json` failed");
   }
   return { mode: "none" };
 }
@@ -114,7 +103,7 @@ export async function difftestCases(opts) {
     ? "Lean reference interpreter not built (mise run lean, or KEKKAI_REF=...): checking that wasm runs without traps only"
     : ir.mode === "none"
       ? "no `ir -json` available: checking that wasm runs without traps only"
-      : `comparing with ${ref} (IR from ${ir.mode === "go" ? "the Go stage0 compiler" : "./kek ir -json"})`;
+      : `comparing with ${ref} (IR from ./kek ir -json)`;
   const cases = [];
   for (let s = opts.seed; s < opts.seed + opts.n; s++) {
     cases.push({ name: `seed${s}`, run: () => oneSeed(s, ref, ir, opts) });

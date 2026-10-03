@@ -5,7 +5,7 @@ Integers are represented as mathematical `Int`s that are kept in the range
 `[-2^63, 2^63)` by `wrap` after every operation. This mirrors the wasm
 backend, which uses `i64` instructions (arithmetic modulo `2^64`).
 
-Division and remainder are total, exactly as in `internal/wasm/codegen.go`:
+Division and remainder are total, exactly as in `compiler/wasm_codegen.kek`:
 
 * `div x 0 = 0`, `div x (-1) = 0 - x` (wrapping; so `MIN / -1 = MIN`),
   otherwise truncating division (`i64.div_s`).

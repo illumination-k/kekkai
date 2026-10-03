@@ -19,7 +19,12 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     lines.push("be");
     let path = args.get(0).unwrap_or("kek_async_vec.txt");
     let lens = write_all(fs, log, path, lines);
-    log.info("lens " + lens.get(0).unwrap_or(-1).to_string() + " " + lens.get(1).unwrap_or(-1).to_string());
+    log.info(
+        "lens "
+            + lens.get(0).unwrap_or(-1).to_string()
+            + " "
+            + lens.get(1).unwrap_or(-1).to_string(),
+    );
     match fs.read(path) {
         Ok(s) => log.info("read " + s.len().to_string()),
         Err(e) => log.error(e.message()),

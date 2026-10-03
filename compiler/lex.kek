@@ -210,9 +210,11 @@ fn lex_run(lx: LexState) {
                 if k1 != "" {
                     lex_advance(lx);
                     lex_emit(lx, k1, "", pos);
-                } else {
+                } else if c < 128 {
                     lex_error(lx, pos, "unexpected character " + lex_quote_byte(c));
                     lex_advance(lx);
+                } else {
+                    lex_unexpected_rune(lx, pos);
                 }
             }
         }
@@ -263,4 +265,46 @@ fn lex_string(lx: LexState, pos: AstPos) {
         }
     }
     lex_emit(lx, "STRING", parts.join(""), pos);
+}
+
+// lex_unexpected_rune reports a non-ASCII character (one diagnostic per
+// UTF-8 sequence, formatted like Go's %q of a rune).
+fn lex_unexpected_rune(lx: LexState, pos: AstPos) {
+    let c = lex_peek(lx, 0);
+    let mut size = 1;
+    let mut r = 65533;
+    if c >= 194 && c < 224 {
+        size = 2;
+        r = c.bit_and(31);
+    } else if c >= 224 && c < 240 {
+        size = 3;
+        r = c.bit_and(15);
+    } else if c >= 240 && c < 245 {
+        size = 4;
+        r = c.bit_and(7);
+    }
+    if size > 1 {
+        for i in 1..size {
+            let b = lex_peek(lx, i);
+            if b < 128 || b >= 192 {
+                size = 1;
+                r = 65533;
+                break;
+            }
+            r = r.shl(6).bit_or(b.bit_and(63));
+        }
+    }
+    let ustart = lx.uoff;
+    for i in 0..size {
+        lex_advance(lx);
+    }
+    let mut q = "";
+    if r <= 160 || r == 173 || r == 8232 || r == 8233 || r == 65279 || (r >= 8203 && r <= 8207) {
+        q = "\\u" + lex_hex2(r.shr(8)) + lex_hex2(r.bit_and(255));
+    } else if r == 65533 && size == 1 {
+        q = String::from_char(65533);
+    } else {
+        q = lx.src.slice(ustart, lx.uoff);
+    }
+    lex_error(lx, pos, "unexpected character '" + q + "'");
 }

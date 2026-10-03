@@ -1,0 +1,35 @@
+// Declaration-level diagnostics (compared between stage0 and stage1).
+struct Int { x: Int }
+struct P { a: Int, a: String, b: Vec<Int, Int>, c: Map<Bool, Int>, d: Unknown, e: Option }
+struct P { z: Int }
+enum E { A, A(Int), B(P) }
+enum Empty { }
+enum P { Q }
+struct Q { l: Log, t: Tx, r: &Int }
+
+#[weird]
+fn f(a: Int, a: String, t: Tx, n: Net) -> Result<Int> {
+    Ok(1)
+}
+
+fn f() {}
+
+#[main]
+fn m1(args: Vec<String>, more: Vec<String>, x: Int, t: &Tx) -> String {
+    ""
+}
+
+#[handler]
+fn h1(r: Request, r2: Request, s: String) -> Int {
+    1
+}
+
+#[test]
+fn t1(x: Int) -> Int { 1 }
+
+#[test]
+#[handler]
+fn t2() -> Result<(), String> { Ok(()) }
+
+#[test]
+fn t3(log: &Log) -> Bool { true }

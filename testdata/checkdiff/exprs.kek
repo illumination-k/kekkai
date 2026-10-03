@@ -1,0 +1,140 @@
+// Expression-level diagnostics (compared between stage0 and stage1).
+struct Pt { x: Int, y: Int }
+enum Sh { Circle(Int), Rect(Int, Int), Dot }
+
+fn helper(a: Int, b: String) -> Int { a }
+fn uses_log(log: &Log) {}
+
+fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
+    let a = 1 + "s";
+    let b = "s" + 1;
+    let c = true && 1;
+    let d = 1 < "x";
+    let e = Pt { x: 1, x: 2, z: 3 };
+    let f = Nope { a: 1 };
+    let g = e.w;
+    let h = a.foo;
+    let i = helper(1);
+    let j = helper("a", 2, 3);
+    let k = nothing(1);
+    let l = a(2);
+    let n = Sh::Circle;
+    let o = Sh::Square(1);
+    let p = Sh::Rect(1);
+    let q = Vec::new;
+    let r = Vec::new(1);
+    let s = Response::text(1);
+    let t = Response::nope();
+    let u = String::from_char;
+    let w = -true;
+    let x = !1;
+    let y = if a { 1 } else { "two" };
+    let z = if true { 1 };
+    let aa = v.push("s");
+    let ab = v.join(",");
+    let ac = v.nope();
+    let ad = m.get(1);
+    let ae = m.keys();
+    let af = a.to_strin();
+    let ag = log.info(1);
+    let ah = log.nope();
+    uses_log(net);
+    uses_log(1);
+    let ai = Some(1, 2);
+    let aj = None;
+    let ak = aj.unwrap_or(5);
+    let al = (1).abs();
+    let am = Vec::new();
+    am.len();
+    let an: Map<Pt, Int> = Map::new();
+    let ao = Map::new();
+    let ap = ao.get(Pt { x: 1, y: 2 });
+    let aq = Ok(1) == Ok(2);
+    let ar = e == e;
+    let at = 1 == "x";
+    exprs(log, net, v, m);
+    let au = (|x| x);
+    let av = Sh::Dot(1);
+    let aw = net.get("u");
+    let ax: String = 5;
+    while 1 { }
+    for i in "abc" { }
+    for i in 0.."z" { }
+    for i in v { i = 2; }
+    break;
+    log = 3;
+    zz = 1;
+    let ay = { return "s"; };
+    ""
+}
+
+fn tries(r: Result<Int, String>, o: Option<Int>) -> Int {
+    let a = r?;
+    let b = o?;
+    let c = 5?;
+    0
+}
+
+fn tries2(o: Option<Int>) -> Option<Int> {
+    let r: Result<Int, String> = Ok(1);
+    let x = r?;
+    Some(o? + 1)
+}
+
+fn tries3(r: Result<Int, String>) -> Result<Int, Int> {
+    let x = r?;
+    let y = Vec::new().pop()?;
+    Ok(x)
+}
+
+fn matches(s: Sh, o: Option<Result<Int, Bool>>, n: Int, t: String, b: Bool) -> Int {
+    match s {
+        Sh::Circle(r) => r,
+        Sh::Rect(w) => w,
+        Other::Dot => 0,
+        Sh::Tri => 1,
+        Dot(1) => 2,
+    };
+    match o {
+        Some(Ok(1)) => 1,
+        Some(Err(true)) => 2,
+        None => 3,
+    };
+    match n {
+        1 => 1,
+        "x" => 2,
+        true => 3,
+    };
+    match t {
+        "a" => 1,
+    };
+    match b {
+        true => 1,
+        false => "x",
+    };
+    match b {
+        true => 1,
+    };
+    match s {
+        Sh::Circle(_) => 1,
+        _ => 2,
+        Sh::Dot => 3,
+    };
+    match Vec::new() {
+        x => 1,
+    };
+    let e = Map::new();
+    match e.get(1) {
+        Some(v) => 1,
+        None => 2,
+    };
+    match o {
+        Some(Some(x)) => 1,
+        _ => 2,
+    };
+    match s {
+        Sh::Circle(a, b) => 1,
+        Sh::Rect(_) => 2,
+        Sh::Dot => 3,
+    }
+}

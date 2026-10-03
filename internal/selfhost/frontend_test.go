@@ -126,6 +126,37 @@ func TestTokens(t *testing.T) { compareDump(t, "lex", selfhost.Tokens) }
 
 func TestAST(t *testing.T) { compareDump(t, "ast", selfhost.AST) }
 
+// stage0Check mirrors `kek check <path>`: the diagnostics (exit 1) or
+// "<path>: ok".
+func stage0Check(path string) (string, bool) {
+	srcs, err := driver.ReadSources(path)
+	if err == nil {
+		_, err = driver.CheckFiles(srcs)
+	}
+	if err != nil {
+		return err.Error() + "\n", false
+	}
+	return path + ": ok\n", true
+}
+
+func TestCheck(t *testing.T) {
+	paths := append(corpus(t), "../../compiler")
+	for _, path := range paths {
+		name, _ := filepath.Rel("../..", path)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			want, ok := stage0Check(path)
+			got, code := stage1(t, "check", path)
+			if got != want {
+				t.Errorf("stage1 check output differs from stage0:\n%s", firstDiff(want, got))
+			}
+			if (code == 0) != ok {
+				t.Errorf("exit code %d, stage0 ok=%v", code, ok)
+			}
+		})
+	}
+}
+
 // firstDiff shows the first differing line of two outputs.
 func firstDiff(want, got string) string {
 	wl := bytes.Split([]byte(want), []byte("\n"))

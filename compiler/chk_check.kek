@@ -18,6 +18,7 @@ struct ChkFunc {
     result: Ty,
     handler: Bool,
     main: Bool,
+    test: Bool,
     async: Bool,
     // user functions called from the body (keys; values unused)
     calls: Map<String, Bool>,
@@ -122,7 +123,7 @@ fn chk_dummy_pos() -> AstPos {
 fn chk_dummy_func() -> ChkFunc {
     let p = chk_dummy_pos();
     ChkFunc {
-        name: "", params: Vec::new(), result: ty_unit(), handler: false, main: false, async: false,
+        name: "", params: Vec::new(), result: ty_unit(), handler: false, main: false, test: false, async: false,
         calls: Map::new(), effects: Map::new(),
         decl: AstFuncDecl {
             id: 0, pos: p, attrs: Vec::new(), name: "", params: Vec::new(), result: None,
@@ -249,11 +250,12 @@ fn chk_declare(c: Chk, f: AstFile) {
         }
         let fun = ChkFunc {
             name: fd.name, decl: fd, params: Vec::new(), result: ty_unit(),
-            handler: ast_has_attr(fd, "handler"), main: ast_has_attr(fd, "main"), async: false,
+            handler: ast_has_attr(fd, "handler"), main: ast_has_attr(fd, "main"), test: ast_has_attr(fd, "test"),
+            async: false,
             calls: Map::new(), effects: Map::new(),
         };
         for a in fd.attrs {
-            if a.name != "handler" && a.name != "main" {
+            if a.name != "handler" && a.name != "main" && a.name != "test" {
                 chk_errorf(c, a.pos, "unknown attribute `#[" + a.name + "]`");
             }
         }
@@ -289,6 +291,9 @@ fn chk_declare(c: Chk, f: AstFile) {
         }
         if fun.main {
             chk_main_sig(c, fun);
+        }
+        if fun.test {
+            chk_test_sig(c, fun);
         }
         c.info.funcs.insert(fd.name, fun);
         c.info.func_list.push(fun);
@@ -369,6 +374,40 @@ fn chk_handler_sig(c: Chk, fun: ChkFunc) {
     if !ty_is_opaque(fun.result, "Response") {
         chk_errorf(c, fun.decl.pos, "a handler must return `Response`, found `" + ty_str(fun.result) + "`");
     }
+}
+
+// chk_test_sig checks a `#[test]` function: it receives only borrowed
+// capabilities and reports failure by returning `false` or `Err(message)`.
+fn chk_test_sig(c: Chk, fun: ChkFunc) {
+    if fun.handler {
+        chk_errorf(c, fun.decl.pos, "a function cannot be both #[test] and #[handler]");
+    }
+    for p in fun.params {
+        let mut ok = false;
+        match p.ty {
+            Ty::Cap(k, borrowed) => {
+                ok = borrowed && k != "Tx";
+            }
+            _ => {}
+        }
+        if !ok {
+            chk_errorf(c, p.pos, "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random), found `" + ty_str(p.ty) + "`");
+        }
+    }
+    match fun.result {
+        Ty::Prim(n) => {
+            if n == "()" || n == "Bool" {
+                return;
+            }
+        }
+        Ty::Result(ok, err) => {
+            if ty_is_prim(ok, "()") && ty_is_prim(err, "String") {
+                return;
+            }
+        }
+        _ => {}
+    }
+    chk_errorf(c, fun.decl.pos, "a test must return `()`, `Bool` or `Result<(), String>`, found `" + ty_str(fun.result) + "`");
 }
 
 // chk_type_args resolves the type arguments of a named type, reporting an

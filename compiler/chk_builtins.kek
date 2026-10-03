@@ -103,6 +103,7 @@ fn chk_new_builtins() -> ChkBuiltins {
 
     chk_ma(bs, "Fs", "read", chk_tys1(s), chk_res(s, io_err));
     chk_ma(bs, "Fs", "write", chk_tys2(s, s), chk_res(u, io_err));
+    chk_ma(bs, "Fs", "list", chk_tys1(s), chk_res(Ty::Vec(s), io_err));
     chk_ma(bs, "Fs", "write_bytes", chk_tys2(s, Ty::Vec(i)), chk_res(u, io_err));
 
     // ---- pure data ----

@@ -128,9 +128,9 @@ const (
 
 type PatInfo struct {
 	Kind PatKind
-	Type Type       // type of the matched value
-	Tag  int        // constructor tag (Result: Ok=0, Err=1; Option: None=0, Some=1)
-	Bind *Binding   // for PatBind
+	Type Type              // type of the matched value
+	Tag  int               // constructor tag (Result: Ok=0, Err=1; Option: None=0, Some=1)
+	Bind *Binding          // for PatBind
 	Args []*syntax.Pattern // for PatCtor: field sub-patterns
 }
 

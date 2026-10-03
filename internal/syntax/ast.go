@@ -228,17 +228,17 @@ type IfExpr struct {
 	Else Expr // nil, *Block or *IfExpr
 }
 
-// Pattern in a match arm.
+// Pattern in a match arm. Patterns nest: `Ok(Some(n))`.
 type Pattern struct {
 	Pos      Pos
-	Wildcard bool     // `_`
-	Bind     string   // a bare identifier binding the whole value (non-empty when not a constructor)
-	Type     string   // `Type::Variant` qualifier (optional)
-	Ctor     string   // constructor / variant name (Ok, Err, Some, None, Variant)
-	Args     []string // bound names for constructor fields ("_" for ignored)
-	IntValue *int64   // integer literal pattern
-	BoolLit  *bool    // boolean literal pattern
-	StrValue *string  // string literal pattern
+	Wildcard bool       // `_`
+	Bind     string     // a bare identifier: a binding, or a nullary constructor (resolved by the checker)
+	Type     string     // `Type::Variant` qualifier (optional)
+	Ctor     string     // constructor / variant name when written with `::` or arguments
+	Args     []*Pattern // constructor fields
+	IntValue *int64     // integer literal pattern
+	BoolLit  *bool      // boolean literal pattern
+	StrValue *string    // string literal pattern
 }
 
 type MatchArm struct {

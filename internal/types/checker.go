@@ -128,9 +128,10 @@ const (
 
 type PatInfo struct {
 	Kind PatKind
+	Type Type       // type of the matched value
 	Tag  int        // constructor tag (Result: Ok=0, Err=1; Option: None=0, Some=1)
 	Bind *Binding   // for PatBind
-	Args []*Binding // for PatCtor (nil entries for `_`)
+	Args []*syntax.Pattern // for PatCtor: field sub-patterns
 }
 
 // Info holds the results of type checking.
@@ -1127,47 +1128,19 @@ func (c *checker) checkMatch(e *syntax.MatchExpr) Type {
 	if st == Invalid {
 		st = c.newVar()
 	}
-	var result Type = Never
-	covered := map[int]bool{}
-	ntags := 0
-	switch st := st.(type) {
-	case *ResultT, *OptionT:
-		ntags = 2
-	case *Enum:
-		ntags = len(st.Variants)
-	}
-	if st == Bool {
-		ntags = 2
-	}
-	catchAll := false
 	if _, ok := st.(*Var); ok {
 		c.errorf(e.Pos, "type annotations needed for match scrutinee")
 		return Invalid
 	}
+	var result Type = Never
+	var rows [][]*syntax.Pattern
 	for _, arm := range e.Arms {
-		if catchAll {
+		c.push(false)
+		c.checkPattern(arm.Pat, st)
+		if len(rows) > 0 && exhaustive(c.info, rows, []Type{st}) {
 			c.errorf(arm.Pos, "unreachable pattern")
 		}
-		c.push(false)
-		pi := c.checkPattern(arm.Pat, st)
-		switch pi.Kind {
-		case PatWild, PatBind:
-			catchAll = true
-		case PatCtor:
-			if covered[pi.Tag] {
-				c.errorf(arm.Pos, "unreachable pattern")
-			}
-			covered[pi.Tag] = true
-		case PatBool:
-			tag := 0
-			if *arm.Pat.BoolLit {
-				tag = 1
-			}
-			if covered[tag] {
-				c.errorf(arm.Pos, "unreachable pattern")
-			}
-			covered[tag] = true
-		}
+		rows = append(rows, []*syntax.Pattern{arm.Pat})
 		at := c.checkExpr(arm.Body)
 		if !unify(result, at) {
 			c.errorf(syntax.ExprPos(arm.Body), "match arms have incompatible types: expected `%s`, found `%s`", Resolve(result), Resolve(at))
@@ -1175,145 +1148,240 @@ func (c *checker) checkMatch(e *syntax.MatchExpr) Type {
 		result = join(result, at)
 		c.pop()
 	}
-	if !catchAll && (ntags == 0 || len(covered) < ntags) {
-		c.errorf(e.Pos, "non-exhaustive patterns in match on `%s`%s", Resolve(st), c.missing(st, covered))
+	if !exhaustive(c.info, rows, []Type{st}) {
+		c.errorf(e.Pos, "non-exhaustive patterns in match on `%s`%s", Resolve(st), missing(c.info, rows, st))
 	}
 	return result
 }
 
-func (c *checker) missing(st Type, covered map[int]bool) string {
-	var names []string
-	switch st := st.(type) {
+// ctors returns the constructor names and field types of a finite type,
+// or nil for types with infinitely many values (Int, String, ...).
+func ctors(t Type) ([]string, [][]Type) {
+	switch t := Prune(t).(type) {
 	case *ResultT:
-		names = []string{"Ok(_)", "Err(_)"}
+		return []string{"Ok(_)", "Err(_)"}, [][]Type{{t.Ok}, {t.Err}}
 	case *OptionT:
-		names = []string{"None", "Some(_)"}
+		return []string{"None", "Some(_)"}, [][]Type{nil, {t.Elem}}
 	case *Enum:
-		for _, v := range st.Variants {
-			names = append(names, st.Name+"::"+v.Name)
+		var names []string
+		var fields [][]Type
+		for _, v := range t.Variants {
+			n := t.Name + "::" + v.Name
+			if len(v.Fields) > 0 {
+				n += "(..)"
+			}
+			names = append(names, n)
+			fields = append(fields, v.Fields)
 		}
-	default:
-		if st == Bool {
-			names = []string{"false", "true"}
-		} else {
-			return ": add a `_` arm"
+		return names, fields
+	case *Prim:
+		if t == Bool {
+			return []string{"false", "true"}, [][]Type{nil, nil}
 		}
 	}
+	return nil, nil
+}
+
+// patTag returns (tag, true) if p tests a constructor (or bool literal),
+// and false for irrefutable patterns. Other literal patterns return tag -1.
+func patTag(info *Info, p *syntax.Pattern) (int, bool) {
+	pi := info.Patterns[p]
+	if pi == nil {
+		return 0, false
+	}
+	switch pi.Kind {
+	case PatCtor:
+		return pi.Tag, true
+	case PatBool:
+		if *p.BoolLit {
+			return 1, true
+		}
+		return 0, true
+	case PatInt, PatString:
+		return -1, true
+	}
+	return 0, false
+}
+
+var wildPat = &syntax.Pattern{Wildcard: true}
+
+// exhaustive reports whether the pattern matrix covers every value of the
+// column types (Maranget's usefulness algorithm, specialised to the
+// question "is the all-wildcards row useful?").
+func exhaustive(info *Info, rows [][]*syntax.Pattern, tys []Type) bool {
+	if len(tys) == 0 {
+		return len(rows) > 0
+	}
+	names, fields := ctors(tys[0])
+	if names == nil {
+		var def [][]*syntax.Pattern
+		for _, r := range rows {
+			if _, refutable := patTag(info, r[0]); !refutable {
+				def = append(def, r[1:])
+			}
+		}
+		return exhaustive(info, def, tys[1:])
+	}
+	for tag := range names {
+		var spec [][]*syntax.Pattern
+		for _, r := range rows {
+			t, refutable := patTag(info, r[0])
+			switch {
+			case !refutable:
+				row := make([]*syntax.Pattern, 0, len(fields[tag])+len(r)-1)
+				for range fields[tag] {
+					row = append(row, wildPat)
+				}
+				spec = append(spec, append(row, r[1:]...))
+			case t == tag:
+				args := info.Patterns[r[0]].Args
+				if len(args) != len(fields[tag]) {
+					continue // arity error already reported
+				}
+				spec = append(spec, append(append([]*syntax.Pattern{}, args...), r[1:]...))
+			}
+		}
+		if !exhaustive(info, spec, append(append([]Type{}, fields[tag]...), tys[1:]...)) {
+			return false
+		}
+	}
+	return true
+}
+
+// missing names the top-level constructors that are not fully covered.
+func missing(info *Info, rows [][]*syntax.Pattern, t Type) string {
+	names, fields := ctors(t)
+	if names == nil {
+		return ": add a `_` arm"
+	}
 	var miss []string
-	for i, n := range names {
-		if !covered[i] {
+	for tag, n := range names {
+		var spec [][]*syntax.Pattern
+		for _, r := range rows {
+			tg, refutable := patTag(info, r[0])
+			if !refutable {
+				row := []*syntax.Pattern{}
+				for range fields[tag] {
+					row = append(row, wildPat)
+				}
+				spec = append(spec, row)
+			} else if tg == tag && len(info.Patterns[r[0]].Args) == len(fields[tag]) {
+				spec = append(spec, info.Patterns[r[0]].Args)
+			}
+		}
+		if !exhaustive(info, spec, fields[tag]) {
 			miss = append(miss, "`"+n+"`")
 		}
 	}
 	sort.Strings(miss)
-	s := ": missing "
+	out := ": missing "
 	for i, m := range miss {
 		if i > 0 {
-			s += ", "
+			out += ", "
 		}
-		s += m
+		out += m
 	}
-	return s
+	return out
 }
 
-func (c *checker) checkPattern(p *syntax.Pattern, st Type) *PatInfo {
-	pi := &PatInfo{}
+func (c *checker) checkPattern(p *syntax.Pattern, st Type) {
+	st = Prune(st)
+	pi := &PatInfo{Type: st}
 	c.info.Patterns[p] = pi
-	bindArgs := func(fields []Type) {
+	subs := func(fields []Type) {
 		if len(p.Args) != len(fields) {
 			c.errorf(p.Pos, "pattern `%s` expects %d field(s), found %d", p.Ctor, len(fields), len(p.Args))
 		}
-		for i, name := range p.Args {
-			var t Type = c.newVar()
+		pi.Args = p.Args
+		for i, sub := range p.Args {
+			var t Type = Invalid
 			if i < len(fields) {
 				t = fields[i]
 			}
-			if name == "_" {
-				pi.Args = append(pi.Args, nil)
-				continue
-			}
-			b := c.newBinding(name, t, p.Pos)
-			c.bind(b)
-			pi.Args = append(pi.Args, b)
+			c.checkPattern(sub, t)
 		}
 	}
 	switch {
 	case p.Wildcard:
 		pi.Kind = PatWild
-		return pi
+		return
 	case p.IntValue != nil:
 		pi.Kind = PatInt
-		if st != Int {
+		if !unify(st, Int) {
 			c.errorf(p.Pos, "integer pattern used on `%s`", st)
 		}
-		return pi
+		return
 	case p.BoolLit != nil:
 		pi.Kind = PatBool
-		if st != Bool {
+		if !unify(st, Bool) {
 			c.errorf(p.Pos, "boolean pattern used on `%s`", st)
 		}
-		return pi
+		return
 	case p.StrValue != nil:
 		pi.Kind = PatString
-		if st != String {
+		if !unify(st, String) {
 			c.errorf(p.Pos, "string pattern used on `%s`", st)
 		}
-		return pi
+		return
 	}
 	ctor := p.Ctor
 	if ctor == "" {
 		ctor = p.Bind
 	}
-	switch st := st.(type) {
+	switch t := st.(type) {
 	case *ResultT:
 		if p.Type == "" && (ctor == "Ok" || ctor == "Err") {
 			pi.Kind = PatCtor
 			if ctor == "Ok" {
-				bindArgs([]Type{st.Ok})
+				subs([]Type{t.Ok})
 			} else {
 				pi.Tag = 1
-				bindArgs([]Type{st.Err})
+				subs([]Type{t.Err})
 			}
-			return pi
+			return
 		}
 	case *OptionT:
 		if p.Type == "" && ctor == "Some" {
 			pi.Kind, pi.Tag = PatCtor, 1
-			bindArgs([]Type{st.Elem})
-			return pi
+			subs([]Type{t.Elem})
+			return
 		}
 		if p.Type == "" && ctor == "None" {
 			pi.Kind, pi.Tag = PatCtor, 0
-			bindArgs(nil)
-			return pi
+			subs(nil)
+			return
 		}
 	case *Enum:
-		if p.Type != "" && p.Type != st.Name {
-			c.errorf(p.Pos, "expected a variant of `%s`, found `%s::%s`", st.Name, p.Type, ctor)
+		if p.Type != "" && p.Type != t.Name {
+			c.errorf(p.Pos, "expected a variant of `%s`, found `%s::%s`", t.Name, p.Type, ctor)
 			pi.Kind = PatWild
-			return pi
+			return
 		}
-		if tag, v := st.Variant(ctor); v != nil {
+		if tag, v := t.Variant(ctor); v != nil {
 			pi.Kind, pi.Tag = PatCtor, tag
-			bindArgs(v.Fields)
-			return pi
+			subs(v.Fields)
+			return
 		}
 		if p.Type != "" {
-			c.errorf(p.Pos, "no variant `%s` in enum `%s`", ctor, st.Name)
+			c.errorf(p.Pos, "no variant `%s` in enum `%s`", ctor, t.Name)
 			pi.Kind = PatWild
-			return pi
+			return
 		}
 	}
 	if p.Ctor != "" {
-		c.errorf(p.Pos, "pattern `%s` does not match type `%s`", ctor, st)
+		if st != Invalid {
+			c.errorf(p.Pos, "pattern `%s` does not match type `%s`", ctor, st)
+		}
 		pi.Kind = PatWild
-		return pi
+		for _, sub := range p.Args {
+			c.checkPattern(sub, Invalid)
+		}
+		return
 	}
 	pi.Kind = PatBind
 	b := c.newBinding(p.Bind, st, p.Pos)
 	c.bind(b)
 	pi.Bind = b
-	return pi
 }
 
 // ---- async analysis ----
@@ -1326,6 +1394,8 @@ func (c *checker) computeAsync() {
 		}
 	}
 	for _, fn := range c.info.FuncList {
+		// The handler is the entry point driven by the JS event loop.
+		fn.Async = fn.Handler
 		for op := range fn.Effects {
 			if asyncOps[op] {
 				fn.Async = true

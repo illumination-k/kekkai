@@ -563,11 +563,7 @@ func (p *parser) parsePattern() *Pattern {
 		if p.accept(LParen) {
 			pat.Ctor = name
 			for !p.at(RParen) {
-				if p.accept(Underscore) {
-					pat.Args = append(pat.Args, "_")
-				} else {
-					pat.Args = append(pat.Args, p.expect(TIdent).Text)
-				}
+				pat.Args = append(pat.Args, p.parsePattern())
 				if !p.accept(Comma) {
 					break
 				}

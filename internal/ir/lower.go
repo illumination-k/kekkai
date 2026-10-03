@@ -503,71 +503,63 @@ func (l *lowerer) match(e *syntax.MatchExpr) int {
 	t := l.typeOf(e)
 	res := l.newLocal(t, "")
 	x := l.expr(e.X)
-	st := types.Resolve(l.info.TypeOf(e.X))
-	var tag, agg int
-	switch st.(type) {
-	case *types.ResultT, *types.OptionT, *types.Enum:
-		agg = l.agg(st)
-		tag = l.emitTo(Ty{Kind: TInt}, Instr{Op: "tag", Type: agg, Args: []int{x}})
-	}
 	join := l.newBlock()
 	for _, arm := range e.Arms {
-		pi := l.info.Patterns[arm.Pat]
-		body := l.newBlock()
-		next := -1
-		var cond int
-		hasCond := true
-		switch pi.Kind {
-		case types.PatWild, types.PatBind:
-			hasCond = false
-		case types.PatCtor:
-			cond = l.emitTo(Ty{Kind: TBool}, Instr{Op: "binop", Name: "eq", Args: []int{tag, l.intc(int64(pi.Tag))}})
-		case types.PatInt:
-			cond = l.emitTo(Ty{Kind: TBool}, Instr{Op: "binop", Name: "eq", Args: []int{x, l.intc(*arm.Pat.IntValue)}})
-		case types.PatBool:
-			if *arm.Pat.BoolLit {
-				cond = x
-			} else {
-				cond = l.emitTo(Ty{Kind: TBool}, Instr{Op: "unop", Name: "not", Args: []int{x}})
-			}
-		case types.PatString:
-			s := l.constant(Const{Kind: TString, Str: *arm.Pat.StrValue})
-			cond = l.emitTo(Ty{Kind: TBool}, Instr{Op: "binop", Name: "eq", Args: []int{x, s}})
-		}
-		if hasCond {
-			next = l.newBlock()
-			l.terminate(Term{Op: "br", Args: []int{cond}, Targets: []int{body, next}})
-		} else {
-			l.jump(body)
-		}
-		l.setBlock(body)
-		switch pi.Kind {
-		case types.PatBind:
-			dst := l.newLocal(l.ty(pi.Bind.Type), pi.Bind.Name)
-			l.copyTo(dst, x)
-			l.vars[pi.Bind] = dst
-		case types.PatCtor:
-			for i, b := range pi.Args {
-				if b == nil {
-					continue
-				}
-				dst := l.newLocal(l.ty(b.Type), b.Name)
-				l.emit(Instr{Op: "vfield", Dst: dst, Type: agg, Tag: pi.Tag, Index: i, Args: []int{x}})
-				l.vars[b] = dst
-			}
-		}
+		next := l.newBlock()
+		l.pattern(x, arm.Pat, next)
 		v := l.expr(arm.Body)
 		l.assignResult(res, v, arm.Body)
 		l.jump(join)
-		if next < 0 {
-			break // catch-all: later arms are unreachable (rejected by the checker)
-		}
 		l.setBlock(next)
 	}
 	// Falling off the last arm is impossible for exhaustive matches.
 	l.terminate(Term{Op: "unreachable"})
 	l.setBlock(join)
 	return res
+}
+
+// pattern emits code testing local x against p; on mismatch control goes
+// to fail, otherwise it continues in the current block with p's variables
+// bound.
+func (l *lowerer) pattern(x int, p *syntax.Pattern, fail int) {
+	pi := l.info.Patterns[p]
+	test := func(cond int) {
+		ok := l.newBlock()
+		l.terminate(Term{Op: "br", Args: []int{cond}, Targets: []int{ok, fail}})
+		l.setBlock(ok)
+	}
+	boolTy := Ty{Kind: TBool}
+	switch pi.Kind {
+	case types.PatWild:
+	case types.PatBind:
+		dst := l.newLocal(l.ty(pi.Bind.Type), pi.Bind.Name)
+		l.copyTo(dst, x)
+		l.vars[pi.Bind] = dst
+	case types.PatInt:
+		test(l.emitTo(boolTy, Instr{Op: "binop", Name: "eq", Args: []int{x, l.intc(*p.IntValue)}}))
+	case types.PatString:
+		s := l.constant(Const{Kind: TString, Str: *p.StrValue})
+		test(l.emitTo(boolTy, Instr{Op: "binop", Name: "eq", Args: []int{x, s}}))
+	case types.PatBool:
+		if *p.BoolLit {
+			test(x)
+		} else {
+			test(l.emitTo(boolTy, Instr{Op: "unop", Name: "not", Args: []int{x}}))
+		}
+	case types.PatCtor:
+		st := types.Resolve(pi.Type)
+		agg := l.agg(st)
+		tag := l.emitTo(Ty{Kind: TInt}, Instr{Op: "tag", Type: agg, Args: []int{x}})
+		test(l.emitTo(boolTy, Instr{Op: "binop", Name: "eq", Args: []int{tag, l.intc(int64(pi.Tag))}}))
+		for i, sub := range pi.Args {
+			spi := l.info.Patterns[sub]
+			if spi.Kind == types.PatWild {
+				continue
+			}
+			v := l.emitTo(l.ty(spi.Type), Instr{Op: "vfield", Type: agg, Tag: pi.Tag, Index: i, Args: []int{x}})
+			l.pattern(v, sub, fail)
+		}
+	}
 }
 
 // prune removes unreachable blocks and renumbers the rest.

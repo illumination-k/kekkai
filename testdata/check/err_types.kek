@@ -30,3 +30,29 @@ fn m(o: Option<Int>) -> Int {
 fn handle(x: Int) -> Int { // ERROR "a handler must return `Response`" ERROR "handler parameters must be"
     1
 } 
+
+fn nested(r: Result<Option<Int>, String>) -> Int {
+    match r { // ERROR "missing `Ok(_)`"
+        Ok(Some(n)) => n,
+        Err(_) => 0,
+    }
+}
+
+fn nested_ok(r: Result<Option<Int>, String>) -> Int {
+    match r {
+        Ok(Some(1)) => 100,
+        Ok(Some(n)) => n,
+        Ok(None) => -1,
+        Err("x") => 1,
+        Err(_) => 0,
+    }
+}
+
+fn unreachable_arm(o: Option<Bool>) -> Int {
+    match o {
+        Some(true) => 1,
+        Some(false) => 2,
+        None => 3,
+        _ => 4, // ERROR "unreachable pattern"
+    }
+}

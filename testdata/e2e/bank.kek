@@ -1,0 +1,82 @@
+// A small bank: balances live in a transactional store.
+enum TransferError {
+    Insufficient,
+    NoAccount(String),
+    Store(TxError),
+}
+
+fn balance_key(name: String) -> String {
+    "balance:" + name
+}
+
+// Pure parsing helper.
+fn parse_amount(s: String) -> Option<Int> {
+    let n = s.parse_int()?;
+    if n > 0 { Some(n) } else { None }
+}
+
+fn read_balance(tx: &Tx, name: String) -> Result<Option<Int>, TxError> {
+    match tx.get(balance_key(name))? {
+        Some(s) => Ok(s.parse_int()),
+        None => Ok(None),
+    }
+}
+
+fn transfer(db: &Db, log: &Log, from: String, to: String, amount: Int) -> Result<Int, TransferError> {
+    let r = db.transaction(|tx| {
+        let a = match read_balance(tx, from)? {
+            Some(n) => n,
+            None => {
+                tx.rollback();
+                return Ok(Err(TransferError::NoAccount(from)));
+            }
+        };
+        if a < amount {
+            tx.rollback();
+            return Ok(Err(TransferError::Insufficient));
+        }
+        let b = read_balance(tx, to)?.unwrap_or(0);
+        tx.put(balance_key(from), (a - amount).to_string())?;
+        tx.put(balance_key(to), (b + amount).to_string())?;
+        tx.outbox("https://hooks.example/transfer", from + "->" + to + ":" + amount.to_string());
+        log.info("transfer " + from + " -> " + to);
+        tx.commit()?;
+        Ok(Ok(a - amount))
+    });
+    match r {
+        Ok(inner) => inner,
+        Err(e) => Err(TransferError::Store(e)),
+    }
+}
+
+fn get_balance(db: &Db, name: String) -> Result<Option<String>, TxError> {
+    db.get(balance_key(name))
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, log: &Log) -> Response {
+    let action = req.segment(0).unwrap_or("");
+    if action == "balance" {
+        let name = req.segment(1).unwrap_or("");
+        return match get_balance(db, name) {
+            Ok(Some(b)) => Response::text(200, b),
+            Ok(None) => Response::not_found(),
+            Err(e) => Response::text(500, e.message()),
+        };
+    }
+    if action == "transfer" && req.method() == "POST" {
+        let from = req.query("from").unwrap_or("");
+        let to = req.query("to").unwrap_or("");
+        let amount = match parse_amount(req.query("amount").unwrap_or("")) {
+            Some(n) => n,
+            None => { return Response::bad_request("bad amount"); }
+        };
+        return match transfer(db, log, from, to, amount) {
+            Ok(left) => Response::json(200, "{\"left\":" + left.to_string() + "}"),
+            Err(TransferError::Insufficient) => Response::text(409, "insufficient funds"),
+            Err(TransferError::NoAccount(n)) => Response::text(404, "no account " + n),
+            Err(TransferError::Store(e)) => if e.retryable() { Response::text(503, "conflict, retry") } else { Response::text(500, e.message()) },
+        };
+    }
+    Response::not_found()
+}

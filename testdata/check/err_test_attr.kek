@@ -1,0 +1,38 @@
+// #[test] functions: capabilities only, result (), Bool or Result<(), String>.
+#[test]
+fn ok_unit() {
+}
+
+#[test]
+fn ok_bool() -> Bool {
+    true
+}
+
+#[test]
+fn ok_result(log: &Log, db: &Db) -> Result<(), String> {
+    log.info("hi");
+    Ok(())
+}
+
+#[test]
+fn bad_param(x: Int) -> Bool { // ERROR "test parameters must be capabilities"
+    x == 1
+}
+
+#[test]
+fn bad_result() -> Int { // ERROR "a test must return `()`, `Bool` or `Result<(), String>`, found `Int`"
+    1
+}
+
+#[test]
+fn bad_err() -> Result<(), Int> { // ERROR "found `Result<(), Int>`"
+    Ok(())
+}
+
+#[test]
+fn bad_tx(tx: &Tx) { // ERROR "test parameters must be capabilities"
+}
+
+#[bench] // ERROR "unknown attribute `#[bench]`"
+fn unknown() {
+}

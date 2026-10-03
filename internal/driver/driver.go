@@ -72,7 +72,17 @@ func Compile(src string) (*Artifacts, error) {
 
 // CompileFiles compiles a multi-file program.
 func CompileFiles(srcs []syntax.Source) (*Artifacts, error) {
-	info, err := CheckFiles(srcs)
+	f, err := syntax.ParseFiles(srcs)
+	if err != nil {
+		return nil, err
+	}
+	return CompileFile(f)
+}
+
+// CompileFile compiles a parsed file (tools such as `kek test` compile a
+// transformed AST).
+func CompileFile(f *syntax.File) (*Artifacts, error) {
+	info, err := types.Check(f)
 	if err != nil {
 		return nil, err
 	}

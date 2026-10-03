@@ -224,7 +224,7 @@ def evalHost (name : String) (args : Array Val) : HM Val := do
   | "string.split" => match args with
     | #[.str s, .str sep] => newVec ((jsSplit s sep).toArray.map Val.str) | _ => bad
   | "string.to_bytes" => match args with
-    | #[.str s] => newVec ((utf8Encode s).toArray.map fun b => .int b) | _ => bad
+    | #[.str s] => newVec ((utf8Encode s).toArray.map fun (b : Nat) => .int (b : Int)) | _ => bad
   | "string.from_char" => match args with
     | #[.int c] => pure (.str (jsFromCharCode c)) | _ => bad
   | "string.from_bytes" => match args with

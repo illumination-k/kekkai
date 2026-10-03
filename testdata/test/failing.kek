@@ -1,0 +1,40 @@
+// Tests with expected failures (used by internal/testrun tests).
+
+fn div(a: Int, b: Int) -> Int {
+    a / b
+}
+
+#[test]
+fn passes() -> Bool {
+    div(6, 3) == 2
+}
+
+#[test]
+fn returns_false() -> Bool {
+    div(6, 3) == 3
+}
+
+#[test]
+fn returns_err(log: &Log) -> Result<(), String> {
+    log.info("about to fail");
+    Err("expected 3, got " + div(6, 3).to_string())
+}
+
+// A `()` test fails only by trapping. Arithmetic is total (x / 0 == 0),
+// so this passes.
+#[test]
+fn unit_passes() {
+    let z = div(1, 0);
+}
+
+#[test]
+fn canned_net(net: &Net) -> Result<(), String> {
+    match net.get("https://api.example/x") {
+        Ok(body) => if body == "hello" {
+            Ok(())
+        } else {
+            Err("got " + body)
+        },
+        Err(e) => Err(e.message()),
+    }
+}

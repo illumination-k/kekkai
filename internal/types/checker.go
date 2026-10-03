@@ -36,6 +36,9 @@ type Func struct {
 	Handler bool
 	// Main marks the entry point of a command-line program.
 	Main bool
+	// Test marks a `#[test]` function, run by `kek test` with mock
+	// capabilities.
+	Test bool
 	// Async is true when the function can reach an asynchronous builtin
 	// (directly or through calls) and is therefore compiled as a resumable
 	// state machine.
@@ -306,8 +309,9 @@ func (c *checker) declare(f *syntax.File) {
 		fn := &Func{Name: fd.Name, Decl: fd, Calls: map[string]bool{}, Effects: map[string]bool{}}
 		fn.Handler = fd.HasAttr("handler")
 		fn.Main = fd.HasAttr("main")
+		fn.Test = fd.HasAttr("test")
 		for _, a := range fd.Attrs {
-			if a.Name != "handler" && a.Name != "main" {
+			if a.Name != "handler" && a.Name != "main" && a.Name != "test" {
 				c.errorf(a.Pos, "unknown attribute `#[%s]`", a.Name)
 			}
 		}
@@ -335,6 +339,9 @@ func (c *checker) declare(f *syntax.File) {
 		}
 		if fn.Main {
 			c.checkMainSig(fn)
+		}
+		if fn.Test {
+			c.checkTestSig(fn)
 		}
 		c.info.Funcs[fd.Name] = fn
 		c.info.FuncList = append(c.info.FuncList, fn)
@@ -393,6 +400,32 @@ func (c *checker) checkHandlerSig(fn *Func) {
 	if fn.Result != Response {
 		c.errorf(fn.Decl.Pos, "a handler must return `Response`, found `%s`", fn.Result)
 	}
+}
+
+// checkTestSig checks a `#[test]` function: it receives only borrowed
+// capabilities (which `kek test` replaces with mocks) and reports failure
+// by returning `false` or `Err(message)`.
+func (c *checker) checkTestSig(fn *Func) {
+	if fn.Handler {
+		c.errorf(fn.Decl.Pos, "a function cannot be both #[test] and #[handler]")
+	}
+	for _, p := range fn.Params {
+		if t, ok := p.Type.(*Cap); ok && t.Borrowed && t.Kind != CapTx {
+			continue
+		}
+		c.errorf(p.Pos, "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random), found `%s`", p.Type)
+	}
+	switch r := fn.Result.(type) {
+	case *Prim:
+		if r == Unit || r == Bool {
+			return
+		}
+	case *ResultT:
+		if r.Ok == Unit && r.Err == String {
+			return
+		}
+	}
+	c.errorf(fn.Decl.Pos, "a test must return `()`, `Bool` or `Result<(), String>`, found `%s`", fn.Result)
 }
 
 // resolveType converts a syntactic type. Capability types are accepted

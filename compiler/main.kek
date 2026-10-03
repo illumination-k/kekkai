@@ -2,6 +2,15 @@
 #[main]
 fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let cmd = args.get(0).unwrap_or("");
+    if (cmd == "check" || cmd == "ir") && diag_json_requested(args) {
+        return diag_json_main(args, fs, log);
+    }
+    if cmd == "caps" {
+        return caps_main(args, fs, log);
+    }
+    if cmd == "search" {
+        return search_main(args, fs, log);
+    }
     if cmd == "lex" || cmd == "ast" || cmd == "check" || cmd == "ir" || cmd == "build" {
         return frontend_main(args, fs, log);
     }

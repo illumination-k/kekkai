@@ -1,0 +1,4 @@
+Shape::Circle            Shape::Circle(Int)  [result] (tests/agent_cmds/lint.kek:3:5)
+Shape::Empty             Shape::Empty  [result] (tests/agent_cmds/lint.kek:5:5)
+Shape::Rect              Shape::Rect(Int, Int)  [result] (tests/agent_cmds/lint.kek:4:5)
+--- exit 0

@@ -1,0 +1,23 @@
+title_key: pure
+done_key: pure
+valid_title: pure
+read_int: tx: &Tx
+    direct effects: tx.get
+create_once: db: &Db
+    direct effects: db.transaction, tx.commit, tx.put
+set_done_once: db: &Db
+    direct effects: db.transaction, tx.commit, tx.get, tx.put, tx.rollback
+delete_once: db: &Db
+    direct effects: db.transaction, tx.commit, tx.delete, tx.get, tx.put, tx.rollback
+should_retry_int: pure
+should_retry_unit: pure
+create: db: &Db
+set_done: db: &Db
+remove: db: &Db
+store_error: pure
+todo_error: pure
+show: db: &Db
+    direct effects: db.get
+handle #[handler]: db: &Db, log: &Log
+    direct effects: db.get, log.info
+--- exit 0

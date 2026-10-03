@@ -1,0 +1,18 @@
+counter_key: pure
+parse_count: pure
+visit: db: &Db, log: &Log
+    direct effects: db.transaction, log.info, tx.commit, tx.get, tx.put
+fetch_greeting: net: &Net
+    direct effects: net.get
+day_of: clock: &Clock
+    direct effects: clock.now_ms
+handle #[handler]: db: &Db, log: &Log
+key_format #[test]: pure
+parse_count_defaults_to_zero #[test]: pure
+visits_are_counted #[test]: db: &Db, log: &Log
+    direct effects: db.get
+greeting_falls_back_offline #[test]: net: &Net
+clock_is_fixed #[test]: clock: &Clock
+random_in_range #[test]: random: &Random
+    direct effects: random.int
+--- exit 0

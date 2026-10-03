@@ -1,0 +1,140 @@
+{
+  "file": "testdata/e2e/bank.kek",
+  "functions": [
+    {
+      "name": "balance_key",
+      "signature": "fn balance_key(name: String) -> String",
+      "line": 8,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": []
+    },
+    {
+      "name": "parse_amount",
+      "signature": "fn parse_amount(s: String) -> Option<Int>",
+      "line": 13,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": []
+    },
+    {
+      "name": "read_balance",
+      "signature": "fn read_balance(tx: &Tx, name: String) -> Result<Option<Int>, TxError>",
+      "line": 18,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "caps": [
+        {
+          "name": "tx",
+          "type": "&Tx",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "tx.get"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "balance_key"
+      ]
+    },
+    {
+      "name": "transfer",
+      "signature": "fn transfer(db: &Db, log: &Log, from: String, to: String, amount: Int) -> Result<Int, TransferError>",
+      "line": 25,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "caps": [
+        {
+          "name": "db",
+          "type": "&Db",
+          "used": true
+        },
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "db.transaction",
+        "log.info",
+        "tx.commit",
+        "tx.outbox",
+        "tx.put",
+        "tx.rollback"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "balance_key",
+        "read_balance"
+      ]
+    },
+    {
+      "name": "get_balance",
+      "signature": "fn get_balance(db: &Db, name: String) -> Result<Option<String>, TxError>",
+      "line": 52,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "caps": [
+        {
+          "name": "db",
+          "type": "&Db",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "db.get"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "balance_key"
+      ]
+    },
+    {
+      "name": "handle",
+      "signature": "fn handle(req: Request, db: &Db, log: &Log) -> Response",
+      "line": 57,
+      "col": 4,
+      "handler": true,
+      "pure": false,
+      "async": true,
+      "caps": [
+        {
+          "name": "db",
+          "type": "&Db",
+          "used": true
+        },
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        }
+      ],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [
+        "get_balance",
+        "parse_amount",
+        "transfer"
+      ]
+    }
+  ]
+}
+--- exit 0

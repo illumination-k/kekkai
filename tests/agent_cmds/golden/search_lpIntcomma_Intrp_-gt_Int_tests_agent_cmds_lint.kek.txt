@@ -1,0 +1,9 @@
+Int.bit_and              fn Int.bit_and(self, Int) -> Int  [exact] (builtin)
+Int.bit_or               fn Int.bit_or(self, Int) -> Int  [exact] (builtin)
+Int.bit_xor              fn Int.bit_xor(self, Int) -> Int  [exact] (builtin)
+Int.max                  fn Int.max(self, Int) -> Int  [exact] (builtin)
+Int.min                  fn Int.min(self, Int) -> Int  [exact] (builtin)
+Int.shl                  fn Int.shl(self, Int) -> Int  [exact] (builtin)
+Int.shr                  fn Int.shr(self, Int) -> Int  [exact] (builtin)
+Int.ushr                 fn Int.ushr(self, Int) -> Int  [exact] (builtin)
+--- exit 0

@@ -1,0 +1,17 @@
+{
+  "file": "tests/agent_cmds/lint.kek",
+  "ok": true,
+  "diagnostics": [
+    {
+      "file": "tests/agent_cmds/lint.kek",
+      "line": 16,
+      "col": 22,
+      "end_line": 16,
+      "end_col": 27,
+      "severity": "warning",
+      "phase": "lint",
+      "message": "capability `clock: &Clock` is granted to `report` but never used; remove it to narrow the function's authority"
+    }
+  ]
+}
+--- exit 0

@@ -1,0 +1,922 @@
+{
+  "types": [
+    {
+      "name": "Vec\u003cString\u003e",
+      "variant": false,
+      "coll": "vec",
+      "elem": {
+        "kind": "string"
+      }
+    },
+    {
+      "name": "Option\u003cString\u003e",
+      "variant": true,
+      "variants": [
+        [],
+        [
+          {
+            "kind": "string"
+          }
+        ]
+      ]
+    }
+  ],
+  "funcs": [
+    {
+      "name": "main",
+      "nparams": 1,
+      "locals": [
+        {
+          "kind": "ext",
+          "ext": "Log"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        }
+      ],
+      "names": [
+        "log",
+        "",
+        "xs",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "total",
+        "i",
+        "",
+        "",
+        "",
+        "x",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "int"
+      },
+      "async": true,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 1,
+              "name": "vec.new"
+            },
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                1
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 3,
+              "const": {
+                "kind": "string",
+                "str": "\u003ctag\u003e \u0026 \"quoted\" \\ back"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 4,
+              "args": [
+                2,
+                3
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 5,
+              "const": {
+                "kind": "string",
+                "str": "tab\tnl\ncr\rnul\u0000end"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 6,
+              "args": [
+                2,
+                5
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 7,
+              "const": {
+                "kind": "string",
+                "str": "café 漢字 😀"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 8,
+              "args": [
+                2,
+                7
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 9,
+              "const": {
+                "kind": "string",
+                "str": "sep\u2028line\u2029para"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 10,
+              "args": [
+                2,
+                9
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 11,
+              "const": {
+                "kind": "int",
+                "int": 8
+              }
+            },
+            {
+              "op": "host",
+              "dst": 12,
+              "args": [
+                11
+              ],
+              "name": "string.from_char"
+            },
+            {
+              "op": "const",
+              "dst": 13,
+              "const": {
+                "kind": "int",
+                "int": 12
+              }
+            },
+            {
+              "op": "host",
+              "dst": 14,
+              "args": [
+                13
+              ],
+              "name": "string.from_char"
+            },
+            {
+              "op": "binop",
+              "dst": 15,
+              "args": [
+                12,
+                14
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 16,
+              "const": {
+                "kind": "int",
+                "int": 31
+              }
+            },
+            {
+              "op": "host",
+              "dst": 17,
+              "args": [
+                16
+              ],
+              "name": "string.from_char"
+            },
+            {
+              "op": "binop",
+              "dst": 18,
+              "args": [
+                15,
+                17
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 19,
+              "args": [
+                2,
+                18
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 20,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 21,
+              "args": [
+                20
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 23,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 22,
+              "args": [
+                23
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 24,
+              "args": [
+                2
+              ],
+              "name": "vec.len"
+            },
+            {
+              "op": "binop",
+              "dst": 25,
+              "args": [
+                22,
+                24
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              25
+            ],
+            "targets": [
+              2,
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 26,
+              "args": [
+                2,
+                22
+              ],
+              "name": "vec.at"
+            },
+            {
+              "op": "host",
+              "dst": 27,
+              "args": [
+                26
+              ],
+              "name": "string.len"
+            },
+            {
+              "op": "binop",
+              "dst": 28,
+              "args": [
+                21,
+                27
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 21,
+              "args": [
+                28
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 29,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 30,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 31,
+              "args": [
+                22,
+                30
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 22,
+              "args": [
+                31
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 32,
+              "const": {
+                "kind": "string",
+                "str": "strings "
+              }
+            },
+            {
+              "op": "host",
+              "dst": 33,
+              "args": [
+                2
+              ],
+              "name": "vec.len"
+            },
+            {
+              "op": "host",
+              "dst": 34,
+              "args": [
+                33
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 35,
+              "args": [
+                32,
+                34
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 36,
+              "const": {
+                "kind": "string",
+                "str": " units "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 37,
+              "args": [
+                35,
+                36
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 38,
+              "args": [
+                21
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 39,
+              "args": [
+                37,
+                38
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 40,
+              "args": [
+                0,
+                39
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "const",
+              "dst": 41,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 42,
+              "args": [
+                2,
+                41
+              ],
+              "name": "vec.get"
+            },
+            {
+              "op": "tag",
+              "dst": 43,
+              "args": [
+                42
+              ],
+              "type": 1
+            },
+            {
+              "op": "const",
+              "dst": 44,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 46,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 47,
+              "args": [
+                43,
+                46
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              47
+            ],
+            "targets": [
+              5,
+              10
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 48,
+              "args": [
+                42
+              ],
+              "type": 1,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 45,
+              "args": [
+                48
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              6
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 49,
+              "args": [
+                0,
+                45
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "const",
+              "dst": 50,
+              "const": {
+                "kind": "int",
+                "int": 2
+              }
+            },
+            {
+              "op": "host",
+              "dst": 51,
+              "args": [
+                2,
+                50
+              ],
+              "name": "vec.get"
+            },
+            {
+              "op": "tag",
+              "dst": 52,
+              "args": [
+                51
+              ],
+              "type": 1
+            },
+            {
+              "op": "const",
+              "dst": 53,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 55,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 56,
+              "args": [
+                52,
+                55
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              56
+            ],
+            "targets": [
+              7,
+              9
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 57,
+              "args": [
+                51
+              ],
+              "type": 1,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 54,
+              "args": [
+                57
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 58,
+              "args": [
+                0,
+                54
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "const",
+              "dst": 59,
+              "const": {
+                "kind": "int"
+              }
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              59
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 54,
+              "args": [
+                53
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 45,
+              "args": [
+                44
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              6
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "handler": "main",
+  "entry": "main",
+  "handler_params": [
+    {
+      "kind": "Log",
+      "name": "log"
+    }
+  ]
+}
+--- exit 0

@@ -1,0 +1,107 @@
+{
+  "file": "testdata/check/err_caps.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 2,
+      "col": 10,
+      "end_line": 2,
+      "end_col": 11,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability type `&Log` is only allowed as a function parameter"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 5,
+      "col": 23,
+      "end_line": 5,
+      "end_col": 24,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability type `&Log` is only allowed as a function parameter"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 6,
+      "col": 5,
+      "end_line": 6,
+      "end_col": 8,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability `log` cannot be used as a value: capabilities are second-class and can only be passed as arguments or used as method receivers"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 10,
+      "col": 13,
+      "end_line": 10,
+      "end_col": 16,
+      "severity": "error",
+      "phase": "type",
+      "message": "capability `log` cannot be used as a value: capabilities are second-class and can only be passed as arguments or used as method receivers"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 13,
+      "col": 15,
+      "end_line": 13,
+      "end_col": 18,
+      "severity": "error",
+      "phase": "type",
+      "message": "capabilities are passed by borrowing: write `&Log`"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 17,
+      "col": 5,
+      "end_line": 17,
+      "end_col": 8,
+      "severity": "error",
+      "phase": "type",
+      "message": "cannot find value `log` in this scope"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 22,
+      "col": 15,
+      "end_line": 22,
+      "end_col": 18,
+      "severity": "error",
+      "phase": "type",
+      "message": "mismatched types in argument of `needs_log`: expected capability `&Log`, found `&Net`"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 29,
+      "col": 17,
+      "end_line": 29,
+      "end_col": 18,
+      "severity": "error",
+      "phase": "type",
+      "message": "`&` can only be applied to capability types (Log, Net, Db, Clock, Random, Tx)"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 33,
+      "col": 13,
+      "end_line": 33,
+      "end_col": 14,
+      "severity": "error",
+      "phase": "type",
+      "message": "closures are second-class: they can only appear as the body of `transaction`"
+    },
+    {
+      "file": "testdata/check/err_caps.kek",
+      "line": 13,
+      "col": 10,
+      "end_line": 13,
+      "end_col": 13,
+      "severity": "warning",
+      "phase": "lint",
+      "message": "capability `log: &Log` is granted to `owned` but never used; remove it to narrow the function's authority"
+    }
+  ]
+}
+--- exit 1

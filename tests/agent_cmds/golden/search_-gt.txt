@@ -1,0 +1,9 @@
+--- stderr
+flag provided but not defined: ->
+Usage of search:
+  -json
+    	emit JSON
+  -limit int
+    	maximum number of results (0: unlimited) (default 20)
+flag provided but not defined: ->
+--- exit 1

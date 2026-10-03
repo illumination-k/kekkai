@@ -1,0 +1,342 @@
+// Indented JSON output (prefix irjson_ / Irj*): the encoding/json Encoder
+// with SetIndent("", "  ") that `kek ir -json`, `check -json`, `caps -json`
+// and `search -json` use, and the JSON form of IR programs (`ir -json`,
+// the input of the Lean reference interpreter).
+
+enum IrjVal {
+    Null,
+    // a number or boolean literal, written as is
+    Raw(String),
+    Str(String),
+    Arr(Vec<IrjVal>),
+    // keys and values in field order
+    Obj(Vec<String>, Vec<IrjVal>),
+}
+
+struct IrjObj {
+    keys: Vec<String>,
+    vals: Vec<IrjVal>,
+}
+
+fn irjson_obj() -> IrjObj {
+    IrjObj { keys: Vec::new(), vals: Vec::new() }
+}
+
+fn irjson_set(o: IrjObj, k: String, v: IrjVal) {
+    o.keys.push(k);
+    o.vals.push(v);
+}
+
+fn irjson_val(o: IrjObj) -> IrjVal {
+    IrjVal::Obj(o.keys, o.vals)
+}
+
+fn irjson_int(n: Int) -> IrjVal {
+    IrjVal::Raw(n.to_string())
+}
+
+fn irjson_bool(b: Bool) -> IrjVal {
+    IrjVal::Raw(if b { "true" } else { "false" })
+}
+
+fn irjson_strs(xs: Vec<String>) -> IrjVal {
+    let out = Vec::new();
+    for x in xs {
+        out.push(IrjVal::Str(x));
+    }
+    IrjVal::Arr(out)
+}
+
+fn irjson_ints(xs: Vec<Int>) -> IrjVal {
+    let out = Vec::new();
+    for x in xs {
+        out.push(irjson_int(x));
+    }
+    IrjVal::Arr(out)
+}
+
+// irjson_quote renders a string like encoding/json; html selects the
+// HTML-safe escaping of <, > and & (json.Marshal, Encoder by default).
+fn irjson_quote(s: String, html: Bool) -> String {
+    if html {
+        return json_quote(s);
+    }
+    let parts = Vec::new();
+    parts.push("\"");
+    let n = s.len();
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        let mut esc = "";
+        if c == 34 {
+            esc = "\\\"";
+        } else if c == 92 {
+            esc = "\\\\";
+        } else if c == 10 {
+            esc = "\\n";
+        } else if c == 13 {
+            esc = "\\r";
+        } else if c == 9 {
+            esc = "\\t";
+        } else if c == 8 {
+            esc = "\\b";
+        } else if c == 12 {
+            esc = "\\f";
+        } else if c < 32 || c == 8232 || c == 8233 {
+            esc = "\\u" + json_hex_digit(c.shr(12).bit_and(15)) + json_hex_digit(c.shr(8).bit_and(15))
+                + json_hex_digit(c.shr(4).bit_and(15)) + json_hex_digit(c.bit_and(15));
+        } else if c >= 55296 && c <= 57343 {
+            let d = s.char_at(i + 1).unwrap_or(0);
+            if c <= 56319 && d >= 56320 && d <= 57343 {
+                i = i + 1;
+            } else {
+                esc = "\\ufffd";
+            }
+        }
+        if esc != "" {
+            parts.push(s.slice(start, i));
+            parts.push(esc);
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.slice(start, n));
+    parts.push("\"");
+    parts.join("")
+}
+
+fn irjson_write(parts: Vec<String>, v: IrjVal, indent: String, html: Bool) {
+    match v {
+        IrjVal::Null => parts.push("null"),
+        IrjVal::Raw(s) => parts.push(s),
+        IrjVal::Str(s) => parts.push(irjson_quote(s, html)),
+        IrjVal::Arr(xs) => {
+            if xs.len() == 0 {
+                parts.push("[]");
+            } else {
+                let inner = indent + "  ";
+                parts.push("[");
+                let mut first = true;
+                for x in xs {
+                    if first {
+                        parts.push("\n" + inner);
+                        first = false;
+                    } else {
+                        parts.push(",\n" + inner);
+                    }
+                    irjson_write(parts, x, inner, html);
+                }
+                parts.push("\n" + indent + "]");
+            }
+        }
+        IrjVal::Obj(keys, vals) => {
+            if keys.len() == 0 {
+                parts.push("{}");
+            } else {
+                let inner = indent + "  ";
+                parts.push("{");
+                let mut i = 0;
+                for k in keys {
+                    if i == 0 {
+                        parts.push("\n" + inner);
+                    } else {
+                        parts.push(",\n" + inner);
+                    }
+                    parts.push(irjson_quote(k, html) + ": ");
+                    irjson_write(parts, vals.get(i).unwrap_or(IrjVal::Null), inner, html);
+                    i = i + 1;
+                }
+                parts.push("\n" + indent + "}");
+            }
+        }
+    }
+}
+
+// irjson_encode renders v indented by two spaces (without the newline the
+// Encoder appends; log.info adds it).
+fn irjson_encode(v: IrjVal, html: Bool) -> String {
+    let parts = Vec::new();
+    irjson_write(parts, v, "", html);
+    parts.join("")
+}
+
+// ---- IR programs (encoding of internal/ir with its json tags) ----
+
+fn irjson_ty(t: IrTy) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "kind", IrjVal::Str(t.kind));
+    if t.agg != 0 {
+        irjson_set(o, "agg", irjson_int(t.agg));
+    }
+    if t.ext != "" {
+        irjson_set(o, "ext", IrjVal::Str(t.ext));
+    }
+    irjson_val(o)
+}
+
+fn irjson_tys(ts: Vec<IrTy>) -> IrjVal {
+    let out = Vec::new();
+    for t in ts {
+        out.push(irjson_ty(t));
+    }
+    IrjVal::Arr(out)
+}
+
+fn irjson_typedef(td: IrTypeDef) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "name", IrjVal::Str(td.name));
+    irjson_set(o, "variant", irjson_bool(td.is_variant));
+    if td.fields.len() > 0 {
+        irjson_set(o, "fields", irjson_tys(td.fields));
+    }
+    if td.variants.len() > 0 {
+        // A variant without fields is a nil slice (null) for enums, and an
+        // empty one ([]) for Option's None.
+        let option = td.name.starts_with("Option<");
+        let vs = Vec::new();
+        for v in td.variants {
+            if v.len() == 0 && !option {
+                vs.push(IrjVal::Null);
+            } else {
+                vs.push(irjson_tys(v));
+            }
+        }
+        irjson_set(o, "variants", IrjVal::Arr(vs));
+    }
+    if td.coll != "" {
+        irjson_set(o, "coll", IrjVal::Str(td.coll));
+        irjson_set(o, "elem", irjson_ty(td.elem));
+        if td.coll == "map" {
+            irjson_set(o, "key", irjson_ty(td.key));
+        }
+    }
+    irjson_val(o)
+}
+
+fn irjson_instr(ins: IrInstr) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "op", IrjVal::Str(ins.op));
+    irjson_set(o, "dst", irjson_int(ins.dst));
+    if ins.args.len() > 0 {
+        irjson_set(o, "args", irjson_ints(ins.args));
+    }
+    if ins.name != "" {
+        irjson_set(o, "name", IrjVal::Str(ins.name));
+    }
+    if ins.ty != 0 {
+        irjson_set(o, "type", irjson_int(ins.ty));
+    }
+    if ins.tag != 0 {
+        irjson_set(o, "tag", irjson_int(ins.tag));
+    }
+    if ins.index != 0 {
+        irjson_set(o, "index", irjson_int(ins.index));
+    }
+    if ins.op == "const" {
+        let c = irjson_obj();
+        irjson_set(c, "kind", IrjVal::Str(ins.cst.kind));
+        if ins.cst.int_val != 0 {
+            irjson_set(c, "int", irjson_int(ins.cst.int_val));
+        }
+        if ins.cst.bool_val {
+            irjson_set(c, "bool", irjson_bool(true));
+        }
+        if ins.cst.str_val != "" {
+            irjson_set(c, "str", IrjVal::Str(ins.cst.str_val));
+        }
+        irjson_set(o, "const", irjson_val(c));
+    }
+    irjson_val(o)
+}
+
+fn irjson_func(f: IrFunc) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "name", IrjVal::Str(f.name));
+    irjson_set(o, "nparams", irjson_int(f.nparams));
+    // nil slices (no locals, no instructions) are null
+    if f.locals.len() == 0 {
+        irjson_set(o, "locals", IrjVal::Null);
+        irjson_set(o, "names", IrjVal::Null);
+    } else {
+        irjson_set(o, "locals", irjson_tys(f.locals));
+        irjson_set(o, "names", irjson_strs(f.names));
+    }
+    irjson_set(o, "result", irjson_ty(f.result));
+    irjson_set(o, "async", irjson_bool(f.is_async));
+    let blocks = Vec::new();
+    for b in f.blocks {
+        let bo = irjson_obj();
+        if b.instrs.len() == 0 {
+            irjson_set(bo, "instrs", IrjVal::Null);
+        } else {
+            let is = Vec::new();
+            for ins in b.instrs {
+                is.push(irjson_instr(ins));
+            }
+            irjson_set(bo, "instrs", IrjVal::Arr(is));
+        }
+        let t = irjson_obj();
+        irjson_set(t, "op", IrjVal::Str(b.term.op));
+        if b.term.args.len() > 0 {
+            irjson_set(t, "args", irjson_ints(b.term.args));
+        }
+        if b.term.targets.len() > 0 {
+            irjson_set(t, "targets", irjson_ints(b.term.targets));
+        }
+        irjson_set(bo, "term", irjson_val(t));
+        blocks.push(irjson_val(bo));
+    }
+    irjson_set(o, "blocks", IrjVal::Arr(blocks));
+    irjson_val(o)
+}
+
+fn irjson_program(p: IrProgram) -> IrjVal {
+    let o = irjson_obj();
+    if p.types.len() == 0 {
+        irjson_set(o, "types", IrjVal::Null);
+    } else {
+        let ts = Vec::new();
+        for td in p.types {
+            ts.push(irjson_typedef(td));
+        }
+        irjson_set(o, "types", IrjVal::Arr(ts));
+    }
+    if p.funcs.len() == 0 {
+        irjson_set(o, "funcs", IrjVal::Null);
+    } else {
+        let fs = Vec::new();
+        for f in p.funcs {
+            fs.push(irjson_func(f));
+        }
+        irjson_set(o, "funcs", IrjVal::Arr(fs));
+    }
+    if p.handler != "" {
+        irjson_set(o, "handler", IrjVal::Str(p.handler));
+    }
+    if p.entry != "" {
+        irjson_set(o, "entry", IrjVal::Str(p.entry));
+    }
+    if p.handler_params.len() > 0 {
+        let hs = Vec::new();
+        for hp in p.handler_params {
+            let h = irjson_obj();
+            irjson_set(h, "kind", IrjVal::Str(hp.kind));
+            irjson_set(h, "name", IrjVal::Str(hp.name));
+            hs.push(irjson_val(h));
+        }
+        irjson_set(o, "handler_params", IrjVal::Arr(hs));
+    }
+    irjson_val(o)
+}
+
+// irjson_main implements `ir -json <file-or-dir>`.
+fn irjson_main(path: String, fs: &Fs, log: &Log) -> Int {
+    match frontend_load(path, fs, log) {
+        Some(res) => {
+            log.info(irjson_encode(irjson_program(lower_lower(res.info)), true));
+            0
+        }
+        None => 1,
+    }
+}

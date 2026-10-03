@@ -203,6 +203,9 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.error(out.err);
         return 1;
     }
+    if glue_emit(args, path, out_dir, prog, fs, log) != 0 {
+        return 1;
+    }
     let wasm_path = out_dir + "/module.wasm";
     match fs.write_bytes(wasm_path, out.wasm) {
         Ok(_) => {}

@@ -1,0 +1,6767 @@
+{
+  "types": [
+    {
+      "name": "Vec\u003cTok\u003e",
+      "variant": false,
+      "coll": "vec",
+      "elem": {
+        "kind": "agg",
+        "agg": 1
+      }
+    },
+    {
+      "name": "Tok",
+      "variant": false,
+      "fields": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ]
+    },
+    {
+      "name": "Option\u003cInt\u003e",
+      "variant": true,
+      "variants": [
+        [],
+        [
+          {
+            "kind": "int"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Vec\u003cInt\u003e",
+      "variant": false,
+      "coll": "vec",
+      "elem": {
+        "kind": "int"
+      }
+    },
+    {
+      "name": "Vec\u003cString\u003e",
+      "variant": false,
+      "coll": "vec",
+      "elem": {
+        "kind": "string"
+      }
+    },
+    {
+      "name": "Map\u003cString,Int\u003e",
+      "variant": false,
+      "coll": "map",
+      "elem": {
+        "kind": "int"
+      },
+      "key": {
+        "kind": "string"
+      }
+    },
+    {
+      "name": "Map\u003cInt,Vec\u003cString\u003e\u003e",
+      "variant": false,
+      "coll": "map",
+      "elem": {
+        "kind": "agg",
+        "agg": 4
+      },
+      "key": {
+        "kind": "int"
+      }
+    },
+    {
+      "name": "Option\u003cVec\u003cString\u003e\u003e",
+      "variant": true,
+      "variants": [
+        [],
+        [
+          {
+            "kind": "agg",
+            "agg": 4
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Option\u003cString\u003e",
+      "variant": true,
+      "variants": [
+        [],
+        [
+          {
+            "kind": "string"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003c(),IoError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "unit"
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "IoError"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Result\u003cString,IoError\u003e",
+      "variant": true,
+      "variants": [
+        [
+          {
+            "kind": "string"
+          }
+        ],
+        [
+          {
+            "kind": "ext",
+            "ext": "IoError"
+          }
+        ]
+      ]
+    }
+  ],
+  "funcs": [
+    {
+      "name": "is_digit",
+      "nparams": 1,
+      "locals": [
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        }
+      ],
+      "names": [
+        "c",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "bool"
+      },
+      "async": false,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 2,
+              "const": {
+                "kind": "int",
+                "int": 48
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 3,
+              "args": [
+                0,
+                2
+              ],
+              "name": "ge"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              3
+            ],
+            "targets": [
+              1,
+              3
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 4,
+              "const": {
+                "kind": "int",
+                "int": 57
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 5,
+              "args": [
+                0,
+                4
+              ],
+              "name": "le"
+            },
+            {
+              "op": "copy",
+              "dst": 1,
+              "args": [
+                5
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              2
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 1,
+              "args": [
+                3
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              2
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "is_alpha",
+      "nparams": 1,
+      "locals": [
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        }
+      ],
+      "names": [
+        "c",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "bool"
+      },
+      "async": false,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 4,
+              "const": {
+                "kind": "int",
+                "int": 97
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 5,
+              "args": [
+                0,
+                4
+              ],
+              "name": "ge"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              5
+            ],
+            "targets": [
+              1,
+              12
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 6,
+              "const": {
+                "kind": "int",
+                "int": 122
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 7,
+              "args": [
+                0,
+                6
+              ],
+              "name": "le"
+            },
+            {
+              "op": "copy",
+              "dst": 3,
+              "args": [
+                7
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              2
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              3
+            ],
+            "targets": [
+              3,
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                3
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              4
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              2
+            ],
+            "targets": [
+              5,
+              7
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 1,
+              "args": [
+                2
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              6
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 13,
+              "const": {
+                "kind": "int",
+                "int": 95
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 14,
+              "args": [
+                0,
+                13
+              ],
+              "name": "eq"
+            },
+            {
+              "op": "copy",
+              "dst": 1,
+              "args": [
+                14
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              6
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 9,
+              "const": {
+                "kind": "int",
+                "int": 65
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 10,
+              "args": [
+                0,
+                9
+              ],
+              "name": "ge"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              10
+            ],
+            "targets": [
+              9,
+              11
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 11,
+              "const": {
+                "kind": "int",
+                "int": 90
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 12,
+              "args": [
+                0,
+                11
+              ],
+              "name": "le"
+            },
+            {
+              "op": "copy",
+              "dst": 8,
+              "args": [
+                12
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              10
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                8
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 8,
+              "args": [
+                10
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              10
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 3,
+              "args": [
+                5
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              2
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "lex",
+      "nparams": 1,
+      "locals": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        }
+      ],
+      "names": [
+        "src",
+        "",
+        "toks",
+        "",
+        "i",
+        "",
+        "n",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "c",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "start",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "start",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "agg"
+      },
+      "async": false,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 1,
+              "name": "vec.new"
+            },
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                1
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 3,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                3
+              ]
+            },
+            {
+              "op": "host",
+              "dst": 5,
+              "args": [
+                0
+              ],
+              "name": "string.len"
+            },
+            {
+              "op": "copy",
+              "dst": 6,
+              "args": [
+                5
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "binop",
+              "dst": 7,
+              "args": [
+                4,
+                6
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              7
+            ],
+            "targets": [
+              2,
+              42
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 8,
+              "args": [
+                0,
+                4
+              ],
+              "name": "string.char_at"
+            },
+            {
+              "op": "tag",
+              "dst": 9,
+              "args": [
+                8
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 10,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 12,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 13,
+              "args": [
+                9,
+                12
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              13
+            ],
+            "targets": [
+              3,
+              41
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 14,
+              "args": [
+                8
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 11,
+              "args": [
+                14
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 15,
+              "args": [
+                11
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 18,
+              "const": {
+                "kind": "int",
+                "int": 32
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 19,
+              "args": [
+                15,
+                18
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              19
+            ],
+            "targets": [
+              5,
+              40
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 17,
+              "args": [
+                19
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              6
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              17
+            ],
+            "targets": [
+              7,
+              9
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 22,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 23,
+              "args": [
+                4,
+                22
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                23
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 24,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 16,
+              "args": [
+                24
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 26,
+              "args": [
+                15
+              ],
+              "name": "is_digit"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              26
+            ],
+            "targets": [
+              10,
+              21
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 27,
+              "args": [
+                4
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              11
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "binop",
+              "dst": 29,
+              "args": [
+                4,
+                6
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              29
+            ],
+            "targets": [
+              12,
+              20
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 30,
+              "args": [
+                0,
+                4
+              ],
+              "name": "string.char_at"
+            },
+            {
+              "op": "tag",
+              "dst": 31,
+              "args": [
+                30
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 32,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 34,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 35,
+              "args": [
+                31,
+                34
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              35
+            ],
+            "targets": [
+              13,
+              19
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 36,
+              "args": [
+                30
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 33,
+              "args": [
+                36
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              14
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 37,
+              "args": [
+                33
+              ],
+              "name": "is_digit"
+            },
+            {
+              "op": "copy",
+              "dst": 28,
+              "args": [
+                37
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              15
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              28
+            ],
+            "targets": [
+              16,
+              17
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 38,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 39,
+              "args": [
+                4,
+                38
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                39
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 40,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              11
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 41,
+              "const": {
+                "kind": "string",
+                "str": "int"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 42,
+              "args": [
+                0,
+                27,
+                4
+              ],
+              "name": "string.slice"
+            },
+            {
+              "op": "struct",
+              "dst": 43,
+              "args": [
+                41,
+                42
+              ],
+              "type": 1
+            },
+            {
+              "op": "host",
+              "dst": 44,
+              "args": [
+                2,
+                43
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 45,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 25,
+              "args": [
+                45
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              18
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 16,
+              "args": [
+                25
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 33,
+              "args": [
+                32
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              14
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 28,
+              "args": [
+                29
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              15
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 47,
+              "args": [
+                15
+              ],
+              "name": "is_alpha"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              47
+            ],
+            "targets": [
+              22,
+              39
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 48,
+              "args": [
+                4
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              23
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "binop",
+              "dst": 50,
+              "args": [
+                4,
+                6
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              50
+            ],
+            "targets": [
+              24,
+              38
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 52,
+              "args": [
+                0,
+                4
+              ],
+              "name": "string.char_at"
+            },
+            {
+              "op": "tag",
+              "dst": 53,
+              "args": [
+                52
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 54,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 56,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 57,
+              "args": [
+                53,
+                56
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              57
+            ],
+            "targets": [
+              25,
+              37
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 58,
+              "args": [
+                52
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 55,
+              "args": [
+                58
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              26
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 59,
+              "args": [
+                55
+              ],
+              "name": "is_alpha"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              59
+            ],
+            "targets": [
+              27,
+              33
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 51,
+              "args": [
+                59
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              28
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 49,
+              "args": [
+                51
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              29
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              49
+            ],
+            "targets": [
+              30,
+              31
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 68,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 69,
+              "args": [
+                4,
+                68
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                69
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 70,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              23
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 71,
+              "const": {
+                "kind": "string",
+                "str": "ident"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 72,
+              "args": [
+                0,
+                48,
+                4
+              ],
+              "name": "string.slice"
+            },
+            {
+              "op": "struct",
+              "dst": 73,
+              "args": [
+                71,
+                72
+              ],
+              "type": 1
+            },
+            {
+              "op": "host",
+              "dst": 74,
+              "args": [
+                2,
+                73
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 75,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 46,
+              "args": [
+                75
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              32
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 25,
+              "args": [
+                46
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              18
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 60,
+              "args": [
+                0,
+                4
+              ],
+              "name": "string.char_at"
+            },
+            {
+              "op": "tag",
+              "dst": 61,
+              "args": [
+                60
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 62,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 64,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 65,
+              "args": [
+                61,
+                64
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              65
+            ],
+            "targets": [
+              34,
+              36
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 66,
+              "args": [
+                60
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 63,
+              "args": [
+                66
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              35
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "call",
+              "dst": 67,
+              "args": [
+                63
+              ],
+              "name": "is_digit"
+            },
+            {
+              "op": "copy",
+              "dst": 51,
+              "args": [
+                67
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              28
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 63,
+              "args": [
+                62
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              35
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 55,
+              "args": [
+                54
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              26
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 49,
+              "args": [
+                50
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              29
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 76,
+              "const": {
+                "kind": "string",
+                "str": "punct"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 77,
+              "args": [
+                15
+              ],
+              "name": "string.from_char"
+            },
+            {
+              "op": "struct",
+              "dst": 78,
+              "args": [
+                76,
+                77
+              ],
+              "type": 1
+            },
+            {
+              "op": "host",
+              "dst": 79,
+              "args": [
+                2,
+                78
+              ],
+              "name": "vec.push"
+            },
+            {
+              "op": "const",
+              "dst": 80,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 81,
+              "args": [
+                4,
+                80
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                81
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 82,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 46,
+              "args": [
+                82
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              32
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 20,
+              "const": {
+                "kind": "int",
+                "int": 10
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 21,
+              "args": [
+                15,
+                20
+              ],
+              "name": "eq"
+            },
+            {
+              "op": "copy",
+              "dst": 17,
+              "args": [
+                21
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              6
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 11,
+              "args": [
+                10
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              4
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              2
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "leb128",
+      "nparams": 2,
+      "locals": [
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        }
+      ],
+      "names": [
+        "v",
+        "out",
+        "x",
+        "",
+        "more",
+        "",
+        "",
+        "b",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "unit"
+      },
+      "async": false,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                0
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 3,
+              "const": {
+                "kind": "bool",
+                "bool": true
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                3
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "br",
+            "args": [
+              4
+            ],
+            "targets": [
+              2,
+              6
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 5,
+              "const": {
+                "kind": "int",
+                "int": 127
+              }
+            },
+            {
+              "op": "host",
+              "dst": 6,
+              "args": [
+                2,
+                5
+              ],
+              "name": "int.bit_and"
+            },
+            {
+              "op": "copy",
+              "dst": 7,
+              "args": [
+                6
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 8,
+              "const": {
+                "kind": "int",
+                "int": 7
+              }
+            },
+            {
+              "op": "host",
+              "dst": 9,
+              "args": [
+                2,
+                8
+              ],
+              "name": "int.ushr"
+            },
+            {
+              "op": "copy",
+              "dst": 2,
+              "args": [
+                9
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 11,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 12,
+              "args": [
+                2,
+                11
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              12
+            ],
+            "targets": [
+              3,
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 13,
+              "args": [
+                1,
+                7
+              ],
+              "name": "vec.push",
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 14,
+              "const": {
+                "kind": "bool"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 4,
+              "args": [
+                14
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 15,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 10,
+              "args": [
+                15
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              4
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 16,
+              "const": {
+                "kind": "int",
+                "int": 128
+              }
+            },
+            {
+              "op": "host",
+              "dst": 17,
+              "args": [
+                7,
+                16
+              ],
+              "name": "int.bit_or"
+            },
+            {
+              "op": "host",
+              "dst": 18,
+              "args": [
+                1,
+                17
+              ],
+              "name": "vec.push",
+              "type": 3
+            },
+            {
+              "op": "const",
+              "dst": 19,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 10,
+              "args": [
+                19
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 20,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "main",
+      "nparams": 3,
+      "locals": [
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "ext",
+          "ext": "Fs"
+        },
+        {
+          "kind": "ext",
+          "ext": "Log"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "agg",
+          "agg": 5
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 1
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "agg",
+          "agg": 6
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 7
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 7
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "agg",
+          "agg": 3
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 4
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 2
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "agg",
+          "agg": 8
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 9
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "IoError"
+        },
+        {
+          "kind": "ext",
+          "ext": "IoError"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "agg",
+          "agg": 10
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "ext",
+          "ext": "IoError"
+        },
+        {
+          "kind": "ext",
+          "ext": "IoError"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "unit"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "agg",
+          "agg": 10
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "int"
+        },
+        {
+          "kind": "bool"
+        },
+        {
+          "kind": "int"
+        }
+      ],
+      "names": [
+        "args",
+        "fs",
+        "log",
+        "",
+        "",
+        "toks",
+        "",
+        "parts",
+        "i",
+        "",
+        "",
+        "",
+        "t",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "counts",
+        "i",
+        "",
+        "",
+        "",
+        "t",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "c",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "ks",
+        "",
+        "summary",
+        "i",
+        "",
+        "",
+        "",
+        "k",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "nested",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "v",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "bytes",
+        "",
+        "",
+        "",
+        "hex",
+        "i",
+        "",
+        "",
+        "",
+        "b",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "total",
+        "i",
+        "",
+        "end",
+        "",
+        "",
+        "i",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "b",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "path",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "e",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "s",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "e",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "result": {
+        "kind": "int"
+      },
+      "async": true,
+      "blocks": [
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 3,
+              "const": {
+                "kind": "string",
+                "str": "let x1 = 42 + foo;"
+              }
+            },
+            {
+              "op": "call",
+              "dst": 4,
+              "args": [
+                3
+              ],
+              "name": "lex"
+            },
+            {
+              "op": "copy",
+              "dst": 5,
+              "args": [
+                4
+              ]
+            },
+            {
+              "op": "host",
+              "dst": 6,
+              "name": "vec.new",
+              "type": 4
+            },
+            {
+              "op": "copy",
+              "dst": 7,
+              "args": [
+                6
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 9,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 8,
+              "args": [
+                9
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 10,
+              "args": [
+                5
+              ],
+              "name": "vec.len"
+            },
+            {
+              "op": "binop",
+              "dst": 11,
+              "args": [
+                8,
+                10
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              11
+            ],
+            "targets": [
+              2,
+              4
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 12,
+              "args": [
+                5,
+                8
+              ],
+              "name": "vec.at"
+            },
+            {
+              "op": "field",
+              "dst": 13,
+              "args": [
+                12
+              ],
+              "type": 1
+            },
+            {
+              "op": "const",
+              "dst": 14,
+              "const": {
+                "kind": "string",
+                "str": ":"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 15,
+              "args": [
+                13,
+                14
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "field",
+              "dst": 16,
+              "args": [
+                12
+              ],
+              "type": 1,
+              "index": 1
+            },
+            {
+              "op": "binop",
+              "dst": 17,
+              "args": [
+                15,
+                16
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 18,
+              "args": [
+                7,
+                17
+              ],
+              "name": "vec.push",
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 19,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              3
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 20,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 21,
+              "args": [
+                8,
+                20
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 8,
+              "args": [
+                21
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              1
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 22,
+              "const": {
+                "kind": "string",
+                "str": " "
+              }
+            },
+            {
+              "op": "host",
+              "dst": 23,
+              "args": [
+                7,
+                22
+              ],
+              "name": "vec.join",
+              "type": 4
+            },
+            {
+              "op": "host",
+              "dst": 24,
+              "args": [
+                2,
+                23
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "host",
+              "dst": 25,
+              "name": "map.new",
+              "type": 5
+            },
+            {
+              "op": "copy",
+              "dst": 26,
+              "args": [
+                25
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 28,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 27,
+              "args": [
+                28
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 29,
+              "args": [
+                5
+              ],
+              "name": "vec.len"
+            },
+            {
+              "op": "binop",
+              "dst": 30,
+              "args": [
+                27,
+                29
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              30
+            ],
+            "targets": [
+              6,
+              11
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 31,
+              "args": [
+                5,
+                27
+              ],
+              "name": "vec.at"
+            },
+            {
+              "op": "field",
+              "dst": 32,
+              "args": [
+                31
+              ],
+              "type": 1
+            },
+            {
+              "op": "host",
+              "dst": 33,
+              "args": [
+                26,
+                32
+              ],
+              "name": "map.get",
+              "type": 5
+            },
+            {
+              "op": "tag",
+              "dst": 34,
+              "args": [
+                33
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 35,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 37,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 38,
+              "args": [
+                34,
+                37
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              38
+            ],
+            "targets": [
+              7,
+              10
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 39,
+              "args": [
+                33
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 36,
+              "args": [
+                39
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 40,
+              "args": [
+                36
+              ]
+            },
+            {
+              "op": "field",
+              "dst": 41,
+              "args": [
+                31
+              ],
+              "type": 1
+            },
+            {
+              "op": "const",
+              "dst": 42,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 43,
+              "args": [
+                40,
+                42
+              ],
+              "name": "add"
+            },
+            {
+              "op": "host",
+              "dst": 44,
+              "args": [
+                26,
+                41,
+                43
+              ],
+              "name": "map.insert",
+              "type": 5
+            },
+            {
+              "op": "const",
+              "dst": 45,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              9
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 46,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 47,
+              "args": [
+                27,
+                46
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 27,
+              "args": [
+                47
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              5
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 36,
+              "args": [
+                35
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              8
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 48,
+              "args": [
+                26
+              ],
+              "name": "map.keys",
+              "type": 5
+            },
+            {
+              "op": "copy",
+              "dst": 49,
+              "args": [
+                48
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 50,
+              "const": {
+                "kind": "string"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 51,
+              "args": [
+                50
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 53,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 52,
+              "args": [
+                53
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              12
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 54,
+              "args": [
+                49
+              ],
+              "name": "vec.len",
+              "type": 4
+            },
+            {
+              "op": "binop",
+              "dst": 55,
+              "args": [
+                52,
+                54
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              55
+            ],
+            "targets": [
+              13,
+              18
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 56,
+              "args": [
+                49,
+                52
+              ],
+              "name": "vec.at",
+              "type": 4
+            },
+            {
+              "op": "binop",
+              "dst": 57,
+              "args": [
+                51,
+                56
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 58,
+              "const": {
+                "kind": "string",
+                "str": "="
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 59,
+              "args": [
+                57,
+                58
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 60,
+              "args": [
+                26,
+                56
+              ],
+              "name": "map.get",
+              "type": 5
+            },
+            {
+              "op": "tag",
+              "dst": 61,
+              "args": [
+                60
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 62,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 64,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 65,
+              "args": [
+                61,
+                64
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              65
+            ],
+            "targets": [
+              14,
+              17
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 66,
+              "args": [
+                60
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 63,
+              "args": [
+                66
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              15
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 67,
+              "args": [
+                63
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 68,
+              "args": [
+                59,
+                67
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 69,
+              "const": {
+                "kind": "string",
+                "str": ";"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 70,
+              "args": [
+                68,
+                69
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "copy",
+              "dst": 51,
+              "args": [
+                70
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 71,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              16
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 72,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 73,
+              "args": [
+                52,
+                72
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 52,
+              "args": [
+                73
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              12
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 63,
+              "args": [
+                62
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              15
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 74,
+              "args": [
+                2,
+                51
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "host",
+              "dst": 75,
+              "name": "map.new",
+              "type": 6
+            },
+            {
+              "op": "copy",
+              "dst": 76,
+              "args": [
+                75
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 77,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "host",
+              "dst": 78,
+              "name": "vec.new",
+              "type": 4
+            },
+            {
+              "op": "host",
+              "dst": 79,
+              "args": [
+                76,
+                77,
+                78
+              ],
+              "name": "map.insert",
+              "type": 6
+            },
+            {
+              "op": "const",
+              "dst": 81,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "host",
+              "dst": 82,
+              "args": [
+                76,
+                81
+              ],
+              "name": "map.get",
+              "type": 6
+            },
+            {
+              "op": "tag",
+              "dst": 83,
+              "args": [
+                82
+              ],
+              "type": 7
+            },
+            {
+              "op": "const",
+              "dst": 84,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 85,
+              "args": [
+                83,
+                84
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              85
+            ],
+            "targets": [
+              19,
+              61
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 86,
+              "args": [
+                82
+              ],
+              "type": 7,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 87,
+              "args": [
+                86
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 88,
+              "const": {
+                "kind": "string",
+                "str": "a"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 89,
+              "args": [
+                87,
+                88
+              ],
+              "name": "vec.push",
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 90,
+              "const": {
+                "kind": "string",
+                "str": "b"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 91,
+              "args": [
+                87,
+                90
+              ],
+              "name": "vec.push",
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 92,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 80,
+              "args": [
+                92
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              20
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 97,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "host",
+              "dst": 98,
+              "args": [
+                76,
+                97
+              ],
+              "name": "map.get",
+              "type": 6
+            },
+            {
+              "op": "tag",
+              "dst": 99,
+              "args": [
+                98
+              ],
+              "type": 7
+            },
+            {
+              "op": "host",
+              "dst": 100,
+              "name": "vec.new",
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 102,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 103,
+              "args": [
+                99,
+                102
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              103
+            ],
+            "targets": [
+              21,
+              60
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 104,
+              "args": [
+                98
+              ],
+              "type": 7,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 101,
+              "args": [
+                104
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              22
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 105,
+              "const": {
+                "kind": "string",
+                "str": ","
+              }
+            },
+            {
+              "op": "host",
+              "dst": 106,
+              "args": [
+                101,
+                105
+              ],
+              "name": "vec.join",
+              "type": 4
+            },
+            {
+              "op": "host",
+              "dst": 107,
+              "args": [
+                2,
+                106
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "host",
+              "dst": 108,
+              "name": "vec.new",
+              "type": 3
+            },
+            {
+              "op": "copy",
+              "dst": 109,
+              "args": [
+                108
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 110,
+              "const": {
+                "kind": "int",
+                "int": 624485
+              }
+            },
+            {
+              "op": "call",
+              "dst": 111,
+              "args": [
+                110,
+                109
+              ],
+              "name": "leb128"
+            },
+            {
+              "op": "host",
+              "dst": 112,
+              "name": "vec.new",
+              "type": 4
+            },
+            {
+              "op": "copy",
+              "dst": 113,
+              "args": [
+                112
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 115,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 114,
+              "args": [
+                115
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              23
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 116,
+              "args": [
+                109
+              ],
+              "name": "vec.len",
+              "type": 3
+            },
+            {
+              "op": "binop",
+              "dst": 117,
+              "args": [
+                114,
+                116
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              117
+            ],
+            "targets": [
+              24,
+              26
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 118,
+              "args": [
+                109,
+                114
+              ],
+              "name": "vec.at",
+              "type": 3
+            },
+            {
+              "op": "host",
+              "dst": 119,
+              "args": [
+                118
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "host",
+              "dst": 120,
+              "args": [
+                113,
+                119
+              ],
+              "name": "vec.push",
+              "type": 4
+            },
+            {
+              "op": "const",
+              "dst": 121,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              25
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 122,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 123,
+              "args": [
+                114,
+                122
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 114,
+              "args": [
+                123
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              23
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 124,
+              "const": {
+                "kind": "string",
+                "str": " "
+              }
+            },
+            {
+              "op": "host",
+              "dst": 125,
+              "args": [
+                113,
+                124
+              ],
+              "name": "vec.join",
+              "type": 4
+            },
+            {
+              "op": "host",
+              "dst": 126,
+              "args": [
+                2,
+                125
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "const",
+              "dst": 127,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 128,
+              "args": [
+                127
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 130,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 129,
+              "args": [
+                130
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 132,
+              "const": {
+                "kind": "int",
+                "int": 10
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 131,
+              "args": [
+                132
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              27
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "binop",
+              "dst": 133,
+              "args": [
+                129,
+                131
+              ],
+              "name": "lt"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              133
+            ],
+            "targets": [
+              28,
+              30
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 134,
+              "args": [
+                129
+              ]
+            },
+            {
+              "op": "binop",
+              "dst": 135,
+              "args": [
+                128,
+                134
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 128,
+              "args": [
+                135
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 136,
+              "const": {
+                "kind": "unit"
+              }
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              29
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 137,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 138,
+              "args": [
+                129,
+                137
+              ],
+              "name": "add"
+            },
+            {
+              "op": "copy",
+              "dst": 129,
+              "args": [
+                138
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              27
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 139,
+              "const": {
+                "kind": "string",
+                "str": "total "
+              }
+            },
+            {
+              "op": "host",
+              "dst": 140,
+              "args": [
+                128
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 141,
+              "args": [
+                139,
+                140
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 142,
+              "const": {
+                "kind": "string",
+                "str": " args "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 143,
+              "args": [
+                141,
+                142
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 144,
+              "args": [
+                0
+              ],
+              "name": "vec.len",
+              "type": 4
+            },
+            {
+              "op": "host",
+              "dst": 145,
+              "args": [
+                144
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 146,
+              "args": [
+                143,
+                145
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 147,
+              "args": [
+                2,
+                146
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "host",
+              "dst": 149,
+              "args": [
+                109
+              ],
+              "name": "vec.pop",
+              "type": 3
+            },
+            {
+              "op": "tag",
+              "dst": 150,
+              "args": [
+                149
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 151,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 152,
+              "args": [
+                150,
+                151
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              152
+            ],
+            "targets": [
+              31,
+              57
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 153,
+              "args": [
+                149
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 154,
+              "args": [
+                153
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 155,
+              "const": {
+                "kind": "string",
+                "str": "popped "
+              }
+            },
+            {
+              "op": "host",
+              "dst": 156,
+              "args": [
+                154
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 157,
+              "args": [
+                155,
+                156
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 158,
+              "const": {
+                "kind": "string",
+                "str": " left "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 159,
+              "args": [
+                157,
+                158
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 160,
+              "args": [
+                109
+              ],
+              "name": "vec.len",
+              "type": 3
+            },
+            {
+              "op": "host",
+              "dst": 161,
+              "args": [
+                160
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 162,
+              "args": [
+                159,
+                161
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 163,
+              "args": [
+                2,
+                162
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "copy",
+              "dst": 148,
+              "args": [
+                163
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              32
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 169,
+              "const": {
+                "kind": "string",
+                "str": "get(-1) "
+              }
+            },
+            {
+              "op": "const",
+              "dst": 170,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "unop",
+              "dst": 171,
+              "args": [
+                170
+              ],
+              "name": "neg"
+            },
+            {
+              "op": "host",
+              "dst": 172,
+              "args": [
+                109,
+                171
+              ],
+              "name": "vec.get",
+              "type": 3
+            },
+            {
+              "op": "tag",
+              "dst": 173,
+              "args": [
+                172
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 174,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 175,
+              "args": [
+                173,
+                174
+              ],
+              "name": "eq"
+            },
+            {
+              "op": "host",
+              "dst": 176,
+              "args": [
+                175
+              ],
+              "name": "bool.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 177,
+              "args": [
+                169,
+                176
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 178,
+              "const": {
+                "kind": "string",
+                "str": " set "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 179,
+              "args": [
+                177,
+                178
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 180,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 181,
+              "const": {
+                "kind": "int",
+                "int": 7
+              }
+            },
+            {
+              "op": "host",
+              "dst": 182,
+              "args": [
+                109,
+                180,
+                181
+              ],
+              "name": "vec.set",
+              "type": 3
+            },
+            {
+              "op": "host",
+              "dst": 183,
+              "args": [
+                182
+              ],
+              "name": "bool.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 184,
+              "args": [
+                179,
+                183
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 185,
+              "const": {
+                "kind": "string",
+                "str": " "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 186,
+              "args": [
+                184,
+                185
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 187,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 188,
+              "args": [
+                109,
+                187
+              ],
+              "name": "vec.get",
+              "type": 3
+            },
+            {
+              "op": "tag",
+              "dst": 189,
+              "args": [
+                188
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 190,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 192,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 193,
+              "args": [
+                189,
+                192
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              193
+            ],
+            "targets": [
+              33,
+              56
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 194,
+              "args": [
+                188
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 191,
+              "args": [
+                194
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              34
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 195,
+              "args": [
+                191
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 196,
+              "args": [
+                186,
+                195
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 197,
+              "args": [
+                2,
+                196
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "const",
+              "dst": 198,
+              "const": {
+                "kind": "string",
+                "str": "split "
+              }
+            },
+            {
+              "op": "const",
+              "dst": 199,
+              "const": {
+                "kind": "string",
+                "str": "a,b,,c"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 200,
+              "const": {
+                "kind": "string",
+                "str": ","
+              }
+            },
+            {
+              "op": "host",
+              "dst": 201,
+              "args": [
+                199,
+                200
+              ],
+              "name": "string.split"
+            },
+            {
+              "op": "host",
+              "dst": 202,
+              "args": [
+                201
+              ],
+              "name": "vec.len",
+              "type": 4
+            },
+            {
+              "op": "host",
+              "dst": 203,
+              "args": [
+                202
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 204,
+              "args": [
+                198,
+                203
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 205,
+              "const": {
+                "kind": "string",
+                "str": " idx "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 206,
+              "args": [
+                204,
+                205
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "const",
+              "dst": 207,
+              "const": {
+                "kind": "string",
+                "str": "hello"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 208,
+              "const": {
+                "kind": "string",
+                "str": "ll"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 209,
+              "args": [
+                207,
+                208
+              ],
+              "name": "string.index_of"
+            },
+            {
+              "op": "tag",
+              "dst": 210,
+              "args": [
+                209
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 211,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "unop",
+              "dst": 212,
+              "args": [
+                211
+              ],
+              "name": "neg"
+            },
+            {
+              "op": "const",
+              "dst": 214,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 215,
+              "args": [
+                210,
+                214
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              215
+            ],
+            "targets": [
+              35,
+              55
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 216,
+              "args": [
+                209
+              ],
+              "type": 2,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 213,
+              "args": [
+                216
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              36
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "host",
+              "dst": 217,
+              "args": [
+                213
+              ],
+              "name": "int.to_string"
+            },
+            {
+              "op": "binop",
+              "dst": 218,
+              "args": [
+                206,
+                217
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 219,
+              "args": [
+                2,
+                218
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "const",
+              "dst": 220,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 221,
+              "args": [
+                0,
+                220
+              ],
+              "name": "vec.get",
+              "type": 4
+            },
+            {
+              "op": "tag",
+              "dst": 222,
+              "args": [
+                221
+              ],
+              "type": 8
+            },
+            {
+              "op": "const",
+              "dst": 223,
+              "const": {
+                "kind": "string",
+                "str": "kek_run_test.txt"
+              }
+            },
+            {
+              "op": "const",
+              "dst": 225,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 226,
+              "args": [
+                222,
+                225
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              226
+            ],
+            "targets": [
+              37,
+              54
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 227,
+              "args": [
+                221
+              ],
+              "type": 8,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 224,
+              "args": [
+                227
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              38
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 228,
+              "args": [
+                224
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 230,
+              "const": {
+                "kind": "string",
+                "str": "written by kekkai"
+              }
+            },
+            {
+              "op": "await",
+              "dst": 231,
+              "args": [
+                1,
+                228,
+                230
+              ],
+              "name": "fs.write"
+            },
+            {
+              "op": "tag",
+              "dst": 232,
+              "args": [
+                231
+              ],
+              "type": 9
+            },
+            {
+              "op": "const",
+              "dst": 233,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 234,
+              "args": [
+                232,
+                233
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              234
+            ],
+            "targets": [
+              39,
+              51
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 235,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 229,
+              "args": [
+                235
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              40
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "await",
+              "dst": 246,
+              "args": [
+                1,
+                228
+              ],
+              "name": "fs.read"
+            },
+            {
+              "op": "tag",
+              "dst": 247,
+              "args": [
+                246
+              ],
+              "type": 10
+            },
+            {
+              "op": "const",
+              "dst": 248,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 249,
+              "args": [
+                247,
+                248
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              249
+            ],
+            "targets": [
+              41,
+              48
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 250,
+              "args": [
+                246
+              ],
+              "type": 10
+            },
+            {
+              "op": "copy",
+              "dst": 251,
+              "args": [
+                250
+              ]
+            },
+            {
+              "op": "const",
+              "dst": 252,
+              "const": {
+                "kind": "string",
+                "str": "read back: "
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 253,
+              "args": [
+                252,
+                251
+              ],
+              "name": "concat"
+            },
+            {
+              "op": "host",
+              "dst": 254,
+              "args": [
+                2,
+                253
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "copy",
+              "dst": 245,
+              "args": [
+                254
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              42
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 265,
+              "const": {
+                "kind": "string",
+                "str": "/nonexistent/file"
+              }
+            },
+            {
+              "op": "await",
+              "dst": 266,
+              "args": [
+                1,
+                265
+              ],
+              "name": "fs.read"
+            },
+            {
+              "op": "tag",
+              "dst": 267,
+              "args": [
+                266
+              ],
+              "type": 10
+            },
+            {
+              "op": "const",
+              "dst": 268,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 269,
+              "args": [
+                267,
+                268
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              269
+            ],
+            "targets": [
+              43,
+              45
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 270,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 264,
+              "args": [
+                270
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              44
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "ret",
+            "args": [
+              264
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 271,
+              "args": [
+                266
+              ],
+              "type": 10
+            },
+            {
+              "op": "const",
+              "dst": 272,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 273,
+              "args": [
+                271,
+                272
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              273
+            ],
+            "targets": [
+              46,
+              47
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 274,
+              "const": {
+                "kind": "int",
+                "int": 3
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 264,
+              "args": [
+                274
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              44
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 255,
+              "args": [
+                246
+              ],
+              "type": 10
+            },
+            {
+              "op": "const",
+              "dst": 256,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 257,
+              "args": [
+                255,
+                256
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              257
+            ],
+            "targets": [
+              49,
+              50
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 258,
+              "args": [
+                246
+              ],
+              "type": 10,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 259,
+              "args": [
+                258
+              ]
+            },
+            {
+              "op": "host",
+              "dst": 260,
+              "args": [
+                259
+              ],
+              "name": "ioError.message"
+            },
+            {
+              "op": "host",
+              "dst": 261,
+              "args": [
+                2,
+                260
+              ],
+              "name": "log.error"
+            },
+            {
+              "op": "const",
+              "dst": 262,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              262
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 236,
+              "args": [
+                231
+              ],
+              "type": 9
+            },
+            {
+              "op": "const",
+              "dst": 237,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 238,
+              "args": [
+                236,
+                237
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              238
+            ],
+            "targets": [
+              52,
+              53
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "vfield",
+              "dst": 239,
+              "args": [
+                231
+              ],
+              "type": 9,
+              "tag": 1
+            },
+            {
+              "op": "copy",
+              "dst": 240,
+              "args": [
+                239
+              ]
+            },
+            {
+              "op": "host",
+              "dst": 241,
+              "args": [
+                240
+              ],
+              "name": "ioError.message"
+            },
+            {
+              "op": "host",
+              "dst": 242,
+              "args": [
+                2,
+                241
+              ],
+              "name": "log.error"
+            },
+            {
+              "op": "const",
+              "dst": 243,
+              "const": {
+                "kind": "int",
+                "int": 1
+              }
+            }
+          ],
+          "term": {
+            "op": "ret",
+            "args": [
+              243
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 224,
+              "args": [
+                223
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              38
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 213,
+              "args": [
+                212
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              36
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 191,
+              "args": [
+                190
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              34
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 164,
+              "args": [
+                149
+              ],
+              "type": 2
+            },
+            {
+              "op": "const",
+              "dst": 165,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 166,
+              "args": [
+                164,
+                165
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              166
+            ],
+            "targets": [
+              58,
+              59
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 167,
+              "const": {
+                "kind": "string",
+                "str": "empty"
+              }
+            },
+            {
+              "op": "host",
+              "dst": 168,
+              "args": [
+                2,
+                167
+              ],
+              "name": "log.info"
+            },
+            {
+              "op": "copy",
+              "dst": 148,
+              "args": [
+                168
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              32
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "copy",
+              "dst": 101,
+              "args": [
+                100
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              22
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "tag",
+              "dst": 93,
+              "args": [
+                82
+              ],
+              "type": 7
+            },
+            {
+              "op": "const",
+              "dst": 94,
+              "const": {
+                "kind": "int"
+              }
+            },
+            {
+              "op": "binop",
+              "dst": 95,
+              "args": [
+                93,
+                94
+              ],
+              "name": "eq"
+            }
+          ],
+          "term": {
+            "op": "br",
+            "args": [
+              95
+            ],
+            "targets": [
+              62,
+              63
+            ]
+          }
+        },
+        {
+          "instrs": [
+            {
+              "op": "const",
+              "dst": 96,
+              "const": {
+                "kind": "unit"
+              }
+            },
+            {
+              "op": "copy",
+              "dst": 80,
+              "args": [
+                96
+              ]
+            }
+          ],
+          "term": {
+            "op": "jump",
+            "targets": [
+              20
+            ]
+          }
+        },
+        {
+          "instrs": null,
+          "term": {
+            "op": "unreachable"
+          }
+        }
+      ]
+    }
+  ],
+  "handler": "main",
+  "entry": "main",
+  "handler_params": [
+    {
+      "kind": "args",
+      "name": "args"
+    },
+    {
+      "kind": "Fs",
+      "name": "fs"
+    },
+    {
+      "kind": "Log",
+      "name": "log"
+    }
+  ]
+}
+--- exit 0

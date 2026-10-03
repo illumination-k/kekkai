@@ -1,8 +1,10 @@
 # Agent and editor tooling
 
 These `kek` commands give LLM coding agents and editors machine-readable
-access to the type checker. Each command reads one `.kek` file. Build the
-binary with `mise run build`, which writes `bin/kek`.
+access to the type checker. Each command reads one `.kek` file. They are
+implemented by the self-hosted compiler (`compiler/caps_*`, `diag_*`,
+`search_*`, `irjson_*`) and run with the `./kek` launcher; the Go binary
+(`mise run build`, `bin/kek`) prints the same output byte for byte.
 
 ## `kek check -json <file.kek>`
 

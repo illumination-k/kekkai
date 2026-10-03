@@ -124,18 +124,32 @@ switch (cmd) {
     break;
   }
   case "build": {
-    // kek build [-o dir] <file|dir>: the compiler writes module.wasm and
-    // kekkai_meta.js; the launcher adds the runtime.
+    // kek build [-o dir] [-target d1|do] <file|dir>: the compiler writes
+    // module.wasm and kekkai_meta.js, and worker.js and wrangler.toml for
+    // #[handler] programs (an existing wrangler.toml is kept); the launcher
+    // adds the runtime.
     let out = "out";
+    let target = "d1";
     const rest = [];
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === "-o") out = args[++i];
+      const a = args[i].replace(/^--/, "-");
+      if (a === "-o") out = args[++i];
+      else if (a.startsWith("-o=")) out = a.slice(3);
+      else if (a === "-target") target = args[++i];
+      else if (a.startsWith("-target=")) target = a.slice(8);
       else rest.push(args[i]);
     }
-    if (rest.length !== 1) { console.error("usage: kek build [-o dir] <file|dir>"); process.exitCode = 2; break; }
+    if (rest.length !== 1 || out === undefined || target === undefined) {
+      console.error("usage: kek build [-o dir] [-target d1|do] <file|dir>");
+      process.exitCode = 2;
+      break;
+    }
     await mkdir(out, { recursive: true });
-    const code = await runStage(await currentStage(), ["build", rest[0], out]);
-    if (code === 0) await copyFile(path.join(here, "kekkai_runtime.js"), path.join(out, "kekkai_runtime.js"));
+    const code = await runStage(await currentStage(), ["build", rest[0], out, "-target", target]);
+    if (code === 0) {
+      await copyFile(path.join(here, "kekkai_runtime.js"), path.join(out, "kekkai_runtime.js"));
+      console.log(`${rest[0]} -> ${out} (${(await stat(path.join(out, "module.wasm"))).size} bytes of wasm)`);
+    }
     process.exitCode = code;
     break;
   }

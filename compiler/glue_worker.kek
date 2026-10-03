@@ -1,0 +1,275 @@
+// Workers glue (prefix glue_ / Glue*): worker.js and the starter
+// wrangler.toml that `build` writes next to module.wasm for #[handler]
+// programs. A port of internal/glue/glue.go (WorkerJS, WranglerTomlFor)
+// and the file selection of cmd/kek/build.go.
+
+// glue_worker_js renders the Workers entry point. Capabilities are created
+// from the environment (the only place the program receives authority).
+fn glue_worker_js(params: Vec<IrHandlerParam>) -> String {
+    let parts = Vec::new();
+    parts.push(glue_worker_head());
+    for p in params {
+        let mut expr = "";
+        if p.kind == "Db" {
+            expr = "dbCap(db(" + lower_go_quote(p.name.to_upper()) + "), outbox(env))";
+        } else if p.kind == "Log" {
+            expr = "consoleLog()";
+        } else if p.kind == "Net" {
+            expr = "fetchNet()";
+        } else if p.kind == "Clock" {
+            expr = "systemClock()";
+        } else if p.kind == "Random" {
+            expr = "cryptoRandom()";
+        }
+        if expr != "" {
+            parts.push("    " + json_quote(p.name) + ": " + expr + ",\n");
+        }
+    }
+    parts.push(glue_worker_tail());
+    parts.join("")
+}
+
+// glue_wrangler_toml renders a starter wrangler.toml for a target ("d1"
+// or "do"); Err is the message for an unknown target.
+fn glue_wrangler_toml(name: String, params: Vec<IrHandlerParam>, target: String) -> Result<String, String> {
+    let parts = Vec::new();
+    parts.push("name = " + lower_go_quote(name) + "\nmain = \"worker.js\"\ncompatibility_date = \"2026-09-01\"\n");
+    parts.push("\n[vars]\n# How outbox entries are delivered after commit: \"fetch\" | \"log\" | \"queue\" (see docs/runtime.md)\nKEKKAI_OUTBOX = \"fetch\"\n");
+    if target == "d1" || target == "" {
+        for p in params {
+            if p.kind == "Db" {
+                parts.push("\n[[d1_databases]]\nbinding = " + lower_go_quote(p.name.to_upper()) + "\ndatabase_name = "
+                    + lower_go_quote(name + "-" + p.name) + "\ndatabase_id = \"local\"\n");
+            }
+        }
+    } else if target == "do" {
+        parts.push("# Which Durable Object a request is routed to: \"global\" | \"segment:N\" | \"header:NAME\" | \"query:NAME\"\nKEKKAI_DO_SHARD = \"global\"\n");
+        parts.push("\n[[durable_objects.bindings]]\nname = \"KEKKAI_DO\"\nclass_name = \"KekkaiObject\"\n");
+        parts.push("\n[[migrations]]\ntag = \"v1\"\nnew_sqlite_classes = [\"KekkaiObject\"]\n");
+    } else {
+        return Err("unknown target " + lower_go_quote(target) + " (want d1 or do)");
+    }
+    Ok(parts.join(""))
+}
+
+// glue_program_name is the file name of path without its extension
+// (filepath.Base, then strings.TrimSuffix of filepath.Ext).
+fn glue_program_name(path: String) -> String {
+    let mut p = path;
+    while p.len() > 1 && p.ends_with("/") {
+        p = p.slice(0, p.len() - 1);
+    }
+    if p == "" {
+        return ".";
+    }
+    let mut base = p;
+    let mut i = p.len() - 1;
+    while i >= 0 {
+        if p.char_at(i).unwrap_or(0) == 47 {
+            base = p.slice(i + 1, p.len());
+            break;
+        }
+        i = i - 1;
+    }
+    if base == "" {
+        base = "/";
+    }
+    let mut j = base.len() - 1;
+    while j >= 0 {
+        let c = base.char_at(j).unwrap_or(0);
+        if c == 47 {
+            break;
+        }
+        if c == 46 {
+            return base.slice(0, j);
+        }
+        j = j - 1;
+    }
+    base
+}
+
+// glue_target returns the value of a trailing `-target <t>` of the build
+// arguments (`build <path> <outdir> [-target d1|do]`), "d1" by default.
+fn glue_target(args: Vec<String>) -> String {
+    let mut t = "d1";
+    let mut i = 3;
+    while i < args.len() {
+        let a = args.get(i).unwrap_or("");
+        if a == "-target" || a == "--target" {
+            t = args.get(i + 1).unwrap_or("");
+            i = i + 1;
+        } else if a.starts_with("-target=") {
+            t = a.slice(8, a.len());
+        } else if a.starts_with("--target=") {
+            t = a.slice(9, a.len());
+        }
+        i = i + 1;
+    }
+    t
+}
+
+// glue_exists reports whether a file or directory exists (os.Stat).
+fn glue_exists(path: String, fs: &Fs) -> Bool {
+    match fs.read(path) {
+        Ok(_) => { return true; }
+        Err(_) => {}
+    }
+    match fs.list(path) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+fn glue_write(path: String, text: String, fs: &Fs, log: &Log) -> Bool {
+    match fs.write(path, text) {
+        Ok(_) => true,
+        Err(e) => {
+            log.error(path + ": " + e.message());
+            false
+        }
+    }
+}
+
+// glue_emit writes worker.js and, unless one exists (it may be edited by
+// the user), wrangler.toml for a #[handler] program. Returns the exit code.
+fn glue_emit(args: Vec<String>, path: String, out_dir: String, prog: IrProgram, fs: &Fs, log: &Log) -> Int {
+    if prog.entry != "handler" {
+        return 0;
+    }
+    let wt = out_dir + "/wrangler.toml";
+    let mut toml = "";
+    let write_toml = !glue_exists(wt, fs);
+    if write_toml {
+        match glue_wrangler_toml(glue_program_name(path), prog.handler_params, glue_target(args)) {
+            Ok(s) => { toml = s; }
+            Err(msg) => {
+                log.error(msg);
+                return 1;
+            }
+        }
+    }
+    if !glue_write(out_dir + "/worker.js", glue_worker_js(prog.handler_params), fs, log) {
+        return 1;
+    }
+    if write_toml && !glue_write(wt, toml, fs, log) {
+        return 1;
+    }
+    0
+}
+
+fn glue_worker_head() -> String {
+    let l = Vec::new();
+    l.push("// Generated by kek. Capabilities are created here from Worker bindings;");
+    l.push("// this is the only place where the program receives authority.");
+    l.push("//");
+    l.push("// Configuration (wrangler.toml):");
+    l.push("//   [[d1_databases]] DB            D1 database for a `db: &Db` parameter (default backend)");
+    l.push("//   [[durable_objects.bindings]] KEKKAI_DO (class KekkaiObject)");
+    l.push("//                                  route every request into a Durable Object and");
+    l.push("//                                  keep Db data in its transactional storage");
+    l.push("//   KEKKAI_DO_SHARD = \"global\" | \"segment:N\" | \"header:NAME\" | \"query:NAME\"");
+    l.push("//                                  which object a request goes to (default \"global\")");
+    l.push("//   KEKKAI_OUTBOX = \"fetch\" | \"log\" | \"queue\"");
+    l.push("//                                  how outbox entries are delivered after commit");
+    l.push("//                                  (default \"fetch\"; \"queue\" needs a producer bound as OUTBOX)");
+    l.push("import wasm from \"./module.wasm\";");
+    l.push("import meta from \"./kekkai_meta.js\";");
+    l.push("import {");
+    l.push("  createKekkai, dbCap, D1KvStore, DurableObjectStore, consoleLog, fetchNet, systemClock, cryptoRandom,");
+    l.push("  fetchOutbox, logOutbox, queueOutbox,");
+    l.push("} from \"./kekkai_runtime.js\";");
+    l.push("");
+    l.push("const app = createKekkai(wasm, meta);");
+    l.push("");
+    l.push("function outbox(env) {");
+    l.push("  const mode = env.KEKKAI_OUTBOX || (env.OUTBOX ? \"queue\" : \"fetch\");");
+    l.push("  switch (mode) {");
+    l.push("    case \"fetch\": return fetchOutbox();");
+    l.push("    case \"log\": return logOutbox();");
+    l.push("    case \"queue\":");
+    l.push("      if (!env.OUTBOX) throw new Error(\"KEKKAI_OUTBOX=queue needs a Queue producer binding named OUTBOX\");");
+    l.push("      return queueOutbox(env.OUTBOX);");
+    l.push("    default: throw new Error(\"unknown KEKKAI_OUTBOX mode \" + mode);");
+    l.push("  }");
+    l.push("}");
+    l.push("");
+    l.push("// db(binding) returns the store backing the Db capability of that binding.");
+    l.push("function capabilities(env, db) {");
+    l.push("  return {");
+    l.join("\n") + "\n"
+}
+
+fn glue_worker_tail() -> String {
+    let l = Vec::new();
+    l.push("  };");
+    l.push("}");
+    l.push("");
+    l.push("const d1Stores = new WeakMap();");
+    l.push("function d1Store(env, binding) {");
+    l.push("  const d1 = env[binding];");
+    l.push("  if (!d1) throw new Error(\"missing D1 binding \" + binding + \" (or bind a Durable Object namespace as KEKKAI_DO)\");");
+    l.push("  let s = d1Stores.get(d1);");
+    l.push("  if (!s) d1Stores.set(d1, (s = new D1KvStore(d1)));");
+    l.push("  return s;");
+    l.push("}");
+    l.push("");
+    l.push("// The name of the Durable Object a request is routed to. Transactions are");
+    l.push("// atomic within one object, so the shard key must cover every key a");
+    l.push("// transaction touches (e.g. a tenant or account id in the path).");
+    l.push("function shardName(request, env) {");
+    l.push("  const spec = env.KEKKAI_DO_SHARD || \"global\";");
+    l.push("  const url = new URL(request.url);");
+    l.push("  const [kind, arg] = spec.split(/:(.*)/s);");
+    l.push("  let v = null;");
+    l.push("  if (kind === \"global\") v = \"global\";");
+    l.push("  else if (kind === \"segment\") v = url.pathname.split(\"/\").filter((s) => s !== \"\")[Number(arg)] ?? null;");
+    l.push("  else if (kind === \"header\") v = request.headers.get(arg);");
+    l.push("  else if (kind === \"query\") v = url.searchParams.get(arg);");
+    l.push("  else throw new Error(\"unknown KEKKAI_DO_SHARD \" + spec);");
+    l.push("  return v === null || v === \"\" ? null : kind + \":\" + v;");
+    l.push("}");
+    l.push("");
+    l.push("export default {");
+    l.push("  async fetch(request, env, ctx) {");
+    l.push("    if (env.KEKKAI_DO) {");
+    l.push("      const name = shardName(request, env);");
+    l.push("      if (name === null) return new Response(\"missing shard key\", { status: 400 });");
+    l.push("      return env.KEKKAI_DO.get(env.KEKKAI_DO.idFromName(name)).fetch(request);");
+    l.push("    }");
+    l.push("    return app.handle(request, capabilities(env, (b) => d1Store(env, b)), ctx);");
+    l.push("  },");
+    l.push("");
+    l.push("  // Outbox consumer for KEKKAI_OUTBOX = \"queue\": at-least-once delivery.");
+    l.push("  async queue(batch, env) {");
+    l.push("    for (const msg of batch.messages) {");
+    l.push("      try {");
+    l.push("        const r = await fetch(msg.body.url, { method: \"POST\", body: msg.body.body });");
+    l.push("        if (!r.ok) throw new Error(\"status \" + r.status);");
+    l.push("        msg.ack();");
+    l.push("      } catch (e) {");
+    l.push("        console.error(\"kekkai: outbox delivery failed, will retry:\", e);");
+    l.push("        msg.retry();");
+    l.push("      }");
+    l.push("    }");
+    l.push("  },");
+    l.push("};");
+    l.push("");
+    l.push("// Durable Object running the program next to its storage. Each Db binding");
+    l.push("// gets its own key prefix inside the object.");
+    l.push("export class KekkaiObject {");
+    l.push("  constructor(state, env) {");
+    l.push("    this.state = state;");
+    l.push("    this.env = env;");
+    l.push("    this.stores = new Map();");
+    l.push("  }");
+    l.push("  store(binding) {");
+    l.push("    let s = this.stores.get(binding);");
+    l.push("    if (!s) this.stores.set(binding, (s = new DurableObjectStore(this.state.storage, { prefix: binding + \":\" })));");
+    l.push("    return s;");
+    l.push("  }");
+    l.push("  async fetch(request) {");
+    l.push("    return app.handle(request, capabilities(this.env, (b) => this.store(b)), {});");
+    l.push("  }");
+    l.push("}");
+    l.join("\n") + "\n"
+}

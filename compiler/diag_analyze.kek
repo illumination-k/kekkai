@@ -1,0 +1,467 @@
+// Source analysis for the agent tooling (prefix diag_ / Diag*): a port of
+// internal/tooling/analyze.go (tooling.Analyze), the JSON diagnostics of
+// `check -json`, and the command-line flag parsing shared by the tooling
+// commands (Go's flag package).
+//
+// Positions are 1-based lines and 1-based byte columns, like the compiler
+// diagnostics; end positions are exclusive and on the same line.
+
+struct DiagDiag {
+    line: Int,
+    col: Int,
+    end_line: Int,
+    end_col: Int,
+    severity: String, // "error" or "warning"
+    phase: String, // "parse", "type" or "lint"
+    message: String,
+}
+
+struct DiagAnalysis {
+    src: String,
+    bytes: Vec<Int>,
+    // byte offset of the start of each line
+    lines: Vec<Int>,
+    toks: Vec<Tok>,
+    // token index by position (diag_pos_key)
+    tok_at: Map<Int, Int>,
+    file: AstFile,
+    info: ChkInfo,
+    parse_ok: Bool,
+    diags: Vec<DiagDiag>,
+}
+
+fn diag_pos_key(line: Int, col: Int) -> Int {
+    line * 4294967296 + col
+}
+
+// diag_analyze parses and type-checks one source text (tooling.Analyze).
+fn diag_analyze(src: String) -> DiagAnalysis {
+    let bytes = src.to_bytes();
+    let lines = Vec::new();
+    lines.push(0);
+    let mut i = 0;
+    for b in bytes {
+        if b == 10 {
+            lines.push(i + 1);
+        }
+        i = i + 1;
+    }
+    let lr = lex_file("", src);
+    let tok_at: Map<Int, Int> = Map::new();
+    let mut k = 0;
+    for t in lr.toks {
+        tok_at.insert(diag_pos_key(t.pos.line, t.pos.col), k);
+        k = k + 1;
+    }
+    let pr = parse_file("", src, AstIds { next: 0 });
+    let res = chk_check(pr.file);
+    let a = DiagAnalysis {
+        src: src, bytes: bytes, lines: lines, toks: lr.toks, tok_at: tok_at, file: pr.file, info: res.info,
+        parse_ok: pr.errs.len() == 0, diags: Vec::new(),
+    };
+    diag_add_errors(a, pr.errs, "parse");
+    if a.parse_ok {
+        diag_add_errors(a, res.errs, "type");
+        diag_add_lints(a);
+    }
+    a
+}
+
+// diag_offset returns the byte offset of a position, clamped to the text.
+fn diag_offset(a: DiagAnalysis, line0: Int, col: Int) -> Int {
+    let line = line0 - 1;
+    if line < 0 {
+        return 0;
+    }
+    if line >= a.lines.len() {
+        return a.bytes.len();
+    }
+    let start = a.lines.get(line).unwrap_or(0);
+    let mut off = start + col - 1;
+    if off < start {
+        off = start;
+    }
+    if off > a.bytes.len() {
+        off = a.bytes.len();
+    }
+    off
+}
+
+fn diag_byte(a: DiagAnalysis, i: Int) -> Int {
+    a.bytes.get(i).unwrap_or(0)
+}
+
+// diag_rune_size is the length of the UTF-8 sequence starting at off.
+fn diag_rune_size(a: DiagAnalysis, off: Int) -> Int {
+    let c = diag_byte(a, off);
+    let mut size = 1;
+    if c >= 194 && c < 224 {
+        size = 2;
+    } else if c >= 224 && c < 240 {
+        size = 3;
+    } else if c >= 240 && c < 245 {
+        size = 4;
+    }
+    if off + size > a.bytes.len() {
+        return 1;
+    }
+    for j in 1..size {
+        let b = diag_byte(a, off + j);
+        if b < 128 || b >= 192 {
+            return 1;
+        }
+    }
+    size
+}
+
+fn diag_add_errors(a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
+    for e in errs {
+        let end = diag_token_end(a, e.pos.line, e.pos.col);
+        let d = DiagDiag {
+            line: e.pos.line, col: e.pos.col, end_line: e.pos.line, end_col: end, severity: "error", phase: phase,
+            message: e.msg,
+        };
+        let mut skip = false;
+        if e.msg.starts_with("unexpected character") {
+            // one diagnostic per character, with its full extent
+            let off = diag_offset(a, e.pos.line, e.pos.col);
+            let c = diag_byte(a, off);
+            if off < a.bytes.len() && c >= 128 && c < 192 {
+                skip = true;
+            }
+            if off < a.bytes.len() {
+                d.end_col = e.pos.col + diag_rune_size(a, off);
+            } else {
+                d.end_col = e.pos.col;
+            }
+        }
+        if !skip {
+            a.diags.push(d);
+        }
+    }
+}
+
+// diag_caps returns the capability parameters of a function (Func.Caps).
+fn diag_caps(fun: ChkFunc) -> Vec<ChkBinding> {
+    let out = Vec::new();
+    for p in fun.params {
+        if ty_is_cap(p.ty) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+// diag_add_lints reports capabilities that are granted but never used.
+fn diag_add_lints(a: DiagAnalysis) {
+    for fun in a.info.func_list {
+        for c in diag_caps(fun) {
+            if c.uses == 0 && c.name != "_" {
+                a.diags.push(DiagDiag {
+                    line: c.pos.line, col: c.pos.col, end_line: c.pos.line,
+                    end_col: diag_token_end(a, c.pos.line, c.pos.col), severity: "warning", phase: "lint",
+                    message: "capability `" + c.name + ": " + ty_str(c.ty) + "` is granted to `" + fun.name
+                        + "` but never used; remove it to narrow the function's authority",
+                });
+            }
+        }
+    }
+}
+
+// diag_token_end returns the end column of the token starting at the
+// position, or col + 1 if there is none.
+fn diag_token_end(a: DiagAnalysis, line: Int, col: Int) -> Int {
+    match a.tok_at.get(diag_pos_key(line, col)) {
+        Some(i) => {
+            let n = diag_token_len(a, i);
+            if n > 0 {
+                return col + n;
+            }
+        }
+        None => {}
+    }
+    col + 1
+}
+
+// diag_token_len returns the length in bytes of token i (0 for EOF).
+fn diag_token_len(a: DiagAnalysis, i: Int) -> Int {
+    let t = match a.toks.get(i) {
+        Some(t) => t,
+        None => { return 0; }
+    };
+    let n = a.bytes.len();
+    let off = diag_offset(a, t.pos.line, t.pos.col);
+    if t.kind == "EOF" {
+        return 0;
+    }
+    if t.kind == "IDENT" {
+        return t.text.to_bytes().len();
+    }
+    if t.kind == "INT" {
+        let mut j = off;
+        while j < n {
+            let c = diag_byte(a, j);
+            if c == 95 || (c >= 48 && c <= 57) {
+                j = j + 1;
+            } else {
+                break;
+            }
+        }
+        return j - off;
+    }
+    if t.kind == "STRING" {
+        let mut j = off + 1;
+        while j < n && diag_byte(a, j) != 34 && diag_byte(a, j) != 10 {
+            if diag_byte(a, j) == 92 {
+                j = j + 1;
+            }
+            j = j + 1;
+        }
+        if j < n && diag_byte(a, j) == 34 {
+            j = j + 1;
+        }
+        if j > n {
+            j = n;
+        }
+        return j - off;
+    }
+    // keywords and punctuation: the kind is the spelling
+    t.kind.len()
+}
+
+// diag_name_after returns the position (line, col) of the first identifier
+// token at or after the position named name, within 4 tokens.
+fn diag_name_after(a: DiagAnalysis, p: AstPos, name: String) -> AstPos {
+    let i = match a.tok_at.get(diag_pos_key(p.line, p.col)) {
+        Some(i) => i,
+        None => { return p; }
+    };
+    let mut j = i;
+    while j < a.toks.len() && j < i + 4 {
+        let t = a.toks.get(j).unwrap_or(Tok { kind: "EOF", text: "", pos: p });
+        if (t.kind == "IDENT" || t.kind == "_") && t.text == name {
+            return t.pos;
+        }
+        j = j + 1;
+    }
+    p
+}
+
+fn diag_error_count(a: DiagAnalysis) -> Int {
+    let mut n = 0;
+    for d in a.diags {
+        if d.severity == "error" {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+// ---- flags (Go's flag package: flags precede the positional arguments) ----
+
+struct DiagFlags {
+    // flag name -> value ("true"/"false" for booleans)
+    vals: Map<String, String>,
+    rest: Vec<String>,
+    // the error message, or "help" for -h / -help
+    err: String,
+}
+
+// diag_flag_usage is the flag.FlagSet usage text of a tooling command.
+fn diag_flag_usage(cmd: String) -> String {
+    if cmd == "search" {
+        return "Usage of search:\n  -json\n    \temit JSON\n  -limit int\n    \tmaximum number of results (0: unlimited) (default 20)";
+    }
+    if cmd == "caps" {
+        return "Usage of caps:\n  -json\n    \temit JSON: per function caps, pure, async, direct effects, unused caps";
+    }
+    if cmd == "check" {
+        return "Usage of check:\n  -json\n    \temit diagnostics as JSON (exit status 1 if there are errors)";
+    }
+    "Usage of ir:\n  -json\n    \temit JSON (input format of the Lean reference interpreter)"
+}
+
+// diag_parse_bool is strconv.ParseBool.
+fn diag_parse_bool(s: String) -> Option<Bool> {
+    if s == "1" || s == "t" || s == "T" || s == "true" || s == "TRUE" || s == "True" {
+        return Some(true);
+    }
+    if s == "0" || s == "f" || s == "F" || s == "false" || s == "FALSE" || s == "False" {
+        return Some(false);
+    }
+    None
+}
+
+// diag_parse_flags parses args[start..] for the flags of cmd: -json, and
+// -limit for search.
+fn diag_parse_flags(args: Vec<String>, start: Int, cmd: String) -> DiagFlags {
+    let fl = DiagFlags { vals: Map::new(), rest: Vec::new(), err: "" };
+    let mut i = start;
+    while i < args.len() {
+        let a = args.get(i).unwrap_or("");
+        if !a.starts_with("-") || a == "-" {
+            break;
+        }
+        i = i + 1;
+        if a == "--" {
+            break;
+        }
+        let mut name = a.slice(1, a.len());
+        if name.starts_with("-") {
+            name = name.slice(1, name.len());
+        }
+        if name == "" || name.starts_with("-") || name.starts_with("=") {
+            fl.err = "bad flag syntax: " + a;
+            return fl;
+        }
+        let mut value = "";
+        let mut has_value = false;
+        match name.index_of("=") {
+            Some(eq) => {
+                value = name.slice(eq + 1, name.len());
+                name = name.slice(0, eq);
+                has_value = true;
+            }
+            None => {}
+        }
+        if name == "json" {
+            if !has_value {
+                value = "true";
+            }
+            match diag_parse_bool(value) {
+                Some(b) => { fl.vals.insert(name, if b { "true" } else { "false" }); }
+                None => {
+                    fl.err = "invalid boolean value " + lower_go_quote(value) + " for -" + name + ": parse error";
+                    return fl;
+                }
+            }
+        } else if name == "limit" && cmd == "search" {
+            if !has_value {
+                if i >= args.len() {
+                    fl.err = "flag needs an argument: -" + name;
+                    return fl;
+                }
+                value = args.get(i).unwrap_or("");
+                i = i + 1;
+            }
+            if value.parse_int().is_none() {
+                fl.err = "invalid value " + lower_go_quote(value) + " for flag -" + name + ": parse error";
+                return fl;
+            }
+            fl.vals.insert(name, value);
+        } else if name == "h" || name == "help" {
+            fl.err = "help";
+            return fl;
+        } else {
+            fl.err = "flag provided but not defined: -" + name;
+            return fl;
+        }
+    }
+    while i < args.len() {
+        fl.rest.push(args.get(i).unwrap_or(""));
+        i = i + 1;
+    }
+    fl
+}
+
+// diag_flag_error reports a flag error like flag.ExitOnError (status 2,
+// or 0 for -h) or, for search, flag.ContinueOnError (the error is printed
+// again by main; status 1). Returns the exit status.
+fn diag_flag_error(fl: DiagFlags, cmd: String, log: &Log) -> Int {
+    if fl.err == "help" {
+        if cmd == "search" {
+            log.error(diag_flag_usage(cmd) + "\nflag: help requested");
+            return 1;
+        }
+        log.error(diag_flag_usage(cmd));
+        return 0;
+    }
+    if cmd == "search" {
+        log.error(fl.err + "\n" + diag_flag_usage(cmd) + "\n" + fl.err);
+        return 1;
+    }
+    log.error(fl.err + "\n" + diag_flag_usage(cmd));
+    2
+}
+
+fn diag_flag_bool(fl: DiagFlags, name: String) -> Bool {
+    fl.vals.get(name).unwrap_or("false") == "true"
+}
+
+// diag_json_requested reports whether `check`/`ir` was given flags (-json);
+// they are handled by diag_json_main.
+fn diag_json_requested(args: Vec<String>) -> Bool {
+    let a = args.get(1).unwrap_or("");
+    a.starts_with("-") && a != "-"
+}
+
+// diag_read_file reads a single source file (os.ReadFile: a directory is
+// an error).
+fn diag_read_file(path: String, fs: &Fs, log: &Log) -> Option<String> {
+    match fs.list(path) {
+        Ok(_) => {
+            log.error("read " + path + ": is a directory");
+            return None;
+        }
+        Err(_) => {}
+    }
+    match fs.read(path) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            let mut msg = e.message();
+            if msg.starts_with("ENOENT: no such file or directory") {
+                msg = "no such file or directory"; // Node's message, as Go's
+            }
+            log.error("open " + path + ": " + msg);
+            None
+        }
+    }
+}
+
+// diag_json_main implements `check -json <file>` and `ir -json <path>`.
+fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let cmd = args.get(0).unwrap_or("");
+    let fl = diag_parse_flags(args, 1, cmd);
+    if fl.err != "" {
+        return diag_flag_error(fl, cmd, log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("kek " + cmd + ": expected exactly one .kek file");
+        return 1;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    if !diag_flag_bool(fl, "json") {
+        let plain = Vec::new();
+        plain.push(cmd);
+        plain.push(path);
+        return frontend_main(plain, fs, log);
+    }
+    if cmd == "ir" {
+        return irjson_main(path, fs, log);
+    }
+    let src = match diag_read_file(path, fs, log) {
+        Some(s) => s,
+        None => { return 1; }
+    };
+    let a = diag_analyze(src);
+    let ds = Vec::new();
+    for d in a.diags {
+        let o = irjson_obj();
+        irjson_set(o, "file", IrjVal::Str(path));
+        irjson_set(o, "line", irjson_int(d.line));
+        irjson_set(o, "col", irjson_int(d.col));
+        irjson_set(o, "end_line", irjson_int(d.end_line));
+        irjson_set(o, "end_col", irjson_int(d.end_col));
+        irjson_set(o, "severity", IrjVal::Str(d.severity));
+        irjson_set(o, "phase", IrjVal::Str(d.phase));
+        irjson_set(o, "message", IrjVal::Str(d.message));
+        ds.push(irjson_val(o));
+    }
+    let ok = diag_error_count(a) == 0;
+    let r = irjson_obj();
+    irjson_set(r, "file", IrjVal::Str(path));
+    irjson_set(r, "ok", irjson_bool(ok));
+    irjson_set(r, "diagnostics", IrjVal::Arr(ds));
+    log.info(irjson_encode(irjson_val(r), false));
+    if ok { 0 } else { 1 }
+}

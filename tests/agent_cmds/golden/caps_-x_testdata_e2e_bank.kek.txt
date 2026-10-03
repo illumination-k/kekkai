@@ -1,0 +1,6 @@
+--- stderr
+flag provided but not defined: -x
+Usage of caps:
+  -json
+    	emit JSON: per function caps, pure, async, direct effects, unused caps
+--- exit 2

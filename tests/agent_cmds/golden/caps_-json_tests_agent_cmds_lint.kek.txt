@@ -1,0 +1,62 @@
+{
+  "file": "tests/agent_cmds/lint.kek",
+  "functions": [
+    {
+      "name": "area",
+      "signature": "fn area(s: Shape) -> Int",
+      "line": 8,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": []
+    },
+    {
+      "name": "report",
+      "signature": "fn report(log: &Log, clock: &Clock, s: Shape)",
+      "line": 16,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": false,
+      "caps": [
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        },
+        {
+          "name": "clock",
+          "type": "&Clock",
+          "used": false
+        }
+      ],
+      "direct_effects": [
+        "log.info"
+      ],
+      "unused_caps": [
+        "clock"
+      ],
+      "calls": [
+        "area"
+      ]
+    },
+    {
+      "name": "describe",
+      "signature": "fn describe(name: String) -> Option<Int>",
+      "line": 20,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": []
+    }
+  ]
+}
+--- exit 0

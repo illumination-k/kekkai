@@ -1,0 +1,10 @@
+balance_key: pure
+parse_amount: pure
+read_balance: tx: &Tx
+    direct effects: tx.get
+transfer: db: &Db, log: &Log
+    direct effects: db.transaction, log.info, tx.commit, tx.outbox, tx.put, tx.rollback
+get_balance: db: &Db
+    direct effects: db.get
+handle #[handler]: db: &Db, log: &Log
+--- exit 0

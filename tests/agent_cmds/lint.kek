@@ -1,0 +1,22 @@
+// Type checks, with an unused-capability warning (check -json stays ok).
+enum Shape {
+    Circle(Int),
+    Rect(Int, Int),
+    Empty,
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Circle(r) => 3 * r * r,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0,
+    }
+}
+
+fn report(log: &Log, clock: &Clock, s: Shape) {
+    log.info("area " + area(s).to_string());
+}
+
+fn describe(name: String) -> Option<Int> {
+    name.parse_int()
+}

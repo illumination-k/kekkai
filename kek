@@ -207,9 +207,11 @@ Usage:
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
                                   search functions by type
+  kek hash [-json] <file|dir>     definition hashes (alpha-normalized; trans = with dependencies)
+  kek config                      print ./kekkai.toml as JSON
   kek assure (plan|apply|check) [flags] <file|dir>
                                   the guarantee ledger kekkai.assure.lock (docs/assure.md)
-  kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>
+  kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path | -diff rev] <file|dir>
                                   duplicate and similar definitions (exit 1 when found)
 
 Compiler internals:

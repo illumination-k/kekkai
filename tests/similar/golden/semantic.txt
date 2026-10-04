@@ -1,0 +1,12 @@
+semantic (equal results on every generated input):
+  testdata/similar/semantic.kek:3:1  abs_a (Int) -> Int
+  testdata/similar/semantic.kek:10:1  abs_b (Int) -> Int
+  hint: same behaviour on generated inputs (not a proof): keep one of `abs_a` and `abs_b`
+
+semantic (equal results on every generated input):
+  testdata/similar/semantic.kek:28:1  count_a (Vec<Int>) -> Int
+  testdata/similar/semantic.kek:38:1  count_b (Vec<Int>) -> Int
+  hint: same behaviour on generated inputs (not a proof): keep one of `count_a` and `count_b`
+
+2 findings (2 semantic)
+--- exit 1

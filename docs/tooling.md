@@ -48,6 +48,30 @@ every effect that the function and its callees can perform. A function is
 `pure` when `caps` is empty. `async` means the function can reach an
 asynchronous builtin, so it is compiled to a resumable state machine.
 
+## `kek hash [-json] <file|dir>`
+
+Prints the definition hash of every user function
+(`compiler/defhash.kek`). The hash is alpha-normalized: local variables are
+numbered in declaration order and a function's own name is replaced, so
+renaming does not change it. `hash_lits` abstracts the values of literals.
+`trans` also covers every user definition the function can reach and the
+type declarations, so an equal `trans` means equal behaviour. It is the
+key of the test, build, coverage and mutation caches, and the identity used
+by `similar` and `assure`.
+
+```json
+{"path": "x.kek", "hash": "<program>", "types": "<type declarations>",
+ "functions": [{"name": "visit", "file": "x.kek", "line": 12, "sig": "(&Db, &Log, String) -> Result<Int, TxError>",
+                "caps": ["Db", "Log"], "hash": "...", "hash_lits": "...", "trans": "...", "deps": ["counter_key"]}]}
+```
+
+## `kek config`
+
+Prints `./kekkai.toml`, the project configuration read by `similar`,
+`cover`, `mutate` and `assure`, as JSON (exit 1 on a syntax error). The
+format is a TOML subset: `[section]` / `[section."sub"]` headers and
+`key = value` with strings, integers, booleans and arrays.
+
 ## `kek search [-json] [-limit n] '<signature>' [file.kek]`
 
 A Hoogle-style search by type, as described under 型検索 in
@@ -258,12 +282,12 @@ hashes of `compiler/defhash.kek` (`kek hash`):
 | --- | --- | --- |
 | `duplicate` | The same code up to the names of the function and its locals. | Equal `hash` (alpha-normalized). One finding per group. |
 | `literals` | Only constants differ. | Equal `hash_lits` (literal values abstracted). `literals` lists each differing literal with its value and position in every member. |
+| `semantic` | Different code, same behaviour (only with `-semantic`). | Pure, non-generic functions of the same signature whose parameter and result types are built from `Int`, `Bool`, `String`, `()`, `Vec`, `Option` and tuples are paired. `./kek` writes one property test per pair (`a(x) == b(x)`, 200 generated inputs) and runs it with `kek test` (timeout `KEK_TEST_TIMEOUT`, default 10s). Pairs that agree on every input are reported with `similarity` 100. This is evidence, not a proof. |
 | `structural` | Near-misses. | MinHash (30 bands of 2 rows) over 3-label shingles of the preorder labels (literal values and local numbers abstracted) proposes candidate pairs; they are confirmed by the Zhang–Shasha tree edit distance. `similarity` = 100 × (1 − distance / larger node count). Pairs at or above the threshold are reported. |
 
 `similarity` is an integer percent. For `literals` it counts each
-differing literal as one relabel. A third kind of equivalence, different code with
-the same behaviour (comparing outputs on generated inputs), is future
-work. Its hook is `sim_semantic` in `compiler/similar_main.kek`.
+differing literal as one relabel. Proving equivalence with an SMT solver
+(for small linear-arithmetic functions, as in the design) is future work.
 
 What is compared:
 

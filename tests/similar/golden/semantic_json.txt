@@ -1,0 +1,64 @@
+{
+  "path": "testdata/similar/semantic.kek",
+  "threshold": 80,
+  "min_nodes": 16,
+  "all": false,
+  "findings": [
+    {
+      "kind": "semantic",
+      "similarity": 100,
+      "members": [
+        {
+          "name": "abs_a",
+          "file": "testdata/similar/semantic.kek",
+          "line": 3,
+          "col": 1,
+          "sig": "(Int) -> Int",
+          "hash": "H",
+          "nodes": 19,
+          "new": true
+        },
+        {
+          "name": "abs_b",
+          "file": "testdata/similar/semantic.kek",
+          "line": 10,
+          "col": 1,
+          "sig": "(Int) -> Int",
+          "hash": "H",
+          "nodes": 18,
+          "new": true
+        }
+      ],
+      "hint": "same behaviour on generated inputs (not a proof): keep one of `abs_a` and `abs_b`"
+    },
+    {
+      "kind": "semantic",
+      "similarity": 100,
+      "members": [
+        {
+          "name": "count_a",
+          "file": "testdata/similar/semantic.kek",
+          "line": 28,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 28,
+          "new": true
+        },
+        {
+          "name": "count_b",
+          "file": "testdata/similar/semantic.kek",
+          "line": 38,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 17,
+          "new": true
+        }
+      ],
+      "hint": "same behaviour on generated inputs (not a proof): keep one of `count_a` and `count_b`"
+    }
+  ],
+  "allowed": []
+}
+--- exit 1

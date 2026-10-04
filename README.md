@@ -40,8 +40,10 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
 | `kek test [-run re] [-j n] [-json] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス、並列）。引数を取るテストはプロパティベーステスト。結果は定義ハッシュでキャッシュし、変更の影響を受けたテストだけを実行する |
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)） |
-| `kek similar [-json] [-threshold pct] [-all] [-tests] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
+| `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
+| `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`assure` の土台 |
+| `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
 | `kek mutate [-json] [-base p] [-diff rev] <file>` | ミューテーションテスト（型の付く変異体だけ。型で検出された変異体を別に数える。結果はキャッシュ） |
 
 ### テスト（`kek test`）
@@ -151,7 +153,7 @@ LLM が既存の実装を探さずに似た関数を書き足すのを防ぐた�
 - 意図的な重複は `#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けた定義で抑制でき、JSON の `allowed` に理由とともに残ります。
 - `-base <file|dir>` は基準になる古いプログラムで、同じ定義ハッシュを持つ定義は既存とみなし、新しい定義を含む指摘だけを報告します。`-diff <rev>` では `./kek` が `git archive` でその revision のプログラムを一時ディレクトリに取り出して `-base` に渡します。
 - `kekkai.toml` の `[similar]` で `threshold`（%）・`min_nodes`・`max_nodes`（これより大きい木は木の編集距離の代わりにラベル列の編集距離で近似）を設定できます。フラグが優先します。
-- 書き方は違うが意味が同じコード（生成した入力で出力を比べる）の検出は今後の課題です。
+- `-semantic` を付けると、書き方は違うが意味が同じコードも探します。シグネチャが同じ純粋関数の組ごとに `a(x) == b(x)` のプロパティテストを合成し、`kek test` で 200 個の生成入力に対して比べます（`semantic`。証明ではありません。1 組の制限時間は `KEK_TEST_TIMEOUT`、既定 10s）。
 
 ### カバレッジ（`kek cover`）
 

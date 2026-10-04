@@ -1,0 +1,40 @@
+// kek similar -semantic: pure functions compared on generated inputs
+// abs written two ways
+fn abs_a(x: Int) -> Int {
+    if x < 0 {
+        return 0 - x;
+    }
+    x
+}
+
+fn abs_b(n: Int) -> Int {
+    match n >= 0 {
+        true => n,
+        false => -n,
+    }
+}
+
+// not equivalent: off by one at zero
+fn sign_a(x: Int) -> Int {
+    if x > 0 {
+        1
+    } else if x < 0 { -1 } else { 0 }
+}
+
+fn sign_b(x: Int) -> Int {
+    if x >= 0 { 1 } else { -1 }
+}
+
+fn count_a(v: Vec<Int>) -> Int {
+    let mut n = 0;
+    for x in v {
+        if x > 0 {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+fn count_b(v: Vec<Int>) -> Int {
+    v.iter().filter(|x| *x > 0).count()
+}

@@ -1,7 +1,7 @@
 #!/bin/sh
 # similar: kek similar against the goldens in tests/similar/golden (each
 # kind of finding, -json, #[allow(similar)], -base, -threshold, -all,
-# -tests, kekkai.toml, exit codes), and `kek similar -diff <rev>` in a
+# -tests, -semantic, kekkai.toml, exit codes), and `kek similar -diff <rev>` in a
 # temporary git repository.
 #
 #   UPDATE=1 tests/run.sh similar    rewrite the golden files
@@ -33,6 +33,8 @@ base	-base	testdata/similar/base.kek	$basic
 base_json	-json	-base	testdata/similar/base.kek	$basic
 min_nodes	-min_nodes	30	$basic
 clean	testdata/similar/clean.kek
+semantic	-semantic	testdata/similar/semantic.kek
+semantic_json	-json	-semantic	testdata/similar/semantic.kek
 bad_threshold	-threshold	0	$basic
 bad_flag	-bogus	$basic
 no_path

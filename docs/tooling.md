@@ -26,8 +26,42 @@ least one error. Warnings do not change the exit status.
 - `phase` is one of:
   - `parse`: syntax errors. When there are any, no type errors are reported.
   - `type`: type, capability and linearity errors.
-  - `lint`: currently a single warning, for a capability that a function
-    receives but never uses.
+  - `refine`: refinement errors (docs/refinement.md): an index `v[i]` not
+    proved in bounds, a precondition not proved at a call, a postcondition
+    or a refined alias (`type Port = Int where ...`) not proved. They are
+    checked only when there are no type errors.
+  - `lint`: warnings: a capability that a function receives but never uses;
+    a division whose divisor may be zero (or `MIN / -1`), and arithmetic
+    that may overflow (refinement lints). The refinement lints become
+    errors (severity `error`, phase still `lint`) or disappear with the
+    `[refine]` section of `./kekkai.toml`:
+    `overflow` / `division` = `"auto"` (default: warnings, only in functions
+    that use refinements), `"lint"` (warnings everywhere), `"error"` or
+    `"off"`.
+- Refinement diagnostics (phase `refine`, and the refinement lints) have
+  two more fields:
+  - `counterexample`: an object from source names to integers, the
+    solver's model for the variables of the condition
+    (`{"i": 0, "v.len()": 0}`; `{}` when the condition has no variables
+    or the solver gave up);
+  - `facts`: the facts the solver was given, each with the position it
+    comes from: `{"line": 8, "col": 7, "fact": "precondition `0 <= i`"}`.
+
+```json
+{"file": "x.kek", "line": 4, "col": 6, "end_line": 4, "end_col": 7,
+ "severity": "error", "phase": "refine",
+ "message": "cannot prove the index is in bounds: `0 <= i && i < v.len()` (counterexample: i = 0, v.len() = 0)",
+ "counterexample": {"i": 0, "v.len()": 0},
+ "facts": [{"line": 3, "col": 8, "fact": "`v.len() >= 0`"}]}
+```
+
+- When the solver runs out of budget the message starts with
+  `unknown (solver budget: <reason>)` instead of `cannot prove`.
+- `kek check -v <file|dir>` prints the same diagnostics as text with their
+  facts (`    fact: x.kek:3:8: ...`), and the proved conditions as notes
+  with the facts they used (the unsat core) on stdout. Plain `kek check`
+  prints errors and warnings (`x.kek:5:3: warning: ...`); only errors
+  change the exit status.
 
 ## `kek caps -json <file.kek>`
 
@@ -88,7 +122,9 @@ format is a TOML subset: `[section]` / `[section."sub"]` headers and
 A Hoogle-style search by type, as described under 型検索 in
 `docs/design.md`. It searches the functions, enum constructors and builtins
 of the file. Without a file, it searches builtins only. Run it before
-writing a new function to check whether one already exists.
+writing a new function to check whether one already exists. A function's
+refinement predicates follow its signature
+(`fn get(v: Vec<Int>, i: Int) -> Int where 0 <= i, i < v.len()`).
 
 ```
 $ kek search 'String -> Option<Int>' bank.kek
@@ -174,6 +210,9 @@ function results replaced by `0`, `""`, `None`, `Vec::new()` (negated for
 deletions and result replacements are type-checked by group testing (all
 at once, bisecting only a group that fails); the rejected ones are
 **killed by types** (e.g. deleting `tx.commit()?;` breaks `Tx` linearity).
+In functions that use refinement types, every mutant is checked this way:
+one that breaks a proof (`i < n` → `i <= n` before `v[i]`) is killed by
+types too.
 The others are compiled into one mutant schema. A baseline run of every
 test (one process) records which mutant sites it reaches and its probe
 hits (`ticks`); each mutant then runs only the passing tests that reach
@@ -247,7 +286,9 @@ PUT, or a `file://` directory). See [parallel-build.md](parallel-build.md).
 
 The guarantee ledger (design and policy reference: [assure.md](assure.md)).
 For every function it records the guarantees the compiler establishes
-(`effects`, `net.hosts`, `tx.linear`, `idempotent`, `tested`) and the
+(`effects`, `net.hosts`, `tx.linear`, `idempotent`, `tested`, and the
+refinement proofs `refine.index_safe`, `refine.no_div_zero`,
+`refine.no_overflow` with evidence `smt`) and the
 assumptions written in the code (`#[allow(similar, ...)]`, `#[rare]`, and
 one `pii.declassify` per call of `mask`/`hash`/`expose_unchecked`, with its
 `call` and the reason/owner/expiry of the function's `#[declassify(...)]`)
@@ -479,6 +520,13 @@ library types such as `HashMap` are rejected by the type checker.
 - A trap ends the test's process: the report shows the trap and the last
   input that was about to run (`last input: case 3: deep(n = 1)`); traps
   are not shrunk.
+
+- A parameter whose type is a refined alias (`p: Port` with `type Port =
+  Int where 1024 <= self && self < 65536`) gets only values that satisfy
+  the predicate: a value is generated again until it does, up to 1000
+  times (an `Int` alias also draws from the bounds `self op k` its
+  predicate states); a case where none does is skipped. Shrink candidates
+  that break the predicate are skipped too.
 
 ### Test result cache
 

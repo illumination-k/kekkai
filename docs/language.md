@@ -194,6 +194,54 @@ fn greet(log: &Log, u: User) {
 - 格下げ（`mask`・`hash`・`expose_unchecked` の呼び出し）は `kek caps` に関数ごとに一覧され（`declassify`）、`kek assure` に前提 `pii.declassify` として記録される。関数に `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けると、その関数の格下げの承認者・理由・期限になる（`kekkai.toml` の `[pii] declassify_requires` で必須にでき、`[pii] max_declassify_per_module` でファイルごとの数を制限できる。[assure.md](assure.md)）。
 - `#[derive]` は `Pii` を含む型に `PartialEq`・`Eq` だけを導出できる。`kek test` は `Pii` の値を生成しない（ライブラリの型）。
 
+## 篩型（refinement types）
+
+```kek
+type Port = Int where 0 < self && self < 65536;
+type Index = Int where 0 <= self;
+
+fn get(v: Vec<Int>, i: Int) -> Int
+where
+    0 <= i,
+    i < v.len(),
+{
+    v[i]
+}
+
+// 事後条件：`result` は戻り値
+fn clamp(x: Int, lo: Int, hi: Int) -> Int
+where
+    lo <= hi,
+    lo <= result,
+    result <= hi,
+{
+    if x < lo { lo } else if x > hi { hi } else { x }
+}
+
+fn sum(v: Vec<Int>) -> Int {
+    let mut t = 0;
+    for i in 0..v.len() {
+        t = t + v[i]; // 0 <= i < v.len() は for の範囲から
+    }
+    t
+}
+```
+
+- `where` 節には trait の境界（`T: Ord`）と述語を混ぜて書ける。述語は線形整数算術：整数リテラル、`Int` の引数、`v.len()`（`Vec`・`String`）、不変なフィールド（`p.x`）、`+`・`-`、定数との `*`、比較、`&&`・`||`・`!`。`result` を含む述語は事後条件、ほかは事前条件。
+- `type Name = T;`・`type Name = T where pred;` は型の別名。透過的（`Port` は `Int` として使える）で、述語は値を `self` と書く。`Int` から `Port` への変換（引数・戻り値・型注釈付きの `let`・struct のフィールド）で述語の証明が要り、`Port` の値からは述語が事実として使える。
+- `v[i]`（`Vec` のみ）は要素を直接返す。`0 <= i && i < v.len()` が証明できなければ型エラー（`get(i)` は `Option` を返すまま）。
+- 検査器（`compiler/refine.kek`）は関数の本体を歩き、条件（`if`・`while`・`match` の整数パターン・`&&`/`||`）、`for` の範囲、不変な `let`、呼び出し先の事後条件、ループで増えるだけ／減るだけの変数、ループで保たれる `x <= y` を事実として、QF\_LIA のソルバ（`compiler/smt.kek`）で検証条件を示す。`v.len()` の事実は `push`・`pop` や `Vec` に届く呼び出しの後で忘れる。
+- 証明できないとき、エラーには反例が付く：`cannot prove the index is in bounds: ``0 <= i && i < v.len()`` (counterexample: i = 0, v.len() = 0)`。`kek check -v`・`-json` は使った事実も示す。
+- `/`・`%` の除数が 0 でない（`/` は `MIN / -1` でもない）ことと、`+ - *` がオーバーフローしないことは lint（警告）。既定では篩型を使う関数だけで検査し、`kekkai.toml` で変えられる：
+
+```toml
+[refine]
+overflow = "error"   # "auto"（既定）| "off" | "lint" | "error"
+division = "lint"
+```
+
+- 実行時の整数はラップアラウンドのまま（`x / 0 == 0`）。詳細と未実装のものは [refinement.md](refinement.md)。
+
 ## 文と式
 
 - `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ）

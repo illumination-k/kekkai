@@ -1085,6 +1085,13 @@ fn chk_declare_func(
     if !fd.has_body && scope.get("Self").is_none() {
         chk_errorf(c, fd.pos, "free function without a body");
     }
+    if !fd.has_body && fd.preds.len() > 0 {
+        chk_errorf(
+            c,
+            fd.pos,
+            "refinement predicates are not supported on trait method declarations",
+        );
+    }
     let fun = ChkFunc {
         name: name,
         decl: fd,

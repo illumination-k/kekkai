@@ -721,10 +721,14 @@ fn chk_preds(c: Chk, fun: ChkFunc) {
     }
     for p in fun.params {
         if p.name == "result" {
+            let at = match fun.decl.preds.get(0) {
+                Some(e) => ast_expr_pos(e),
+                None => p.pos,
+            };
             chk_errorf(
                 c,
-                p.pos,
-                "a function with refinement predicates cannot have a parameter named `result`",
+                at,
+                "`result` in a predicate is the return value: a function with refinement predicates cannot have a parameter named `result`",
             );
         }
     }

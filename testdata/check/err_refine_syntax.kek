@@ -12,10 +12,9 @@ struct Counter {
     limit: Int,
 }
 
-// ERROR "refinement predicates must be linear: `x * y` multiplies two variables"
 fn area(x: Int, y: Int) -> Int
 where
-    x * y > 0,
+    x * y > 0, // ERROR "refinement predicates must be linear: `x * y` multiplies two variables"
 {
     x * y
 }
@@ -28,52 +27,46 @@ where
     x
 }
 
-// ERROR "`area(x, x)` is not supported in a refinement predicate"
 fn called(x: Int) -> Int
 where
-    area(x, x) > 0,
+    area(x, x) > 0, // ERROR "`area(x, x)` is not supported in a refinement predicate"
 {
     x
 }
 
-// ERROR "mismatched types in refinement predicate: expected `Bool`, found `Int`"
 fn not_bool(x: Int) -> Int
 where
-    x + 1,
+    x + 1, // ERROR "mismatched types in refinement predicate: expected `Bool`, found `Int`"
 {
     x
 }
 
-// ERROR "refinement predicates compare integers only"
 fn strings(s: String, t: String) -> Int
 where
-    s == t,
+    s == t, // ERROR "refinement predicates compare integers only"
     s.len() > 0,
 {
     0
 }
 
-// ERROR "can only mention immutable fields: `n` of `Counter` is `mut`"
 fn mutable_field(c: Counter) -> Int
 where
-    c.n < 10,
+    c.n < 10, // ERROR "can only mention immutable fields: `n` of `Counter` is `mut`"
     c.limit > 0,
 {
     0
 }
 
-// ERROR "cannot have a parameter named `result`"
 fn named_result(result: Int) -> Int
 where
-    result > 0,
+    result > 0, // ERROR "cannot have a parameter named `result`"
 {
     result
 }
 
-// ERROR "cannot find value `y` in this scope"
 fn unknown_name(x: Int) -> Int
 where
-    y > 0,
+    y > 0, // ERROR "cannot find value `y` in this scope"
 {
     x
 }

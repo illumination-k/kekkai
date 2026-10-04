@@ -668,8 +668,15 @@ fn fmt_wheres(ws: Vec<AstWhere>, ind: Int) -> String {
 }
 
 // fmt_wheres_preds prints a function's `where` clause: the trait bounds,
-// then the refinement predicates (each on its own line).
-fn fmt_wheres_preds(p: FmtPrinter, ws: Vec<AstWhere>, preds: Vec<AstExpr>, ind: Int) -> String {
+// then the refinement predicates (each on its own line, keeping a comment
+// that follows it on its line; end is the position after the clause).
+fn fmt_wheres_preds(
+    p: FmtPrinter,
+    ws: Vec<AstWhere>,
+    preds: Vec<AstExpr>,
+    ind: Int,
+    end: AstPos,
+) -> String {
     let mut s = fmt_wheres(ws, ind);
     if preds.len() == 0 {
         return s;
@@ -677,8 +684,23 @@ fn fmt_wheres_preds(p: FmtPrinter, ws: Vec<AstWhere>, preds: Vec<AstExpr>, ind: 
     if s == "" {
         s = "\n" + fmt_indent(ind) + "where";
     }
-    for e in preds {
+    let n = preds.len();
+    for i in 0..n {
+        let e = match preds.get(i) {
+            Some(x) => x,
+            None => {
+                continue;
+            }
+        };
+        let start = fmt_start_pos(e);
+        let next = match preds.get(i + 1) {
+            Some(x) => fmt_start_pos(x),
+            None => end,
+        };
         s = s + "\n" + fmt_indent(ind + 1) + fmt_expr(p, e, ind + 1, (ind + 1) * 4, false) + ",";
+        for c in fmt_take(p, true, start, true, next, start.line) {
+            s = s + " " + c.text;
+        }
     }
     s
 }
@@ -770,7 +792,7 @@ fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
         None => "",
     };
     let name = d.name + fmt_generics(d.generics);
-    let wh = fmt_wheres_preds(p, d.wheres, d.preds, ind);
+    let wh = fmt_wheres_preds(p, d.wheres, d.preds, ind, d.body.pos);
     let mut head = "fn " + name + "(" + params.join(", ") + ")" + ret;
     if ind * 4 + fmt_w(p, head) + 2 > fmt_max_width() && params.len() > 0 {
         head = "fn " + name + "(\n";

@@ -1,0 +1,1290 @@
+// A decision procedure for quantifier-free linear integer arithmetic
+// (QF_LIA), the solver of refinement types (prefix smt_ / Smt*). The API is
+// in docs/refinement.md ("ソルバの API"); the algorithm and budgets in
+// docs/refinement.md ("ソルバの実装").
+//
+// smt_prove(hyps, goal) decides whether hyps && !goal is unsatisfiable:
+//
+//   1. negation normal form: the literals are `lin <= 0` and `lin == 0`
+//      (`!(lin <= 0)` is `-lin + 1 <= 0`, `!(lin == 0)` the disjunction
+//      `lin + 1 <= 0 || -lin + 1 <= 0`), constants folded, And / Or
+//      flattened. A `False` root (e.g. a trivially true goal) is valid.
+//   2. a small DPLL over the disjunctions: the unit constraints are checked
+//      by the theory at every node (a partial assignment); when its model
+//      already satisfies every pending disjunction we are done, otherwise
+//      we split on an unsatisfied disjunction with the fewest children.
+//   3. the theory, conjunctions of linear constraints over the integers:
+//      the Omega test (Pugh 1991). Normalization (gcd tightening, constant
+//      folding), exact elimination of equalities (a unit coefficient, or
+//      Pugh's `mod^` substitution with a new variable), parallel and
+//      opposite constraints merged (bounds conflicts, implied equalities),
+//      one-sided variables dropped, then Fourier–Motzkin on the cheapest
+//      variable: exact when it is (a unit coefficient on one side),
+//      otherwise the real shadow (unsat: done), the dark shadow (sat:
+//      done), and the splinters.
+//
+// Every constraint carries the set of hypothesis labels (`Named`) it was
+// derived from (a bitmask), which gives the unsat core. A satisfying
+// assignment is rebuilt from the eliminations and checked against the
+// original formula: a model that does not check gives Unknown, never a
+// wrong answer. Arithmetic is checked: an overflow of 64 bits anywhere
+// gives Unknown("overflow").
+
+// ---- the API ----
+
+// sum(coef * atom) + k
+struct SmtMono {
+    coef: Int,
+    atom: String,
+}
+
+struct SmtLin {
+    terms: Vec<SmtMono>,
+    k: Int,
+}
+
+enum SmtF {
+    True,
+    False,
+    // lin <= 0
+    Le(SmtLin),
+    // lin == 0
+    Eq(SmtLin),
+    Not(SmtF),
+    And(Vec<SmtF>),
+    Or(Vec<SmtF>),
+    // a named hypothesis (for the unsat core)
+    Named(String, SmtF),
+}
+
+enum SmtResult {
+    // proved; the names of the hypotheses used (unsat core)
+    Valid(Vec<String>),
+    // a counterexample (an integer for every atom)
+    Invalid(Vec<SmtBinding>),
+    // out of budget, coefficient overflow, ...
+    Unknown(String),
+}
+
+struct SmtBinding {
+    atom: String,
+    value: Int,
+}
+
+// ---- budgets ----
+
+// theory calls (Omega steps, counting every elimination and splinter)
+fn smt_max_steps() -> Int {
+    20000
+}
+
+// DPLL nodes
+fn smt_max_branches() -> Int {
+    2000
+}
+
+// constraints in one Omega problem (Fourier–Motzkin can square them)
+fn smt_max_cons() -> Int {
+    500
+}
+
+// ---- state ----
+
+struct SmtCtx {
+    atom_ids: HashMap<String, Int>,
+    atoms: Vec<String>,
+    label_ids: HashMap<String, Int>,
+    labels: Vec<String>,
+    mut overflow: Bool,
+    // a literal's constant was lowered to fit (see smt_flip)
+    mut relaxed: Bool,
+    mut steps: Int,
+    mut branches: Int,
+    // non-empty: give up with this reason
+    mut fail: String,
+}
+
+// a.x + k <= 0 (eq: == 0). a may be shorter than the number of variables
+// (missing coefficients are 0). deps: the labels it was derived from (bit i
+// for label i < 62; bit 62 stands for all labels from 62 on).
+struct SmtCons {
+    a: Vec<Int>,
+    k: Int,
+    eq: Bool,
+    deps: Int,
+}
+
+// a theory result: a model (one value per variable), or unsat with deps
+enum SmtT {
+    Sat(Vec<Int>),
+    Unsat(Int),
+    Unk,
+}
+
+// the formula in negation normal form
+enum SmtN {
+    Lit(SmtCons),
+    And(Vec<SmtN>),
+    Or(Vec<SmtN>),
+    Tru,
+    Fal(Int),
+}
+
+enum SmtNorm {
+    Taut,
+    Contra(Int),
+    Keep(SmtCons),
+}
+
+enum SmtComb {
+    Conflict(Int),
+    // an implied equality was found: the new constraint list
+    Again(Vec<SmtCons>),
+    Done(Vec<SmtCons>),
+}
+
+fn smt_ctx_new() -> SmtCtx {
+    SmtCtx {
+        atom_ids: HashMap::new(),
+        atoms: Vec::new(),
+        label_ids: HashMap::new(),
+        labels: Vec::new(),
+        overflow: false,
+        relaxed: false,
+        steps: 0,
+        branches: 0,
+        fail: "",
+    }
+}
+
+fn smt_fail(x: SmtCtx, why: String) {
+    if x.fail == "" {
+        x.fail = why;
+    }
+}
+
+fn smt_atom(x: SmtCtx, name: String) -> Int {
+    match x.atom_ids.get(name) {
+        Some(i) => i,
+        None => {
+            let i = x.atoms.len();
+            x.atom_ids.insert(name, i);
+            x.atoms.push(name);
+            i
+        }
+    }
+}
+
+fn smt_label_bit(x: SmtCtx, name: String) -> Int {
+    let id = match x.label_ids.get(name) {
+        Some(i) => i,
+        None => {
+            let i = x.labels.len();
+            x.label_ids.insert(name, i);
+            x.labels.push(name);
+            i
+        }
+    };
+    let one = 1;
+    one.shl(id.min(62))
+}
+
+// smt_core lists the labels of a deps mask, in order of appearance.
+fn smt_core(x: SmtCtx, deps: Int) -> Vec<String> {
+    let out = Vec::new();
+    let one = 1;
+    for i in 0..x.labels.len() {
+        if deps.bit_and(one.shl(i.min(62))) != 0 {
+            out.push(x.labels.get(i).unwrap_or(""));
+        }
+    }
+    out
+}
+
+// ---- checked arithmetic ----
+
+fn smt_int_min() -> Int {
+    -9223372036854775807 - 1
+}
+
+fn smt_add(x: SmtCtx, a: Int, b: Int) -> Int {
+    let r = a + b;
+    if (a >= 0 && b >= 0 && r < 0) || (a < 0 && b < 0 && r >= 0) {
+        x.overflow = true;
+        return 0;
+    }
+    r
+}
+
+fn smt_neg(x: SmtCtx, a: Int) -> Int {
+    if a == smt_int_min() {
+        x.overflow = true;
+        return 0;
+    }
+    0 - a
+}
+
+fn smt_mul(x: SmtCtx, a: Int, b: Int) -> Int {
+    if a == 0 || b == 0 {
+        return 0;
+    }
+    if (a == -1 && b == smt_int_min()) || (b == -1 && a == smt_int_min()) {
+        x.overflow = true;
+        return 0;
+    }
+    let r = a * b;
+    if r / b != a {
+        x.overflow = true;
+        return 0;
+    }
+    r
+}
+
+fn smt_abs(x: SmtCtx, a: Int) -> Int {
+    if a < 0 { smt_neg(x, a) } else { a }
+}
+
+// floor(a / b), b > 0
+fn smt_floor_div(a: Int, b: Int) -> Int {
+    let q = a / b;
+    if a % b != 0 && a < 0 { q - 1 } else { q }
+}
+
+// ceil(a / b), b > 0
+fn smt_ceil_div(a: Int, b: Int) -> Int {
+    let q = a / b;
+    if a % b != 0 && a > 0 { q + 1 } else { q }
+}
+
+// gcd of non-negative numbers
+fn smt_gcd(a: Int, b: Int) -> Int {
+    let mut p = a;
+    let mut q = b;
+    while q != 0 {
+        let r = p % q;
+        p = q;
+        q = r;
+    }
+    p
+}
+
+// Pugh's a mod^ m = a - m * floor(a / m + 1/2), in (-m/2, m/2]
+fn smt_modhat(a: Int, m: Int) -> Int {
+    let mut r = a % m;
+    if r < 0 {
+        r = r + m;
+    }
+    if r >= m - r { r - m } else { r }
+}
+
+fn smt_co(c: SmtCons, i: Int) -> Int {
+    c.a.get(i).unwrap_or(0)
+}
+
+fn smt_zeros(n: Int) -> Vec<Int> {
+    let v = Vec::new();
+    for _ in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+// ---- the theory: the Omega test ----
+
+// smt_norm divides by the gcd of the coefficients (tightening the constant
+// of an inequality, refuting an equality it does not divide) and folds
+// constraints without variables.
+fn smt_norm(x: SmtCtx, c: SmtCons, nv: Int) -> SmtNorm {
+    let mut g = 0;
+    for i in 0..nv {
+        let v = smt_co(c, i);
+        if v != 0 {
+            g = smt_gcd(g, smt_abs(x, v));
+        }
+    }
+    if g == 0 {
+        let ok = if c.eq { c.k == 0 } else { c.k <= 0 };
+        if ok {
+            return SmtNorm::Taut;
+        }
+        return SmtNorm::Contra(c.deps);
+    }
+    if g == 1 && c.a.len() == nv {
+        return SmtNorm::Keep(c);
+    }
+    let a = Vec::new();
+    for i in 0..nv {
+        a.push(smt_co(c, i) / g);
+    }
+    if c.eq {
+        if c.k % g != 0 {
+            return SmtNorm::Contra(c.deps);
+        }
+        return SmtNorm::Keep(SmtCons { a, k: c.k / g, eq: true, deps: c.deps });
+    }
+    SmtNorm::Keep(SmtCons { a, k: smt_ceil_div(c.k, g), eq: false, deps: c.deps })
+}
+
+// smt_omega decides a conjunction of constraints over nv variables.
+fn smt_omega(x: SmtCtx, cs0: Vec<SmtCons>, nv: Int) -> SmtT {
+    x.steps = x.steps + 1;
+    if x.steps > smt_max_steps() {
+        smt_fail(x, "budget: more than " + smt_max_steps().to_string() + " theory steps");
+    }
+    if x.overflow || x.fail != "" {
+        return SmtT::Unk;
+    }
+    let cs = Vec::new();
+    let mut has_eq = false;
+    for c in cs0 {
+        match smt_norm(x, c, nv) {
+            SmtNorm::Taut => {}
+            SmtNorm::Contra(d) => {
+                return SmtT::Unsat(d);
+            }
+            SmtNorm::Keep(n) => {
+                if n.eq {
+                    has_eq = true;
+                }
+                cs.push(n);
+            }
+        }
+    }
+    if x.overflow {
+        return SmtT::Unk;
+    }
+    if cs.len() > smt_max_cons() {
+        smt_fail(x, "budget: more than " + smt_max_cons().to_string() + " constraints");
+        return SmtT::Unk;
+    }
+    if has_eq {
+        return smt_elim_eq(x, cs, nv);
+    }
+    let ineqs = match smt_combine(x, cs, nv) {
+        SmtComb::Conflict(d) => {
+            return SmtT::Unsat(d);
+        }
+        SmtComb::Again(next) => {
+            return smt_omega(x, next, nv);
+        }
+        SmtComb::Done(r) => r,
+    };
+    if ineqs.len() == 0 {
+        return SmtT::Sat(smt_zeros(nv));
+    }
+    // per variable: lower / upper bound counts, and whether all lower
+    // (upper) coefficients are 1 (then the elimination is exact)
+    let nlo = smt_zeros(nv);
+    let nup = smt_zeros(nv);
+    let lo_unit = Vec::new();
+    let up_unit = Vec::new();
+    for _ in 0..nv {
+        lo_unit.push(true);
+        up_unit.push(true);
+    }
+    let mut single = true;
+    for c in ineqs {
+        let mut nz = 0;
+        for i in 0..nv {
+            let v = smt_co(c, i);
+            if v > 0 {
+                nup.set(i, nup.get(i).unwrap_or(0) + 1);
+                if v != 1 {
+                    up_unit.set(i, false);
+                }
+                nz = nz + 1;
+            } else if v < 0 {
+                nlo.set(i, nlo.get(i).unwrap_or(0) + 1);
+                if v != -1 {
+                    lo_unit.set(i, false);
+                }
+                nz = nz + 1;
+            }
+        }
+        if nz != 1 {
+            single = false;
+        }
+    }
+    if single {
+        // pure interval reasoning: after smt_combine every variable has at
+        // most one lower and one upper bound, and they agree
+        let m = smt_zeros(nv);
+        for v in 0..nv {
+            if nlo.get(v).unwrap_or(0) + nup.get(v).unwrap_or(0) > 0 {
+                if !smt_pick(x, ineqs, v, m) {
+                    smt_fail(x, "internal: interval model");
+                    return SmtT::Unk;
+                }
+            }
+        }
+        return SmtT::Sat(m);
+    }
+    let mut best = -1;
+    let mut best_cost = 0;
+    let mut best_exact = false;
+    for v in 0..nv {
+        let lo = nlo.get(v).unwrap_or(0);
+        let up = nup.get(v).unwrap_or(0);
+        if lo + up == 0 {
+            continue;
+        }
+        if lo == 0 || up == 0 {
+            return smt_drop_var(x, ineqs, v, nv);
+        }
+        let exact = lo_unit.get(v).unwrap_or(false) || up_unit.get(v).unwrap_or(false);
+        let mut cost = lo * up - lo - up;
+        if !exact {
+            cost = cost + 1000000;
+        }
+        if best < 0 || cost < best_cost {
+            best = v;
+            best_cost = cost;
+            best_exact = exact;
+        }
+    }
+    smt_fm(x, ineqs, best, nv, best_exact)
+}
+
+// smt_elim_eq eliminates one equality: with a unit coefficient by
+// substitution, otherwise by Pugh's mod^ step (a new variable sigma).
+fn smt_elim_eq(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtT {
+    let mut ei = -1;
+    let mut j = -1;
+    let mut idx = 0;
+    while idx < cs.len() && j < 0 {
+        let c = cs.get(idx).unwrap_or(SmtCons { a: Vec::new(), k: 0, eq: false, deps: 0 });
+        if c.eq {
+            if ei < 0 {
+                ei = idx;
+            }
+            for i in 0..nv {
+                let v = smt_co(c, i);
+                if j < 0 && (v == 1 || v == -1) {
+                    ei = idx;
+                    j = i;
+                }
+            }
+        }
+        idx = idx + 1;
+    }
+    let e = cs.get(ei).unwrap_or(SmtCons { a: Vec::new(), k: 0, eq: true, deps: 0 });
+    let unit = j >= 0;
+    let mut nv2 = nv;
+    let d = Vec::new();
+    let mut dk = 0;
+    if unit {
+        // x_j = -s * (sum_{i != j} a_i x_i + k), s = a_j = +-1
+        let s = smt_co(e, j);
+        for i in 0..nv {
+            if i == j {
+                d.push(0);
+            } else {
+                d.push(smt_mul(x, 0 - s, smt_co(e, i)));
+            }
+        }
+        dk = smt_mul(x, 0 - s, e.k);
+    } else {
+        // the smallest coefficient a_j (made positive by s), m = a_j + 1:
+        // x_j = -m sigma + sum_{i != j} (s a_i mod^ m) x_i + (s k mod^ m)
+        let mut amin = 0;
+        for i in 0..nv {
+            let v = smt_abs(x, smt_co(e, i));
+            if v != 0 && (j < 0 || v < amin) {
+                j = i;
+                amin = v;
+            }
+        }
+        let s = if smt_co(e, j) < 0 { -1 } else { 1 };
+        let m = smt_add(x, amin, 1);
+        for i in 0..nv {
+            if i == j {
+                d.push(0);
+            } else {
+                d.push(smt_modhat(smt_mul(x, s, smt_co(e, i)), m));
+            }
+        }
+        d.push(smt_neg(x, m));
+        dk = smt_modhat(smt_mul(x, s, e.k), m);
+        nv2 = nv + 1;
+    }
+    if x.overflow {
+        return SmtT::Unk;
+    }
+    let next = Vec::new();
+    for i in 0..cs.len() {
+        if unit && i == ei {
+            continue;
+        }
+        let c = cs.get(i).unwrap_or(e);
+        next.push(smt_subst(x, c, j, d, dk, e.deps, nv2));
+    }
+    match smt_omega(x, next, nv2) {
+        SmtT::Sat(m) => {
+            let mut val = dk;
+            for i in 0..nv2 {
+                let di = d.get(i).unwrap_or(0);
+                if di != 0 {
+                    val = smt_add(x, val, smt_mul(x, di, m.get(i).unwrap_or(0)));
+                }
+            }
+            m.set(j, val);
+            SmtT::Sat(m)
+        }
+        r => r,
+    }
+}
+
+// smt_subst replaces x_j by d.x + dk in c.
+fn smt_subst(x: SmtCtx, c: SmtCons, j: Int, d: Vec<Int>, dk: Int, edeps: Int, nv: Int) -> SmtCons {
+    let cj = smt_co(c, j);
+    if cj == 0 {
+        return c;
+    }
+    let a = Vec::new();
+    for i in 0..nv {
+        if i == j {
+            a.push(0);
+        } else {
+            a.push(smt_add(x, smt_co(c, i), smt_mul(x, cj, d.get(i).unwrap_or(0))));
+        }
+    }
+    SmtCons { a, k: smt_add(x, c.k, smt_mul(x, cj, dk)), eq: c.eq, deps: c.deps.bit_or(edeps) }
+}
+
+// smt_vec_rel: 1 when a == b, -1 when a == -b, 0 otherwise.
+fn smt_vec_rel(a: Vec<Int>, b: Vec<Int>, nv: Int) -> Int {
+    let mut same = true;
+    let mut opp = true;
+    for i in 0..nv {
+        let p = a.get(i).unwrap_or(0);
+        let q = b.get(i).unwrap_or(0);
+        if p != q {
+            same = false;
+        }
+        if p != 0 - q {
+            opp = false;
+        }
+        if !same && !opp {
+            return 0;
+        }
+    }
+    if same { 1 } else { -1 }
+}
+
+// smt_combine merges inequalities with the same coefficients (the tighter
+// stays) and checks opposite pairs: a.x + k1 <= 0, -a.x + k2 <= 0 conflict
+// when k1 + k2 > 0 and are the equality a.x + k1 == 0 when k1 + k2 == 0.
+fn smt_combine(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtComb {
+    let n = cs.len();
+    let dead = Vec::new();
+    for _ in 0..n {
+        dead.push(false);
+    }
+    let dummy = SmtCons { a: Vec::new(), k: 0, eq: false, deps: 0 };
+    for i in 0..n {
+        let ci = cs.get(i).unwrap_or(dummy);
+        let mut j = i + 1;
+        while j < n && !dead.get(i).unwrap_or(false) {
+            if !dead.get(j).unwrap_or(false) {
+                let cj = cs.get(j).unwrap_or(dummy);
+                let rel = smt_vec_rel(ci.a, cj.a, nv);
+                if rel == 1 {
+                    if cj.k > ci.k {
+                        dead.set(i, true);
+                    } else {
+                        dead.set(j, true);
+                    }
+                } else if rel == -1 {
+                    let s = smt_add(x, ci.k, cj.k);
+                    let deps = ci.deps.bit_or(cj.deps);
+                    if s > 0 {
+                        return SmtComb::Conflict(deps);
+                    }
+                    if s == 0 {
+                        let next = Vec::new();
+                        for t in 0..n {
+                            if t != i && t != j && !dead.get(t).unwrap_or(false) {
+                                next.push(cs.get(t).unwrap_or(dummy));
+                            }
+                        }
+                        next.push(SmtCons { a: ci.a, k: ci.k, eq: true, deps });
+                        return SmtComb::Again(next);
+                    }
+                }
+            }
+            j = j + 1;
+        }
+    }
+    let out = Vec::new();
+    for i in 0..n {
+        if !dead.get(i).unwrap_or(false) {
+            out.push(cs.get(i).unwrap_or(dummy));
+        }
+    }
+    SmtComb::Done(out)
+}
+
+// smt_drop_var: v has bounds on one side only, so its constraints can
+// always be met; decide the rest and choose v afterwards.
+fn smt_drop_var(x: SmtCtx, cs: Vec<SmtCons>, v: Int, nv: Int) -> SmtT {
+    let rest = Vec::new();
+    let mine = Vec::new();
+    for c in cs {
+        if smt_co(c, v) != 0 {
+            mine.push(c);
+        } else {
+            rest.push(c);
+        }
+    }
+    match smt_omega(x, rest, nv) {
+        SmtT::Sat(m) => {
+            if !smt_pick(x, mine, v, m) {
+                smt_fail(x, "internal: one-sided model");
+                return SmtT::Unk;
+            }
+            SmtT::Sat(m)
+        }
+        r => r,
+    }
+}
+
+// smt_pick sets m[v] to an integer satisfying cs given the other values of
+// m (the one closest to 0), or reports that there is none.
+fn smt_pick(x: SmtCtx, cs: Vec<SmtCons>, v: Int, m: Vec<Int>) -> Bool {
+    let mut has_l = false;
+    let mut has_u = false;
+    let mut l = 0;
+    let mut u = 0;
+    for c in cs {
+        let a = smt_co(c, v);
+        if a == 0 {
+            continue;
+        }
+        let mut s = c.k;
+        for i in 0..c.a.len() {
+            let ci = smt_co(c, i);
+            if i != v && ci != 0 {
+                s = smt_add(x, s, smt_mul(x, ci, m.get(i).unwrap_or(0)));
+            }
+        }
+        // a v + s <= 0 (or == 0)
+        let mut lo = 0;
+        let mut up = 0;
+        let mut set_lo = false;
+        let mut set_up = false;
+        if c.eq {
+            let ns = smt_neg(x, s);
+            if ns % a != 0 {
+                return false;
+            }
+            lo = ns / a;
+            up = lo;
+            set_lo = true;
+            set_up = true;
+        } else if a > 0 {
+            up = smt_floor_div(smt_neg(x, s), a);
+            set_up = true;
+        } else {
+            lo = smt_ceil_div(s, smt_neg(x, a));
+            set_lo = true;
+        }
+        if set_lo && (!has_l || lo > l) {
+            l = lo;
+            has_l = true;
+        }
+        if set_up && (!has_u || up < u) {
+            u = up;
+            has_u = true;
+        }
+    }
+    if x.overflow {
+        return false;
+    }
+    if has_l && has_u && l > u {
+        return false;
+    }
+    let val = if has_l && l > 0 {
+        l
+    } else if has_u && u < 0 { u } else { 0 };
+    while m.len() <= v {
+        m.push(0);
+    }
+    m.set(v, val);
+    true
+}
+
+// smt_fm_pair combines a lower bound l (coefficient -b of v) and an upper
+// bound u (coefficient a): a l + b u, plus slack (the dark shadow's
+// (a - 1)(b - 1)).
+fn smt_fm_pair(x: SmtCtx, l: SmtCons, u: SmtCons, v: Int, nv: Int, dark: Bool) -> SmtCons {
+    let b = smt_neg(x, smt_co(l, v));
+    let a = smt_co(u, v);
+    let co = Vec::new();
+    for i in 0..nv {
+        if i == v {
+            co.push(0);
+        } else {
+            co.push(smt_add(x, smt_mul(x, a, smt_co(l, i)), smt_mul(x, b, smt_co(u, i))));
+        }
+    }
+    let mut k = smt_add(x, smt_mul(x, a, l.k), smt_mul(x, b, u.k));
+    if dark {
+        k = smt_add(x, k, smt_mul(x, a - 1, b - 1));
+    }
+    SmtCons { a: co, k, eq: false, deps: l.deps.bit_or(u.deps) }
+}
+
+fn smt_shadow(
+    x: SmtCtx,
+    rest: Vec<SmtCons>,
+    los: Vec<SmtCons>,
+    ups: Vec<SmtCons>,
+    v: Int,
+    nv: Int,
+    dark: Bool,
+) -> Vec<SmtCons> {
+    let out = Vec::new();
+    for c in rest {
+        out.push(c);
+    }
+    for l in los {
+        for u in ups {
+            out.push(smt_fm_pair(x, l, u, v, nv, dark));
+        }
+    }
+    out
+}
+
+// smt_fm eliminates v by Fourier–Motzkin: exact, or real shadow / dark
+// shadow / splinters.
+fn smt_fm(x: SmtCtx, cs: Vec<SmtCons>, v: Int, nv: Int, exact: Bool) -> SmtT {
+    let rest = Vec::new();
+    let los = Vec::new();
+    let ups = Vec::new();
+    let mine = Vec::new();
+    for c in cs {
+        let a = smt_co(c, v);
+        if a > 0 {
+            ups.push(c);
+            mine.push(c);
+        } else if a < 0 {
+            los.push(c);
+            mine.push(c);
+        } else {
+            rest.push(c);
+        }
+    }
+    if los.len() * ups.len() + rest.len() > smt_max_cons() {
+        smt_fail(x, "budget: more than " + smt_max_cons().to_string() + " constraints");
+        return SmtT::Unk;
+    }
+    let real = smt_shadow(x, rest, los, ups, v, nv, false);
+    if x.overflow {
+        return SmtT::Unk;
+    }
+    match smt_omega(x, real, nv) {
+        SmtT::Sat(m) => {
+            if smt_pick(x, mine, v, m) {
+                return SmtT::Sat(m);
+            }
+            if exact {
+                smt_fail(x, "internal: exact elimination model");
+                return SmtT::Unk;
+            }
+        }
+        r => {
+            return r;
+        }
+    }
+    if x.overflow {
+        return SmtT::Unk;
+    }
+    // the real shadow has a solution but maybe no integer one: the dark
+    // shadow (an integer v surely fits between the bounds)
+    let darkc = smt_shadow(x, rest, los, ups, v, nv, true);
+    if x.overflow {
+        return SmtT::Unk;
+    }
+    let mut deps = 0;
+    match smt_omega(x, darkc, nv) {
+        SmtT::Sat(m) => {
+            if smt_pick(x, mine, v, m) {
+                return SmtT::Sat(m);
+            }
+            smt_fail(x, "internal: dark shadow model");
+            return SmtT::Unk;
+        }
+        SmtT::Unsat(d) => {
+            deps = d;
+        }
+        SmtT::Unk => {
+            return SmtT::Unk;
+        }
+    }
+    for c in mine {
+        deps = deps.bit_or(c.deps);
+    }
+    // splinters: an integer solution outside the dark shadow lies close to
+    // some lower bound b v >= e: b v == e + i, 0 <= i <= (mx b - mx - b) / mx
+    // where mx is the largest upper coefficient
+    let mut mx = 0;
+    for u in ups {
+        mx = mx.max(smt_co(u, v));
+    }
+    for l in los {
+        let b = smt_neg(x, smt_co(l, v));
+        let top = smt_floor_div(smt_add(x, smt_mul(x, mx, b), smt_neg(x, smt_add(x, mx, b))), mx);
+        if x.overflow {
+            return SmtT::Unk;
+        }
+        let mut i = 0;
+        while i <= top {
+            let next = Vec::new();
+            for c in cs {
+                next.push(c);
+            }
+            // -b v + e + i == 0
+            next.push(SmtCons { a: l.a, k: smt_add(x, l.k, i), eq: true, deps: l.deps });
+            match smt_omega(x, next, nv) {
+                SmtT::Sat(m) => {
+                    return SmtT::Sat(m);
+                }
+                SmtT::Unsat(d) => {
+                    deps = deps.bit_or(d);
+                }
+                SmtT::Unk => {
+                    return SmtT::Unk;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    SmtT::Unsat(deps)
+}
+
+// ---- formulas ----
+
+fn smt_lin_cons(x: SmtCtx, l: SmtLin, eq: Bool, deps: Int) -> SmtCons {
+    for t in l.terms {
+        smt_atom(x, t.atom);
+    }
+    let a = smt_zeros(x.atoms.len());
+    for t in l.terms {
+        let i = smt_atom(x, t.atom);
+        a.set(i, smt_add(x, a.get(i).unwrap_or(0), t.coef));
+    }
+    SmtCons { a, k: l.k, eq, deps }
+}
+
+// smt_flip: s * c + 1 <= 0 (s = +-1). When the constant passes the
+// largest Int (`!(x + y <= MAX)` is `-x - y + MAX + 1 <= 0`), it is
+// lowered to MAX: a weaker literal (in negation normal form every literal
+// occurs positively), so `valid` stays sound; a model is still checked
+// against the original formula.
+fn smt_flip(x: SmtCtx, c: SmtCons, s: Int) -> SmtCons {
+    let a = Vec::new();
+    for v in c.a {
+        a.push(smt_mul(x, s, v));
+    }
+    let saved = x.overflow;
+    let mut k = smt_mul(x, s, c.k);
+    if x.overflow {
+        // -MIN: the constant is MAX + 1 before adding 1
+        k = 9223372036854775807;
+        x.relaxed = true;
+    } else {
+        k = smt_add(x, k, 1);
+        if x.overflow {
+            k = 9223372036854775807;
+            x.relaxed = true;
+        }
+    }
+    x.overflow = saved;
+    SmtCons { a, k, eq: false, deps: c.deps }
+}
+
+// smt_lit folds a literal without variables.
+fn smt_lit(c: SmtCons) -> SmtN {
+    for v in c.a {
+        if v != 0 {
+            return SmtN::Lit(c);
+        }
+    }
+    let ok = if c.eq { c.k == 0 } else { c.k <= 0 };
+    if ok { SmtN::Tru } else { SmtN::Fal(c.deps) }
+}
+
+fn smt_mk_and(parts: Vec<SmtN>) -> SmtN {
+    let out = Vec::new();
+    for p in parts {
+        match p {
+            SmtN::Tru => {}
+            SmtN::Fal(d) => {
+                return SmtN::Fal(d);
+            }
+            SmtN::And(qs) => {
+                for q in qs {
+                    out.push(q);
+                }
+            }
+            q => {
+                out.push(q);
+            }
+        }
+    }
+    if out.len() == 0 {
+        return SmtN::Tru;
+    }
+    if out.len() == 1 {
+        return out.get(0).unwrap_or(SmtN::Tru);
+    }
+    SmtN::And(out)
+}
+
+fn smt_mk_or(parts: Vec<SmtN>) -> SmtN {
+    let out = Vec::new();
+    let mut deps = 0;
+    for p in parts {
+        match p {
+            SmtN::Tru => {
+                return SmtN::Tru;
+            }
+            SmtN::Fal(d) => {
+                deps = deps.bit_or(d);
+            }
+            SmtN::Or(qs) => {
+                for q in qs {
+                    out.push(q);
+                }
+            }
+            q => {
+                out.push(q);
+            }
+        }
+    }
+    if out.len() == 0 {
+        return SmtN::Fal(deps);
+    }
+    if out.len() == 1 {
+        return out.get(0).unwrap_or(SmtN::Tru);
+    }
+    SmtN::Or(out)
+}
+
+// smt_nnf converts f (negated when neg) under the labels deps.
+fn smt_nnf(x: SmtCtx, f: SmtF, neg: Bool, deps: Int) -> SmtN {
+    match f {
+        SmtF::True => if neg { SmtN::Fal(deps) } else { SmtN::Tru },
+        SmtF::False => if neg { SmtN::Tru } else { SmtN::Fal(deps) },
+        SmtF::Le(l) => {
+            let c = smt_lin_cons(x, l, false, deps);
+            if neg {
+                // lin >= 1
+                smt_lit(smt_flip(x, c, -1))
+            } else {
+                smt_lit(c)
+            }
+        }
+        SmtF::Eq(l) => {
+            let c = smt_lin_cons(x, l, true, deps);
+            if neg {
+                // lin <= -1 || lin >= 1
+                let parts = Vec::new();
+                parts.push(smt_lit(smt_flip(x, c, 1)));
+                parts.push(smt_lit(smt_flip(x, c, -1)));
+                smt_mk_or(parts)
+            } else {
+                smt_lit(c)
+            }
+        }
+        SmtF::Not(g) => smt_nnf(x, g, !neg, deps),
+        SmtF::And(gs) => {
+            let parts = Vec::new();
+            for g in gs {
+                parts.push(smt_nnf(x, g, neg, deps));
+            }
+            if neg {
+                smt_mk_or(parts)
+            } else {
+                smt_mk_and(parts)
+            }
+        }
+        SmtF::Or(gs) => {
+            let parts = Vec::new();
+            for g in gs {
+                parts.push(smt_nnf(x, g, neg, deps));
+            }
+            if neg {
+                smt_mk_and(parts)
+            } else {
+                smt_mk_or(parts)
+            }
+        }
+        SmtF::Named(n, g) => smt_nnf(x, g, neg, deps.bit_or(smt_label_bit(x, n))),
+    }
+}
+
+// smt_flatten adds a conjunct to units / ors: -1, or the deps of a False.
+fn smt_flatten(n: SmtN, units: Vec<SmtCons>, ors: Vec<SmtN>) -> Int {
+    match n {
+        SmtN::Lit(c) => {
+            units.push(c);
+            -1
+        }
+        SmtN::And(ps) => {
+            for p in ps {
+                let d = smt_flatten(p, units, ors);
+                if d >= 0 {
+                    return d;
+                }
+            }
+            -1
+        }
+        SmtN::Or(_) => {
+            ors.push(n);
+            -1
+        }
+        SmtN::Tru => -1,
+        SmtN::Fal(d) => d,
+    }
+}
+
+// smt_eval_n evaluates n under the model m (a heuristic: an overflow makes
+// a literal false).
+fn smt_eval_n(x: SmtCtx, n: SmtN, m: Vec<Int>) -> Bool {
+    match n {
+        SmtN::Lit(c) => {
+            let saved = x.overflow;
+            x.overflow = false;
+            let mut s = c.k;
+            for i in 0..c.a.len() {
+                let v = smt_co(c, i);
+                if v != 0 {
+                    s = smt_add(x, s, smt_mul(x, v, m.get(i).unwrap_or(0)));
+                }
+            }
+            let bad = x.overflow;
+            x.overflow = saved;
+            if bad {
+                return false;
+            }
+            if c.eq { s == 0 } else { s <= 0 }
+        }
+        SmtN::And(ps) => {
+            for p in ps {
+                if !smt_eval_n(x, p, m) {
+                    return false;
+                }
+            }
+            true
+        }
+        SmtN::Or(ps) => {
+            for p in ps {
+                if smt_eval_n(x, p, m) {
+                    return true;
+                }
+            }
+            false
+        }
+        SmtN::Tru => true,
+        SmtN::Fal(_) => false,
+    }
+}
+
+fn smt_or_size(n: SmtN) -> Int {
+    match n {
+        SmtN::Or(ps) => ps.len(),
+        _ => 1,
+    }
+}
+
+// smt_search: DPLL over the disjunctions ors, with the theory checking the
+// units at every node.
+fn smt_search(x: SmtCtx, units: Vec<SmtCons>, ors: Vec<SmtN>, nv: Int) -> SmtT {
+    x.branches = x.branches + 1;
+    if x.branches > smt_max_branches() {
+        smt_fail(x, "budget: more than " + smt_max_branches().to_string() + " case splits");
+        return SmtT::Unk;
+    }
+    let m = match smt_omega(x, units, nv) {
+        SmtT::Sat(m) => m,
+        r => {
+            return r;
+        }
+    };
+    // split on an unsatisfied disjunction with the fewest children
+    let mut bi = -1;
+    let mut bn = 0;
+    for i in 0..ors.len() {
+        let o = ors.get(i).unwrap_or(SmtN::Tru);
+        if !smt_eval_n(x, o, m) {
+            let n = smt_or_size(o);
+            if bi < 0 || n < bn {
+                bi = i;
+                bn = n;
+            }
+        }
+    }
+    if bi < 0 {
+        return SmtT::Sat(m);
+    }
+    let children = match ors.get(bi).unwrap_or(SmtN::Tru) {
+        SmtN::Or(ps) => ps,
+        o => {
+            let v = Vec::new();
+            v.push(o);
+            v
+        }
+    };
+    let mut deps = 0;
+    for ch in children {
+        let u2 = Vec::new();
+        for c in units {
+            u2.push(c);
+        }
+        let o2 = Vec::new();
+        for i in 0..ors.len() {
+            if i != bi {
+                o2.push(ors.get(i).unwrap_or(SmtN::Tru));
+            }
+        }
+        let fd = smt_flatten(ch, u2, o2);
+        if fd >= 0 {
+            deps = deps.bit_or(fd);
+            continue;
+        }
+        match smt_search(x, u2, o2, nv) {
+            SmtT::Sat(m2) => {
+                return SmtT::Sat(m2);
+            }
+            SmtT::Unsat(d) => {
+                deps = deps.bit_or(d);
+            }
+            SmtT::Unk => {
+                return SmtT::Unk;
+            }
+        }
+    }
+    SmtT::Unsat(deps)
+}
+
+// ---- evaluation (the model check) ----
+
+fn smt_eval_lin(x: SmtCtx, l: SmtLin, env: HashMap<String, Int>) -> Int {
+    let mut s = l.k;
+    for t in l.terms {
+        s = smt_add(x, s, smt_mul(x, t.coef, env.get(t.atom).unwrap_or(0)));
+    }
+    s
+}
+
+// smt_eval evaluates f under env (atoms missing are 0); an overflow sets
+// x.overflow.
+fn smt_eval(x: SmtCtx, f: SmtF, env: HashMap<String, Int>) -> Bool {
+    match f {
+        SmtF::True => true,
+        SmtF::False => false,
+        SmtF::Le(l) => smt_eval_lin(x, l, env) <= 0,
+        SmtF::Eq(l) => smt_eval_lin(x, l, env) == 0,
+        SmtF::Not(g) => !smt_eval(x, g, env),
+        SmtF::And(gs) => {
+            let mut ok = true;
+            for g in gs {
+                if !smt_eval(x, g, env) {
+                    ok = false;
+                }
+            }
+            ok
+        }
+        SmtF::Or(gs) => {
+            let mut ok = false;
+            for g in gs {
+                if smt_eval(x, g, env) {
+                    ok = true;
+                }
+            }
+            ok
+        }
+        SmtF::Named(_, g) => smt_eval(x, g, env),
+    }
+}
+
+// ---- the entry point ----
+
+// smt_prove decides whether hyps && !goal is unsatisfiable over the
+// integers.
+fn smt_prove(hyps: Vec<SmtF>, goal: SmtF) -> SmtResult {
+    let x = smt_ctx_new();
+    let parts = Vec::new();
+    for h in hyps {
+        parts.push(smt_nnf(x, h, false, 0));
+    }
+    parts.push(smt_nnf(x, goal, true, 0));
+    if x.overflow {
+        return SmtResult::Unknown("overflow");
+    }
+    let root = smt_mk_and(parts);
+    let units = Vec::new();
+    let ors = Vec::new();
+    let fd = smt_flatten(root, units, ors);
+    if fd >= 0 {
+        return SmtResult::Valid(smt_core(x, fd));
+    }
+    let nv = x.atoms.len();
+    let r = smt_search(x, units, ors, nv);
+    if x.overflow {
+        return SmtResult::Unknown("overflow");
+    }
+    if x.fail != "" {
+        return SmtResult::Unknown(x.fail);
+    }
+    match r {
+        SmtT::Unsat(d) => SmtResult::Valid(smt_core(x, d)),
+        SmtT::Unk => SmtResult::Unknown("unknown"),
+        SmtT::Sat(m) => {
+            let env: HashMap<String, Int> = HashMap::new();
+            let bs = Vec::new();
+            for i in 0..nv {
+                let name = x.atoms.get(i).unwrap_or("");
+                let val = m.get(i).unwrap_or(0);
+                env.insert(name, val);
+                bs.push(SmtBinding { atom: name, value: val });
+            }
+            let mut ok = true;
+            for h in hyps {
+                if !smt_eval(x, h, env) {
+                    ok = false;
+                }
+            }
+            if smt_eval(x, goal, env) {
+                ok = false;
+            }
+            if x.overflow {
+                return SmtResult::Unknown("overflow");
+            }
+            if !ok && x.relaxed {
+                return SmtResult::Unknown("overflow");
+            }
+            if !ok {
+                return SmtResult::Unknown("internal: the model does not check");
+            }
+            SmtResult::Invalid(bs)
+        }
+    }
+}
+
+// smt_result_text prints a result as `valid [h1, h2]`, `invalid x=1 y=2`
+// or `unknown: reason`.
+fn smt_result_text(r: SmtResult) -> String {
+    match r {
+        SmtResult::Valid(core) => "valid [" + core.join(", ") + "]",
+        SmtResult::Invalid(bs) => {
+            let mut s = "invalid";
+            for b in bs {
+                s = s + " " + b.atom + "=" + b.value.to_string();
+            }
+            s
+        }
+        SmtResult::Unknown(why) => "unknown: " + why,
+    }
+}

@@ -1,0 +1,18 @@
+two_x_eq_one: valid []
+one_le_3x_le_2: valid [h1, h2]
+even_odd: valid [h1, h2]
+gcd_eq: valid [h1]
+gcd_eq_sat: invalid x=-1 y=1
+modhat_eq: invalid x=12 y=-3 z=-1
+modhat_eq_bounded_unsat: valid [h1, h2, h3]
+dark_shadow: valid [h1, h2, h3, h4]
+dark_shadow_sat: invalid x=2 y=2
+two_strips: valid [h1, h2, h3, h4]
+strip_without_points: valid [h1, h2]
+two_var_parity: valid [h1, h2]
+splinter_point_1: invalid a=2 b=-4
+splinter_point_2: invalid a=1 b=4
+splinter_3: valid [s1, s2]
+splinter_4: invalid b=1 a=1
+splinter_5: valid [s1, s2, s3]
+--- exit 0

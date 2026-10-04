@@ -1,0 +1,830 @@
+// `kek smt` (hidden; prefix smt_): runs the QF_LIA solver of
+// compiler/smt.kek on problems written in a small text syntax, and tests
+// it against brute force.
+//
+//   kek smt [-repeat N] <file>     solve the problems of the file
+//   kek smt -random N [-seed S]    differential test against brute force
+//   kek smt -bench N [-seed S]     solve N random problems (for timing)
+//
+// A file holds problems separated by blank lines; `//` starts a comment
+// line:
+//
+//   problem index_safe             (optional) printed before the result
+//   hyp h1: 0 <= i < n             a named hypothesis (unsat core)
+//   hyp: n == len(v)               an unnamed one
+//   goal: i < len(v)               (default: false)
+//
+// Formulas: comparisons `<= < >= > == !=` (chains `a <= b < c` are
+// conjunctions) of linear terms (`+ -`, `*` by a constant, parentheses),
+// `&& || !`, `true`, `false`. An atom is a name of letters, digits and
+// `_ # . [ ]`, optionally followed by a parenthesized argument
+// (`len(v)`, `v.len()`, `x#2`). Each problem prints one line:
+// `valid [h1, h2]`, `invalid x=1 y=2` or `unknown: reason`.
+
+struct SmtTok {
+    // num, id, op, eof
+    kind: String,
+    text: String,
+    num: Int,
+}
+
+fn smt_is_digit(c: Int) -> Bool {
+    c >= 48 && c <= 57
+}
+
+fn smt_is_id_start(c: Int) -> Bool {
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
+}
+
+fn smt_is_id_char(c: Int) -> Bool {
+    smt_is_id_start(c) || smt_is_digit(c) || c == 35 || c == 46 || c == 91 || c == 93
+}
+
+fn smt_lex(s: String) -> Result<Vec<SmtTok>, String> {
+    let toks = Vec::new();
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        if c == 32 || c == 9 || c == 13 {
+            i = i + 1;
+            continue;
+        }
+        if smt_is_digit(c) {
+            let st = i;
+            while i < n && smt_is_digit(s.char_at(i).unwrap_or(0)) {
+                i = i + 1;
+            }
+            let t = s.slice(st, i);
+            match t.parse_int() {
+                Some(v) => {
+                    toks.push(SmtTok { kind: "num", text: t, num: v });
+                }
+                None => {
+                    return Err("number out of range: " + t);
+                }
+            }
+            continue;
+        }
+        if smt_is_id_start(c) {
+            let st = i;
+            while i < n && smt_is_id_char(s.char_at(i).unwrap_or(0)) {
+                i = i + 1;
+            }
+            if i < n && s.char_at(i).unwrap_or(0) == 40 {
+                // an argument: up to the matching parenthesis
+                let mut depth = 0;
+                while i < n {
+                    let d = s.char_at(i).unwrap_or(0);
+                    i = i + 1;
+                    if d == 40 {
+                        depth = depth + 1;
+                    } else if d == 41 {
+                        depth = depth - 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                }
+                if depth != 0 {
+                    return Err("unbalanced parenthesis in " + s.slice(st, i));
+                }
+                while i < n && smt_is_id_char(s.char_at(i).unwrap_or(0)) {
+                    i = i + 1;
+                }
+            }
+            toks.push(SmtTok { kind: "id", text: s.slice(st, i), num: 0 });
+            continue;
+        }
+        let two = if i + 1 < n { s.slice(i, i + 2) } else { "" };
+        if two == "<=" || two == ">=" || two == "==" || two == "!=" || two == "&&" || two == "||" {
+            toks.push(SmtTok { kind: "op", text: two, num: 0 });
+            i = i + 2;
+            continue;
+        }
+        let one = s.slice(i, i + 1);
+        if "<>+-*()!".contains(one) {
+            toks.push(SmtTok { kind: "op", text: one, num: 0 });
+            i = i + 1;
+            continue;
+        }
+        return Err("unexpected character " + one);
+    }
+    toks.push(SmtTok { kind: "eof", text: "", num: 0 });
+    Ok(toks)
+}
+
+struct SmtParser {
+    toks: Vec<SmtTok>,
+    mut pos: Int,
+    mut err: String,
+    // checked arithmetic of constants
+    x: SmtCtx,
+}
+
+fn smt_p_tok(p: SmtParser) -> SmtTok {
+    p.toks.get(p.pos).unwrap_or(SmtTok { kind: "eof", text: "", num: 0 })
+}
+
+fn smt_p_is(p: SmtParser, text: String) -> Bool {
+    let t = smt_p_tok(p);
+    t.kind == "op" && t.text == text
+}
+
+fn smt_p_fail(p: SmtParser, msg: String) {
+    if p.err == "" {
+        let t = smt_p_tok(p);
+        let at = if t.kind == "eof" {
+            "end of line"
+        } else {
+            "`" + t.text + "`"
+        };
+        p.err = msg + " at " + at;
+    }
+}
+
+fn smt_p_formula(p: SmtParser) -> SmtF {
+    let parts = Vec::new();
+    parts.push(smt_p_and(p));
+    while p.err == "" && smt_p_is(p, "||") {
+        p.pos = p.pos + 1;
+        parts.push(smt_p_and(p));
+    }
+    if parts.len() == 1 {
+        return parts.get(0).unwrap_or(SmtF::True);
+    }
+    SmtF::Or(parts)
+}
+
+fn smt_p_and(p: SmtParser) -> SmtF {
+    let parts = Vec::new();
+    parts.push(smt_p_unary(p));
+    while p.err == "" && smt_p_is(p, "&&") {
+        p.pos = p.pos + 1;
+        parts.push(smt_p_unary(p));
+    }
+    if parts.len() == 1 {
+        return parts.get(0).unwrap_or(SmtF::True);
+    }
+    SmtF::And(parts)
+}
+
+fn smt_p_is_term_op(p: SmtParser) -> Bool {
+    let t = smt_p_tok(p);
+    t.kind == "op" && "+ - * <= < >= > == !=".split(" ").iter().any(|o| o == t.text)
+}
+
+fn smt_p_unary(p: SmtParser) -> SmtF {
+    if smt_p_is(p, "!") {
+        p.pos = p.pos + 1;
+        return SmtF::Not(smt_p_unary(p));
+    }
+    let t = smt_p_tok(p);
+    if t.kind == "id" && t.text == "true" {
+        p.pos = p.pos + 1;
+        return SmtF::True;
+    }
+    if t.kind == "id" && t.text == "false" {
+        p.pos = p.pos + 1;
+        return SmtF::False;
+    }
+    if smt_p_is(p, "(") {
+        // a parenthesized formula, unless it is the start of a term
+        let save = p.pos;
+        p.pos = p.pos + 1;
+        let f = smt_p_formula(p);
+        if p.err == "" && smt_p_is(p, ")") {
+            p.pos = p.pos + 1;
+            if !smt_p_is_term_op(p) {
+                return f;
+            }
+        }
+        p.pos = save;
+        p.err = "";
+    }
+    smt_p_cmp(p)
+}
+
+fn smt_lin_const(k: Int) -> SmtLin {
+    SmtLin { terms: Vec::new(), k }
+}
+
+// smt_lin_comb: a + s * b
+fn smt_lin_comb(x: SmtCtx, a: SmtLin, s: Int, b: SmtLin) -> SmtLin {
+    let terms = Vec::new();
+    for t in a.terms {
+        terms.push(t);
+    }
+    for t in b.terms {
+        terms.push(SmtMono { coef: smt_mul(x, s, t.coef), atom: t.atom });
+    }
+    SmtLin { terms, k: smt_add(x, a.k, smt_mul(x, s, b.k)) }
+}
+
+fn smt_lin_scale(x: SmtCtx, s: Int, a: SmtLin) -> SmtLin {
+    smt_lin_comb(x, smt_lin_const(0), s, a)
+}
+
+fn smt_p_cmp(p: SmtParser) -> SmtF {
+    let x = p.x;
+    let mut l = smt_p_lin(p);
+    let parts = Vec::new();
+    while true {
+        if p.err != "" {
+            return SmtF::True;
+        }
+        let t = smt_p_tok(p);
+        let op = t.text;
+        if t.kind != "op"
+            || !(op == "<=" || op == "<" || op == ">=" || op == ">" || op == "==" || op == "!=") {
+            break;
+        }
+        p.pos = p.pos + 1;
+        let r = smt_p_lin(p);
+        // l - r, or r - l for >= and >
+        let d = if op == ">=" || op == ">" {
+            smt_lin_comb(x, r, -1, l)
+        } else {
+            smt_lin_comb(x, l, -1, r)
+        };
+        let f = if op == "<=" || op == ">=" {
+            SmtF::Le(d)
+        } else if op == "<" || op == ">" {
+            SmtF::Le(smt_lin_comb(x, d, 1, smt_lin_const(1)))
+        } else if op == "==" {
+            SmtF::Eq(d)
+        } else {
+            SmtF::Not(SmtF::Eq(d))
+        };
+        parts.push(f);
+        l = r;
+    }
+    if parts.len() == 0 {
+        smt_p_fail(p, "expected a comparison");
+        return SmtF::True;
+    }
+    if x.overflow {
+        p.err = "constant out of range";
+    }
+    if parts.len() == 1 {
+        return parts.get(0).unwrap_or(SmtF::True);
+    }
+    SmtF::And(parts)
+}
+
+fn smt_p_lin(p: SmtParser) -> SmtLin {
+    let mut l = smt_p_term(p);
+    while p.err == "" && (smt_p_is(p, "+") || smt_p_is(p, "-")) {
+        let s = if smt_p_is(p, "+") { 1 } else { -1 };
+        p.pos = p.pos + 1;
+        let r = smt_p_term(p);
+        l = smt_lin_comb(p.x, l, s, r);
+    }
+    l
+}
+
+fn smt_p_term(p: SmtParser) -> SmtLin {
+    let mut l = smt_p_factor(p);
+    while p.err == "" && smt_p_is(p, "*") {
+        p.pos = p.pos + 1;
+        let r = smt_p_factor(p);
+        if l.terms.len() == 0 {
+            l = smt_lin_scale(p.x, l.k, r);
+        } else if r.terms.len() == 0 {
+            l = smt_lin_scale(p.x, r.k, l);
+        } else {
+            smt_p_fail(p, "nonlinear product");
+        }
+    }
+    l
+}
+
+fn smt_p_factor(p: SmtParser) -> SmtLin {
+    let t = smt_p_tok(p);
+    if t.kind == "num" {
+        p.pos = p.pos + 1;
+        return smt_lin_const(t.num);
+    }
+    if t.kind == "id" && t.text != "true" && t.text != "false" {
+        p.pos = p.pos + 1;
+        let terms = Vec::new();
+        terms.push(SmtMono { coef: 1, atom: t.text });
+        return SmtLin { terms, k: 0 };
+    }
+    if smt_p_is(p, "-") {
+        p.pos = p.pos + 1;
+        return smt_lin_scale(p.x, -1, smt_p_factor(p));
+    }
+    if smt_p_is(p, "(") {
+        p.pos = p.pos + 1;
+        let l = smt_p_lin(p);
+        if !smt_p_is(p, ")") {
+            smt_p_fail(p, "expected `)`");
+        }
+        p.pos = p.pos + 1;
+        return l;
+    }
+    smt_p_fail(p, "expected a term");
+    smt_lin_const(0)
+}
+
+// smt_parse_formula parses one formula (the whole string).
+fn smt_parse_formula(s: String) -> Result<SmtF, String> {
+    let toks = match smt_lex(s) {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let p = SmtParser { toks, pos: 0, err: "", x: smt_ctx_new() };
+    let f = smt_p_formula(p);
+    if p.err == "" && smt_p_tok(p).kind != "eof" {
+        smt_p_fail(p, "unexpected token");
+    }
+    if p.err != "" {
+        return Err(p.err);
+    }
+    Ok(f)
+}
+
+struct SmtProblem {
+    mut name: String,
+    hyps: Vec<SmtF>,
+    mut goal: SmtF,
+    mut err: String,
+    mut line: Int,
+    mut empty: Bool,
+}
+
+fn smt_problem_new() -> SmtProblem {
+    SmtProblem { name: "", hyps: Vec::new(), goal: SmtF::False, err: "", line: 0, empty: true }
+}
+
+fn smt_parse_file(text: String) -> Vec<SmtProblem> {
+    let out = Vec::new();
+    let mut cur = smt_problem_new();
+    let mut ln = 0;
+    for raw in text.split("\n") {
+        ln = ln + 1;
+        let line = raw.trim();
+        if line == "" {
+            if !cur.empty {
+                out.push(cur);
+                cur = smt_problem_new();
+            }
+            continue;
+        }
+        if line.starts_with("//") {
+            continue;
+        }
+        if cur.empty {
+            cur.empty = false;
+            cur.line = ln;
+        }
+        if cur.err != "" {
+            continue;
+        }
+        if line.starts_with("problem ") {
+            cur.name = line.slice(8, line.len()).trim();
+            continue;
+        }
+        let colon = match line.index_of(":") {
+            Some(i) => i,
+            None => {
+                cur.err = "line " + ln.to_string() + ": expected `hyp [name]: ...` or `goal: ...`";
+                continue;
+            }
+        };
+        let head = line.slice(0, colon).trim();
+        let body = line.slice(colon + 1, line.len());
+        let f = match smt_parse_formula(body) {
+            Ok(f) => f,
+            Err(e) => {
+                cur.err = "line " + ln.to_string() + ": " + e;
+                continue;
+            }
+        };
+        if head == "goal" {
+            cur.goal = f;
+        } else if head == "hyp" {
+            cur.hyps.push(f);
+        } else if head.starts_with("hyp ") {
+            cur.hyps.push(SmtF::Named(head.slice(4, head.len()).trim(), f));
+        } else {
+            cur.err = "line " + ln.to_string() + ": unknown line kind `" + head + "`";
+        }
+    }
+    if !cur.empty {
+        out.push(cur);
+    }
+    out
+}
+
+fn smt_usage() -> String {
+    "smt [-repeat N] <file> | smt -random N [-seed S] | smt -bench N [-seed S]"
+}
+
+fn smt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = tool_flags(args, 1, "repeat# random# bench# seed#");
+    if fl.err != "" {
+        return tool_flag_error(fl, smt_usage(), log);
+    }
+    let seed = tool_flag_int(fl, "seed", 1);
+    let random = tool_flag_int(fl, "random", 0);
+    if random > 0 {
+        return smt_random_main(random, seed, log);
+    }
+    let bench = tool_flag_int(fl, "bench", 0);
+    if bench > 0 {
+        return smt_bench_main(bench, seed, log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek " + smt_usage());
+        return 2;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let text = match fs.read(path) {
+        Ok(t) => t,
+        Err(_) => {
+            log.error("kek smt: cannot read " + path);
+            return 1;
+        }
+    };
+    let repeat = tool_flag_int(fl, "repeat", 1).max(1);
+    let lines = Vec::new();
+    let mut status = 0;
+    for pr in smt_parse_file(text) {
+        let prefix = if pr.name == "" { "" } else { pr.name + ": " };
+        if pr.err != "" {
+            lines.push(prefix + "error: " + pr.err);
+            status = 1;
+            continue;
+        }
+        let mut r = SmtResult::Unknown("");
+        for _ in 0..repeat {
+            r = smt_prove(pr.hyps, pr.goal);
+        }
+        lines.push(prefix + smt_result_text(r));
+    }
+    if lines.len() > 0 {
+        log.info(lines.join("\n"));
+    }
+    status
+}
+
+// ---- printing (for failures of the random test) ----
+
+fn smt_lin_text(l: SmtLin) -> String {
+    let parts = Vec::new();
+    for t in l.terms {
+        parts.push(t.coef.to_string() + "*" + t.atom);
+    }
+    parts.push(l.k.to_string());
+    parts.join(" + ")
+}
+
+fn smt_f_text(f: SmtF) -> String {
+    match f {
+        SmtF::True => "true",
+        SmtF::False => "false",
+        SmtF::Le(l) => "(" + smt_lin_text(l) + " <= 0)",
+        SmtF::Eq(l) => "(" + smt_lin_text(l) + " == 0)",
+        SmtF::Not(g) => "!" + smt_f_text(g),
+        SmtF::And(gs) => {
+            let ps = Vec::new();
+            for g in gs {
+                ps.push(smt_f_text(g));
+            }
+            "(" + ps.join(" && ") + ")"
+        }
+        SmtF::Or(gs) => {
+            let ps = Vec::new();
+            for g in gs {
+                ps.push(smt_f_text(g));
+            }
+            "(" + ps.join(" || ") + ")"
+        }
+        SmtF::Named(_, g) => smt_f_text(g),
+    }
+}
+
+fn smt_problem_text(name: String, hyps: Vec<SmtF>, goal: SmtF) -> String {
+    let lines = Vec::new();
+    lines.push("problem " + name);
+    for h in hyps {
+        match h {
+            SmtF::Named(n, g) => {
+                lines.push("hyp " + n + ": " + smt_f_text(g));
+            }
+            g => {
+                lines.push("hyp: " + smt_f_text(g));
+            }
+        }
+    }
+    lines.push("goal: " + smt_f_text(goal));
+    lines.join("\n")
+}
+
+// ---- random problems ----
+
+struct SmtRng {
+    mut s: Int,
+}
+
+fn smt_rng_int(r: SmtRng, lo: Int, hi: Int) -> Int {
+    r.s = r.s * 6364136223846793005 + 1442695040888963407;
+    lo + r.s.ushr(33) % (hi - lo + 1)
+}
+
+fn smt_rand_lin(r: SmtRng, maxc: Int) -> SmtLin {
+    smt_rand_lin_k(r, maxc, 8)
+}
+
+fn smt_rand_lin_k(r: SmtRng, maxc: Int, maxk: Int) -> SmtLin {
+    let terms = Vec::new();
+    let n = smt_rng_int(r, 1, 3);
+    for _ in 0..n {
+        let mut c = smt_rng_int(r, 0 - maxc, maxc);
+        if c == 0 {
+            c = 1;
+        }
+        let i = smt_rng_int(r, 0, 2);
+        terms.push(SmtMono { coef: c, atom: "abc".slice(i, i + 1) });
+    }
+    SmtLin { terms, k: smt_rng_int(r, 0 - maxk, maxk) }
+}
+
+fn smt_rand_f(r: SmtRng, depth: Int, maxc: Int) -> SmtF {
+    let roll = smt_rng_int(r, 0, 9);
+    if depth == 0 || roll < 4 {
+        let l = smt_rand_lin(r, maxc);
+        if smt_rng_int(r, 0, 9) < 7 {
+            return SmtF::Le(l);
+        }
+        return SmtF::Eq(l);
+    }
+    if roll < 6 {
+        return SmtF::Not(smt_rand_f(r, depth - 1, maxc));
+    }
+    let gs = Vec::new();
+    gs.push(smt_rand_f(r, depth - 1, maxc));
+    gs.push(smt_rand_f(r, depth - 1, maxc));
+    if roll < 8 {
+        SmtF::And(gs)
+    } else {
+        SmtF::Or(gs)
+    }
+}
+
+// smt_rand_problem: problem i over a, b, c. Even problems are bounded
+// (-4 <= a, b, c <= 4, unnamed hypotheses). By (i / 2) % 4: up to 3 named
+// random formulas and a random goal with coefficients up to 3, the same up
+// to 7, or 3 to 5 inequalities with coefficients up to 9 (the dark shadow
+// and splinters) and a goal that is an inequality or false, or thin
+// strips in a and b and the goal false.
+fn smt_rand_problem(r: SmtRng, i: Int) -> (Vec<SmtF>, SmtF) {
+    let bounded = i % 2 == 0;
+    let kind = i / 2 % 4;
+    let hyps = Vec::new();
+    if kind == 3 {
+        // two or three thin strips lo <= p.a + q.b <= lo + w: the real
+        // shadow is often satisfiable where no integer point is
+        let ns = smt_rng_int(r, 2, 3);
+        for j in 0..ns {
+            let terms = Vec::new();
+            let mut p = smt_rng_int(r, -11, 11);
+            if p == 0 {
+                p = 5;
+            }
+            let mut q = smt_rng_int(r, -11, 11);
+            if q == 0 {
+                q = -7;
+            }
+            terms.push(SmtMono { coef: p, atom: "a" });
+            terms.push(SmtMono { coef: q, atom: "b" });
+            let lo = smt_rng_int(r, -30, 30);
+            let w = smt_rng_int(r, 0, 4);
+            let lin = SmtLin { terms, k: 0 };
+            let s = Vec::new();
+            s.push(SmtF::Le(smt_lin_comb(smt_ctx_new(), smt_lin_const(lo), -1, lin)));
+            s.push(SmtF::Le(smt_lin_comb(smt_ctx_new(), lin, 1, smt_lin_const(0 - lo - w))));
+            hyps.push(SmtF::Named("s" + (j + 1).to_string(), SmtF::And(s)));
+        }
+        smt_rand_bounds(hyps, bounded);
+        return (hyps, SmtF::False);
+    }
+    if kind == 2 {
+        let nh = smt_rng_int(r, 3, 5);
+        for j in 0..nh {
+            hyps.push(SmtF::Named("h" + (j + 1).to_string(), SmtF::Le(smt_rand_lin_k(r, 9, 20))));
+        }
+    } else {
+        let nh = smt_rng_int(r, 0, 3);
+        let maxc = if kind == 1 { 7 } else { 3 };
+        for j in 0..nh {
+            hyps.push(SmtF::Named("h" + (j + 1).to_string(), smt_rand_f(r, 2, maxc)));
+        }
+    }
+    smt_rand_bounds(hyps, bounded);
+    let goal = if kind == 2 {
+        if smt_rng_int(r, 0, 1) == 0 {
+            SmtF::False
+        } else {
+            SmtF::Le(smt_rand_lin_k(r, 9, 20))
+        }
+    } else {
+        smt_rand_f(r, 2, if kind == 1 { 7 } else { 3 })
+    };
+    (hyps, goal)
+}
+
+fn smt_rand_bounds(hyps: Vec<SmtF>, bounded: Bool) {
+    if bounded {
+        for i in 0..3 {
+            let atom = "abc".slice(i, i + 1);
+            let up = Vec::new();
+            up.push(SmtMono { coef: 1, atom });
+            hyps.push(SmtF::Le(SmtLin { terms: up, k: -4 }));
+            let lo = Vec::new();
+            lo.push(SmtMono { coef: -1, atom });
+            hyps.push(SmtF::Le(SmtLin { terms: lo, k: -4 }));
+        }
+    }
+}
+
+// an evaluator independent of the solver's: vals are a, b, c
+fn smt_bf_eval(f: SmtF, vals: Vec<Int>) -> Bool {
+    match f {
+        SmtF::True => true,
+        SmtF::False => false,
+        SmtF::Le(l) => smt_bf_lin(l, vals) <= 0,
+        SmtF::Eq(l) => smt_bf_lin(l, vals) == 0,
+        SmtF::Not(g) => !smt_bf_eval(g, vals),
+        SmtF::And(gs) => gs.iter().all(|g| smt_bf_eval(g, vals)),
+        SmtF::Or(gs) => gs.iter().any(|g| smt_bf_eval(g, vals)),
+        SmtF::Named(_, g) => smt_bf_eval(g, vals),
+    }
+}
+
+fn smt_bf_lin(l: SmtLin, vals: Vec<Int>) -> Int {
+    let mut s = l.k;
+    for t in l.terms {
+        let i = if t.atom == "a" {
+            0
+        } else if t.atom == "b" { 1 } else { 2 };
+        s = s + t.coef * vals.get(i).unwrap_or(0);
+    }
+    s
+}
+
+fn smt_bf_cex(hyps: Vec<SmtF>, goal: SmtF, vals: Vec<Int>) -> Bool {
+    for h in hyps {
+        if !smt_bf_eval(h, vals) {
+            return false;
+        }
+    }
+    !smt_bf_eval(goal, vals)
+}
+
+// smt_bf_valid: no counterexample in [-4, 4]^3
+fn smt_bf_valid(hyps: Vec<SmtF>, goal: SmtF) -> Bool {
+    for a in -4..5 {
+        for b in -4..5 {
+            for c in -4..5 {
+                let vals = Vec::new();
+                vals.push(a);
+                vals.push(b);
+                vals.push(c);
+                if smt_bf_cex(hyps, goal, vals) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+// smt_core_hyps keeps the unnamed hypotheses and the named ones in core.
+fn smt_core_hyps(hyps: Vec<SmtF>, core: Vec<String>) -> Vec<SmtF> {
+    let out = Vec::new();
+    for h in hyps {
+        match h {
+            SmtF::Named(n, _) => {
+                if core.iter().any(|c| c == n) {
+                    out.push(h);
+                }
+            }
+            _ => {
+                out.push(h);
+            }
+        }
+    }
+    out
+}
+
+// smt_random_main: n random problems (smt_rand_problem) against brute
+// force over [-4, 4]^3.
+// Bounded problems are decided exactly by brute force; for the others a
+// counterexample in the box refutes `valid`, and a model must check.
+fn smt_random_main(n: Int, seed: Int, log: &Log) -> Int {
+    let r = SmtRng { s: seed };
+    let mut nvalid = 0;
+    let mut ninvalid = 0;
+    let mut nunknown = 0;
+    let fails = Vec::new();
+    for i in 0..n {
+        let bounded = i % 2 == 0;
+        let (hyps, goal) = smt_rand_problem(r, i);
+        let bf = smt_bf_valid(hyps, goal);
+        let name = "random-" + seed.to_string() + "-" + i.to_string();
+        let mut why = "";
+        match smt_prove(hyps, goal) {
+            SmtResult::Valid(core) => {
+                nvalid = nvalid + 1;
+                if !bf {
+                    why = "valid, but brute force finds a counterexample";
+                } else if !smt_bf_valid(smt_core_hyps(hyps, core), goal) {
+                    why = "the core [" + core.join(", ") + "] is not enough";
+                }
+            }
+            SmtResult::Invalid(bs) => {
+                ninvalid = ninvalid + 1;
+                let vals = smt_zeros(3);
+                for b in bs {
+                    let k = "abc".index_of(b.atom).unwrap_or(0);
+                    vals.set(k, b.value);
+                }
+                if bounded && bf {
+                    why = "invalid, but brute force finds no counterexample";
+                } else if !smt_bf_cex(hyps, goal, vals) {
+                    why = "the model does not check";
+                }
+            }
+            SmtResult::Unknown(w) => {
+                nunknown = nunknown + 1;
+                why = "unknown: " + w;
+            }
+        }
+        if why != "" {
+            fails.push("FAIL " + name + ": " + why + "\n" + smt_problem_text(name, hyps, goal));
+        }
+    }
+    let lines = Vec::new();
+    for f in fails {
+        lines.push(f);
+    }
+    lines.push(
+        "random: "
+            + n.to_string()
+            + " problems (seed "
+            + seed.to_string()
+            + "): "
+            + nvalid.to_string()
+            + " valid, "
+            + ninvalid.to_string()
+            + " invalid, "
+            + nunknown.to_string()
+            + " unknown, "
+            + fails.len().to_string()
+            + " failures",
+    );
+    log.info(lines.join("\n"));
+    if fails.len() > 0 { 1 } else { 0 }
+}
+
+// smt_bench_main solves n random problems (generated up front).
+fn smt_bench_main(n: Int, seed: Int, log: &Log) -> Int {
+    let r = SmtRng { s: seed };
+    let probs = Vec::new();
+    for i in 0..n {
+        probs.push(smt_rand_problem(r, i));
+    }
+    let mut nvalid = 0;
+    let mut ninvalid = 0;
+    let mut nunknown = 0;
+    for (hyps, goal) in probs {
+        match smt_prove(hyps, goal) {
+            SmtResult::Valid(_) => {
+                nvalid = nvalid + 1;
+            }
+            SmtResult::Invalid(_) => {
+                ninvalid = ninvalid + 1;
+            }
+            SmtResult::Unknown(_) => {
+                nunknown = nunknown + 1;
+            }
+        }
+    }
+    log.info(
+        "bench: "
+            + n.to_string()
+            + " problems: "
+            + nvalid.to_string()
+            + " valid, "
+            + ninvalid.to_string()
+            + " invalid, "
+            + nunknown.to_string()
+            + " unknown",
+    );
+    0
+}

@@ -34,6 +34,9 @@ fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
     if cmd == "assure" {
         return asr_main(args, fs, log);
     }
+    if cmd == "smt" {
+        return smt_main(args, fs, log);
+    }
     if cmd == "similar" {
         return sim_main(args, fs, log);
     }

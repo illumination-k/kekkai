@@ -7,6 +7,8 @@ import Kekkai.Effects
 import Kekkai.Monitor
 import Kekkai.Linearity
 import Kekkai.NoLeak
+import Kekkai.Pred
+import Kekkai.Refine
 import Kekkai.Examples
 import Kekkai.IR.Arith
 import Kekkai.IR.Syntax

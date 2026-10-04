@@ -91,6 +91,17 @@ theorem TxPost.single {Δ ρ s σ M o v ev} (h : Rel Δ ρ s σ M o) (hst : M.st
     TxPost Δ ρ s s σ M o (.done (.ok v) σ [ev]) :=
   ⟨M, by simp [Mon.run, hst], h.act, h.seen, fun _ => rfl, fun _ _ => h⟩
 
+/-- A result without events that does not change the state (`binResult`,
+`indexResult`). -/
+theorem TxPost.of_noEvents {Δ ρ s σ M o r} (h : Rel Δ ρ s σ M o)
+    (hr : ∀ out σ' tr, r = .done out σ' tr → tr = [] ∧ σ' = σ ∧ ∃ v, out = .ok v) :
+    TxPost Δ ρ s s σ M o r := by
+  cases r with
+  | done out σ' tr =>
+    obtain ⟨rfl, rfl, v, rfl⟩ := hr _ _ _ rfl
+    exact TxPost.nil h
+  | _ => trivial
+
 /-- Consuming the open transaction (`commit` succeeded or failed, `rollback`). -/
 theorem TxPost.consume {Δ ρ σ M o v ev} (h : Rel Δ ρ .live σ M o)
     (hst : M.step ev = some ⟨none, M.seen⟩) :
@@ -131,9 +142,7 @@ theorem eval_txsafe (O : Oracle) {P : Prog} (hP : WTProg P) :
       simp only [eval]
       refine TxPost.bind (ih ha hR) ha.none_pres' fun _ _ _ _ _ _ hR₁ _ => ?_
       refine TxPost.bind (ih hb hR₁) hb.none_pres' fun _ _ _ _ _ _ hR₂ _ => ?_
-      split
-      · exact TxPost.nil hR₂
-      · trivial
+      exact TxPost.of_noEvents hR₂ fun _ _ _ h => binResult_done h
     | @call _ _ _ f args cs fd hf hargs hcs hnd =>
       simp only [eval]
       split
@@ -272,6 +281,16 @@ theorem eval_txsafe (O : Oracle) {P : Prog} (hP : WTProg P) :
     | abort _ =>
       simp only [eval]
       exact ⟨M, rfl, hR.act, hR.seen, fun _ => rfl, fun _ => nofun⟩
+    | len _ =>
+      simp only [eval]
+      split
+      · exact TxPost.nil hR
+      · trivial
+    | index _ _ =>
+      simp only [eval]
+      split
+      · exact TxPost.of_noEvents hR fun _ _ _ h => indexResult_done h
+      · trivial
 
 /-- **Transactional discipline of whole runs.** Running a well-typed entry
 function (one that takes no `Tx` parameter) of a well-typed program yields a trace

@@ -50,6 +50,7 @@ inductive ValTy : Val → Ty → Prop where
   | unit : ValTy .unit .unit
   | bool (b : Bool) : ValTy (.bool b) .bool
   | int (i : Int) : ValTy (.int i) .int
+  | arr (xs : List Int) : ValTy (.arr xs) .arr
 
 /-- Result type of a binary operator (both operands are `Int`). -/
 def BinOp.resTy : BinOp → Ty
@@ -57,6 +58,11 @@ def BinOp.resTy : BinOp → Ty
   | .sub => .int
   | .lt => .bool
   | .eq => .bool
+  | .mul => .int
+  | .div => .int
+  | .mod => .int
+  | .le => .bool
+  | .ne => .bool
 
 /-- Result type of a store operation. -/
 def StoreOp.resTy : StoreOp → Ty
@@ -116,6 +122,9 @@ inductive HasType (P : Prog) :
   | rollback {Γ Δ c} :
       Δ[c]? = some (some .tx) → HasType P Γ Δ .live (.rollback c) .unit .done
   | abort {Γ Δ s s' τ} : AbortStep s s' → HasType P Γ Δ s .abort τ s'
+  | len {Γ Δ s a} : Γ[a]? = some .arr → HasType P Γ Δ s (.len a) .int s
+  | index {Γ Δ s a i} :
+      Γ[a]? = some .arr → Γ[i]? = some .int → HasType P Γ Δ s (.index a i) .int s
 
 /-- A function is well typed when its body has its return type, in the context of
 its parameters, *without owning a transaction* (state `none` → `none`). -/
@@ -130,7 +139,7 @@ preserved. -/
 theorem HasType.none_pres' {P Γ Δ s e τ s'} (h : HasType P Γ Δ s e τ s') :
     s = .none → s' = .none := by
   induction h with
-  | val | var | call | transaction | store => exact id
+  | val | var | call | transaction | store | len | index => exact id
   | let_ _ _ ih₁ ih₂ => exact fun hs => ih₂ (ih₁ hs)
   | ite _ _ _ ih₁ ih₂ _ => exact fun hs => ih₂ (ih₁ hs)
   | bin _ _ ih₁ ih₂ => exact fun hs => ih₂ (ih₁ hs)

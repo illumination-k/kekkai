@@ -50,6 +50,19 @@ structure St where
   live : Bool
   deriving DecidableEq, Repr
 
+/-- Run-time faults: the errors that the *refinement* layer (not the type
+system) rules out. Unlike the compiled code (where `x / 0 == 0` and arithmetic
+wraps around), the core calculus treats them as errors, so that "the program
+never faults" is a meaningful theorem (`Kekkai.refinement_safety`). -/
+inductive Fault where
+  /-- `div`/`mod` by zero -/
+  | divByZero
+  /-- `a[i]` with `i < 0` or `a.len() <= i` -/
+  | outOfBounds
+  /-- `add`/`sub`/`mul`/`div` whose mathematical result is outside `[-2^63, 2^63)` -/
+  | overflow
+  deriving DecidableEq, Repr
+
 /-- Outcome of a terminating evaluation. -/
 inductive Outcome where
   | ok (v : Val)
@@ -62,6 +75,8 @@ inductive Result where
   | timeout
   /-- dynamic type error -/
   | stuck
+  /-- run-time fault (division by zero, index out of range, overflow) -/
+  | fault (f : Fault)
   /-- terminated with outcome `o`, final state `σ` and trace `tr` -/
   | done (o : Outcome) (σ : St) (tr : List Event)
   deriving DecidableEq, Repr
@@ -86,13 +101,46 @@ def Result.bind (r : Result) (k : Val → St → Result) : Result :=
   | .done (.ok v) σ tr => (k v σ).prepend tr
   | r => r
 
-/-- Primitive operators. -/
-def evalBin : BinOp → Val → Val → Option Val
-  | .add, .int a, .int b => some (.int (a + b))
-  | .sub, .int a, .int b => some (.int (a - b))
-  | .lt, .int a, .int b => some (.bool (decide (a < b)))
-  | .eq, .int a, .int b => some (.bool (decide (a = b)))
-  | _, _, _ => none
+/-- Smallest 64-bit integer, `-2^63`. -/
+def i64Min : Int := -9223372036854775808
+/-- Largest 64-bit integer, `2^63 - 1`. -/
+def i64Max : Int := 9223372036854775807
+
+/-- An integer result, or `overflow` outside the 64-bit range. Integers are
+mathematical integers; this check stands for the "no overflow" verification
+condition. -/
+def checkI64 (x : Int) : Except Fault Val :=
+  if i64Min ≤ x ∧ x ≤ i64Max then .ok (.int x) else .error .overflow
+
+/-- Primitive operators on integers. -/
+def arith : BinOp → Int → Int → Except Fault Val
+  | .add, a, b => checkI64 (a + b)
+  | .sub, a, b => checkI64 (a - b)
+  | .mul, a, b => checkI64 (a * b)
+  | .div, a, b =>
+    if b = 0 then .error .divByZero
+    else if a = i64Min ∧ b = -1 then .error .overflow
+    else .ok (.int (a.tdiv b))
+  | .mod, a, b => if b = 0 then .error .divByZero else .ok (.int (a.tmod b))
+  | .lt, a, b => .ok (.bool (decide (a < b)))
+  | .le, a, b => .ok (.bool (decide (a ≤ b)))
+  | .eq, a, b => .ok (.bool (decide (a = b)))
+  | .ne, a, b => .ok (.bool (!decide (a = b)))
+
+/-- Result of a binary operator: `stuck` on non-integers (a dynamic type error),
+a `fault` from `arith`, or a value. No events, no change of state. -/
+def binResult (op : BinOp) (v₁ v₂ : Val) (σ : St) : Result :=
+  match v₁, v₂ with
+  | .int a, .int b =>
+    match arith op a b with
+    | .ok v => .done (.ok v) σ []
+    | .error f => .fault f
+  | _, _ => .stuck
+
+/-- Array indexing: `outOfBounds` unless `0 ≤ k < xs.length`. -/
+def indexResult (xs : List Int) (k : Int) (σ : St) : Result :=
+  if 0 ≤ k ∧ k < xs.length then .done (.ok (.int (xs.getD k.toNat 0))) σ [] else
+    .fault .outOfBounds
 
 /-- Result value of a store operation. -/
 def storeResult (O : Oracle) : StoreOp → Nat → List Val → Val
@@ -120,10 +168,7 @@ def eval (O : Oracle) (P : Prog) : Nat → List Val → List RCap → St → Exp
         | _ => .stuck
     | .bin op a b =>
       (eval O P n env ρ σ a).bind fun v₁ σ₁ =>
-        (eval O P n env ρ σ₁ b).bind fun v₂ σ₂ =>
-          match evalBin op v₁ v₂ with
-          | some v => .done (.ok v) σ₂ []
-          | none => .stuck
+        (eval O P n env ρ σ₁ b).bind fun v₂ σ₂ => binResult op v₁ v₂ σ₂
     | .call f args cs =>
       match P[f]?, lookupAll env args, lookupAll ρ cs with
       | some fd, some vs, some rs => eval O P n vs rs σ fd.body
@@ -169,6 +214,14 @@ def eval (O : Oracle) (P : Prog) : Nat → List Val → List RCap → St → Exp
         if σ.live then .done (.ok .unit) ⟨σ.next, false⟩ [.txRollback t] else .stuck
       | _ => .stuck
     | .abort => .done .err σ []
+    | .len a =>
+      match env[a]? with
+      | some (.arr xs) => .done (.ok (.int xs.length)) σ []
+      | _ => .stuck
+    | .index a i =>
+      match env[a]?, env[i]? with
+      | some (.arr xs), some (.int k) => indexResult xs k σ
+      | _, _ => .stuck
 
 /-- Initial state for running an entry point. -/
 def St.init : St := ⟨0, false⟩
@@ -182,6 +235,22 @@ def runFun (O : Oracle) (P : Prog) (n : Nat) (f : Nat) (vs : List Val) (caps : L
   | none => .stuck
 
 /-! ## Basic facts about `bind` / `prepend` -/
+
+theorem binResult_done {op : BinOp} {v₁ v₂ : Val} {σ : St} {o σ' tr}
+    (h : binResult op v₁ v₂ σ = .done o σ' tr) : tr = [] ∧ σ' = σ ∧ ∃ v, o = .ok v := by
+  unfold binResult at h
+  split at h
+  · split at h
+    · cases h; exact ⟨rfl, rfl, _, rfl⟩
+    · cases h
+  · cases h
+
+theorem indexResult_done {xs : List Int} {k : Int} {σ : St} {o σ' tr}
+    (h : indexResult xs k σ = .done o σ' tr) : tr = [] ∧ σ' = σ ∧ ∃ v, o = .ok v := by
+  unfold indexResult at h
+  split at h
+  · cases h; exact ⟨rfl, rfl, _, rfl⟩
+  · cases h
 
 theorem Result.prepend_ne_stuck {tr : List Event} {r : Result} (h : r ≠ .stuck) :
     r.prepend tr ≠ .stuck := by

@@ -7,6 +7,10 @@ import Kekkai.Semantics
 For the fuel-based big-step interpreter, type safety reads: a well-typed
 expression evaluated in a well-typed runtime environment never gets `stuck`; when
 it terminates with a value, the value has the expected type.
+
+A well-typed program may still *fault* (division by zero, an index out of range,
+an overflow): those are ruled out by the refinement layer
+(`Kekkai.refinement_safety`), not by the type system.
 -/
 
 namespace Kekkai
@@ -40,6 +44,7 @@ structure TxInv (Δ : List (Option CapKind)) (s : TxSt) (live : Bool) : Prop whe
 def SafePost (Δ : List (Option CapKind)) (τ : Ty) (s s' : TxSt) (σ : St) : Result → Prop
   | .timeout => True
   | .stuck => False
+  | .fault _ => True
   | .done o σ' _ =>
     (s = .none → σ'.live = σ.live) ∧ ∀ v, o = .ok v → ValTy v τ ∧ TxInv Δ s' σ'.live
 
@@ -58,6 +63,7 @@ theorem SafePost.bind {Δ τ₁ τ₂ s s₁ s₂ σ r k}
   cases r with
   | timeout => trivial
   | stuck => exact hr
+  | fault => trivial
   | done o σ₁ tr =>
     cases o with
     | err => simpa [Result.bind, SafePost] using hr.1
@@ -68,7 +74,7 @@ theorem SafePost.bind {Δ τ₁ τ₂ s s₁ s₂ σ r k}
       simp only [Result.bind]
       revert this
       cases (k v σ₁).prepend tr with
-      | timeout => intro; trivial
+      | timeout | fault => intro; trivial
       | stuck => intro h; exact h
       | done o' σ' tr' =>
         rintro ⟨h3, h4⟩
@@ -108,9 +114,17 @@ theorem lookup_tx {ρ : List RCap} {Δ : List (Option CapKind)} {c : Nat} (hρ :
   obtain ⟨t, rfl⟩ := capOk_tx hok
   exact ⟨t, hr⟩
 
-theorem evalBin_ty (op : BinOp) (a b : Int) :
-    ∃ v, evalBin op (.int a) (.int b) = some v ∧ ValTy v op.resTy := by
-  cases op <;> exact ⟨_, rfl, by constructor⟩
+theorem arith_ty {op : BinOp} {a b : Int} {v : Val} (h : arith op a b = .ok v) :
+    ValTy v op.resTy := by
+  cases op <;> simp only [arith, checkI64] at h <;>
+    (try split at h) <;> (try split at h) <;> cases h <;> constructor
+
+theorem binResult_safe {Δ s s' σ} (op : BinOp) (a b : Int) (hi : TxInv Δ s' σ.live) :
+    SafePost Δ op.resTy s s' σ (binResult op (.int a) (.int b) σ) := by
+  simp only [binResult]
+  split
+  · rename_i v hv; exact SafePost.done_ok (arith_ty hv) hi
+  · trivial
 
 theorem storeResult_ty (O : Oracle) (op : StoreOp) (t : Nat) (vs : List Val) :
     ValTy (storeResult O op t vs) op.resTy := by
@@ -166,10 +180,7 @@ theorem eval_safe (O : Oracle) {P : Prog} (hP : WTProg P) :
       cases hv₁ with
       | int a =>
         cases hv₂ with
-        | int b =>
-          obtain ⟨v, hv, hvt⟩ := evalBin_ty op a b
-          simp only [hv]
-          exact SafePost.done_ok hvt hinv₂
+        | int b => exact binResult_safe op a b hinv₂
     | @call _ _ _ f args cs fd hf hargs hcs hnd =>
       obtain ⟨vs, hvs, hvst⟩ := lookupAll_forall2 henv hargs
       obtain ⟨rs, hrs, hrst⟩ := lookupAll_forall2 hρ hcs
@@ -185,7 +196,7 @@ theorem eval_safe (O : Oracle) {P : Prog} (hP : WTProg P) :
       have := ih (hP f fd hf) hvst hrst hinv'
       revert this
       cases eval O P n vs rs σ fd.body with
-      | timeout => intro; trivial
+      | timeout | fault => intro; trivial
       | stuck => intro h; exact h
       | done o σ' tr =>
         rintro ⟨h1, h2⟩
@@ -216,7 +227,7 @@ theorem eval_safe (O : Oracle) {P : Prog} (hP : WTProg P) :
       have := ih hb henv hρ' hinv'
       revert this
       cases eval O P n env (.tx σ.next :: ρ) ⟨σ.next + 1, true⟩ body with
-      | timeout => intro; trivial
+      | timeout | fault => intro; trivial
       | stuck => intro h; exact h
       | done o σ₂ tr =>
         rintro ⟨_, h2⟩
@@ -255,6 +266,19 @@ theorem eval_safe (O : Oracle) {P : Prog} (hP : WTProg P) :
     | abort _ =>
       simp only [eval]
       exact ⟨fun _ => rfl, fun _ => nofun⟩
+    | len ha =>
+      obtain ⟨v, hv, hvt⟩ := henv.get ha
+      cases hvt
+      simp only [eval, hv]
+      exact SafePost.done_ok (.int _) hinv
+    | index ha hi =>
+      obtain ⟨v, hv, hvt⟩ := henv.get ha
+      obtain ⟨w, hw, hwt⟩ := henv.get hi
+      cases hvt; cases hwt
+      simp only [eval, hv, hw, indexResult]
+      split
+      · exact SafePost.done_ok (.int _) hinv
+      · trivial
 
 /-- **Theorem 1 (type safety).** Running a well-typed entry function of a
 well-typed program, with well-typed arguments and capabilities of the declared

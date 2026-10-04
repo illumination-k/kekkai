@@ -160,14 +160,26 @@ fn glue_emit(
     fs: &Fs,
     log: &Log,
 ) -> Int {
-    if prog.entry != "handler" {
+    glue_emit_for(args, path, out_dir, prog.entry, prog.handler_params, fs, log)
+}
+
+fn glue_emit_for(
+    args: Vec<String>,
+    path: String,
+    out_dir: String,
+    entry: String,
+    params: Vec<IrHandlerParam>,
+    fs: &Fs,
+    log: &Log,
+) -> Int {
+    if entry != "handler" {
         return 0;
     }
     let wt = out_dir + "/wrangler.toml";
     let mut toml = "";
     let write_toml = !glue_exists(wt, fs);
     if write_toml {
-        match glue_wrangler_toml(glue_program_name(path), prog.handler_params, glue_target(args)) {
+        match glue_wrangler_toml(glue_program_name(path), params, glue_target(args)) {
             Ok(s) => {
                 toml = s;
             }
@@ -177,7 +189,7 @@ fn glue_emit(
             }
         }
     }
-    if !glue_write(out_dir + "/worker.js", glue_worker_js(prog.handler_params), fs, log) {
+    if !glue_write(out_dir + "/worker.js", glue_worker_js(params), fs, log) {
         return 1;
     }
     if write_toml && !glue_write(wt, toml, fs, log) {

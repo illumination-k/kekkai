@@ -120,6 +120,8 @@ struct ChkInfo {
     impls: HashMap<String, Vec<ChkImpl>>,
     // binary operators resolved to a trait method (`==` on a struct)
     binops: HashMap<Int, ChkMethodInfo>,
+    // structs and enums of the core library and the runtime prelude
+    lib_types: HashMap<String, Bool>,
 }
 
 // A closure's body is a scope with lambda set to the closure's id: a
@@ -318,8 +320,11 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
 }
 
 fn chk_is_lib(fun: ChkFunc) -> Bool {
-    let f = fun.decl.pos.file;
-    f.starts_with("<core>/") || f.starts_with("<prelude>/")
+    chk_is_lib_pos(fun.decl.pos)
+}
+
+fn chk_is_lib_pos(p: AstPos) -> Bool {
+    p.file.starts_with("<core>/") || p.file.starts_with("<prelude>/")
 }
 
 fn chk_check_mode(user: AstFile, prelude: Bool) -> ChkResult {
@@ -348,6 +353,7 @@ fn chk_check_mode(user: AstFile, prelude: Bool) -> ChkResult {
         traits: HashMap::new(),
         impls: HashMap::new(),
         binops: HashMap::new(),
+        lib_types: HashMap::new(),
     };
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs);
@@ -438,6 +444,9 @@ fn chk_declare(c: Chk, f: AstFile) {
             chk_errorf(c, sd.pos, "type `" + sd.name + "` is already defined");
             continue;
         }
+        if chk_is_lib_pos(sd.pos) {
+            c.info.lib_types.insert(sd.name, true);
+        }
         c.info.structs.insert(sd.name, TyStruct {
             name: sd.name,
             params: chk_tparams(c, sd.generics, false),
@@ -450,6 +459,9 @@ fn chk_declare(c: Chk, f: AstFile) {
             || c.info.enums.contains_key(ed.name) {
             chk_errorf(c, ed.pos, "type `" + ed.name + "` is already defined");
             continue;
+        }
+        if chk_is_lib_pos(ed.pos) {
+            c.info.lib_types.insert(ed.name, true);
         }
         c.info.enums.insert(ed.name, TyEnum {
             name: ed.name,
@@ -927,28 +939,40 @@ fn chk_handler_sig(c: Chk, fun: ChkFunc) {
     }
 }
 
-// chk_test_sig checks a `#[test]` function: it receives only borrowed
-// capabilities and reports failure by returning `false` or `Err(message)`.
+// chk_test_sig checks a `#[test]` function: it receives borrowed
+// capabilities (mocks) and, for a property test, values that `kek test`
+// can generate (compiler/pbt.kek). It reports failure by returning
+// `false` or `Err(message)`.
 fn chk_test_sig(c: Chk, fun: ChkFunc) {
     if fun.handler {
         chk_errorf(c, fun.decl.pos, "a function cannot be both #[test] and #[handler]");
     }
     for p in fun.params {
-        let mut ok = false;
         match p.ty {
             Ty::Cap(k, borrowed) => {
-                ok = borrowed && k != "Tx";
+                if !borrowed || k == "Tx" {
+                    chk_errorf(
+                        c,
+                        p.pos,
+                        "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random) or generatable values, found `"
+                            + ty_str(p.ty)
+                            + "`",
+                    );
+                }
             }
-            _ => {}
-        }
-        if !ok {
-            chk_errorf(
-                c,
-                p.pos,
-                "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random), found `"
-                    + ty_str(p.ty)
-                    + "`",
-            );
+            _ => {
+                let why = pbt_why(c.info, p.ty);
+                if why != "" {
+                    chk_errorf(
+                        c,
+                        p.pos,
+                        "cannot generate inputs of type `"
+                            + ty_str(p.ty)
+                            + "` for a property test: "
+                            + why,
+                    );
+                }
+            }
         }
     }
     match fun.result {

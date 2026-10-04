@@ -346,6 +346,49 @@ fn __fs_write_bytes(fs: __Any, path: String, bytes: Vec<Int>) -> Result<(), IoEr
     __fs_write_mem(rt, path, p, n)
 }
 
+// __fs_read_line reads a line of standard input (without its newline),
+// one byte at a time so that nothing past the line is consumed; None at the
+// end of the input.
+fn __fs_read_line(fs: __Any) -> Option<String> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let iov = __mem_alloc(rt, 16);
+    let nread = __mem_alloc(rt, 8);
+    let mut cap = 4096;
+    let mut buf = __mem_alloc(rt, cap);
+    let mut len = 0;
+    while true {
+        if len == cap {
+            let nb = __mem_alloc(rt, cap * 2);
+            for i in 0..len {
+                __Mem::store8(nb + i, __Mem::load8(buf + i));
+            }
+            buf = nb;
+            cap = cap * 2;
+        }
+        __Mem::store32(iov, buf + len);
+        __Mem::store32(iov + 4, 1);
+        let e = __Wasi::fd_read(0, iov, 1, nread);
+        if e != 0 || __Mem::load32(nread) == 0 {
+            if len == 0 {
+                return None;
+            }
+            break;
+        }
+        if __Mem::load8(buf + len) == 10 {
+            break;
+        }
+        len = len + 1;
+    }
+    Some(__mem_string(buf, len))
+}
+
+// __fs_set_cwd sets the directory relative paths are resolved against.
+fn __fs_set_cwd(fs: __Any, dir: String) {
+    let rt = __Rt::get();
+    rt.cwd = "/" + __path_abs("/", dir);
+}
+
 // Entry names of a directory (without "." and ".."), sorted.
 fn __fs_list(fs: __Any, path: String) -> Result<Vec<String>, IoError> {
     let rt = __Rt::get();

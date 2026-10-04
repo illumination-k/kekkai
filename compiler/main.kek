@@ -1,7 +1,18 @@
 // Kekkai compiler written in Kekkai (stage1). See docs/selfhost.md.
 #[main]
-fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+fn main(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
+    if args.get(0).unwrap_or("") == "serve" {
+        return serve_main(args, fs, log, clock);
+    }
+    kek_dispatch(args, fs, log, clock)
+}
+
+// kek_dispatch runs one command (also for each request of `serve`).
+fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
     let cmd = args.get(0).unwrap_or("");
+    if cmd == "build-timings" {
+        return frontend_timings(args, fs, log, clock);
+    }
     if (cmd == "check" || cmd == "ir") && diag_json_requested(args) {
         return diag_json_main(args, fs, log);
     }

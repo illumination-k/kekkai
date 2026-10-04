@@ -1,0 +1,106 @@
+// `serve <dir>` (prefix serve_): the compiler as a long-running process
+// (`kek daemon`). It reads requests from standard input, one per line:
+//
+//   seq<TAB>cwd<TAB>arg<TAB>arg...    (fields escaped: \t \n \\)
+//
+// runs the command with cwd as the working directory, its output going to
+// the process's standard output and error (the launcher truncates the files
+// they go to before a request and reads them after), and then writes the
+// exit status to <dir>/resp-<seq>. `quit` ends the process.
+//
+// Between requests it keeps the parses of the source files and of the
+// core library (FeCache in frontend.kek), so `build` and `check` parse only
+// the files that changed. Other commands run as in a new process.
+
+fn serve_unesc(s: String) -> String {
+    if s.index_of("\\").is_none() {
+        return s;
+    }
+    let parts = Vec::new();
+    let mut i = 0;
+    let mut start = 0;
+    while i < s.len() {
+        if s.char_at(i).unwrap_or(0) == 92 {
+            parts.push(s.slice(start, i));
+            let e = s.char_at(i + 1).unwrap_or(0);
+            if e == 116 {
+                parts.push("\t");
+            } else if e == 110 {
+                parts.push("\n");
+            } else {
+                parts.push("\\");
+            }
+            i = i + 2;
+            start = i;
+            continue;
+        }
+        i = i + 1;
+    }
+    parts.push(s.slice(start, s.len()));
+    parts.join("")
+}
+
+fn serve_main(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
+    let dir = frontend_clean_dir(args.get(1).unwrap_or(""));
+    if dir == "" {
+        log.error("usage: kek serve <dir>");
+        return 2;
+    }
+    let c = fe_cache_new();
+    while true {
+        let line = match fs.read_line() {
+            Some(l) => l,
+            None => {
+                return 0;
+            }
+        };
+        if line == "" {
+            continue;
+        }
+        let parts = Vec::new();
+        for p in line.split("\t") {
+            parts.push(serve_unesc(p));
+        }
+        let seq = parts.get(0).unwrap_or("0");
+        fs.set_cwd(parts.get(1).unwrap_or("/"));
+        let a = Vec::new();
+        let mut i = 2;
+        while i < parts.len() {
+            a.push(parts.get(i).unwrap_or(""));
+            i = i + 1;
+        }
+        let cmd = a.get(0).unwrap_or("");
+        let mut code = 0;
+        if cmd == "quit" {
+            serve_respond(fs, log, dir, seq, 0);
+            return 0;
+        } else if cmd == "build" {
+            code = frontend_build_c(c, a, fs, log);
+        } else if cmd == "check" && a.len() == 2 {
+            code = frontend_check_c(c, a.get(1).unwrap_or(""), fs, log);
+            if code == 0 {
+                log.info(a.get(1).unwrap_or("") + ": ok");
+            }
+        } else if cmd == "serve-stats" {
+            log.info(
+                "files cached "
+                    + c.files.len().to_string()
+                    + ", parses reused "
+                    + c.hits.to_string()
+                    + ", parsed "
+                    + c.misses.to_string(),
+            );
+        } else {
+            code = kek_dispatch(a, fs, log, clock);
+        }
+        serve_respond(fs, log, dir, seq, code);
+    }
+    0
+}
+
+fn serve_respond(fs: &Fs, log: &Log, dir: String, seq: String, code: Int) {
+    match fs.write(dir + "/resp-" + seq, code.to_string() + "\n") {
+        Ok(_) => {}
+        Err(e) => log.error("kek serve: " + e.message()),
+    }
+}

@@ -213,20 +213,34 @@ fn chk_dummy_func() -> ChkFunc {
 
 // chk_check type-checks a parsed program.
 fn chk_check(f: AstFile) -> ChkResult {
-    chk_check_mode(f, false)
+    chk_check_mode(f, false, chk_parse_core())
+}
+
+// chk_check_c and chk_check_prelude_c check with a core library parsed
+// before (a long-running compiler parses it once: compiler/serve.kek).
+fn chk_check_c(f: AstFile, core: ChkCore) -> ChkResult {
+    chk_check_mode(f, false, core)
+}
+
+fn chk_check_prelude_c(f: AstFile, core: ChkCore) -> ChkResult {
+    chk_check_mode(f, true, core)
 }
 
 // chk_check_prelude type-checks a program together with the runtime
 // prelude (see lib/prelude).
 fn chk_check_prelude(f: AstFile) -> ChkResult {
-    chk_check_mode(f, true)
+    chk_check_mode(f, true, chk_parse_core())
 }
 
-// chk_with_core returns the program f together with the core library
-// (lib/core), which every program includes. Core items come first so
-// that a clash is reported at the user's definition; core nodes get ids
-// from a separate range.
-fn chk_with_core(f: AstFile, errs: Vec<AstError>) -> AstFile {
+// ChkCore is the parsed core library; next is the first node id after it
+// (the ids of derived implementations follow).
+struct ChkCore {
+    file: AstFile,
+    errs: Vec<AstError>,
+    next: Int,
+}
+
+fn chk_parse_core() -> ChkCore {
     let out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
@@ -234,6 +248,7 @@ fn chk_with_core(f: AstFile, errs: Vec<AstError>) -> AstFile {
         impls: Vec::new(),
         traits: Vec::new(),
     };
+    let errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
     let srcs = core_sources();
     srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples() });
@@ -244,8 +259,27 @@ fn chk_with_core(f: AstFile, errs: Vec<AstError>) -> AstFile {
         }
         chk_append_file(out, pr.file);
     }
+    ChkCore { file: out, errs: errs, next: ids.next }
+}
+
+// chk_with_core returns the program f together with the core library
+// (lib/core), which every program includes. Core items come first so
+// that a clash is reported at the user's definition; core nodes get ids
+// from a separate range.
+fn chk_with_core(f: AstFile, errs: Vec<AstError>, core: ChkCore) -> AstFile {
+    let out = AstFile {
+        structs: Vec::new(),
+        enums: Vec::new(),
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+    };
+    for e in core.errs {
+        errs.push(e);
+    }
+    chk_append_file(out, core.file);
     chk_append_file(out, f);
-    derive_items(out, ids, errs);
+    derive_items(out, AstIds { next: core.next }, errs);
     out
 }
 
@@ -327,7 +361,7 @@ fn chk_is_lib_pos(p: AstPos) -> Bool {
     p.file.starts_with("<core>/") || p.file.starts_with("<prelude>/")
 }
 
-fn chk_check_mode(user: AstFile, prelude: Bool) -> ChkResult {
+fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
     let info = ChkInfo {
         funcs: HashMap::new(),
         func_list: Vec::new(),
@@ -356,7 +390,7 @@ fn chk_check_mode(user: AstFile, prelude: Bool) -> ChkResult {
         lib_types: HashMap::new(),
     };
     let core_errs = Vec::new();
-    let f = chk_with_core(user, core_errs);
+    let f = chk_with_core(user, core_errs, core);
     let c = Chk {
         loops: 0,
         info: info,

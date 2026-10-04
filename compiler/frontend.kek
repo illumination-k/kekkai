@@ -271,45 +271,70 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let out_dir = frontend_clean_dir(args.get(2).unwrap_or(""));
     let cache_dir = frontend_opt(args, "-cache");
     let mut key = "";
-    let mut res0: Option<ChkResult> = None;
+    let mut prog = lower_lower_none();
     if cache_dir != "" {
-        let l = match dh_load(path, fs, log) {
-            Some(l) => l,
+        // one check with the prelude: its info gives the definition hashes
+        // (the cache keys) and is lowered
+        let srcs = match frontend_read_sources(path, fs, log) {
+            Some(s) => s,
             None => {
                 return 1;
             }
         };
-        let entry = lower_entry_kind(l.res.info);
-        let params = match l.res.info.handler {
+        let all = Vec::new();
+        for s in srcs {
+            all.push(s);
+        }
+        for s in prelude_sources() {
+            all.push(s);
+        }
+        let parsed = frontend_parse_all(all);
+        if parsed.errs.len() > 0 {
+            frontend_print_errors(log, parsed.errs);
+            return 1;
+        }
+        let res = chk_check_prelude(parsed.file);
+        if res.errs.len() > 0 {
+            // the diagnostics of the program alone, as `kek check` reports them
+            match frontend_load(path, fs, log) {
+                Some(_) => frontend_print_errors(log, res.errs),
+                None => {}
+            }
+            return 1;
+        }
+        let dh = dh_program(parsed.file, res.info);
+        let entry = lower_entry_kind(res.info);
+        let params = match res.info.handler {
             Some(h) => lower_handler_params(h),
             None => Vec::new(),
         };
-        let parts = Vec::new();
-        parts.push("build-1");
-        parts.push(l.prog.hash);
-        parts.push(entry);
-        for p in params {
-            parts.push(p.kind + ":" + p.name);
+        {
+            let parts = Vec::new();
+            parts.push("build-2");
+            parts.push(dh.hash);
+            parts.push(entry);
+            for p in params {
+                parts.push(p.kind + ":" + p.name);
+            }
+            key = dh_hash_strs(parts);
+            if glue_exists(cache_dir + "/" + key + "/ok", fs) {
+                if frontend_emit_glue(args, path, out_dir, entry, params, fs, log) != 0 {
+                    return 1;
+                }
+                log.info("kek-build-cache: hit " + key + " " + entry);
+                return 0;
+            }
         }
-        key = dh_hash_strs(parts);
-        if glue_exists(cache_dir + "/" + key + "/ok", fs) {
-            if frontend_emit_glue(args, path, out_dir, entry, params, fs, log) != 0 {
+        prog = lower_lower(res.info);
+    } else {
+        let res = match frontend_load_prelude(path, fs, log) {
+            Some(r) => r,
+            None => {
                 return 1;
             }
-            log.info("kek-build-cache: hit " + key + " " + entry);
-            return 0;
-        }
-        res0 = frontend_check_prelude(l.srcs, log);
-    } else {
-        res0 = frontend_load_prelude(path, fs, log);
+        };
+        prog = lower_lower(res.info);
     }
-    let res = match res0 {
-        Some(r) => r,
-        None => {
-            return 1;
-        }
-    };
-    let prog = lower_lower(res.info);
     let out = wasm_compile(prog);
     if out.err != "" {
         log.error(out.err);
@@ -330,6 +355,16 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.info("kek-build-cache: miss " + key + " " + prog.entry);
     }
     0
+}
+
+fn lower_lower_none() -> IrProgram {
+    IrProgram {
+        types: Vec::new(),
+        funcs: Vec::new(),
+        handler: "",
+        entry: "",
+        handler_params: Vec::new(),
+    }
 }
 
 // frontend_opt returns the value of `name value` in args ("" if absent).
@@ -388,4 +423,258 @@ fn frontend_meta_json(params: Vec<IrHandlerParam>) -> String {
         );
     }
     "{\n  \"handlerParams\": [" + items.join(",") + "\n  ]\n}"
+}
+
+// `build-timings <file|dir>`: the time of each phase of a build (no
+// output is written), for profiling the compiler.
+fn frontend_timings(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
+    let path = args.get(1).unwrap_or("");
+    let lines = Vec::new();
+    let mut t = clock.now_ms();
+    let srcs = match frontend_read_sources(path, fs, log) {
+        Some(s) => s,
+        None => {
+            return 1;
+        }
+    };
+    let all = Vec::new();
+    for s in srcs {
+        all.push(s);
+    }
+    for s in prelude_sources() {
+        all.push(s);
+    }
+    lines.push("read      " + (clock.now_ms() - t).to_string() + "ms");
+    t = clock.now_ms();
+    let prog = frontend_parse_all(all);
+    lines.push("parse     " + (clock.now_ms() - t).to_string() + "ms");
+    t = clock.now_ms();
+    let res = chk_check_prelude(prog.file);
+    lines.push("check     " + (clock.now_ms() - t).to_string() + "ms");
+    t = clock.now_ms();
+    let ir = lower_lower(res.info);
+    lines.push(
+        "lower     "
+            + (clock.now_ms() - t).to_string()
+            + "ms ("
+            + ir.funcs.len().to_string()
+            + " functions)",
+    );
+    t = clock.now_ms();
+    let out = wasm_compile(ir);
+    lines.push(
+        "codegen   "
+            + (clock.now_ms() - t).to_string()
+            + "ms ("
+            + out.wasm.len().to_string()
+            + " bytes)",
+    );
+    t = clock.now_ms();
+    let wout = frontend_opt(args, "-o");
+    if wout != "" {
+        match fs.write_bytes(wout, out.wasm) {
+            Ok(_) => {}
+            Err(e) => log.error(e.message()),
+        }
+        lines.push("write     " + (clock.now_ms() - t).to_string() + "ms");
+    }
+    t = clock.now_ms();
+    let l = dh_program(prog.file, res.info);
+    lines.push(
+        "defhash   "
+            + (clock.now_ms() - t).to_string()
+            + "ms ("
+            + l.defs.len().to_string()
+            + " definitions)",
+    );
+    frontend_print(log, lines);
+    0
+}
+
+// ---- the in-memory cache of a long-running compiler (serve.kek) ----
+
+// FeCache keeps the parse of every source file (by name, valid while its
+// text is the same) and of the core library across requests. Node ids
+// keep increasing, so files parsed at different times never share one.
+struct FeCache {
+    files: HashMap<String, FeParsed>,
+    ids: AstIds,
+    core: ChkCore,
+    mut hits: Int,
+    mut misses: Int,
+}
+
+struct FeParsed {
+    text: String,
+    pr: ParseResult,
+}
+
+fn fe_cache_new() -> FeCache {
+    FeCache {
+        files: HashMap::new(),
+        ids: AstIds { next: 0 },
+        core: chk_parse_core(),
+        hits: 0,
+        misses: 0,
+    }
+}
+
+// frontend_parse_cached is frontend_parse_all with the parses of unchanged
+// files taken from the cache.
+fn frontend_parse_cached(c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
+    let out = AstFile {
+        structs: Vec::new(),
+        enums: Vec::new(),
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+    };
+    let errs = Vec::new();
+    for s in srcs {
+        let mut pr = parse_file_dummy();
+        let mut found = false;
+        match c.files.get(s.name) {
+            Some(p) => {
+                if p.text == s.text {
+                    pr = p.pr;
+                    found = true;
+                }
+            }
+            None => {}
+        }
+        if found {
+            c.hits = c.hits + 1;
+        } else {
+            c.misses = c.misses + 1;
+            pr = parse_file(s.name, s.text, c.ids);
+            // a long-running compiler sees many programs: start over
+            // rather than keep every file it ever parsed
+            if c.files.len() >= 4000 {
+                c.files.clear();
+            }
+            c.files.insert(s.name, FeParsed { text: s.text, pr: pr });
+        }
+        for e in pr.errs {
+            errs.push(e);
+        }
+        chk_append_file(out, pr.file);
+    }
+    FeProgram { file: out, errs: ast_sort_errors(errs) }
+}
+
+fn parse_file_dummy() -> ParseResult {
+    ParseResult {
+        file: AstFile {
+            structs: Vec::new(),
+            enums: Vec::new(),
+            funcs: Vec::new(),
+            impls: Vec::new(),
+            traits: Vec::new(),
+        },
+        errs: Vec::new(),
+    }
+}
+
+// frontend_build_c is `build <path> <out> -cache <dir>` with the cache.
+fn frontend_build_c(c: FeCache, args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    if args.len() < 3 {
+        log.error("usage: build <file-or-dir> <outdir>");
+        return 2;
+    }
+    let path = args.get(1).unwrap_or("");
+    let out_dir = frontend_clean_dir(args.get(2).unwrap_or(""));
+    let cache_dir = frontend_opt(args, "-cache");
+    let srcs = match frontend_read_sources(path, fs, log) {
+        Some(s) => s,
+        None => {
+            return 1;
+        }
+    };
+    let all = Vec::new();
+    for s in srcs {
+        all.push(s);
+    }
+    for s in prelude_sources() {
+        all.push(s);
+    }
+    let parsed = frontend_parse_cached(c, all);
+    if parsed.errs.len() > 0 {
+        frontend_print_errors(log, parsed.errs);
+        return 1;
+    }
+    let res = chk_check_prelude_c(parsed.file, c.core);
+    if res.errs.len() > 0 {
+        match frontend_check_c(c, path, fs, log) {
+            0 => frontend_print_errors(log, res.errs),
+            _ => {}
+        }
+        return 1;
+    }
+    let dh = dh_program(parsed.file, res.info);
+    let entry = lower_entry_kind(res.info);
+    let params = match res.info.handler {
+        Some(h) => lower_handler_params(h),
+        None => Vec::new(),
+    };
+    let mut key = "";
+    if cache_dir != "" {
+        let parts = Vec::new();
+        parts.push("build-2");
+        parts.push(dh.hash);
+        parts.push(entry);
+        for p in params {
+            parts.push(p.kind + ":" + p.name);
+        }
+        key = dh_hash_strs(parts);
+        if glue_exists(cache_dir + "/" + key + "/ok", fs) {
+            if frontend_emit_glue(args, path, out_dir, entry, params, fs, log) != 0 {
+                return 1;
+            }
+            log.info("kek-build-cache: hit " + key + " " + entry);
+            return 0;
+        }
+    }
+    let prog = lower_lower(res.info);
+    let out = wasm_compile(prog);
+    if out.err != "" {
+        log.error(out.err);
+        return 1;
+    }
+    if frontend_emit_glue(args, path, out_dir, prog.entry, prog.handler_params, fs, log) != 0 {
+        return 1;
+    }
+    let wasm_path = out_dir + "/module.wasm";
+    match fs.write_bytes(wasm_path, out.wasm) {
+        Ok(_) => {}
+        Err(e) => {
+            log.error(wasm_path + ": " + e.message());
+            return 1;
+        }
+    }
+    if key != "" {
+        log.info("kek-build-cache: miss " + key + " " + prog.entry);
+    }
+    0
+}
+
+// frontend_check_c is `check <path>` with the cache (diagnostics are
+// printed; 0 when the program checks, without printing "ok").
+fn frontend_check_c(c: FeCache, path: String, fs: &Fs, log: &Log) -> Int {
+    let srcs = match frontend_read_sources(path, fs, log) {
+        Some(s) => s,
+        None => {
+            return 1;
+        }
+    };
+    let prog = frontend_parse_cached(c, srcs);
+    if prog.errs.len() > 0 {
+        frontend_print_errors(log, prog.errs);
+        return 1;
+    }
+    let res = chk_check_c(prog.file, c.core);
+    if res.errs.len() > 0 {
+        frontend_print_errors(log, res.errs);
+        return 1;
+    }
+    0
 }

@@ -27,9 +27,18 @@
 set -eu
 
 root=$(cd "$(dirname "$0")" && pwd)
+ktab='	'
 cache=${KEK_CACHE:-$root/.kek-cache}
 wasmtime=${WASMTIME:-wasmtime}
 wasm_flags="-W gc=y,function-references=y"
+# Garbage collection: wasmtime's default (deferred reference counting) is
+# several times slower than the copying collector on the compiler and on
+# programs alike (the compiler builds itself in ~1.3s instead of ~10s). The
+# compiler gets a large initial heap (reserved, not touched: a small
+# program stays small). Precompiled modules must match these flags, so
+# they are part of the compiler's cache key.
+gc_compiler="-C collector=copying -O gc-heap-initial-size=1073741824"
+gc_user="-C collector=copying"
 
 die() {
 	echo "$*" >&2
@@ -67,19 +76,32 @@ wasm() {
 	_pre=
 	case $_m in *.cwasm) _pre=--allow-precompiled ;; esac
 	# shellcheck disable=SC2086
-	"$wasmtime" run $wasm_flags $_pre --dir / --env PWD="$PWD" ${wasm_extra:-} "$_m" "$@"
+	"$wasmtime" run $wasm_flags $(gc_flags "$_m") $_pre --dir / --env PWD="$PWD" ${wasm_extra:-} "$_m" "$@"
 }
 
-# compile <dir>: precompile <dir>/module.wasm into <dir>/module.cwasm.
+# gc_flags <module>: the collector of the compiler (the bootstrap, a stage,
+# the stages of bootstrap-check) or of a program.
+gc_flags() {
+	case $1 in
+	"$root"/bootstrap/* | "$cache"/stage-*/* | */kek-stage[23]-*/*) echo "$gc_compiler" ;;
+	*) echo "$gc_user" ;;
+	esac
+}
+
+# precompile <dir> [compiler]: precompile <dir>/module.wasm into
+# <dir>/module.cwasm, for the compiler's or a program's collector.
 precompile() {
+	_g=$gc_user
+	[ "${2:-}" != compiler ] || _g=$gc_compiler
 	# shellcheck disable=SC2086
-	"$wasmtime" compile $wasm_flags ${compile_extra:-} "$1/module.wasm" -o "$1/module.cwasm"
+	"$wasmtime" compile $wasm_flags $_g ${compile_extra:-} "$1/module.wasm" -o "$1/module.cwasm"
 }
 
 sources_hash() {
 	{
 		cat "$root/bootstrap/kek.wasm"
 		"$wasmtime" --version
+		echo "$gc_compiler"
 		for f in "$root"/compiler/*.kek "$root"/lib/prelude/*.kek "$root"/lib/core/*.kek; do
 			printf '%s\0' "${f#"$root"/}"
 			cat "$f"
@@ -93,7 +115,7 @@ sources_hash() {
 build_compiler() {
 	mkdir -p "$2"
 	(cd "$root" && wasm "$1" build compiler "$2") || return 1
-	precompile "$2"
+	precompile "$2" compiler
 }
 
 bootstrap_module() {
@@ -155,10 +177,127 @@ stage_key() {
 	fi
 }
 
-# compiler <args...>: run the current compiler.
+# compiler <args...>: run the current compiler (through the daemon when
+# one is running for it and free).
 compiler() {
 	stage_dir
+	if daemon_call "$@"; then
+		return "$_dc_code"
+	fi
 	wasm "$(stage_module "$_stage_memo")" "$@"
+}
+
+# ---- the compiler daemon (kek daemon) ----
+#
+# `kek daemon start` keeps the compiler running (`serve`, compiler/serve.kek)
+# with the parses of source files and of the core library in memory, so a
+# build parses only what changed and no process starts. Requests are lines
+# appended to <dir>/req.log, which `tail -f` feeds to its standard input;
+# its output goes to <dir>/out.log and err.log, and <dir>/resp-<seq> holds
+# the exit status. One request runs at a time: a launch that finds the
+# daemon busy (<dir>/lock) runs the compiler itself instead.
+
+daemon_dir() {
+	echo "$cache/daemon/$(stage_key)"
+}
+
+# daemon_alive <dir>
+daemon_alive() {
+	[ -f "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null
+}
+
+_dc_seq=0
+
+# daemon_call <args...>: run a compiler command in the daemon. Returns 1
+# (and the caller runs the compiler itself) when there is no daemon, it is
+# busy or it died; otherwise sets _dc_code to the command's status.
+daemon_call() {
+	[ "${KEK_DAEMON:-1}" != 0 ] || return 1
+	[ -n "${_stage_memo:-}" ] && [ "$_stage_memo" != "$root/bootstrap" ] || return 1
+	_dd=$cache/daemon/${_stage_memo##*/}
+	daemon_alive "$_dd" || return 1
+	# fields are tab-separated: arguments with tabs, newlines or
+	# backslashes go the direct way
+	_dline=
+	for _da in "$PWD" "$@"; do
+		case $_da in
+		*"$ktab"* | *"\\"* | *"
+"*) return 1 ;;
+		esac
+		_dline="$_dline$ktab$_da"
+	done
+	mkdir "$_dd/lock" 2>/dev/null || return 1
+	_dc_seq=$((_dc_seq + 1))
+	_dseq=$$-$_dc_seq
+	: >"$_dd/out.log"
+	: >"$_dd/err.log"
+	printf '%s%s\n' "$_dseq" "$_dline" >>"$_dd/req.log"
+	_dn=0
+	while [ ! -s "$_dd/resp-$_dseq" ]; do
+		_dn=$((_dn + 1))
+		if [ $((_dn % 50)) -eq 0 ] && ! daemon_alive "$_dd"; then
+			rmdir "$_dd/lock" 2>/dev/null || true
+			return 1
+		fi
+		sleep 0.005
+	done
+	cat "$_dd/out.log"
+	cat "$_dd/err.log" >&2
+	_dc_code=$(cat "$_dd/resp-$_dseq")
+	rm -f "$_dd/resp-$_dseq"
+	rmdir "$_dd/lock" 2>/dev/null || true
+	return 0
+}
+
+cmd_daemon() {
+	stage_dir
+	[ "$_stage_memo" != "$root/bootstrap" ] || die "kek daemon: not with KEK_STAGE=bootstrap"
+	_dd=$cache/daemon/${_stage_memo##*/}
+	case ${1:-status} in
+	start)
+		if daemon_alive "$_dd"; then
+			echo "kek daemon: running (pid $(cat "$_dd/pid"))"
+			return 0
+		fi
+		mkdir -p "$_dd"
+		rm -rf "$_dd/lock" "$_dd"/resp-*
+		: >"$_dd/req.log"
+		: >"$_dd/out.log"
+		: >"$_dd/err.log"
+		# shellcheck disable=SC2086
+		nohup sh -c 'tail -n 0 -f "$1/req.log" | "$2" run $3 --allow-precompiled --dir / "$4" serve "$1" >>"$1/out.log" 2>>"$1/err.log"' \
+			kek-daemon "$_dd" "$wasmtime" "$wasm_flags $gc_compiler" "$(stage_module "$_stage_memo")" >/dev/null 2>&1 &
+		echo $! >"$_dd/pid"
+		echo "kek daemon: started (pid $!)"
+		;;
+	stop)
+		if ! daemon_alive "$_dd"; then
+			echo "kek daemon: not running"
+			return 0
+		fi
+		_dc_code=0
+		daemon_call quit >/dev/null 2>&1 || true
+		_p=$(cat "$_dd/pid")
+		# the tail of the pipeline ends at its next write
+		echo >>"$_dd/req.log"
+		pkill -P "$_p" 2>/dev/null || true
+		kill "$_p" 2>/dev/null || true
+		rm -f "$_dd/pid"
+		echo "kek daemon: stopped"
+		;;
+	status)
+		if daemon_alive "$_dd"; then
+			echo "kek daemon: running (pid $(cat "$_dd/pid"), compiler ${_stage_memo##*/})"
+		else
+			echo "kek daemon: not running"
+			return 1
+		fi
+		;;
+	stats)
+		daemon_call serve-stats || die "kek daemon: not running or busy"
+		;;
+	*) die "usage: kek daemon start|stop|status|stats" ;;
+	esac
 }
 
 # bootstrap_check requires stage1 (the current compiler, built by the
@@ -235,6 +374,10 @@ Compiler internals:
   kek mutate-build <file|dir> <outdir> [-base p] [-main] | kek mutate-report [-json] <outdir>
   kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
   kek embed-prelude lib/core compiler/core_src.kek -as core [-check]
+
+Daemon:
+  kek daemon start|stop|status|stats
+                                  keep the compiler running: parses stay in memory between builds
 
 Maintenance:
   kek bootstrap-check             rebuild the compiler with itself; require a fixed point
@@ -1467,7 +1610,7 @@ cmd_mutate() {
 		fi
 		# the time limit needs epoch interruption compiled in
 		# shellcheck disable=SC2086
-		"$wasmtime" compile $wasm_flags -W epoch-interruption=y "$_tmp/module.wasm" -o "$_tmp/module.cwasm"
+		"$wasmtime" compile $wasm_flags $gc_user -W epoch-interruption=y "$_tmp/module.wasm" -o "$_tmp/module.cwasm"
 		if [ -e "$_b" ]; then
 			rm -rf "$_tmp"
 		else
@@ -1625,6 +1768,7 @@ bootstrap-update)
 	echo "bootstrap/ updated"
 	;;
 build) cmd_build "$@" ;;
+daemon) cmd_daemon "$@" ;;
 run) cmd_run "$@" ;;
 test) cmd_test "$@" ;;
 affected) cmd_affected "$@" ;;

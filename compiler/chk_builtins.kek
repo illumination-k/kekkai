@@ -119,6 +119,10 @@ fn chk_new_builtins() -> ChkBuiltins {
     chk_ma(bs, "Fs", "write", chk_tys2(s, s), chk_res(u, io_err));
     chk_ma(bs, "Fs", "list", chk_tys1(s), chk_res(Ty::Vec(s), io_err));
     chk_ma(bs, "Fs", "write_bytes", chk_tys2(s, Ty::Vec(i)), chk_res(u, io_err));
+    // a line of standard input (None at its end), and the directory that
+    // relative paths are resolved against (for a long-running program)
+    chk_ma(bs, "Fs", "read_line", chk_tys0(), Ty::Option(s));
+    chk_ma(bs, "Fs", "set_cwd", chk_tys1(s), u);
 
     // ---- pure data ----
     chk_m(bs, "Int", "to_string", chk_tys0(), s);

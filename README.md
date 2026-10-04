@@ -43,6 +43,7 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
 | `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
+| `kek daemon start\|stop\|status\|stats` | コンパイラを常駐させる（構文木をメモリに残し、変わったファイルだけ構文解析する） |
 | `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`assure` の土台 |
 | `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
 | `kek mutate [-json] [-base p] [-diff rev] [-shard i/n] <file>` | ミューテーションテスト（型の付く変異体だけ。型で検出された変異体を別に数える。結果はキャッシュ。シャードに分割できる） |
@@ -209,6 +210,12 @@ LLM が既存の実装を探さずに似た関数を書き足すのを防ぐた�
 ./kek affected -diff origin/main src          # 変わった定義・影響を受ける定義とテスト・ビルド出力が変わるか
 ./kek test -affected origin/main src          # 影響を受けるテストだけ（キャッシュのない CI 向け）
 KEK_REMOTE_CACHE=https://cache.example ./kek test src   # CI と手元でキャッシュを共有
+```
+
+コンパイラを起動したままにすると、ソースファイルの構文木がメモリに残り、変わったファイルだけを構文解析します（コンパイラ自身の規模で、関数本体を変えた再ビルドが約 1.8 秒から約 1.3 秒）。起動していれば `./kek` が自動で使います。
+
+```sh
+./kek daemon start     # stop / status / stats（構文解析の再利用の回数）
 ```
 
 `KEK_REMOTE_CACHE` は Bazel のリモートキャッシュと同じ HTTP プロトコル（`GET`/`PUT <url>/ac/<sha256>`）で、bazel-remote（`--disable_http_ac_validation`）や `file://` の共有ディレクトリが使えます。設計と現状は [docs/parallel-build.md](docs/parallel-build.md)。

@@ -1,0 +1,18 @@
+index_safe: valid [lo, hi, len]
+index_unsafe_off_by_one: invalid i=0 n=0 len(v)=0
+index_negative: invalid i=-1 len(v)=0
+loop_counter: valid [init, inv, step]
+loop_counter_from_param: valid [start, step]
+for_range: valid [range_lo, range_hi, b_le_len, a_nonneg]
+midpoint: valid [h1, h2, h3, mid]
+clamp_post: valid [pre, branch]
+clamp_post_wrong: invalid x=1 lo=1 r=0 hi=0
+add_no_overflow: valid [a, b]
+add_may_overflow: unknown: overflow
+div_nonzero: valid [h1]
+port: valid [port, lt]
+core_subset: valid [a]
+core_from_disjunction: valid [a]
+unnamed_hyps: valid [named]
+model_three_atoms: invalid x=10 y=0 z=0
+--- exit 0

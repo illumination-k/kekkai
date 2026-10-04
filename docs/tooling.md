@@ -477,3 +477,13 @@ runs every test.
 
 Tests run in separate processes, `-j n` at a time (default: the number of
 CPUs); the report keeps declaration order.
+
+## `kek smt [-repeat n] <file>` (hidden)
+
+Runs the refinement-type solver (`compiler/smt.kek`) on problems written
+in a small text syntax (docs/refinement.md, "ソルバの実装") and prints one
+line per problem: `valid [h1, h2]` (the unsat core), `invalid x=1 y=2` (a
+counterexample) or `unknown: reason`. `-random n [-seed s]` checks n
+random formulas against brute force and `-bench n` solves n random
+problems (for timing); both are used by `tests/run.sh smt`. It is not in
+the usage text: it is a test hook for the solver, not a user command.

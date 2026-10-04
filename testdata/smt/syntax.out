@@ -1,0 +1,9 @@
+invalid x#2=9 len(v)=10
+dotted_atoms: valid [h]
+nonlinear: error: line 12: nonlinear product at `<=`
+bad_token: error: line 16: unexpected character ;
+missing_comparison: error: line 20: expected a comparison at end of line
+unknown_line: error: line 23: unknown line kind `assume`
+bad_number: error: line 26: number out of range: 99999999999999999999
+default_goal_false: valid [h1, h2]
+--- exit 1

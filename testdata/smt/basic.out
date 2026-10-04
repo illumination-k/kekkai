@@ -1,0 +1,24 @@
+bounds_valid: valid [h1, h2]
+bounds_conflict: valid [h1, h2]
+bounds_invalid: invalid x=10
+trivially_true_goal: valid []
+trivially_false_goal: invalid
+distinct_vars_intervals: valid [a, b]
+eq_subst: valid [h1, h2]
+eq_chain_invalid: invalid y=2 x=0 z=4
+neq_goal_valid: valid [h1]
+neq_goal_invalid: invalid x=3
+neq_hyp: valid [h1, h2]
+neq_hyp_split: valid [h1, h2]
+or_hyp_valid: valid [h1, h2]
+or_hyp_invalid: invalid x=-1
+or_both_branches: valid [h1, h2]
+nested_bool: valid [h1, h2]
+not_or: valid [h1]
+strict_to_nonstrict: valid [h1]
+three_disjunctions: valid [h1, h2, h3]
+three_disjunctions_invalid: invalid a=1 b=1 c=1
+transitivity: valid [h1, h2, h3]
+unconstrained_atom: invalid x=0 y=6
+parenthesized_terms: valid [h1]
+--- exit 0

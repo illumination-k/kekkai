@@ -93,11 +93,11 @@ t_json() {
 	"$KEK" mutate -json "$calc" >"$d/out" 2>&1 || r="exit $?"
 	tr -d ' \n' <"$d/out" >"$d/flat"
 	r="$r$(contains "$d/flat" \
-		'"summary":{"generated":30,"killed_by_types":1,"killed":18,"survived":8,"timeout":3,"no_coverage":0,"score":72.4,"covered_score":72.4,"min_score":null,"ok":true}' \
+		'"summary":{"generated":30,"killed_by_types":1,"killed":18,"survived":8,"timeout":3,"no_coverage":0,"skipped":0,"score":72.4,"covered_score":72.4,"min_score":null,"ok":true}' \
 		'"functions":["clamp","triangle","is_adult","deposit"]' \
 		'"func":"triangle","kind":"stmt","description":"deletestatement","original":"i=i+1;","mutated":"","status":"timeout","killed_by":"triangle_of_4"' \
 		'"func":"deposit","kind":"stmt","description":"deletestatement","original":"tx.commit()?;","mutated":"","status":"killed_by_types","message":"testdata/mutate/calc.kek:38:9:transaction`tx`isnevercommittedorrolledback' \
-		'{"name":"deposits_add_up","status":"ok","ms":')"
+		'{"name":"deposits_add_up","status":"ok","ticks":')"
 	result json "$r" "$d/out"
 	rm -rf "$d"
 }
@@ -112,9 +112,37 @@ second run: exit $?"
 	cmp -s "$d/out1" "$d/out2" || r="$r
 the reports differ:
 $(diff "$d/out1" "$d/out2")"
-	ls "$ROOT"/.kek-cache/mutate/run-* >/dev/null 2>&1 || r="$r
+	[ -s "$(ls "$ROOT"/.kek-cache/mutate/pairs-*.tsv 2>/dev/null | head -n 1)" ] || r="$r
 no cached results"
 	result cache "$r" "$d/out2"
+	rm -rf "$d"
+}
+
+# -shard i/n runs a third of the mutants each; -merge of their -results
+# reports the same as one run. TEST_SHARD_INDEX / TEST_TOTAL_SHARDS (Bazel)
+# select a shard too.
+t_shard() {
+	d=$(tmpdir)
+	r=
+	"$KEK" mutate -json "$calc" >"$d/all" 2>&1 || r="exit $?"
+	for i in 0 1 2; do
+		"$KEK" mutate -shard "$i/3" -results "$d/r$i" "$calc" >"$d/s$i" 2>&1 || r="$r
+shard $i: exit $?"
+	done
+	r="$r$(contains "$d/s1" "in other shards)")"
+	"$KEK" mutate -json -merge "$d/r0,$d/r1,$d/r2" "$calc" >"$d/merged" 2>&1 || r="$r
+merge: exit $?"
+	cmp -s "$d/all" "$d/merged" || r="$r
+merged report differs:
+$(diff "$d/all" "$d/merged")"
+	TEST_SHARD_INDEX=2 TEST_TOTAL_SHARDS=3 TEST_SHARD_STATUS_FILE="$d/status" "$KEK" mutate "$calc" >"$d/env" 2>&1
+	cmp -s "$d/s2" "$d/env" || r="$r
+TEST_SHARD_INDEX=2 differs from -shard 2/3"
+	[ -f "$d/status" ] || r="$r
+TEST_SHARD_STATUS_FILE not touched"
+	"$KEK" mutate -shard 3/3 "$calc" >"$d/bad" 2>&1 && r="$r
+-shard 3/3 accepted"
+	result shard "$r" "$d/all"
 	rm -rf "$d"
 }
 
@@ -198,4 +226,4 @@ if [ "${1:-}" = --case ]; then
 	esac
 	exit 0
 fi
-run_parallel "$0" report json cache base diff threshold usage testdata/run/*.kek
+run_parallel "$0" report json cache shard base diff threshold usage testdata/run/*.kek

@@ -57,6 +57,12 @@ struct __Rt {
     cov: Vec<Bool>,
     mut cov_out: String,
     mut mutant: Int,
+    // batch runs (`kek mutate`): the probes hit by the current test, the
+    // probe hits counted so far and the budget (0: none) after which the
+    // run stops as a timeout
+    mut cov_hits: Vec<Int>,
+    mut ticks: Int,
+    mut budget: Int,
     // property tests: KEK_TEST_SEED, KEK_TEST_CASES, the &Random state at
     // the start of the test and the text of KEK_TEST_DB (every case gets
     // fresh mocks)

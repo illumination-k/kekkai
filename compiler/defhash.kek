@@ -56,6 +56,8 @@ struct DhLit {
 // Walker state of one definition.
 struct DhWalk {
     info: ChkInfo,
+    // `Trait::m` -> the user implementations `<T as Trait>::m`
+    impls: HashMap<String, Vec<String>>,
     self_name: String,
     labels: Vec<String>,
     depths: Vec<Int>,
@@ -439,12 +441,51 @@ fn dh_trait_impls(w: DhWalk, name: String) {
     if !w.info.traits.contains_key(tr) {
         return;
     }
-    let suffix = " as " + tr + ">::" + name.slice(sep + 2, name.len());
-    for fun in w.info.func_list {
-        if fun.name.ends_with(suffix) && !chk_is_lib(fun) {
-            dh_dep(w, fun.name);
+    match w.impls.get(name) {
+        Some(ns) => {
+            for n in ns {
+                dh_dep(w, n);
+            }
+        }
+        None => {}
+    }
+}
+
+// dh_impl_index maps every trait method `Trait::m` to its user
+// implementations (`<T as Trait>::m`), so that a call through a trait does
+// not scan every function.
+fn dh_impl_index(info: ChkInfo) -> HashMap<String, Vec<String>> {
+    let idx: HashMap<String, Vec<String>> = HashMap::new();
+    for fun in info.func_list {
+        if chk_is_lib(fun) || !fun.name.starts_with("<") {
+            continue;
+        }
+        let close = match fun.name.index_of(">::") {
+            Some(i) => i,
+            None => {
+                continue;
+            }
+        };
+        let head = fun.name.slice(1, close);
+        let mut tr = "";
+        let parts = head.split(" as ");
+        if parts.len() >= 2 {
+            tr = parts.get(parts.len() - 1).unwrap_or("");
+        }
+        if tr == "" {
+            continue;
+        }
+        let key = tr + "::" + fun.name.slice(close + 3, fun.name.len());
+        match idx.get(key) {
+            Some(v) => v.push(fun.name),
+            None => {
+                let v = Vec::new();
+                v.push(fun.name);
+                idx.insert(key, v);
+            }
         }
     }
+    idx
 }
 
 fn dh_expr(w: DhWalk, e: AstExpr) {
@@ -621,9 +662,10 @@ fn dh_caps(fun: ChkFunc) -> Vec<String> {
 }
 
 // dh_def walks one function.
-fn dh_def(info: ChkInfo, fun: ChkFunc) -> DhDef {
+fn dh_def(info: ChkInfo, impls: HashMap<String, Vec<String>>, fun: ChkFunc) -> DhDef {
     let w = DhWalk {
         info: info,
+        impls: impls,
         self_name: fun.name,
         labels: Vec::new(),
         depths: Vec::new(),
@@ -789,48 +831,17 @@ fn dh_is_lib_pos(p: AstPos) -> Bool {
 fn dh_program(file: AstFile, info: ChkInfo) -> DhProgram {
     let defs = Vec::new();
     let by_name: HashMap<String, DhDef> = HashMap::new();
+    let impls = dh_impl_index(info);
     for fun in info.func_list {
         if chk_is_lib(fun) {
             continue;
         }
-        let d = dh_def(info, fun);
+        let d = dh_def(info, impls, fun);
         defs.push(d);
         by_name.insert(d.name, d);
     }
     let th = dh_types_hash(file);
-    // trans: own hash + the sorted (name, hash) of the reachable closure
-    for d in defs {
-        let seen: HashMap<String, Bool> = HashMap::new();
-        let work = Vec::new();
-        work.push(d.name);
-        seen.insert(d.name, true);
-        let mut i = 0;
-        while i < work.len() {
-            match by_name.get(work.get(i).unwrap_or("")) {
-                Some(x) => {
-                    for dep in x.deps {
-                        if !seen.contains_key(dep) {
-                            seen.insert(dep, true);
-                            work.push(dep);
-                        }
-                    }
-                }
-                None => {}
-            }
-            i = i + 1;
-        }
-        let parts = Vec::new();
-        for n in work {
-            match by_name.get(n) {
-                Some(x) => parts.push(n + "=" + x.hash),
-                None => {}
-            }
-        }
-        chk_sort_strings(parts);
-        parts.push("types=" + th);
-        parts.push("self=" + d.hash);
-        d.trans = dh_hash_strs(parts);
-    }
+    dh_trans(defs, by_name, th);
     let all = Vec::new();
     for d in defs {
         all.push(d.name + "=" + d.trans);
@@ -838,6 +849,129 @@ fn dh_program(file: AstFile, info: ChkInfo) -> DhProgram {
     chk_sort_strings(all);
     all.push("types=" + th);
     DhProgram { defs: defs, by_name: by_name, types_hash: th, hash: dh_hash_strs(all) }
+}
+
+// dh_trans sets the trans hash of every definition. The call graph is
+// split into strongly connected components (iterative Tarjan); a
+// component's hash covers its members' (name, hash) and the hashes of the
+// components it calls, which Tarjan has finished before it. So trans
+// covers everything reachable, in O(definitions + calls) instead of one
+// traversal per definition.
+fn dh_trans(defs: Vec<DhDef>, by_name: HashMap<String, DhDef>, th: String) {
+    let n = defs.len();
+    let index_of: HashMap<String, Int> = HashMap::new();
+    let mut k = 0;
+    for d in defs {
+        index_of.insert(d.name, k);
+        k = k + 1;
+    }
+    let adj: Vec<Vec<Int>> = Vec::new();
+    let idx = Vec::new();
+    let low = Vec::new();
+    let on = Vec::new();
+    let comp = Vec::new();
+    for d in defs {
+        let es = Vec::new();
+        for dep in d.deps {
+            match index_of.get(dep) {
+                Some(j) => es.push(j),
+                None => {}
+            }
+        }
+        adj.push(es);
+        idx.push(-1);
+        low.push(0);
+        on.push(false);
+        comp.push(-1);
+    }
+    let comp_hash: Vec<String> = Vec::new();
+    let stack = Vec::new();
+    let fv = Vec::new();
+    let fi = Vec::new();
+    let mut counter = 0;
+    for root in 0..n {
+        if idx.get(root).unwrap_or(0) != -1 {
+            continue;
+        }
+        idx.set(root, counter);
+        low.set(root, counter);
+        counter = counter + 1;
+        stack.push(root);
+        on.set(root, true);
+        fv.push(root);
+        fi.push(0);
+        while fv.len() > 0 {
+            let top = fv.len() - 1;
+            let v = fv.get(top).unwrap_or(0);
+            let i = fi.get(top).unwrap_or(0);
+            let es = adj.get(v).unwrap_or(Vec::new());
+            if i < es.len() {
+                fi.set(top, i + 1);
+                let w = es.get(i).unwrap_or(0);
+                if idx.get(w).unwrap_or(0) == -1 {
+                    idx.set(w, counter);
+                    low.set(w, counter);
+                    counter = counter + 1;
+                    stack.push(w);
+                    on.set(w, true);
+                    fv.push(w);
+                    fi.push(0);
+                } else if on.get(w).unwrap_or(false) {
+                    low.set(v, low.get(v).unwrap_or(0).min(idx.get(w).unwrap_or(0)));
+                }
+                continue;
+            }
+            if low.get(v).unwrap_or(0) == idx.get(v).unwrap_or(0) {
+                // v roots a component: its callees' components are done
+                let c = comp_hash.len();
+                let members = Vec::new();
+                let mut more = true;
+                while more {
+                    let x = stack.pop().unwrap_or(v);
+                    on.set(x, false);
+                    comp.set(x, c);
+                    members.push(x);
+                    more = x != v;
+                }
+                let parts = Vec::new();
+                let ext: HashSet<String> = HashSet::new();
+                for x in members {
+                    match defs.get(x) {
+                        Some(d) => parts.push(d.name + "=" + d.hash),
+                        None => {}
+                    }
+                    for w in adj.get(x).unwrap_or(Vec::new()) {
+                        let cw = comp.get(w).unwrap_or(-1);
+                        if cw != c && cw >= 0 {
+                            ext.insert(comp_hash.get(cw).unwrap_or(""));
+                        }
+                    }
+                }
+                chk_sort_strings(parts);
+                let deps: Vec<String> = ext.iter().collect();
+                chk_sort_strings(deps);
+                for h in deps {
+                    parts.push("calls=" + h);
+                }
+                comp_hash.push(dh_hash_strs(parts));
+            }
+            fv.pop();
+            fi.pop();
+            if fv.len() > 0 {
+                let u = fv.get(fv.len() - 1).unwrap_or(0);
+                low.set(u, low.get(u).unwrap_or(0).min(low.get(v).unwrap_or(0)));
+            }
+        }
+    }
+    let mut j = 0;
+    for d in defs {
+        let parts = Vec::new();
+        parts.push("self=" + d.name + "=" + d.hash);
+        parts.push("scc=" + comp_hash.get(comp.get(j).unwrap_or(0)).unwrap_or(""));
+        parts.push("types=" + th);
+        d.trans = dh_hash_strs(parts);
+        j = j + 1;
+    }
 }
 
 // dh_load parses and checks a program (diagnostics are printed) and

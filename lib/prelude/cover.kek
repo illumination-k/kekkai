@@ -9,11 +9,22 @@
 // mutant is KEK_MUTANT (0 or unset: none).
 
 fn __cov_hit(k: Int) {
-    let c = __Rt::get().cov;
+    let rt = __Rt::get();
+    rt.ticks = rt.ticks + 1;
+    if rt.budget > 0 && rt.ticks > rt.budget {
+        // a deterministic time limit (`kek mutate`): the run took more
+        // probe hits than its budget
+        __print("kek-timeout");
+        __exit(3);
+    }
+    let c = rt.cov;
     while c.len() <= k {
         c.push(false);
     }
-    c.set(k, true);
+    if !c.get(k).unwrap_or(false) {
+        c.set(k, true);
+        rt.cov_hits.push(k);
+    }
 }
 
 // __cov_flush is called by __exit.
@@ -95,4 +106,80 @@ fn __mut_icmp(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Bool {
     } else if o == 7 {
         x <= y
     } else if o == 8 { x > y } else { x >= y }
+}
+
+// ---- batch runs (`kek mutate`) ----
+//
+// `<module> --batch` runs the plan in the file KEK_BATCH in one process
+// instead of one process per (mutant, test). Each line is
+// `mutant test:budget test:budget ...`. Mutant 0 is the baseline: every
+// test runs and `kek-base test status ticks ids` reports its result, the
+// number of probe hits and the mutant sites it reached. Otherwise the
+// tests run until one fails and `kek-result mutant killed|survived test`
+// reports it. `kek-start mutant` comes first, so the launcher knows which
+// mutant was running when the process trapped or ran out of budget (exit
+// status 3); it restarts the rest of the plan in a new process. The
+// harness (compiler/testrun.kek) supplies the loop.
+
+fn __batch_plan() -> Vec<String> {
+    let rt = __Rt::get();
+    let f = __env_lookup(__env_all(rt), "KEK_BATCH");
+    let out = Vec::new();
+    match __fs_read(__Any::null(), f) {
+        Ok(text) => {
+            for l in text.split("\n") {
+                if l != "" {
+                    out.push(l);
+                }
+            }
+        }
+        Err(e) => __eprint("kek: KEK_BATCH: " + f + ": " + e.message),
+    }
+    out
+}
+
+fn __batch_mutant(m: Int) {
+    __Rt::get().mutant = m;
+    __print("kek-start " + m.to_string());
+}
+
+// __batch_test resets the state for test `name:budget` and returns name.
+fn __batch_test(tb: String) -> String {
+    let rt = __Rt::get();
+    let parts = tb.split(":");
+    let name = parts.get(0).unwrap_or("");
+    __print("kek-test " + name);
+    rt.rand = rt.seed;
+    __test_begin(name);
+    __test_case_reset();
+    for k in rt.cov_hits {
+        rt.cov.set(k, false);
+    }
+    rt.cov_hits = Vec::new();
+    rt.ticks = 0;
+    rt.budget = parts.get(1).unwrap_or("0").parse_int().unwrap_or(0);
+    name
+}
+
+// __batch_done reports a baseline run (mutant 0).
+fn __batch_done(name: String, code: Int) {
+    let rt = __Rt::get();
+    rt.budget = 0;
+    if rt.mutant != 0 {
+        return;
+    }
+    let ids = Vec::new();
+    for k in rt.cov_hits {
+        ids.push(k.to_string());
+    }
+    let st = if code == 0 { "ok" } else { "failed" };
+    __print("kek-base " + name + " " + st + " " + rt.ticks.to_string() + " " + ids.join(","));
+}
+
+fn __batch_result(m: Int, killed_by: String) {
+    if killed_by == "" {
+        __print("kek-result " + m.to_string() + " survived");
+    } else {
+        __print("kek-result " + m.to_string() + " killed " + killed_by);
+    }
 }

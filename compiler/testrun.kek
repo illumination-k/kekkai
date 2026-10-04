@@ -199,11 +199,40 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
             b = b + ", __" + c.to_lower() + ": &" + c;
         }
     }
+    // the capability parameters, and the same as arguments
+    let mut cdecl = "";
+    let mut cargs = "";
+    for c in "Log Clock Random Db Net".split(" ") {
+        if used.get(c).unwrap_or(false) {
+            cdecl = cdecl + ", __" + c.to_lower() + ": &" + c;
+            cargs = cargs + ", __" + c.to_lower();
+        }
+    }
     b = b + ") -> Int {\n    let __name = __args.get(0).unwrap_or(\"\");\n";
     let pg = pbt_new();
     let mut ti = 0;
+    b = b + "    if __name == \"--batch\" {\n        return __kek_batch(0" + cargs + ");\n    }\n";
     b = b + "    if !__test_begin(__name) {\n        return 1;\n    }\n";
     b = b + "    if __name == \"\" {\n        return 0;\n    }\n";
+    b = b + "    __kek_run_one(__name" + cargs + ")\n}\n\n";
+    // the batch loop of lib/prelude/cover.kek
+    b = b + "fn __kek_batch(__u: Int" + cdecl + ") -> Int {\n";
+    b = b + "    for __line in __batch_plan() {\n";
+    b = b + "        let __w = __line.split(\" \");\n";
+    b = b + "        let __m = __w.get(0).unwrap_or(\"0\").parse_int().unwrap_or(0);\n";
+    b = b + "        __batch_mutant(__m);\n";
+    b = b + "        let mut __by = \"\";\n";
+    b = b + "        let mut __i = 1;\n";
+    b = b + "        while __i < __w.len() {\n";
+    b = b + "            let __t = __batch_test(__w.get(__i).unwrap_or(\"\"));\n";
+    b = b + "            let __c = __kek_run_one(__t" + cargs + ");\n";
+    b = b + "            __batch_done(__t, __c);\n";
+    b = b
+        + "            if __c != 0 && __m != 0 {\n                __by = __t;\n                break;\n            }\n";
+    b = b + "            __i = __i + 1;\n        }\n";
+    b = b
+        + "        if __m != 0 {\n            __batch_result(__m, __by);\n        }\n    }\n    0\n}\n\n";
+    b = b + "fn __kek_run_one(__name: String" + cdecl + ") -> Int {\n";
     for t in tests {
         let args = Vec::new();
         for c in t.caps {

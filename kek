@@ -1056,79 +1056,84 @@ Usage of mutate: kek mutate [flags] <file|dir>
     	parallel test processes (default: number of CPUs)
   -json
     	print the report as JSON
+  -merge string
+    	report the -results files of the shards (comma-separated) instead of running
+  -results string
+    	also write this run's raw results to a file (for -merge)
   -run string
     	use only tests whose name matches this extended regular expression
+  -shard string
+    	run only shard i of n (i/n, 0-based; default from TEST_SHARD_INDEX / TEST_TOTAL_SHARDS)
   -timeout string
-    	time limit of a test run with a mutant: 2s, 500ms (default: 1s + 10x the slowest test)
+    	wall-clock limit of one test process: 2s, 500ms (default 60s); a run with a
+    	mutant is also limited to 10x the probe hits of its test without mutants
 EOF
 }
 
-# mutate_base_one <dir> <index> <test> <test key> (a parallel worker):
-# runs a test without mutants, recording the mutant sites it reaches.
-# Writes <dir>/base/<index> ("test<TAB>status<TAB>ms") and
-# <dir>/reach/<index> (the ids), both cached in $KEK_W_CACHE-<test key>.
-mutate_base_one() {
-	wasm_extra="$KEK_W_EXTRA --env KEK_MUTANT=0 --env KEK_COVER_OUT=$1/reach/$2"
-	set +e
-	wasm "$1/module.cwasm" "$3" >"$1/out/$2" 2>&1
-	_c=$?
-	set -e
-	case $_c in
-	0) _st=ok ;;
-	1) _st=failed ;;
-	*) _st=trapped ;;
-	esac
-	_ms=$(sed -n 's/.*; \([0-9]*\)\.[0-9]*ms)$/\1/p' "$1/out/$2" | head -n 1)
-	printf '%s\t%s\t%s\n' "$3" "$_st" "${_ms:-0}" >"$1/base/$2"
-	[ -f "$1/reach/$2" ] || : >"$1/reach/$2"
-	if [ -n "${4:-}" ]; then
-		cat "$1/base/$2" "$1/reach/$2" >"$1/out/$2.cache"
-		cache_put "$KEK_W_CACHE-$4" "$1/out/$2.cache"
-	fi
+# mutate_batch <dir> <chunk> (a parallel worker): runs the plan
+# <dir>/chunk.<chunk> through `module --batch` processes (one process for
+# many (mutant, test) runs) and appends their `kek-` lines to
+# <dir>/clog.<chunk>. A process that traps, runs out of its probe budget
+# (exit status 3) or of wall-clock time stops in the middle of a line: that
+# line gets `kek-crash killed|timeout` and the rest of the plan restarts in
+# a new process.
+mutate_batch() {
+	_d=$1
+	_c=$2
+	_rest=$_d/rest.$_c
+	cp "$_d/chunk.$_c" "$_rest"
+	: >"$_d/clog.$_c"
+	while [ -s "$_rest" ]; do
+		wasm_extra="$KEK_W_EXTRA --env KEK_BATCH=$_rest"
+		set +e
+		wasm "$_d/module.cwasm" --batch >"$_d/o.$_c" 2>"$_d/e.$_c"
+		_x=$?
+		set -e
+		grep '^kek-' "$_d/o.$_c" >>"$_d/clog.$_c" || true
+		[ $_x -ne 0 ] || break
+		_n=$(grep -c '^kek-start' "$_d/o.$_c" || true)
+		if [ "$_n" -eq 0 ]; then
+			# nothing started: the module itself cannot run
+			echo "kek mutate: the test module failed:" >&2
+			cat "$_d/e.$_c" >&2
+			exit 1
+		fi
+		_why=killed
+		[ $_x -ne 3 ] || _why=timeout
+		if grep -q 'wasm trap: interrupt' "$_d/e.$_c"; then
+			# the wall clock limit is per process: give the line that was
+			# running a process of its own before calling it a timeout
+			sed -n "${_n}p" "$_rest" >"$_rest.one"
+			wasm_extra="$KEK_W_EXTRA --env KEK_BATCH=$_rest.one"
+			set +e
+			wasm "$_d/module.cwasm" --batch >"$_d/o.$_c" 2>"$_d/e.$_c"
+			_x=$?
+			set -e
+			grep '^kek-' "$_d/o.$_c" >>"$_d/clog.$_c" || true
+			_why=
+			if [ $_x -eq 3 ] || grep -q 'wasm trap: interrupt' "$_d/e.$_c"; then
+				_why=timeout
+			elif [ $_x -ne 0 ]; then
+				_why=killed
+			fi
+		fi
+		[ -z "$_why" ] || echo "kek-crash $_why" >>"$_d/clog.$_c"
+		tail -n +$((_n + 1)) "$_rest" >"$_rest.tmp"
+		mv "$_rest.tmp" "$_rest"
+	done
 }
 
-# mutate_one <dir> <id> <mutant key> <test...> (a parallel worker): runs
-# the tests that reach mutant <id> until one fails, and writes
-# "id<TAB>killed|survived|timeout<TAB>test" to <dir>/res/<id>. The result
-# of every (mutant, test) pair is cached in
-# .kek-cache/mutate/run-<stage>-<mutant key>-<test key>.
-mutate_one() {
+# mutate_run_plan <dir> <plan> <jobs>: splits the plan into <jobs> chunks,
+# runs them in parallel (mutate_batch) and prints the combined log.
+mutate_run_plan() {
 	_d=$1
-	_id=$2
-	_mk=$3
-	shift 3
-	_res=survived
-	_by=
-	for _t in "$@"; do
-		_tk=$(test_key "$_d" "$_t")
-		_cf=$cache/mutate/run-$KEK_W_STAGE-$_mk-$_tk
-		if [ -n "$_tk" ] && [ -f "$_cf" ]; then
-			_r=$(cat "$_cf")
-		else
-			wasm_extra="$KEK_W_EXTRA --env KEK_MUTANT=$_id"
-			set +e
-			wasm "$_d/module.cwasm" "$_t" >"$_d/out/m$_id" 2>&1
-			_c=$?
-			set -e
-			if [ $_c -eq 0 ]; then
-				_r=survived
-			elif grep -q 'wasm trap: interrupt' "$_d/out/m$_id"; then
-				_r=timeout
-			else
-				_r=killed
-			fi
-			if [ -n "$_tk" ]; then
-				echo "$_r" >"$_d/out/m$_id.cache"
-				cache_put "$_cf" "$_d/out/m$_id.cache"
-			fi
-		fi
-		if [ "$_r" != survived ]; then
-			_res=$_r
-			_by=$_t
-			break
-		fi
+	rm -f "$_d"/chunk.* "$_d"/clog.*
+	awk -v n="$3" -v d="$_d" '{ print > (d "/chunk." ((NR - 1) % n)) }' "$2"
+	for _p in "$_d"/chunk.*; do
+		mutate_batch "$_d" "${_p##*.}" &
 	done
-	printf '%s\t%s\t%s\n' "$_id" "$_res" "$_by" >"$_d/res/$_id"
+	wait
+	cat "$_d"/clog.*
 }
 
 # mutate_extract <rev> <path> <outdir>: the program at a git revision.
@@ -1164,7 +1169,10 @@ cmd_mutate() {
 	flag_diff=
 	flag_timeout=
 	flag_j=$(ncpu)
-	tool_flags_parse mutate_usage "json run= base= diff= timeout= j#" "$@"
+	flag_shard=
+	flag_results=
+	flag_merge=
+	tool_flags_parse mutate_usage "json run= base= diff= timeout= j# shard= results= merge=" "$@"
 	[ "$tool_nrest" -eq 1 ] || { mutate_usage; exit 2; }
 	_file=$tool_path
 	[ -e "$_file" ] || die "stat $_file: no such file or directory"
@@ -1233,70 +1241,130 @@ cmd_mutate() {
 	mkdir -p "$_dir/base" "$_dir/reach" "$_dir/out" "$_dir/res"
 	: >"$_dir/baseline.txt"
 	: >"$_dir/results.txt"
-	if [ -s "$_dir/selected.txt" ] && [ -s "$_dir/mutants.txt" ]; then
-		KEK_W_STAGE=$_sk
-		KEK_W_CACHE=$cache/mutate/base-$_bk
-		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=60s"
-		export KEK_W_STAGE KEK_W_CACHE KEK_W_EXTRA
-		# baseline: which mutant sites each test reaches
-		: >"$_dir/torun.txt"
-		test_jobs "$_dir" | while read -r _i _t _tk; do
-			if [ -n "$_tk" ] && [ -f "$KEK_W_CACHE-$_tk" ]; then
-				sed -n 1p "$KEK_W_CACHE-$_tk" >"$_dir/base/$_i"
-				sed -n 2p "$KEK_W_CACHE-$_tk" >"$_dir/reach/$_i"
-			else
-				echo "$_i $_t $_tk" >>"$_dir/torun.txt"
-			fi
+	# sharding: this run owns the mutants with index % n == i (-shard i/n,
+	# or Bazel's TEST_SHARD_INDEX / TEST_TOTAL_SHARDS)
+	_si=0
+	_sn=1
+	if [ -n "$flag_shard" ]; then
+		_si=${flag_shard%%/*}
+		_sn=${flag_shard#*/}
+	elif [ -n "${TEST_TOTAL_SHARDS:-}" ]; then
+		_si=${TEST_SHARD_INDEX:-0}
+		_sn=$TEST_TOTAL_SHARDS
+		[ -z "${TEST_SHARD_STATUS_FILE:-}" ] || : >"$TEST_SHARD_STATUS_FILE"
+	fi
+	case "$_si/$_sn" in
+	*[!0-9/]* | /* | */) die "kek mutate: invalid -shard $flag_shard (use i/n)" ;;
+	esac
+	[ "$_sn" -ge 1 ] && [ "$_si" -lt "$_sn" ] || die "kek mutate: invalid shard $_si/$_sn"
+	awk -F '\t' -v i="$_si" -v n="$_sn" -v skip="$_dir/skipped.txt" '
+		BEGIN { printf "" > skip }
+		(NR - 1) % n == i { print; next }
+		{ printf "%s\tskipped\t\n", $1 > skip }
+	' "$_dir/mutants.txt" >"$_dir/mine.txt"
+	if [ -n "$flag_merge" ]; then
+		# combine the -results files of the shards: a mutant's result is
+		# the one of the shard that ran it
+		: >"$_dir/merged.txt"
+		_first=
+		for _r in $(echo "$flag_merge" | tr ',' ' '); do
+			[ -f "$_r" ] || die "kek mutate: -merge: no such file: $_r"
+			[ -n "$_first" ] || _first=$_r
+			cat "$_r" >>"$_dir/merged.txt"
 		done
-		if [ -s "$_dir/torun.txt" ]; then
-			xargs -L 1 -P "$flag_j" "$root/kek" __mutate-base "$_dir" <"$_dir/torun.txt"
-		fi
-		cat "$_dir"/base/* >"$_dir/baseline.txt"
-		if [ -z "$_tmo" ]; then
-			_max=$(awk -F '\t' 'BEGIN { m = 0 } $3 + 0 > m { m = $3 + 0 } END { print m }' "$_dir/baseline.txt")
-			_tmo=$((1000 + 10 * _max))
-		fi
-		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=${_tmo}ms"
+		awk -F '\t' '$1 == "B" { sub(/^B\t/, ""); print }' "$_first" >"$_dir/baseline.txt"
+		awk -F '\t' '$1 == "R" && $3 != "skipped" { sub(/^R\t/, ""); print }' "$_dir/merged.txt" >"$_dir/results.txt"
+	elif [ -s "$_dir/selected.txt" ] && [ -s "$_dir/mutants.txt" ]; then
+		_wall=${_tmo:-60000}
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=${_wall}ms"
 		export KEK_W_EXTRA
-		# plan: for every mutant, the passing tests that reach it; mutants
-		# whose result is known from the cache are settled here
-		for _bf in "$_dir"/base/*; do
-			_i=${_bf##*/}
-			awk -F '\t' -v r="$_dir/reach/$_i" '$2 == "ok" {
-				while ((getline line < r) > 0) {
-					n = split(line, ids, " ")
-					for (k = 1; k <= n; k++) print ids[k], $1
-				}
-			}' "$_bf"
-		done >"$_dir/reached.txt"
-		awk -v reached="$_dir/reached.txt" -v keys="$_dir/testkeys.txt" -v res="$_dir/res/known" \
-			-v pre="$cache/mutate/run-$_sk-" '
+		# baseline, in one process: each test's status, probe hits (ticks)
+		# and the mutant sites it reaches
+		awk '{ print "0 " $0 }' "$_dir/selected.txt" >"$_dir/plan0.txt"
+		mutate_run_plan "$_dir" "$_dir/plan0.txt" 1 | awk -v base="$_dir/baseline.txt" -v reach="$_dir/reach.txt" '
+			BEGIN { printf "" > base; printf "" > reach }
+			$1 == "kek-test" { t = $2 }
+			$1 == "kek-base" { printf "%s\t%s\t%s\n", $2, $3, $4 > base; if ($3 == "ok") print $2, $5 > reach }
+			$1 == "kek-crash" { printf "%s\t%s\t0\n", t, ($2 == "timeout" ? "timeout" : "trapped") > base }
+		'
+		# plan: for each mutant of this shard, the passing tests that reach
+		# it, cheapest first, each with a probe budget of 10x its baseline
+		# ticks + 1000 (a deterministic time limit). Pairs already known
+		# from the cache (mutant key x test key -> result) are not run.
+		_pairs=$cache/mutate/pairs-$_sk.tsv
+		[ -f "$_pairs" ] || : >"$_pairs"
+		awk -v reach="$_dir/reach.txt" -v base="$_dir/baseline.txt" -v keys="$_dir/testkeys.txt" \
+			-v pairs="$_pairs" -v known="$_dir/known.txt" '
 			BEGIN {
-				while ((getline l < reached) > 0) { split(l, a, " "); t[a[1]] = t[a[1]] " " a[2] }
-				while ((getline l < keys) > 0) { split(l, a, "\t"); k[a[1]] = a[2] }
-				printf "" > res
+				while ((getline l < base) > 0) { split(l, a, "\t"); ticks[a[1]] = a[3] + 0 }
+				while ((getline l < keys) > 0) { split(l, a, "\t"); tk[a[1]] = a[2] }
+				while ((getline l < pairs) > 0) { split(l, a, "\t"); pr[a[1] " " a[2]] = a[3] }
+				# tests reaching each site, cheapest first (insertion sort)
+				while ((getline l < reach) > 0) {
+					split(l, a, " ")
+					n = split(a[2], ids, ",")
+					for (k = 1; k <= n; k++) {
+						s = ids[k]
+						c = ++cnt[s]
+						tt[s, c] = a[1]
+						for (j = c; j > 1 && ticks[tt[s, j - 1]] > ticks[tt[s, j]]; j--) {
+							x = tt[s, j]; tt[s, j] = tt[s, j - 1]; tt[s, j - 1] = x
+						}
+					}
+				}
+				printf "" > known
 			}
 			{
 				split($0, m, "\t")
-				if (!(m[1] in t)) { printf "%s\tnocov\t\n", m[1] > res; next }
-				n = split(t[m[1]], ts, " ")
-				for (i = 1; i <= n; i++) {
-					f = pre m[2] "-" k[ts[i]]
-					r = ""
-					if (k[ts[i]] != "" && (getline r < f) > 0) close(f)
-					else r = ""
-					if (r == "") { print m[1], m[2] t[m[1]]; next }
-					if (r != "survived") { printf "%s\t%s\t%s\n", m[1], r, ts[i] > res; next }
+				id = m[1]; mk = m[2]
+				if (!(id in cnt)) { printf "%s\tnocov\t\n", id > known; next }
+				line = ""; res = ""
+				for (j = 1; j <= cnt[id]; j++) {
+					t = tt[id, j]
+					r = pr[mk " " tk[t]]
+					if (r == "survived") continue
+					if (r != "") { res = r; by = t; break }
+					line = line " " t ":" (10 * ticks[t] + 1000)
 				}
-				printf "%s\tsurvived\t\n", m[1] > res
+				if (res != "") printf "%s\t%s\t%s\n", id, res, by > known
+				else if (line == "") printf "%s\tsurvived\t\n", id > known
+				else print id line
 			}
-		' "$_dir/mutants.txt" >"$_dir/plan.txt"
+		' "$_dir/mine.txt" >"$_dir/plan.txt"
+		cp "$_dir/known.txt" "$_dir/results.txt"
 		if [ -s "$_dir/plan.txt" ]; then
-			xargs -L 1 -P "$flag_j" "$root/kek" __mutate-one "$_dir" <"$_dir/plan.txt"
+			mutate_run_plan "$_dir" "$_dir/plan.txt" "$flag_j" >"$_dir/log.txt"
+			# results, and the (mutant, test) pairs for the cache: the tests
+			# before the one that killed a mutant let it survive
+			awk -v mk="$_dir/mutants.txt" -v keys="$_dir/testkeys.txt" -v res="$_dir/results.txt" \
+				-v pairs="$_dir/newpairs.txt" '
+				BEGIN {
+					while ((getline l < mk) > 0) { split(l, a, "\t"); key[a[1]] = a[2] }
+					while ((getline l < keys) > 0) { split(l, a, "\t"); tk[a[1]] = a[2] }
+					printf "" > pairs
+				}
+				function pair(t, r) { if (tk[t] != "") printf "%s\t%s\t%s\n", key[m], tk[t], r > pairs }
+				$1 == "kek-start" { m = $2; t = ""; n = 0 }
+				$1 == "kek-test" { if (t != "") pair(t, "survived"); t = $2 }
+				$1 == "kek-result" {
+					if ($3 == "survived") { if (t != "") pair(t, "survived"); printf "%s\tsurvived\t\n", m >> res }
+					else { pair(t, "killed"); printf "%s\tkilled\t%s\n", m, t >> res }
+					t = ""
+				}
+				$1 == "kek-crash" { pair(t, $2); printf "%s\t%s\t%s\n", m, $2, t >> res; t = "" }
+			' "$_dir/log.txt"
+			# appends of short lines are atomic: concurrent runs may share it
+			cat "$_dir/newpairs.txt" >>"$_pairs"
 		fi
-		cat "$_dir"/res/* >"$_dir/results.txt"
+		cat "$_dir/skipped.txt" >>"$_dir/results.txt"
 	elif [ -s "$_dir/selected.txt" ]; then
 		awk '{ printf "%s\tok\t0\n", $0 }' "$_dir/selected.txt" >"$_dir/baseline.txt"
+	fi
+	if [ -n "$flag_results" ]; then
+		{
+			awk '{ print "B\t" $0 }' "$_dir/baseline.txt"
+			awk '{ print "R\t" $0 }' "$_dir/results.txt"
+		} >"$flag_results"
 	fi
 	set -- "$_dir"
 	[ "$flag_json" = true ] && set -- -json "$@"
@@ -1320,8 +1388,6 @@ test) cmd_test "$@" ;;
 cover) cmd_cover "$@" ;;
 mutate) cmd_mutate "$@" ;;
 __cover-one) cover_one "$@" ;;
-__mutate-base) mutate_base_one "$@" ;;
-__mutate-one) mutate_one "$@" ;;
 assure)
 	# the compiler has no clock: pass today's date (KEK_TODAY overrides it)
 	if [ $# -gt 0 ]; then

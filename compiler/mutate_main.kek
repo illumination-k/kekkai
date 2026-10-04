@@ -11,8 +11,8 @@
 //       mutants.txt ("id<TAB>cache key" per well-typed mutant) and
 //       mutants.json (every mutant, for the report)
 //   mutate-report [-json] <outdir>
-//       combine mutants.json, baseline.txt ("test<TAB>status<TAB>ms") and
-//       results.txt ("id<TAB>killed|survived|timeout|nocov<TAB>test") into
+//       combine mutants.json, baseline.txt ("test<TAB>status<TAB>ticks") and
+//       results.txt ("id<TAB>killed|survived|timeout|nocov|skipped<TAB>test") into
 //       the report; exit 1 when the score is below [mutate] min_score of
 //       kekkai.toml
 //
@@ -32,6 +32,74 @@ fn mut_check_one(p: CovProg, sel: HashMap<Int, Bool>, c: MutCand) -> String {
     match res.errs.get(0) {
         Some(e) => ast_error_string(e),
         None => "",
+    }
+}
+
+// mut_check_set type-checks the program with every mutant of cs applied
+// at once (as plain code; their nodes must differ) and returns the first
+// error ("" when it checks).
+fn mut_check_set(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) -> String {
+    let prog = frontend_parse_all(p.srcs);
+    let w = cov_new_walk("apply");
+    w.real = true;
+    for c in cs {
+        w.active.insert(c.node, mut_one_cand(c));
+    }
+    cov_rewrite_file(w, prog.file, p, sel);
+    let res = chk_check(prog.file);
+    match res.errs.get(0) {
+        Some(e) => ast_error_string(e),
+        None => "",
+    }
+}
+
+// mut_bisect finds the ill-typed mutants of cs by group testing: the whole
+// group is checked at once and only a group that fails is split. Most
+// mutants are well-typed, so this takes a few checks instead of one per
+// mutant (with k ill-typed ones, about 2k log n). A mutant alone in a
+// failing group is "killed by types".
+fn mut_bisect(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) {
+    if cs.len() == 0 {
+        return;
+    }
+    let nodes: HashSet<Int> = HashSet::new();
+    let mut distinct = true;
+    for c in cs {
+        if !nodes.insert(c.node) {
+            distinct = false;
+        }
+    }
+    if distinct {
+        let msg = mut_check_set(p, sel, cs);
+        if msg == "" {
+            return;
+        }
+        if cs.len() == 1 {
+            let c = cs.get(0).unwrap_or(mut_dummy(cs));
+            c.status = "types";
+            c.msg = msg;
+            return;
+        }
+    }
+    let left = Vec::new();
+    let right = Vec::new();
+    let mut i = 0;
+    for c in cs {
+        if i < cs.len() / 2 {
+            left.push(c);
+        } else {
+            right.push(c);
+        }
+        i = i + 1;
+    }
+    mut_bisect(p, sel, left);
+    mut_bisect(p, sel, right);
+}
+
+fn mut_dummy(cs: Vec<MutCand>) -> MutCand {
+    match cs.get(0) {
+        Some(c) => c,
+        None => mut_dummy(cs),
     }
 }
 
@@ -132,15 +200,22 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     cov_rewrite_file(w, p.file, p, sel);
     let cands = w.cands;
-    // candidates that can be ill-typed: check them one by one
+    // candidates that can be ill-typed: group testing per kind (a deleted
+    // statement and a replaced result in one function could hide each
+    // other's errors)
+    let by_kind: HashMap<String, Vec<MutCand>> = HashMap::new();
+    let kinds = Vec::new();
     for c in cands {
         if c.risky {
-            let msg = mut_check_one(p, sel, c);
-            if msg != "" {
-                c.status = "types";
-                c.msg = msg;
+            if !by_kind.contains_key(c.kind) {
+                kinds.push(c.kind);
+                by_kind.insert(c.kind, Vec::new());
             }
+            by_kind.get(c.kind).unwrap_or(Vec::new()).push(c);
         }
+    }
+    for k in kinds {
+        mut_bisect(p, sel, by_kind.get(k).unwrap_or(Vec::new()));
     }
     if !cov_write_tests(p, out_dir, fs, log) {
         return 1;
@@ -149,7 +224,7 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if res.errs.len() > 0 {
         // a candidate assumed well-typed is not: check every one
         for c in cands {
-            if c.status == "" && !c.risky {
+            if c.status == "" {
                 let msg = mut_check_one(p, sel, c);
                 if msg != "" {
                     c.status = "types";
@@ -286,7 +361,8 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         let st = parts.get(1).unwrap_or("");
         irjson_set(t, "name", IrjVal::Str(name));
         irjson_set(t, "status", IrjVal::Str(st));
-        irjson_set(t, "ms", irjson_int(parts.get(2).unwrap_or("0").parse_int().unwrap_or(0)));
+        // probe hits of the test without mutants (its time limit is 10x)
+        irjson_set(t, "ticks", irjson_int(parts.get(2).unwrap_or("0").parse_int().unwrap_or(0)));
         tests.push(irjson_val(t));
         if st != "ok" {
             failing.push(name);
@@ -297,6 +373,8 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut n_surv = 0;
     let mut n_timeout = 0;
     let mut n_nocov = 0;
+    // mutants of other shards (`kek mutate -shard i/n`)
+    let mut n_skipped = 0;
     let objs = Vec::new();
     let rows: HashMap<String, Vec<String>> = HashMap::new();
     let muts = tool_json_arr(tool_json_get(table, "mutants"));
@@ -314,6 +392,9 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             n_surv = n_surv + 1;
         } else if st == "timeout" {
             n_timeout = n_timeout + 1;
+        } else if st == "skipped" {
+            n_skipped = n_skipped + 1;
+            continue;
         } else {
             st = "no_coverage";
             n_nocov = n_nocov + 1;
@@ -393,6 +474,7 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         irjson_set(s, "survived", irjson_int(n_surv));
         irjson_set(s, "timeout", irjson_int(n_timeout));
         irjson_set(s, "no_coverage", irjson_int(n_nocov));
+        irjson_set(s, "skipped", irjson_int(n_skipped));
         irjson_set(s, "score", cov_pct_num(detected, denom));
         irjson_set(s, "covered_score", cov_pct_num(detected, detected + n_surv));
         irjson_set(s, "min_score", if min_score >= 0 {
@@ -447,18 +529,11 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     out.push("");
     out.push(
-        "generated "
-            + muts.len().to_string()
-            + ": killed by types "
-            + n_types.to_string()
-            + ", killed "
-            + n_killed.to_string()
-            + ", survived "
-            + n_surv.to_string()
-            + ", timeout "
-            + n_timeout.to_string()
-            + ", no coverage "
-            + n_nocov.to_string(),
+        "generated " + muts.len().to_string() + ": killed by types " + n_types.to_string() + ", killed " + n_killed.to_string() + ", survived " + n_surv.to_string() + ", timeout " + n_timeout.to_string() + ", no coverage " + n_nocov.to_string() + if n_skipped > 0 {
+            " (" + n_skipped.to_string() + " in other shards)"
+        } else {
+            ""
+        },
     );
     out.push(
         "mutation score "

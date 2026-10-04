@@ -421,6 +421,8 @@ fn ref_cmp(op: String, a: SmtLin, b: SmtLin) -> Option<SmtF> {
     }
 }
 
+// ref_eq is `a == b` as a fact: True (no information) when the
+// difference does not fit in 64 bits. Never negate it: use ref_cmp.
 fn ref_eq(a: SmtLin, b: SmtLin) -> SmtF {
     match ref_cmp("==", a, b) {
         Some(f) => f,
@@ -2809,39 +2811,52 @@ fn ref_divc(
     } else {
         ref_la(ref_atom(cx, "$q", "quotient"))
     };
-    match ref_lscale(q, c) {
-        Some(cq) => {
-            let pos_side = Vec::new();
-            pos_side.push(SmtF::Le(ref_lscale(x, -1).unwrap_or(ref_lc(1))));
-            pos_side.push(SmtF::Le(ref_ladd(cq, x, -1).unwrap_or(ref_lc(1))));
-            match ref_ladd(x, cq, -1) {
-                Some(d) => pos_side.push(SmtF::Le(SmtLin { terms: d.terms, k: d.k - c + 1 })),
-                None => pos_side.push(SmtF::False),
-            }
-            let neg_side = Vec::new();
-            neg_side.push(SmtF::Le(SmtLin { terms: x.terms, k: x.k + 1 }));
-            match ref_ladd(cq, x, -1) {
-                Some(d) => neg_side.push(SmtF::Le(SmtLin { terms: d.terms, k: d.k - c + 1 })),
-                None => neg_side.push(SmtF::False),
-            }
-            neg_side.push(SmtF::Le(ref_ladd(x, cq, -1).unwrap_or(ref_lc(1))));
-            let f = ref_or2(SmtF::And(pos_side), SmtF::And(neg_side));
-            if op == "/" {
-                ref_fact(cx, st, f, pos, "`" + ref_show(e) + "` (division by a constant)");
-            } else {
-                match ref_ladd(x, cq, -1) {
-                    Some(rem) => ref_fact(
-                        cx,
-                        st,
-                        ref_and2(f, ref_eq(r, rem)),
-                        pos,
-                        "`" + ref_show(e) + "` (remainder by a constant)",
-                    ),
-                    None => {}
-                }
-            }
+    // every term must be exact: a fact built from a failed (overflowing)
+    // computation would be unsound, so then there is no fact at all
+    let cq = match ref_lscale(q, c) {
+        Some(v) => v,
+        None => {
+            return;
         }
-        None => {}
+    };
+    let nx = ref_lscale(x, -1);
+    let cq_x = ref_ladd(cq, x, -1);
+    let x_cq = ref_ladd(x, cq, -1);
+    let c1 = ref_cadd(1, -c);
+    let x1 = ref_cadd(x.k, 1);
+    if nx.is_none() || cq_x.is_none() || x_cq.is_none() || c1.is_none() || x1.is_none() {
+        return;
+    }
+    let nxv = nx.unwrap_or(ref_lc(0));
+    let a = cq_x.unwrap_or(ref_lc(0));
+    let d = x_cq.unwrap_or(ref_lc(0));
+    let k1 = c1.unwrap_or(0);
+    let ak = ref_cadd(a.k, k1);
+    let dk = ref_cadd(d.k, k1);
+    if ak.is_none() || dk.is_none() {
+        return;
+    }
+    // x >= 0 && c*q <= x && x - c*q - (c - 1) <= 0
+    let pos_side = Vec::new();
+    pos_side.push(SmtF::Le(nxv));
+    pos_side.push(SmtF::Le(a));
+    pos_side.push(SmtF::Le(SmtLin { terms: d.terms, k: dk.unwrap_or(0) }));
+    // x + 1 <= 0 && c*q - x - (c - 1) <= 0 && x - c*q <= 0
+    let neg_side = Vec::new();
+    neg_side.push(SmtF::Le(SmtLin { terms: x.terms, k: x1.unwrap_or(0) }));
+    neg_side.push(SmtF::Le(SmtLin { terms: a.terms, k: ak.unwrap_or(0) }));
+    neg_side.push(SmtF::Le(d));
+    let f = ref_or2(SmtF::And(pos_side), SmtF::And(neg_side));
+    if op == "/" {
+        ref_fact(cx, st, f, pos, "`" + ref_show(e) + "` (division by a constant)");
+    } else {
+        ref_fact(
+            cx,
+            st,
+            ref_and2(f, ref_eq(r, d)),
+            pos,
+            "`" + ref_show(e) + "` (remainder by a constant)",
+        );
     }
 }
 
@@ -2927,13 +2942,16 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
         }
         if (p.wildcard || (p.bind != "" && p.ctor == "")) && sv.kind == "int" {
             for k in prev {
-                ref_fact(
-                    cx,
-                    s,
-                    SmtF::Not(ref_eq(sv.lin, ref_lc(k))),
-                    p.pos,
-                    "`match` arm `" + text + " != " + k.to_string() + "`",
-                );
+                match ref_cmp("!=", sv.lin, ref_lc(k)) {
+                    Some(f) => ref_fact(
+                        cx,
+                        s,
+                        f,
+                        p.pos,
+                        "`match` arm `" + text + " != " + k.to_string() + "`",
+                    ),
+                    None => {}
+                }
             }
             match cx.info.patterns.get(p.id) {
                 Some(pi) => match pi.bind {
@@ -2984,7 +3002,9 @@ fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
             + ".len()`",
     );
     // past the access (it traps otherwise), the bounds hold
-    ref_fact(cx, st, goal, x.pos, "`" + ref_show(e) + "` is in bounds");
+    if ref_lscale(i, -1).is_some() && ref_cmp("<", i, n).is_some() {
+        ref_fact(cx, st, goal, x.pos, "`" + ref_show(e) + "` is in bounds");
+    }
     ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), x.pos)
 }
 
@@ -3176,15 +3196,20 @@ fn ref_method(cx: RefCtx, st: RefSt, m: AstMethodCall, e: AstExpr) -> RefVal {
                             m.pos,
                         );
                         let na = ref_la(st.env.get(key).unwrap_or(""));
-                        // pop: 0 stays 0, otherwise one less
-                        let f = ref_or2(
-                            ref_and2(ref_eq(old, ref_lc(0)), ref_eq(na, ref_lc(0))),
-                            ref_and2(
-                                SmtF::Le(ref_ladd(ref_lc(1), old, -1).unwrap_or(ref_lc(1))),
-                                ref_eq(na, ref_ladd(old, ref_lc(1), -1).unwrap_or(old)),
-                            ),
-                        );
-                        ref_fact(cx, st, f, m.pos, "`" + ref_show(e) + "`");
+                        // pop: 0 stays 0, otherwise one less (no fact when
+                        // a term does not fit)
+                        let one_le = ref_ladd(ref_lc(1), old, -1);
+                        let less = ref_ladd(old, ref_lc(1), -1);
+                        if one_le.is_some() && less.is_some() {
+                            let f = ref_or2(
+                                ref_and2(ref_eq(old, ref_lc(0)), ref_eq(na, ref_lc(0))),
+                                ref_and2(
+                                    SmtF::Le(one_le.unwrap_or(ref_lc(0))),
+                                    ref_eq(na, less.unwrap_or(old)),
+                                ),
+                            );
+                            ref_fact(cx, st, f, m.pos, "`" + ref_show(e) + "`");
+                        }
                     }
                 }
                 None => ref_havoc_vecs(cx, st, m.pos),

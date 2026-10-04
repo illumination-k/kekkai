@@ -158,6 +158,8 @@ goal: i < len(v)             // 省略すると false
 | `kek mutate` | 篩型を使う関数の変異体は「型が付かないかもしれない」ものとして、平のコードで 1 つずつ（まとめて二分探索で）検査し、篩型の証明に失敗したものは「型で検出」になる。変異体をまとめた schema は prelude の関数呼び出しで値を隠すので、篩型の検査をしない |
 | 性能 | 篩型を使わない関数は型検査器の記録を見るだけで飛ばす。`./kek build-timings compiler` の check は同じ入力で変更前とほぼ同じ（下記） |
 
+テスト：`testdata/check/err_refine_*.kek`（範囲外の添字、呼び出しでの事前条件、事後条件、別名、設定でエラーにしたゼロ除算、ループの off-by-one、述語の構文と型）、`testdata/run/refine.kek`（`for` の範囲、`while lo < hi` の二分探索、`clamp` の事後条件）、`tests/suites/refine.sh`（`-v`・`-json` の反例と事実、`[refine]` の設定、`tests/refine/golden`）、`tests/fmt/refine.*`、`tests/suites/assure.sh` の `refine`、`tests/suites/pbt.sh` の `refined`、`tests/suites/mutate.sh` の `refine`。
+
 未実装：`checked_add` などの `Option` を返す演算、`String` の `s[i]`、`v[i] = x`、等式の不変条件（`out.len() + i == v.len()` のような関係はループで失われる）、述語の中の `/`・`%`、総称的な別名、`match` の束縛での struct のフィールドの事実、篩型の struct フィールドの値を `kek test` が生成すること、反例の `MIN / -1`。
 
 ## 個人情報の最小版（`Pii<T>`）（実装済み）

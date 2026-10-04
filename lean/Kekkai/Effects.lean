@@ -91,7 +91,7 @@ theorem eval_effects (O : Oracle) (P : Prog) :
       simp only [eval]
       refine (ih _ _ _ _).bind fun v₁ σ₁ _ _ => (ih _ _ _ _).bind fun v₂ σ₂ _ _ => ?_
       intro o σ' tr h
-      split at h <;> cases h
+      obtain ⟨rfl, rfl, _⟩ := binResult_done h
       simp
     | call f args cs =>
       intro o σ' tr h
@@ -209,6 +209,12 @@ theorem eval_effects (O : Oracle) (P : Prog) :
       · cases h
     | abort =>
       intro o σ' tr h; simp only [eval] at h; cases h; simp
+    | len a =>
+      intro o σ' tr h; simp only [eval] at h; split at h <;> cases h; simp
+    | index a i =>
+      intro o σ' tr h; simp only [eval] at h; split at h
+      · obtain ⟨rfl, rfl, _⟩ := indexResult_done h; simp
+      · cases h
 
 /-- The provided resource capability an event uses, if any. -/
 def Event.resource : Event → Option Nat
@@ -282,7 +288,7 @@ theorem eval_no_caps (O : Oracle) (P : Prog) :
       simp only [eval] at h
       refine hb (fun h => ih _ _ _ h) (fun _ h => ?_) h
       refine hb (fun h => ih _ _ _ h) (fun _ h => ?_) h
-      split at h <;> cases h; exact ⟨rfl, rfl⟩
+      obtain ⟨rfl, rfl, _⟩ := binResult_done h; exact ⟨rfl, rfl⟩
     | call f args cs =>
       simp only [eval] at h
       split at h
@@ -307,6 +313,11 @@ theorem eval_no_caps (O : Oracle) (P : Prog) :
       · rename_i hc; simp at hc
       · cases h
     | abort => simp only [eval] at h; cases h; exact ⟨rfl, rfl⟩
+    | len a => simp only [eval] at h; split at h <;> cases h; exact ⟨rfl, rfl⟩
+    | index a i =>
+      simp only [eval] at h; split at h
+      · obtain ⟨rfl, rfl, _⟩ := indexResult_done h; exact ⟨rfl, rfl⟩
+      · cases h
 
 /-- **Corollary (purity).** A well-typed call of a function that takes no
 capability parameters produces an empty trace. -/

@@ -42,6 +42,7 @@ def Val.capIds : Val → List RCap
   | .unit => []
   | .bool _ => []
   | .int _ => []
+  | .arr _ => []
 
 /-- Values never contain capabilities (trivial by construction of `Val`). -/
 theorem Val.capIds_nil (v : Val) : v.capIds = [] := by cases v <;> rfl
@@ -89,6 +90,18 @@ theorem Result.bind_rename {π : Nat → Nat} {r : Result} {k k' : Val → St �
     | err => rfl
   | _ => rfl
 
+theorem binResult_rename {π : Nat → Nat} {op : BinOp} {v₁ v₂ : Val} {σ : St} :
+    (binResult op v₁ v₂ σ).rename π = binResult op v₁ v₂ σ := by
+  unfold binResult
+  split
+  · split <;> rfl
+  · rfl
+
+theorem indexResult_rename {π : Nat → Nat} {xs : List Int} {k : Int} {σ : St} :
+    (indexResult xs k σ).rename π = indexResult xs k σ := by
+  unfold indexResult
+  split <;> rfl
+
 set_option linter.unusedSimpArgs false in
 /-- **Equivariance of evaluation.** Renaming the provided capabilities by `π`
 (with an oracle that answers renamed `fetch`es the same way) renames the trace by
@@ -124,7 +137,7 @@ theorem eval_rename (O O' : Oracle) (P : Prog) (π : Nat → Nat)
       refine Result.bind_rename fun v σ₁ => ?_
       rw [ih]
       refine Result.bind_rename fun v₂ σ₂ => ?_
-      split <;> rfl
+      exact binResult_rename.symm
     | call f args cs =>
       simp only [eval, lookupAll_map]
       cases P[f]? <;> cases lookupAll env args <;> cases lookupAll ρ cs <;>
@@ -194,6 +207,8 @@ theorem eval_rename (O O' : Oracle) (P : Prog) (π : Nat → Nat)
         | res id => rfl
         | tx t => cases hl : σ.live <;> simp [hl, RCap.rename, Result.rename, Event.rename]
     | abort => rfl
+    | len a => simp only [eval]; split <;> rfl
+    | index a i => simp only [eval]; split <;> first | rfl | exact indexResult_rename.symm
 
 /-- **Theorem 5 (capability non-leakage, semantic form).** Running an entry
 point with provided capabilities `caps` or with renamed capabilities

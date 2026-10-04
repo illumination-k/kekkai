@@ -309,33 +309,26 @@ fn fix_edit(files: Vec<FixFile>, d: MuDiag) -> Option<FixEdit> {
     };
     let off = fix_offset(f.text, d.fix_pos.line, d.fix_pos.col);
     let k = d.fix;
-    if k == "let" {
-        let at = fix_skip_word(f.text, off, "let");
-        if at == off {
-            return None;
+    // where `mut ` goes
+    let mut at = -1;
+    if k == "let" || k == "for" {
+        let a = fix_skip_word(f.text, off, k);
+        if a != off {
+            at = a;
         }
-        return Some(FixEdit { file: f.name, off: at, text: "mut " });
-    }
-    if k == "for" {
-        let at = fix_skip_word(f.text, off, "for");
-        if at == off {
-            return None;
+    } else if k == "refparam" || k == "refself" || k == "refarg" {
+        if f.text.slice(off, off + 1) == "&" {
+            at = off + 1;
         }
-        return Some(FixEdit { file: f.name, off: at, text: "mut " });
+    } else if k == "param" || k == "self" || k == "pat" || k == "closure" {
+        at = off;
     }
-    if k == "refparam" || k == "refself" || k == "refarg" {
-        if f.text.slice(off, off + 1) != "&" {
-            return None;
-        }
-        return Some(FixEdit { file: f.name, off: off + 1, text: "mut " });
+    // nothing to insert, or it is there already (the diagnostic is then
+    // not about a missing `mut`)
+    if at < 0 || f.text.slice(at, at + 4) == "mut " {
+        return None;
     }
-    if k == "param" || k == "self" || k == "pat" || k == "closure" {
-        if f.text.slice(off, off + 4) == "mut " {
-            return None;
-        }
-        return Some(FixEdit { file: f.name, off: off, text: "mut " });
-    }
-    None
+    Some(FixEdit { file: f.name, off: at, text: "mut " })
 }
 
 // fix_apply applies insertions (from the end of each file, so that the

@@ -1,3 +1,14 @@
---- stderr
-invalid query "&Int": `&` applies only to capabilities
---- exit 1
+Clock.now_ms             fn Clock.now_ms(&self) -> Int  [result] (builtin)
+Int.abs                  fn Int.abs(self) -> Int  [result] (builtin)
+Int.bit_and              fn Int.bit_and(self, Int) -> Int  [result] (builtin)
+Int.bit_or               fn Int.bit_or(self, Int) -> Int  [result] (builtin)
+Int.bit_xor              fn Int.bit_xor(self, Int) -> Int  [result] (builtin)
+Int.max                  fn Int.max(self, Int) -> Int  [result] (builtin)
+Int.min                  fn Int.min(self, Int) -> Int  [result] (builtin)
+Int.shl                  fn Int.shl(self, Int) -> Int  [result] (builtin)
+Int.shr                  fn Int.shr(self, Int) -> Int  [result] (builtin)
+Int.ushr                 fn Int.ushr(self, Int) -> Int  [result] (builtin)
+Random.int               fn Random.int(&self, Int, Int) -> Int  [result] (builtin)
+String.__hash            fn String.__hash(self, Int) -> Int  [result] (builtin)
+String.len               fn String.len(self) -> Int  [result] (builtin)
+--- exit 0

@@ -53,7 +53,8 @@ struct AstNamedType {
 }
 
 // `&T` or `&mut T`: a borrowed capability, or (for any other type) the
-// type itself.
+// type itself for the type checker, a shared or mutable borrow for the
+// mutability pass (compiler/chk_mut.kek).
 struct AstRefType {
     id: Int,
     pos: AstPos,
@@ -381,8 +382,9 @@ struct AstBinary {
     y: AstExpr,
 }
 
-// op is "-", "!", or one of "&", "&mut ", "*" (no-ops kept for Rust's
-// spelling: values of structs and collections are references already).
+// op is "-", "!", or one of "&", "&mut ", "*" (no-ops at run time:
+// values of structs and collections are references already; `&` and
+// `&mut ` borrow shared or mutably for the mutability pass).
 struct AstUnary {
     id: Int,
     pos: AstPos,

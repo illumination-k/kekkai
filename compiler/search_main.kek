@@ -255,12 +255,13 @@ fn search_typ(mut p: SearchParser) -> SearchTerm {
     let bad = search_con0("()");
     let t = search_next(p);
     if t.kind == "&" {
+        // `&T` / `&mut T`: a borrowed capability, or (a reference only
+        // limits mutation, docs/mutability.md) the type T itself
+        if search_peek(p) == "mut" {
+            search_next(p);
+        }
         let inner = search_typ(p);
         if p.err != "" {
-            return bad;
-        }
-        if !inner.con.starts_with("&") {
-            search_fail(p, "`&` applies only to capabilities");
             return bad;
         }
         return inner;

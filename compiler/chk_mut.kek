@@ -972,7 +972,7 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
             }
             let ev = MuVal { view: elem, mutable: true, root: 0, path: "", src: it.src };
             match s.pat {
-                Some(pat) => mu_pattern_kind(cx, pat, ev, "for", s.pos),
+                Some(pat) => mu_pattern(cx, pat, ev),
                 None => match cx.info.fors.get(s.id) {
                     Some(cb) => {
                         let view = if mu_rel(cx, cb.ty) { elem } else { 0 };
@@ -1000,11 +1000,7 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
 }
 
 // mu_pattern binds the variables of a pattern matched against a value v.
-fn mu_pattern(cx: MuCx, p: AstPattern, v: MuVal) {
-    mu_pattern_kind(cx, p, v, "pat", p.pos);
-}
-
-fn mu_pattern_kind(mut cx: MuCx, p: AstPattern, v: MuVal, kind: String, pos: AstPos) {
+fn mu_pattern(mut cx: MuCx, p: AstPattern, v: MuVal) {
     match cx.info.patterns.get(p.id) {
         Some(pi) => {
             if pi.kind == "bind" {

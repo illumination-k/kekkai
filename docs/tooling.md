@@ -184,6 +184,10 @@ The query syntax:
 - Capability parameters are part of the signature. `Log` and `&Log` mean
   the same thing. `&Log, String -> ()` finds `Log.info`, and a query with
   no capabilities never returns a function that needs one.
+- For other types `&T` and `&mut T` mean `T`: a reference only limits
+  mutation (docs/mutability.md), so `&Item -> String` and `Item -> String`
+  find the same functions. Signatures in the results show `&` and `&mut`
+  as written.
 
 The `match` field says how a result matched. Lower `score` values sort
 first, and functions from the file rank above builtins.

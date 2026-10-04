@@ -152,7 +152,7 @@ below `[cover] min_line` of `kekkai.toml`.
 - Results are cached per test in `.kek-cache/cover/`, keyed by the
   compiler, the probe table, the seed and the test's `trans` hash.
 
-## `kek mutate [-json] [-run re] [-base <file|dir> | -diff <rev>] [-timeout 2s] [-j n] <file|dir>`
+## `kek mutate [-json] [-run re] [-base <file|dir> | -diff <rev>] [-shard i/n] [-results f] [-merge f,...] [-j n] <file|dir>`
 
 Mutation testing on the typed AST (`compiler/mutate_gen.kek`). Mutants:
 arithmetic swaps on `Int`, comparison boundaries and negations, `&&`/`||`,
@@ -160,16 +160,22 @@ negated `if`/`while` conditions, dropped `!`/`-`, integer literals (n+1, 0),
 flipped booleans, strings to `""`, deleted call/assignment statements, and
 function results replaced by `0`, `""`, `None`, `Vec::new()` (negated for
 `Bool`). `#[test]` and `#[rare]` functions are not mutated. Statement
-deletions and result replacements are type-checked one by one; the
-rejected ones are **killed by types** (e.g. deleting `tx.commit()?;` breaks
-`Tx` linearity). The others are compiled into one mutant schema, where the
-active mutant is chosen by `KEK_MUTANT`. A baseline run of every test
-records which mutant sites it reaches; each mutant then runs only the
-passing tests that reach it, until one fails.
+deletions and result replacements are type-checked by group testing (all
+at once, bisecting only a group that fails); the rejected ones are
+**killed by types** (e.g. deleting `tx.commit()?;` breaks `Tx` linearity).
+The others are compiled into one mutant schema. A baseline run of every
+test (one process) records which mutant sites it reaches and its probe
+hits (`ticks`); each mutant then runs only the passing tests that reach
+it, cheapest first, until one fails. One wasmtime process runs many
+(mutant, test) pairs (`module --batch`), and only a trap or a timeout
+starts a new one. A run's time limit is a probe budget, 10x the test's
+ticks + 1000: deterministic, so timeouts are cached like other results
+(`-timeout`, default 60s, is only a wall-clock backstop per process).
 
 Statuses: `killed` (a test failed or trapped; `killed_by` names it),
-`survived`, `timeout` (counted as detected; default limit 1s + 10x the
-slowest test), `no_coverage`, `killed_by_types`. The score is
+`survived`, `timeout` (counted as detected), `no_coverage`,
+`killed_by_types`, and `skipped` for the mutants of other shards (counted
+in no score). The score is
 (killed + timeout) / (killed + timeout + survived + no_coverage);
 `covered_score` leaves out `no_coverage`. The exit status is 1 when the
 score is below `[mutate] min_score` of `kekkai.toml`.
@@ -178,9 +184,9 @@ score is below `[mutate] min_score` of `kekkai.toml`.
 {
   "path": "testdata/mutate/calc.kek", "base": null,
   "functions": ["clamp", "triangle", "is_adult", "deposit"],
-  "tests": [{"name": "clamp_inside", "status": "ok", "ms": 0}],
+  "tests": [{"name": "clamp_inside", "status": "ok", "ticks": 7}],
   "summary": {"generated": 30, "killed_by_types": 1, "killed": 18, "survived": 8,
-              "timeout": 3, "no_coverage": 0, "score": 72.4, "covered_score": 72.4,
+              "timeout": 3, "no_coverage": 0, "skipped": 0, "score": 72.4, "covered_score": 72.4,
               "min_score": null, "ok": true},
   "mutants": [{"id": 1, "file": "...", "line": 8, "col": 10, "func": "clamp", "kind": "boundary",
                "description": "`<` → `<=`", "original": "if x < lo {", "mutated": "if x <= lo {",
@@ -195,6 +201,37 @@ score is below `[mutate] min_score` of `kekkai.toml`.
   mutant's identity (the function's `trans` hash, the mutant's position in
   the function and the mutation) and the test's `trans` hash, under
   `.kek-cache/mutate/`: an unchanged second run starts no test process.
+- `-shard i/n` (or Bazel's `TEST_SHARD_INDEX` / `TEST_TOTAL_SHARDS`, which
+  also touches `TEST_SHARD_STATUS_FILE`) runs the mutants whose index is
+  i modulo n. `-results f` writes the run's raw baseline and results;
+  `kek mutate -merge f0,f1,... <path>` reports the shards together, the
+  same report as one unsharded run.
+
+## `kek affected [-json] (-base <file|dir> | -diff <rev>) <file|dir>`
+
+What a change affects, from the definition hashes: `changed` (own hash
+differs), `added`, `removed`, `affected` (the `trans` hash differs: the
+changed definitions and everything that reaches them), `tests` (the
+affected `#[test]` functions) and `build` (whether the program hash, and so
+`kek build`'s output, changed). `-diff rev` extracts the base program from
+git. `kek test -affected <rev>` runs only those tests.
+
+```json
+{"path": "counter.kek", "base": "...", "build": true, "types": false,
+ "changed": ["counter_key"], "added": [], "removed": [],
+ "affected": ["counter_key", "visit", "handle", "key_format", "visits_are_counted"],
+ "tests": ["key_format", "visits_are_counted"]}
+```
+
+## Action cache and remote cache
+
+`kek build` and `kek test` key their outputs by the digest of their
+inputs (the compiler stage, the arguments and the program's files) and
+skip the compiler when it is unchanged; test results are keyed by each
+test's `trans` hash. `KEK_REMOTE_CACHE=<url>` shares the entries over the
+HTTP protocol of Bazel's remote cache (`GET`/`PUT <url>/ac/<sha256>`;
+bazel-remote with `--disable_http_ac_validation`, any server accepting
+PUT, or a `file://` directory). See [parallel-build.md](parallel-build.md).
 ## `kek assure plan|apply|check [-json] <file|dir>`
 
 The guarantee ledger (design and policy reference: [assure.md](assure.md)).

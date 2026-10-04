@@ -42,9 +42,10 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)） |
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
+| `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
 | `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`assure` の土台 |
 | `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
-| `kek mutate [-json] [-base p] [-diff rev] <file>` | ミューテーションテスト（型の付く変異体だけ。型で検出された変異体を別に数える。結果はキャッシュ） |
+| `kek mutate [-json] [-base p] [-diff rev] [-shard i/n] <file>` | ミューテーションテスト（型の付く変異体だけ。型で検出された変異体を別に数える。結果はキャッシュ。シャードに分割できる） |
 
 ### テスト（`kek test`）
 
@@ -185,9 +186,32 @@ LLM が既存の実装を探さずに似た関数を書き足すのを防ぐた�
 
 文の削除や結果の置き換えは 1 つずつ型検査し、通らないものを**型で検出**（killed by types）として別に数えます。たとえば `tx.commit()?;` の削除は `Tx` の線形性検査で弾かれます。型で検出された割合は、型システムがどれだけバグを防いでいるかの指標です。
 
-残りの変異体は**ミュータントスキーマ**として 1 つのモジュールにまとめます。各箇所は `__mut_iop(k, x, y, op, alt)` や `if __mut_on(k) { 変異 } else { 元 }` のような prelude の呼び出しになり、実行時に環境変数 `KEK_MUTANT=k` で 1 つを選びます。まず変異なしで各テストを実行して、どのテストがどの変異箇所に到達するかを記録し、変異体ごとに到達するテストだけを、どれかが失敗するまで実行します（wasmtime のプロセスを並列に起動）。結果は検出（killed）、生存（survived）、時間切れ（timeout、既定は 1 秒 + 最も遅いテストの 10 倍、`-timeout 2s`）、未到達（no coverage）です。スコアは (killed + timeout) / (killed + timeout + survived + no coverage) で、`kekkai.toml` の `[mutate] min_score = 80` を下回ると終了コード 1 です。
+残りの変異体は**ミュータントスキーマ**として 1 つのモジュールにまとめます。各箇所は `__mut_iop(k, x, y, op, alt)` や `if __mut_on(k) { 変異 } else { 元 }` のような prelude の呼び出しになり、実行時に 1 つを選びます。型が付かないかもしれない変異体（文の削除・結果の置き換え）は、まとめて型検査して失敗したグループだけを二分探索します（変異体ごとにプログラム全体を検査し直さない）。
 
-`-base <file|dir>` か `-diff <git-rev>` を付けると、定義ハッシュ（`hash`）が変わった定義と新しい定義だけを変異させます。ビルドはソースの内容で、変異体ごとの結果は「変異体（関数の `trans` ハッシュ + 関数内の位置 + 変異）× テストの `trans` ハッシュ」で `.kek-cache/mutate/` にキャッシュするので、変更のない 2 回目の実行はテストを 1 つも動かしません。
+実行は mutrim と同じ方針です。
+
+- まず変異なしで全テストを 1 プロセスで実行し、テストごとに到達する変異箇所と**プローブの通過回数**（ticks）を記録します。
+- 変異体ごとに、到達するテストだけを速い順に、どれかが失敗するまで実行します。1 つの wasmtime プロセスが多数の（変異体, テスト）を順に実行し（`--batch`）、トラップしたときだけ残りを新しいプロセスでやり直します。
+- 時間切れは壁時計ではなく、そのテストの変異なしの ticks の 10 倍 + 1000 で決めます。決定的なのでキャッシュでき、遅いマシンでも結果が変わりません（壁時計の `-timeout`、既定 60 秒は保険）。
+- 結果は検出（killed）、生存（survived）、時間切れ（timeout）、未到達（no coverage）です。スコアは (killed + timeout) / (killed + timeout + survived + no coverage) で、`kekkai.toml` の `[mutate] min_score = 80` を下回ると終了コード 1 です。
+
+`-shard i/n`（または Bazel の `TEST_SHARD_INDEX` / `TEST_TOTAL_SHARDS`）で変異体を n 個に分けて別々のマシンで実行し、`-results f` で書いた結果を `-merge f0,f1,...` でまとめて 1 つのレポートにできます。
+
+`-base <file|dir>` か `-diff <git-rev>` を付けると、定義ハッシュ（`hash`）が変わった定義と新しい定義だけを変異させます。変異体ごとの結果は「変異体（関数の `trans` ハッシュ + 関数内の位置 + 変異）× テストの `trans` ハッシュ」で `.kek-cache/mutate/` にキャッシュするので、変更のない 2 回目の実行はテストを 1 つも動かしません。
+
+変異体 1768 個・テスト 100 個のベンチマーク（`testdata/bench/mutate_bench.kek`）で、以前の 1 プロセス 1 実行の方式の 51.7 秒が 3.9 秒（キャッシュありで 0.9 秒）になり、判定はすべて一致しました。
+
+### アクションキャッシュと影響範囲
+
+`kek build`・`kek test` は Bazel のアクションと同じく、入力（コンパイラとプログラムのファイル）のダイジェストで出力をキャッシュし、ソースが変わらなければコンパイラを起動しません。コメントだけの変更なら定義ハッシュで、変更の影響を受けないテストの結果はテストの `trans` ハッシュでヒットします。
+
+```sh
+./kek affected -diff origin/main src          # 変わった定義・影響を受ける定義とテスト・ビルド出力が変わるか
+./kek test -affected origin/main src          # 影響を受けるテストだけ（キャッシュのない CI 向け）
+KEK_REMOTE_CACHE=https://cache.example ./kek test src   # CI と手元でキャッシュを共有
+```
+
+`KEK_REMOTE_CACHE` は Bazel のリモートキャッシュと同じ HTTP プロトコル（`GET`/`PUT <url>/ac/<sha256>`）で、bazel-remote（`--disable_http_ac_validation`）や `file://` の共有ディレクトリが使えます。設計と現状は [docs/parallel-build.md](docs/parallel-build.md)。
 
 ## 開発
 

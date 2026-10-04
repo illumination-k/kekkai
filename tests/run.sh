@@ -20,6 +20,8 @@
 #   agent-cmds    check -json, ir -json, caps and search against tests/agent_cmds goldens
 #   assure        kek assure plan/apply/check on testdata/assure against
 #                 tests/assure goldens
+#   actions       kek affected / test -affected (git changes), the input-digest
+#                 action cache of build and test, the remote cache (file://)
 #   similar       kek similar (duplicate / similar code) against tests/similar goldens
 #   fmt           kek fmt goldens, -check / -w, and round trips (idempotent,
 #                 same AST, comments and diagnostics) over the sources and
@@ -71,7 +73,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test pbt test-cache cover mutate agent-cmds assure similar fmt difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache actions cover mutate agent-cmds assure similar fmt difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

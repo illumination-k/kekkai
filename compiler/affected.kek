@@ -1,0 +1,131 @@
+// `affected [-json] -base <file|dir> <file|dir>` (prefix aff_): what a
+// change affects, from the definition hashes (compiler/defhash.kek), like
+// a build system's affected-target query.
+//
+//   changed    definitions whose own hash differs (or that are new)
+//   removed    definitions of the base that are gone
+//   affected   definitions whose trans hash differs: the changed ones and
+//              everything that reaches them (their behaviour may differ)
+//   tests      the #[test] functions among the affected: the tests to run
+//   build      whether the program (and so `kek build`'s output) changed
+//
+// The launcher's `kek affected -diff <rev>` extracts the base from git, and
+// `kek test -affected <rev>` runs only the affected tests (the CI mode when
+// no result cache is at hand).
+
+fn aff_usage() -> String {
+    "affected [-json] -base <file|dir> <file|dir>"
+}
+
+fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = tool_flags(args, 1, "json base= tests_only");
+    if fl.err != "" {
+        return tool_flag_error(fl, aff_usage(), log);
+    }
+    let base = tool_flag_str(fl, "base", "");
+    if fl.rest.len() != 1 || base == "" {
+        log.error("usage: kek " + aff_usage());
+        return 2;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let cur = match dh_load(path, fs, log) {
+        Some(l) => l,
+        None => {
+            return 1;
+        }
+    };
+    let old = match dh_load(base, fs, log) {
+        Some(l) => l,
+        None => {
+            log.error("kek affected: the base program " + base + " does not check");
+            return 1;
+        }
+    };
+    let changed = Vec::new();
+    let added = Vec::new();
+    let affected = Vec::new();
+    let tests = Vec::new();
+    for d in cur.prog.defs {
+        match old.prog.by_name.get(d.name) {
+            Some(o) => {
+                if o.hash != d.hash {
+                    changed.push(d.name);
+                }
+                if o.trans != d.trans {
+                    affected.push(d.name);
+                    if d.fun.test {
+                        tests.push(d.name);
+                    }
+                }
+            }
+            None => {
+                added.push(d.name);
+                affected.push(d.name);
+                if d.fun.test {
+                    tests.push(d.name);
+                }
+            }
+        }
+    }
+    let removed = Vec::new();
+    for o in old.prog.defs {
+        if !cur.prog.by_name.contains_key(o.name) {
+            removed.push(o.name);
+        }
+    }
+    let build = cur.prog.hash != old.prog.hash;
+    if tool_flag_bool(fl, "tests_only") {
+        // one test name per line, for the launcher
+        if tests.len() > 0 {
+            log.info(tests.join("\n"));
+        }
+        return 0;
+    }
+    if tool_flag_bool(fl, "json") {
+        let o = irjson_obj();
+        irjson_set(o, "path", IrjVal::Str(path));
+        irjson_set(o, "base", IrjVal::Str(base));
+        irjson_set(o, "build", irjson_bool(build));
+        irjson_set(o, "types", irjson_bool(cur.prog.types_hash != old.prog.types_hash));
+        irjson_set(o, "changed", irjson_strs(changed));
+        irjson_set(o, "added", irjson_strs(added));
+        irjson_set(o, "removed", irjson_strs(removed));
+        irjson_set(o, "affected", irjson_strs(affected));
+        irjson_set(o, "tests", irjson_strs(tests));
+        log.info(irjson_encode(irjson_val(o), false));
+        return 0;
+    }
+    let lines = Vec::new();
+    if !build {
+        lines.push(
+            "nothing affected: the definitions are unchanged (build output and test results stay)",
+        );
+        frontend_print(log, lines);
+        return 0;
+    }
+    if cur.prog.types_hash != old.prog.types_hash {
+        lines.push("type declarations changed: every definition is affected");
+    }
+    aff_list(lines, "changed", changed);
+    aff_list(lines, "added", added);
+    aff_list(lines, "removed", removed);
+    aff_list(lines, "affected", affected);
+    aff_list(lines, "tests to run", tests);
+    lines.push(
+        affected.len().to_string()
+            + " of "
+            + cur.prog.defs.len().to_string()
+            + " definitions affected, "
+            + tests.len().to_string()
+            + " tests to run; the build output changes",
+    );
+    frontend_print(log, lines);
+    0
+}
+
+fn aff_list(lines: Vec<String>, title: String, xs: Vec<String>) {
+    if xs.len() == 0 {
+        return;
+    }
+    lines.push(title + " (" + xs.len().to_string() + "): " + xs.join(", "));
+}

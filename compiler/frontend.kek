@@ -261,7 +261,7 @@ fn frontend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
 // (compiler/defhash.kek), its entry kind and its handler parameters: when
 // <dir>/<key>/ok exists, only the glue files are written and the launcher
 // copies <dir>/<key>/module.wasm. Either way the last line printed is
-// `kek-build-cache: hit|miss <key>`.
+// `kek-build-cache: hit|miss <key> <entry>` (entry: "handler", "main" or "").
 fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if args.len() < 3 {
         log.error("usage: build <file-or-dir> <outdir>");
@@ -296,7 +296,7 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             if frontend_emit_glue(args, path, out_dir, entry, params, fs, log) != 0 {
                 return 1;
             }
-            log.info("kek-build-cache: hit " + key);
+            log.info("kek-build-cache: hit " + key + " " + entry);
             return 0;
         }
         res0 = frontend_check_prelude(l.srcs, log);
@@ -327,7 +327,7 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     }
     if key != "" {
-        log.info("kek-build-cache: miss " + key);
+        log.info("kek-build-cache: miss " + key + " " + prog.entry);
     }
     0
 }

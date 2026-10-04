@@ -14,6 +14,9 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "config" {
         return tool_config_main(fs, log);
     }
+    if cmd == "affected" {
+        return aff_main(args, fs, log);
+    }
     if cmd == "hash" {
         return dh_main(args, fs, log);
     }

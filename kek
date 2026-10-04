@@ -37,6 +37,18 @@ die() {
 }
 
 command -v "$wasmtime" >/dev/null 2>&1 || die "kek: wasmtime not found (install it with: mise install)"
+# a mise shim costs ~0.1s per run and kek runs wasmtime many times: use the
+# binary behind it (and pass it on to nested launches)
+case $(command -v "$wasmtime") in
+*/mise/shims/*)
+	_real=$(cd "$root" && mise which wasmtime 2>/dev/null) || _real=
+	if [ -n "$_real" ] && [ -x "$_real" ]; then
+		wasmtime=$_real
+		WASMTIME=$_real
+		export WASMTIME
+	fi
+	;;
+esac
 
 sha() {
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -195,7 +207,7 @@ Usage:
   kek build [-o dir] [-target d1|do] <file|dir>
                                   compile: a WASI command for #[main], a Worker for #[handler]
   kek run <file|dir> [args...]    compile a #[main] program and run it
-  kek test [-run re] [-seed n] [-cases n] [-j n] [-json] [-no-cache]
+  kek test [-run re] [-seed n] [-cases n] [-j n] [-json] [-no-cache] [-affected rev]
            [-clock ms] [-net f.json] [-db f.json] <file|dir>
                                   run the #[test] functions with mock capabilities
                                   (property tests, results cached by definition hash)
@@ -207,6 +219,8 @@ Usage:
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
                                   search functions by type
+  kek affected [-json] (-base <file|dir> | -diff <rev>) <file|dir>
+                                  definitions, tests and build output a change affects
   kek hash [-json] <file|dir>     definition hashes (alpha-normalized; trans = with dependencies)
   kek config                      print ./kekkai.toml as JSON
   kek assure (plan|apply|check) [flags] <file|dir>
@@ -237,6 +251,112 @@ EOF
 # formatting is not compiled again; the other outputs (worker.js,
 # wrangler.toml, kekkai_meta.js) are always written by the compiler.
 # KEK_BUILD_CACHE=0 disables the cache.
+# src_digest <path> [args...]: the digest of an action's inputs: the
+# compiler, the path, the arguments and the contents of the program's
+# files (a directory's *.kek). Equal digests give equal outputs, so the
+# compiler need not run at all (Bazel's action key).
+src_digest() {
+	_sd_p=$1
+	shift
+	{
+		stage_key
+		printf '%s\n%s\n' "$_sd_p" "$*"
+		if [ -d "$_sd_p" ]; then
+			for _sd_f in "$_sd_p"/*.kek; do
+				printf '%s\0' "${_sd_f##*/}"
+				cat "$_sd_f"
+				printf '\0'
+			done
+		else
+			cat "$_sd_p"
+		fi
+	} | sha
+}
+
+# ---- remote cache ----
+#
+# KEK_REMOTE_CACHE=<url> shares the action cache between machines (CI
+# runners, developers) over the HTTP protocol of Bazel's remote cache:
+# GET and PUT <url>/ac/<sha256>. bazel-remote serves it (with
+# --disable_http_ac_validation, since the entries are kek's own), and so
+# does any server accepting PUT; a file:// URL names a shared directory.
+# A remote failure is a cache miss, never an error.
+
+remote_key() {
+	printf '%s' "$1" | {
+		if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi
+	} | cut -c1-64
+}
+
+# remote_get <name> <file>: fetch an entry (0 when found).
+remote_get() {
+	[ -n "${KEK_REMOTE_CACHE:-}" ] || return 1
+	curl -fsS -o "$2" "${KEK_REMOTE_CACHE%/}/ac/$(remote_key "$1")" 2>/dev/null
+}
+
+# remote_put <name> <file>: upload an entry (errors are ignored).
+remote_put() {
+	[ -n "${KEK_REMOTE_CACHE:-}" ] || return 0
+	case $KEK_REMOTE_CACHE in
+	file://*) mkdir -p "${KEK_REMOTE_CACHE#file://}/ac" 2>/dev/null || true ;;
+	esac
+	curl -fsS -T "$2" "${KEK_REMOTE_CACHE%/}/ac/$(remote_key "$1")" >/dev/null 2>&1 || true
+}
+
+# action_fetch <dir>: when the action <dir> is not in the local cache,
+# fetch it from the remote cache.
+action_fetch() {
+	[ -n "${KEK_REMOTE_CACHE:-}" ] && [ ! -e "$1" ] || return 0
+	_af_t=$(mktemp -d "${TMPDIR:-/tmp}/kek-fetch-XXXXXX")
+	if remote_get "${1#"$cache"/}" "$_af_t/a.tar" && mkdir "$_af_t/d" && tar -xf "$_af_t/a.tar" -C "$_af_t/d" 2>/dev/null && [ -f "$_af_t/d/ok" ]; then
+		mkdir -p "${1%/*}"
+		[ -e "$1" ] || mv "$_af_t/d" "$1" 2>/dev/null || true
+	fi
+	rm -rf "$_af_t"
+}
+
+# file_fetch <file> / file_push <file>: the same for a single-file entry.
+file_fetch() {
+	[ -n "${KEK_REMOTE_CACHE:-}" ] && [ ! -e "$1" ] || return 0
+	_ff_t=$(mktemp "${TMPDIR:-/tmp}/kek-fetch-XXXXXX")
+	if remote_get "${1#"$cache"/}" "$_ff_t"; then
+		mkdir -p "${1%/*}"
+		mv "$_ff_t" "$1"
+	else
+		rm -f "$_ff_t"
+	fi
+}
+
+file_push() {
+	[ -n "${KEK_REMOTE_CACHE:-}" ] || return 0
+	remote_put "${1#"$cache"/}" "$1"
+}
+
+# action_put <dir> <files...>: store the files (those that exist) as the
+# outputs of the action cached in <dir> (written aside, then renamed).
+action_put() {
+	_ap_d=$1
+	shift
+	[ ! -e "$_ap_d" ] || return 0
+	mkdir -p "${_ap_d%/*}"
+	_ap_t=$(mktemp -d "${_ap_d%/*}/tmp-XXXXXX")
+	for _ap_f in "$@"; do
+		[ ! -f "$_ap_f" ] || cp "$_ap_f" "$_ap_t/"
+	done
+	: >"$_ap_t/ok"
+	if [ -e "$_ap_d" ]; then
+		rm -rf "$_ap_t"
+	else
+		mv "$_ap_t" "$_ap_d"
+		rm -rf "${_ap_d:?}/$(basename "$_ap_t")"
+		if [ -n "${KEK_REMOTE_CACHE:-}" ]; then
+			_ap_tar=$(mktemp "${TMPDIR:-/tmp}/kek-put-XXXXXX")
+			tar -cf "$_ap_tar" -C "$_ap_d" . && remote_put "${_ap_d#"$cache"/}" "$_ap_tar"
+			rm -f "$_ap_tar"
+		fi
+	fi
+}
+
 cached_build() {
 	_bp=$1
 	_bo=$2
@@ -246,17 +366,45 @@ cached_build() {
 		return
 	fi
 	stage_dir
+	# 1. the inputs are unchanged: reuse the outputs without the compiler
+	# (its diagnostics are replayed). wrangler.toml is only written when
+	# the output directory has none, as the compiler does.
+	_bd=$cache/build/src-$(src_digest "$_bp" build "$@")
+	action_fetch "$_bd"
+	if [ -f "$_bd/ok" ] && { [ ! -f "$_bd/worker.js" ] || [ -f "$_bo/wrangler.toml" ] || [ -f "$_bd/wrangler.toml" ]; }; then
+		for _bf in module.wasm kekkai_meta.js worker.js; do
+			[ ! -f "$_bd/$_bf" ] || cp "$_bd/$_bf" "$_bo/$_bf"
+		done
+		[ -f "$_bo/wrangler.toml" ] || [ ! -f "$_bd/wrangler.toml" ] || cp "$_bd/wrangler.toml" "$_bo/wrangler.toml"
+		[ ! -s "$_bd/stderr" ] || cat "$_bd/stderr" >&2
+		return 0
+	fi
+	_btoml=0
+	[ -f "$_bo/wrangler.toml" ] || _btoml=1
+	# 2. otherwise the compiler checks the program and reuses the module
+	# when its definition hashes are unchanged (comment-only edits)
 	_bc=$cache/build/$(stage_key)
-	_bres=$(compiler build "$_bp" "$_bo" "$@" -cache "$_bc") || return $?
+	_berr=$(mktemp "${TMPDIR:-/tmp}/kek-build-err-XXXXXX")
+	set +e
+	_bres=$(compiler build "$_bp" "$_bo" "$@" -cache "$_bc" 2>"$_berr")
+	_bx=$?
+	set -e
+	cat "$_berr" >&2
+	if [ $_bx -ne 0 ]; then
+		rm -f "$_berr"
+		return $_bx
+	fi
 	printf '%s\n' "$_bres" | grep -v '^kek-build-cache: ' | grep -v '^$' || true
 	_bline=$(printf '%s\n' "$_bres" | grep '^kek-build-cache: ' | tail -n 1)
-	_bkey=${_bline##* }
+	# kek-build-cache: hit|miss <key> <entry>
+	set -- $_bline
+	_bkey=${3:-}
+	_bentry=${4:-}
 	case $_bline in
 	*" hit "*)
 		cp "$_bc/$_bkey/module.wasm" "$_bo/module.wasm"
 		;;
 	*" miss "*)
-		[ ! -e "$_bc/$_bkey" ] || return 0
 		mkdir -p "$_bc"
 		_bt=$(mktemp -d "$_bc/tmp-XXXXXX")
 		cp "$_bo/module.wasm" "$_bt/module.wasm"
@@ -269,6 +417,16 @@ cached_build() {
 		fi
 		;;
 	esac
+	# record the action: its outputs and diagnostics
+	_bs=$(mktemp -d "${TMPDIR:-/tmp}/kek-build-out-XXXXXX")
+	cp "$_bo/module.wasm" "$_bs/module.wasm"
+	if [ "$_bentry" = handler ]; then
+		cp "$_bo/kekkai_meta.js" "$_bo/worker.js" "$_bs/"
+		[ $_btoml -eq 0 ] || cp "$_bo/wrangler.toml" "$_bs/wrangler.toml"
+	fi
+	mv "$_berr" "$_bs/stderr"
+	action_put "$_bd" "$_bs"/*
+	rm -rf "$_bs"
 }
 
 cmd_build() {
@@ -344,6 +502,8 @@ cmd_run() {
 test_usage() {
 	cat >&2 <<'EOF'
 Usage of test:
+  -affected string
+    	run only the tests that a change since this git revision can affect
   -cases int
     	cases of a property test (a test with generated parameters) (default 100)
   -clock int
@@ -391,91 +551,114 @@ json_str() {
 	printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
 }
 
-# test_run_one <idx> <name>: runs one test of $_dir/module.cwasm into
-# $_dir/r/<idx>.out and writes its status (ok, failed, trapped or error)
-# to $_dir/r/<idx>.st last.
-test_run_one() {
-	_o=$_dir/r/$1
-	set +e
-	wasm "$_dir/module.cwasm" "$2" >"$_o.out" 2>"$_o.err"
-	_c=$?
-	set -e
-	if [ $_c -eq 0 ]; then
-		_st=ok
-	elif [ $_c -eq 1 ]; then
-		_st=failed
-	else
-		_st=error
-		grep -q 'wasm trap: ' "$_o.err" && _st=trapped
-		{
-			echo "test $2 ... FAILED (trapped)"
-			_trap=$(grep -E 'wasm trap: ' "$_o.err" | sed 's/.*wasm trap: //' | head -n 1)
-			[ -n "$_trap" ] || _trap=$(grep -v '^kek-case: ' "$_o.err" | tail -n 1)
-			echo "    trap: $_trap"
-			# a property test notes each input before running it
-			_in=$(grep '^kek-case: ' "$_o.err" | tail -n 1 | sed 's/^kek-case: //')
-			[ -z "$_in" ] || echo "    last input: $_in"
-		} >>"$_o.out"
-	fi
-	echo "$_st" >"$_o.st.tmp"
-	mv "$_o.st.tmp" "$_o.st"
-}
-
-# test_launch starts the next uncached tests, keeping at most $_jobs
-# running beyond the ones already reported.
-test_launch() {
-	while [ "$_launched" -lt "$_nrun" ] && [ $((_launched - _reported)) -lt "$_jobs" ]; do
-		_launched=$((_launched + 1))
-		eval "_li=\$_run_$_launched"
-		eval "_ln=\$_name_$_li"
-		test_run_one "$_li" "$_ln" &
-		eval "_pid_$_li=\$!"
+# test_batch <dir> <chunk> (a parallel worker): runs the tests of
+# <dir>/chunk.<chunk> (lines `0 name`) with `module --batch`, many tests per
+# process, and writes their whole output to <dir>/clog.<chunk>. A test that
+# traps or times out ends its process: `kek-crash` and its stderr
+# (`kek-err` lines) follow, and the remaining tests run in a new process.
+# A wall-clock timeout (KEK_TEST_TIMEOUT) is per process, so a test
+# interrupted after others ran in its process first runs again alone.
+test_batch() {
+	_d=$1
+	_c=$2
+	_rest=$_d/rest.$_c
+	cp "$_d/chunk.$_c" "$_rest"
+	: >"$_d/clog.$_c"
+	while [ -s "$_rest" ]; do
+		set +e
+		wasm_extra="$KEK_W_EXTRA --env KEK_BATCH=$_rest"
+		wasm "$_d/module.cwasm" --batch >"$_d/o.$_c" 2>"$_d/e.$_c"
+		_x=$?
+		set -e
+		_n=$(grep -c '^kek-start' "$_d/o.$_c" || true)
+		if [ $_x -ne 0 ] && [ "$_n" -gt 1 ] && grep -q 'wasm trap: interrupt' "$_d/e.$_c"; then
+			awk -v n="$_n" '/^kek-start/ { k++ } k < n' "$_d/o.$_c" >>"$_d/clog.$_c"
+			tail -n +"$_n" "$_rest" >"$_rest.tmp"
+			mv "$_rest.tmp" "$_rest"
+			continue
+		fi
+		cat "$_d/o.$_c" >>"$_d/clog.$_c"
+		[ $_x -ne 0 ] || break
+		[ "$_n" -gt 0 ] || _n=1
+		echo "kek-crash" >>"$_d/clog.$_c"
+		sed 's/^/kek-err /' "$_d/e.$_c" >>"$_d/clog.$_c"
+		tail -n +$((_n + 1)) "$_rest" >"$_rest.tmp"
+		mv "$_rest.tmp" "$_rest"
 	done
 }
 
-# test_json_obj <name> <status> <cached> <caps> <hash> <result file>: one
-# element of the "tests" array of `kek test -json`.
-test_json_obj() {
-	awk -v name="$1" -v status="$2" -v cached="$3" -v caps="$4" -v hash="$5" '
-	function esc(s,   r, i, c) {
-		gsub(/\\/, "\\\\", s)
-		gsub(/"/, "\\\"", s)
-		gsub(/\t/, "\\t", s)
-		gsub(/\r/, "\\r", s)
-		if (s ~ /[\001-\037]/) {
-			r = ""
-			for (i = 1; i <= length(s); i++) {
-				c = substr(s, i, 1)
-				r = r (c ~ /[\001-\037]/ ? sprintf("\\u%04x", ord[c]) : c)
+# test_run_batch <dir> <jobs>: runs the tests of <dir>/run.txt in <jobs>
+# batch processes and writes <dir>/r/<name>.out and .st (ok, failed or
+# trapped), as one process per test would have.
+test_run_batch() {
+	_d=$1
+	rm -f "$_d"/chunk.* "$_d"/clog.*
+	awk -v n="$2" -v d="$_d" '{ print "0 " $0 > (d "/chunk." ((NR - 1) % n)) }' "$_d/run.txt"
+	for _p in "$_d"/chunk.*; do
+		test_batch "$_d" "${_p##*.}" &
+	done
+	wait
+	cat "$_d"/clog.* | awk -v r="$_d/r" '
+		function finish() {
+			if (t == "") return
+			if (crashed) {
+				body = body "test " t " ... FAILED (trapped)\n"
+				body = body "    trap: " (trap != "" ? trap : other) "\n"
+				if (last != "") body = body "    last input: " last "\n"
 			}
-			s = r
+			printf "%s", body > (r "/" t ".out"); close(r "/" t ".out")
+			print st > (r "/" t ".st"); close(r "/" t ".st")
+			t = ""
 		}
-		return "\"" s "\""
-	}
-	BEGIN {
-		for (i = 1; i < 32; i++) ord[sprintf("%c", i)] = i
-		n = 0
-		ce = "null"
-		ms = "null"
-	}
-	NR == 1 {
-		if (match($0, /; [0-9]+\.[0-9]+ms\)$/)) ms = substr($0, RSTART + 2, RLENGTH - 5)
-		next
-	}
-	{
-		line = $0
-		sub(/^    /, "", line)
-		out[n++] = esc(line)
-		if (line ~ /^counterexample: /) ce = esc(substr(line, 17))
-	}
-	END {
-		cs = ""
-		k = split(caps, a, ",")
-		for (i = 1; i <= k; i++) cs = cs (i > 1 ? "," : "") esc(a[i])
-		o = ""
-		for (i = 0; i < n; i++) o = o (i > 0 ? "," : "") out[i]
-		printf "{\"name\":%s,\"status\":\"%s\",\"cached\":%s,\"pure\":%s,\"caps\":[%s],\"hash\":%s,\"ms\":%s,\"output\":[%s],\"counterexample\":%s}", esc(name), status, cached, (k == 0 ? "true" : "false"), cs, esc(hash), ms, o, ce
-	}' "$6"
+		/^kek-start / { next }
+		/^kek-test / { finish(); t = $2; body = ""; st = "error"; crashed = 0; trap = ""; last = ""; other = ""; next }
+		/^kek-base / { st = $3; next }
+		/^kek-crash/ { crashed = 1; st = "trapped"; next }
+		/^kek-err / {
+			l = substr($0, 9)
+			if (l ~ /wasm trap: /) { if (trap == "") { trap = l; sub(/.*wasm trap: /, "", trap) } }
+			else if (l ~ /^kek-case: /) last = substr(l, 11)
+			else if (l != "") other = l
+			next
+		}
+		{ if (!crashed) body = body $0 "\n" }
+		END { finish() }
+	'
+}
+
+# ---- kek affected ----
+
+cmd_affected() {
+	_aj=
+	_abase=
+	_arev=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-json | --json) _aj=-json ;;
+		-base | --base) _abase=${2:-}; shift ;;
+		-base=* | --base=*) _abase=${1#*=} ;;
+		-diff | --diff) _arev=${2:-}; shift ;;
+		-diff=* | --diff=*) _arev=${1#*=} ;;
+		-h | -help | --help)
+			echo "usage: kek affected [-json] (-base <file|dir> | -diff <rev>) <file|dir>" >&2
+			exit 0
+			;;
+		-*) die "flag provided but not defined: $1" ;;
+		*) break ;;
+		esac
+		shift
+	done
+	[ $# -eq 1 ] || die "usage: kek affected [-json] (-base <file|dir> | -diff <rev>) <file|dir>"
+	[ -e "$1" ] || die "stat $1: no such file or directory"
+	if [ -n "$_arev" ]; then
+		[ -z "$_abase" ] || die "kek affected: -base and -diff are exclusive"
+		_adir=$(mktemp -d "${TMPDIR:-/tmp}/kek-affected-XXXXXX")
+		trap 'rm -rf "$_adir"' EXIT
+		_abase=$(mutate_extract "$_arev" "$1" "$_adir")
+	fi
+	[ -n "$_abase" ] || die "kek affected: -base or -diff is required"
+	# shellcheck disable=SC2086
+	compiler affected $_aj -base "$_abase" "$1"
 }
 
 cmd_test() {
@@ -488,6 +671,7 @@ cmd_test() {
 	_jobs=
 	_json=0
 	_nocache=0
+	_affected=
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--) shift; break ;;
@@ -523,7 +707,7 @@ cmd_test() {
 			shift
 			continue
 			;;
-		run | seed | clock | net | db | cases | j) ;;
+		run | seed | clock | net | db | cases | j | affected) ;;
 		*) test_usage_error "flag provided but not defined: -$_name" ;;
 		esac
 		if [ $_has -eq 0 ]; then
@@ -548,6 +732,7 @@ cmd_test() {
 		db) _db=$_val ;;
 		cases) _cases=$_val ;;
 		j) _jobs=$_val ;;
+		affected) _affected=$_val ;;
 		esac
 		shift
 	done
@@ -561,7 +746,16 @@ cmd_test() {
 	_dir=$(mktemp -d "${TMPDIR:-/tmp}/kek-test-XXXXXX")
 	trap 'rm -rf "$_dir"' EXIT
 	mkdir "$_dir/r"
-	compiler test-build "$_file" "$_dir" -list || exit $?
+	# the test list (names, hashes, parameters) is an action keyed by the
+	# program's files: unchanged sources need no compiler run
+	_ld=$cache/test-list/$(src_digest "$_file" test-list)
+	action_fetch "$_ld"
+	if [ -f "$_ld/ok" ]; then
+		cp "$_ld/tests.txt" "$_ld/tests.tsv" "$_ld/tests.json" "$_dir/"
+	else
+		compiler test-build "$_file" "$_dir" -list || exit $?
+		action_put "$_ld" "$_dir/tests.txt" "$_dir/tests.tsv" "$_dir/tests.json"
+	fi
 	# errors in the options are reported after the program's diagnostics
 	for _f in "$_net" "$_db"; do
 		[ -z "$_f" ] || [ -f "$_f" ] || die "open $_f: no such file or directory"
@@ -574,6 +768,14 @@ cmd_test() {
 		[ $_g -le 1 ] || die "kek test: -run: invalid regular expression: $_run"
 	else
 		cp "$_dir/tests.txt" "$_dir/selected.txt"
+	fi
+	if [ -n "$_affected" ]; then
+		# only the tests a change since the git revision can affect
+		mkdir "$_dir/base-src"
+		_abase=$(mutate_extract "$_affected" "$_file" "$_dir/base-src")
+		compiler affected -tests_only -base "$_abase" "$_file" >"$_dir/affected.txt" || exit $?
+		grep -Fx -f "$_dir/affected.txt" "$_dir/selected.txt" >"$_dir/sel2.txt" || true
+		mv "$_dir/sel2.txt" "$_dir/selected.txt"
 	fi
 	_count=$(wc -l <"$_dir/selected.txt" | tr -d ' ')
 	if [ "$_count" -eq 0 ]; then
@@ -599,25 +801,26 @@ cmd_test() {
 	# run number
 	awk -F '\t' 'NR == FNR { want[$1] = 1; next } want[$1]' \
 		"$_dir/selected.txt" "$_dir/tests.tsv" >"$_dir/plan.tsv"
-	_i=0
-	_nrun=0
-	while IFS="$(printf '\t')" read -r _t _h _np _c _caps; do
-		_i=$((_i + 1))
-		[ "$_np" -gt 0 ] || _c=1
-		[ "$_np" -eq 0 ] || [ "$_c" -gt 0 ] || _c=$_cases
-		eval "_name_$_i=\$_t"
-		eval "_hash_$_i=\$_h"
-		eval "_caps_$_i=\$_caps"
-		eval "_key_$_i=\$_h-\$_c-\$_t"
-		eval "_cached_$_i=0"
-		if [ $_nocache -eq 0 ] && [ -f "$_tc/$_h-$_c-$_t" ]; then
-			eval "_cached_$_i=1"
-		else
-			_nrun=$((_nrun + 1))
-			eval "_run_$_nrun=$_i"
-			printf '%s\n' "$_t" >>"$_dir/run.txt"
-		fi
-	done <"$_dir/plan.tsv"
+	if [ -n "${KEK_REMOTE_CACHE:-}" ] && [ "$_nocache" -eq 0 ]; then
+		awk -F '\t' -v tc="$_tc" -v cases="$_cases" '{
+			c = $4 + 0
+			if ($3 + 0 == 0) c = 1
+			else if (c <= 0) c = cases
+			print tc "/" $2 "-" c "-" $1
+		}' "$_dir/plan.tsv" | while read -r _rf; do
+			file_fetch "$_rf"
+		done
+	fi
+	awk -F '\t' -v tc="$_tc" -v nocache="$_nocache" -v cases="$_cases" '
+		{
+			c = $4 + 0
+			if ($3 + 0 == 0) c = 1
+			else if (c <= 0) c = cases
+			f = tc "/" $2 "-" c "-" $1
+			if (!nocache && (getline l < f) > 0) { close(f); next }
+			print $1
+		}' "$_dir/plan.tsv" >"$_dir/run.txt"
+	_nrun=$(wc -l <"$_dir/run.txt" | tr -d ' ')
 
 	if [ "$_nrun" -gt 0 ]; then
 		# shellcheck disable=SC2046
@@ -645,79 +848,115 @@ cmd_test() {
 	_passed=0
 	_failed=0
 	_ncached=0
-	_launched=0
-	_reported=0
-	test_launch
-	_i=0
-	while [ $_i -lt "$_count" ]; do
-		_i=$((_i + 1))
-		eval "_t=\$_name_$_i"
-		eval "_key=\$_key_$_i"
-		eval "_cached=\$_cached_$_i"
-		_res=$_dir/r/$_i.res
-		if [ "$_cached" -eq 1 ]; then
-			_ncached=$((_ncached + 1))
-			_st=$(head -n 1 "$_tc/$_key")
-			tail -n +2 "$_tc/$_key" >"$_res"
-		else
-			eval "_p=\$_pid_$_i"
-			wait "$_p" || true
-			_reported=$((_reported + 1))
-			test_launch
-			_st=$(cat "$_dir/r/$_i.st" 2>/dev/null || echo error)
-			cp "$_dir/r/$_i.out" "$_res"
-			if [ "$_st" = error ]; then
-				# not a test result (e.g. a crash of wasmtime): not cached
-				_st=trapped
-			elif [ $_nocache -eq 0 ]; then
-				mkdir -p "$_tc"
-				_tmp=$(mktemp "$_tc/tmp-XXXXXX")
-				{
-					echo "$_st"
-					cat "$_res"
-				} >"$_tmp"
-				mv "$_tmp" "$_tc/$_key"
-			fi
-		fi
-		if [ "$_st" = ok ]; then
-			_passed=$((_passed + 1))
-		else
-			_failed=$((_failed + 1))
-		fi
-		if [ $_json -eq 1 ]; then
-			_cj=false
-			[ "$_cached" -eq 0 ] || _cj=true
-			eval "_caps=\$_caps_$_i"
-			eval "_h=\$_hash_$_i"
-			test_json_obj "$_t" "$_st" "$_cj" "$_caps" "$_h" "$_res" >"$_dir/r/$_i.json"
-		elif [ "$_cached" -eq 1 ]; then
-			sed -e '1s/$/ (cached)/' "$_res"
-		else
-			cat "$_res"
-		fi
-	done
-	if [ $_json -eq 1 ]; then
-		printf '{"file":%s,"passed":%d,"failed":%d,"cached":%d,"tests":[' \
-			"$(json_str "$_file")" "$_passed" "$_failed" "$_ncached"
-		_i=0
-		while [ $_i -lt "$_count" ]; do
-			_i=$((_i + 1))
-			[ $_i -eq 1 ] || printf ','
-			cat "$_dir/r/$_i.json"
-		done
-		printf ']}\n'
-		[ $_failed -eq 0 ] || exit 1
-		exit 0
+	if [ "$_nrun" -gt 0 ]; then
+		KEK_W_EXTRA=$wasm_extra
+		test_run_batch "$_dir" "$_jobs"
 	fi
-	_note=
-	[ $_ncached -eq 0 ] || _note=" ($_ncached cached)"
-	echo
-	if [ $_failed -eq 0 ]; then
-		echo "test result: ok. $_passed passed; $_failed failed$_note"
-		exit 0
+	# report in declaration order, in one awk process (no fork per test):
+	# cached results come from $_tc, new ones from the batch runs and are
+	# added to the cache (written to a temporary file, then renamed)
+	_jn=0
+	[ $_json -eq 0 ] || _jn=1
+	[ "$_nocache" -ne 0 ] || mkdir -p "$_tc"
+	_ncache=$_nocache
+	set +e
+	awk -F '\t' -v tc="$_tc" -v r="$_dir/r" -v nocache="$_ncache" -v json="$_jn" \
+		-v file="$_file" -v cases="$_cases" -v mv="$_dir/mv.txt" '
+	function esc(s,   x, i, c) {
+		gsub(/\\/, "\\\\", s)
+		gsub(/"/, "\\\"", s)
+		gsub(/\t/, "\\t", s)
+		gsub(/\r/, "\\r", s)
+		if (s ~ /[\001-\037]/) {
+			x = ""
+			for (i = 1; i <= length(s); i++) {
+				c = substr(s, i, 1)
+				x = x (c ~ /[\001-\037]/ ? sprintf("\\u%04x", ord[c]) : c)
+			}
+			s = x
+		}
+		return "\"" s "\""
+	}
+	# readall <file> into lines[1..n]; returns n (0 when missing)
+	function readall(f,   n, l) {
+		n = 0
+		while ((getline l < f) > 0) lines[++n] = l
+		close(f)
+		return n
+	}
+	BEGIN {
+		for (i = 1; i < 32; i++) ord[sprintf("%c", i)] = i
+		printf "" > mv
+	}
+	{
+		name = $1; hash = $2; np = $3 + 0; c = $4 + 0; caps = $5
+		if (np == 0) c = 1
+		else if (c <= 0) c = cases
+		key = hash "-" c "-" name
+		cached = 0
+		n = 0
+		if (!nocache) n = readall(tc "/" key)
+		if (n > 0) {
+			cached = 1
+			st = lines[1]
+			for (i = 2; i <= n; i++) out[i - 1] = lines[i]
+			nout = n - 1
+			ncached++
+		} else {
+			st = "error"
+			if (readall(r "/" name ".st") > 0) st = lines[1]
+			nout = readall(r "/" name ".out")
+			for (i = 1; i <= nout; i++) out[i] = lines[i]
+			if (st == "error") st = "trapped"
+			else if (!nocache) {
+				tmp = tc "/tmp-" key
+				print st > tmp
+				for (i = 1; i <= nout; i++) print out[i] > tmp
+				close(tmp)
+				print tmp "\t" tc "/" key > mv
+			}
+		}
+		if (st == "ok") passed++
+		else failed++
+		if (json) {
+			ms = "null"; ce = "null"; o = ""; k = 0
+			if (nout > 0 && match(out[1], /; [0-9]+\.[0-9]+ms\)$/)) ms = substr(out[1], RSTART + 2, RLENGTH - 5)
+			for (i = 2; i <= nout; i++) {
+				line = out[i]
+				sub(/^    /, "", line)
+				o = o (k++ > 0 ? "," : "") esc(line)
+				if (line ~ /^counterexample: /) ce = esc(substr(line, 17))
+			}
+			cs = ""
+			m = split(caps, a, ",")
+			for (i = 1; i <= m; i++) cs = cs (i > 1 ? "," : "") esc(a[i])
+			objs = objs (NR > 1 ? "," : "") sprintf("{\"name\":%s,\"status\":\"%s\",\"cached\":%s,\"pure\":%s,\"caps\":[%s],\"hash\":%s,\"ms\":%s,\"output\":[%s],\"counterexample\":%s}", esc(name), st, (cached ? "true" : "false"), (m == 0 ? "true" : "false"), cs, esc(hash), ms, o, ce)
+		} else {
+			for (i = 1; i <= nout; i++) print out[i] (i == 1 && cached ? " (cached)" : "")
+		}
+	}
+	END {
+		passed += 0; failed += 0; ncached += 0
+		if (json) {
+			printf "{\"file\":%s,\"passed\":%d,\"failed\":%d,\"cached\":%d,\"tests\":[%s]}\n", esc(file), passed, failed, ncached, objs
+		} else {
+			note = (ncached > 0 ? " (" ncached " cached)" : "")
+			print ""
+			if (failed == 0) print "test result: ok. " passed " passed; " failed " failed" note
+			else print "test result: FAILED. " passed " passed; " failed " failed" note
+		}
+		exit failed > 0 ? 1 : 0
+	}' "$_dir/plan.tsv"
+	_status=$?
+	set -e
+	if [ -s "$_dir/mv.txt" ]; then
+		_tab=$(printf '\t')
+		while IFS=$_tab read -r _from _to; do
+			mv "$_from" "$_to"
+			file_push "$_to"
+		done <"$_dir/mv.txt"
 	fi
-	echo "test result: FAILED. $_passed passed; $_failed failed$_note"
-	exit 1
+	exit $_status
 }
 
 # ---- kek similar -diff <rev> ----
@@ -1388,6 +1627,7 @@ bootstrap-update)
 build) cmd_build "$@" ;;
 run) cmd_run "$@" ;;
 test) cmd_test "$@" ;;
+affected) cmd_affected "$@" ;;
 cover) cmd_cover "$@" ;;
 mutate) cmd_mutate "$@" ;;
 __cover-one) cover_one "$@" ;;

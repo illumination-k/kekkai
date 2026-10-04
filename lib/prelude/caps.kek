@@ -4,7 +4,7 @@
 // kind per program, and the state lives in `__Rt`.
 
 fn __rt_new() -> __Rt {
-    let rt = __Rt {
+    let mut rt = __Rt {
         test: false,
         base: 1024,
         brk: 1024,
@@ -43,7 +43,7 @@ fn __rt_new() -> __Rt {
 // ---- &Log ----
 
 fn __log_line(level: String, m: String) {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     if rt.test {
         rt.lines.push(level + ": " + m);
     } else if level == "info" {
@@ -78,7 +78,7 @@ fn __clock_now_ms(c: __Any) -> Int {
 // ---- &Random ----
 
 // SplitMix64
-fn __splitmix(rt: __Rt) -> Int {
+fn __splitmix(mut rt: __Rt) -> Int {
     rt.rand = rt.rand + -7046029254386353131;
     let mut z = rt.rand;
     z = z.bit_xor(z.ushr(30)) * -4658895280553007687;
@@ -108,7 +108,7 @@ fn __net_request(
     body: String,
     has_body: Bool,
 ) -> Result<String, NetError> {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     if !rt.test {
         return Err(NetError { message: "network access is not available to command-line programs" });
     }
@@ -172,7 +172,7 @@ fn __store_new() -> __Store {
     __Store { data: HashMap::new(), clock: 0 }
 }
 
-fn __store_put(s: __Store, k: String, v: String) {
+fn __store_put(mut s: __Store, k: String, v: String) {
     s.clock = s.clock + 1;
     s.data.insert(k, __Entry { value: v, version: s.clock });
 }
@@ -194,7 +194,7 @@ fn __db_begin(db: __Any) -> __Any {
 }
 
 fn __tx_get(t: __Any, key: String) -> Result<Option<String>, TxError> {
-    let tx = __Tx::from_any(t);
+    let mut tx = __Tx::from_any(t);
     match tx.writes.get(key) {
         Some(w) => {
             return Ok(w);
@@ -225,16 +225,16 @@ fn __tx_delete(t: __Any, key: String) -> Result<(), TxError> {
 }
 
 fn __tx_outbox(t: __Any, url: String, body: String) {
-    let tx = __Tx::from_any(t);
+    let mut tx = __Tx::from_any(t);
     tx.outbox.push(url);
     tx.outbox.push(body);
 }
 
 fn __tx_commit(t: __Any) -> Result<(), TxError> {
-    let tx = __Tx::from_any(t);
+    let mut tx = __Tx::from_any(t);
     tx.open = false;
-    let rt = __Rt::get();
-    let s = rt.store;
+    let mut rt = __Rt::get();
+    let mut s = rt.store;
     for k in tx.reads.keys() {
         let seen = tx.reads.get(k).unwrap_or(0);
         let cur = match s.data.get(k) {
@@ -271,7 +271,7 @@ fn __tx_commit(t: __Any) -> Result<(), TxError> {
 }
 
 fn __tx_rollback(t: __Any) {
-    let tx = __Tx::from_any(t);
+    let mut tx = __Tx::from_any(t);
     tx.open = false;
     tx.writes = HashMap::new();
     tx.outbox = Vec::new();

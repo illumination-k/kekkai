@@ -39,7 +39,7 @@ impl<T: Hash> Pii<T> {
     // 16 lowercase hex digits: a declassification that keeps equality (to
     // join or count records) but not the value.
     fn hash(&self) -> String {
-        let h = DefaultHasher::new();
+        let mut h = DefaultHasher::new();
         self.__value.hash(&mut h);
         __pii_hex(h.finish())
     }
@@ -67,7 +67,7 @@ impl Pii<String> {
             }
             i = i + 1;
         }
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         for j in 0..at {
             if j == 0 && at > 1 {
                 parts.push(cs.get(0).unwrap_or(""));
@@ -90,10 +90,16 @@ impl<T: PartialEq> PartialEq for Pii<T> {
 
 impl<T: Eq> Eq for Pii<T> {}
 
+impl<T: Clone> Clone for Pii<T> {
+    fn clone(&self) -> Pii<T> {
+        Pii { __value: self.__value.clone() }
+    }
+}
+
 // __pii_hex renders x as 16 lowercase hex digits (two's complement).
 fn __pii_hex(x: Int) -> String {
     let digits = "0123456789abcdef";
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 15;
     while i >= 0 {
         let d = x.ushr(i * 4).bit_and(15);

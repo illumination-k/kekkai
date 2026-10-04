@@ -196,6 +196,9 @@ struct Chk {
 struct ChkResult {
     info: ChkInfo,
     errs: Vec<AstError>,
+    // the mutability pass (compiler/chk_mut.kek): its diagnostics (in
+    // errs too when the rules are enforced) with their fixes
+    mu: MuReport,
     // the refinement pass (compiler/refine.kek): its diagnostics (errors
     // are also in errs) and per-function summaries
     refine: RefReport,
@@ -270,6 +273,12 @@ struct ChkCore {
 }
 
 fn chk_parse_core() -> ChkCore {
+    chk_parse_core_from(core_sources())
+}
+
+// chk_parse_core_from parses a core library from its sources (`kek fix`
+// of lib/core checks the files being fixed).
+fn chk_parse_core_from(srcs: Vec<FeSource>) -> ChkCore {
     let out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
@@ -280,7 +289,6 @@ fn chk_parse_core() -> ChkCore {
     };
     let errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
-    let srcs = core_sources();
     srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples() });
     for s in srcs {
         let pr = parse_file(s.name, s.text, ids);
@@ -378,6 +386,17 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
         }
         return;
     }
+    if a.name == "fresh" {
+        // a core function whose result is a new container (shared
+        // contents, not shared) when it is given shared values
+        if !chk_is_lib_pos(a.pos) {
+            chk_errorf(c, a.pos, "`#[fresh]` is only allowed in the core library and the prelude");
+        }
+        if a.args.len() > 0 {
+            chk_errorf(c, a.pos, "`#[fresh]` takes no arguments");
+        }
+        return;
+    }
     if a.name == "main" || a.name == "rare" {
         if a.args.len() > 0 {
             chk_errorf(c, a.pos, "`#[" + a.name + "]` takes no arguments");
@@ -433,6 +452,18 @@ fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
 // chk_check_cfg type-checks a program, then runs the refinement pass with
 // the `[refine]` configuration cfg (when there are no type errors).
 fn chk_check_cfg(user: AstFile, prelude: Bool, core: ChkCore, cfg: RefConfig) -> ChkResult {
+    chk_check_full(user, prelude, core, cfg, mu_enforce())
+}
+
+// chk_check_full is chk_check_cfg; with mu set, it runs the mutability
+// pass even when its rules are not enforced (`kek fix`).
+fn chk_check_full(
+    user: AstFile,
+    prelude: Bool,
+    core: ChkCore,
+    cfg: RefConfig,
+    mu: Bool,
+) -> ChkResult {
     let info = ChkInfo {
         funcs: HashMap::new(),
         func_list: Vec::new(),
@@ -496,6 +527,15 @@ fn chk_check_cfg(user: AstFile, prelude: Bool, core: ChkCore, cfg: RefConfig) ->
     for fun in c.info.func_list {
         lin_check(c.info, fun, c.errs);
     }
+    let mut mr = mu_empty_report();
+    if c.errs.len() == 0 && mu {
+        mr = mu_program(c.info, f);
+        if mu_enforce() {
+            for d in mr.diags {
+                c.errs.push(AstError { pos: d.pos, msg: d.msg });
+            }
+        }
+    }
     let mut rr = ref_report_empty();
     if c.errs.len() == 0 && !cfg.off {
         rr = ref_program(c.info, cfg, f);
@@ -505,7 +545,7 @@ fn chk_check_cfg(user: AstFile, prelude: Bool, core: ChkCore, cfg: RefConfig) ->
             }
         }
     }
-    ChkResult { info: c.info, errs: ast_sort_errors(c.errs), refine: rr }
+    ChkResult { info: c.info, errs: ast_sort_errors(c.errs), mu: mr, refine: rr }
 }
 
 fn chk_errorf(c: Chk, pos: AstPos, msg: String) {
@@ -1118,6 +1158,10 @@ fn chk_declare_func(
         declass: Vec::new(),
     };
     for a in fd.attrs {
+        if scope.contains_key("Self") && a.name != "fresh" {
+            chk_errorf(c, a.pos, "attributes are not allowed on methods");
+            continue;
+        }
         chk_check_attr(c, a);
     }
     let seen: HashMap<String, Bool> = HashMap::new();
@@ -3539,7 +3583,13 @@ fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
             ty_invalid()
         }
         Some(cl) => {
-            let p0 = cl.params.get(0).unwrap_or(AstParam { id: 0, pos: cl.pos, name: "", ty: None });
+            let p0 = cl.params.get(0).unwrap_or(AstParam {
+                id: 0,
+                pos: cl.pos,
+                mutable: false,
+                name: "",
+                ty: None,
+            });
             let tx_type = Ty::Cap("Tx", false);
             match p0.ty {
                 Some(pt) => {

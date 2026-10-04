@@ -12,7 +12,7 @@ fn __sb_new(cap: Int) -> __Sb {
     __Sb { buf: __Chars::new(if cap < 8 { 8 } else { cap }), n: 0 }
 }
 
-fn __sb_reserve(b: __Sb, extra: Int) {
+fn __sb_reserve(mut b: __Sb, extra: Int) {
     let need = b.n + extra;
     let cap = b.buf.len();
     if need <= cap {
@@ -22,18 +22,18 @@ fn __sb_reserve(b: __Sb, extra: Int) {
     if c < need {
         c = need;
     }
-    let nb = __Chars::new(c);
+    let mut nb = __Chars::new(c);
     nb.copy(0, b.buf, 0, b.n);
     b.buf = nb;
 }
 
-fn __sb_char(b: __Sb, c: Int) {
+fn __sb_char(mut b: __Sb, c: Int) {
     __sb_reserve(b, 1);
     b.buf.set(b.n, c);
     b.n = b.n + 1;
 }
 
-fn __sb_str(b: __Sb, s: String) {
+fn __sb_str(mut b: __Sb, s: String) {
     let x = __Chars::of(s);
     let k = x.len();
     __sb_reserve(b, k);
@@ -54,14 +54,14 @@ fn __chars_prefix(c: __Chars, n: Int) -> String {
     if n == c.len() {
         return c.freeze();
     }
-    let r = __Chars::new(n);
+    let mut r = __Chars::new(n);
     r.copy(0, c, 0, n);
     r.freeze()
 }
 
 fn __str_sub(s: String, a: Int, b: Int) -> String {
     let x = __Chars::of(s);
-    let r = __Chars::new(b - a);
+    let mut r = __Chars::new(b - a);
     r.copy(0, x, a, b - a);
     r.freeze()
 }
@@ -96,7 +96,7 @@ fn __string_concat(a: String, b: String) -> String {
     if k == 0 {
         return a;
     }
-    let r = __Chars::new(n + k);
+    let mut r = __Chars::new(n + k);
     r.copy(0, x, 0, n);
     r.copy(n, y, 0, k);
     r.freeze()
@@ -132,7 +132,7 @@ fn __int_to_string(x: Int) -> String {
     }
     // digits of a non-positive number (so that MIN works)
     let mut v = if x < 0 { x } else { 0 - x };
-    let tmp = __Chars::new(20);
+    let mut tmp = __Chars::new(20);
     let mut i = 20;
     while v != 0 {
         i = i - 1;
@@ -140,7 +140,7 @@ fn __int_to_string(x: Int) -> String {
         v = v / 10;
     }
     let neg = if x < 0 { 1 } else { 0 };
-    let r = __Chars::new(20 - i + neg);
+    let mut r = __Chars::new(20 - i + neg);
     if neg == 1 {
         r.set(0, 45);
     }
@@ -307,7 +307,7 @@ fn __string_trim(s: String) -> String {
 fn __str_map_case(s: String, lo: Int, hi: Int, delta: Int) -> String {
     let x = __Chars::of(s);
     let n = x.len();
-    let r = __Chars::new(n);
+    let mut r = __Chars::new(n);
     let mut i = 0;
     while i < n {
         let c = x.get(i);
@@ -366,7 +366,7 @@ fn __is_low(c: Int) -> Bool {
 
 // An empty separator splits into code points.
 fn __string_split(s: String, sep: String) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let x = __Chars::of(s);
     let y = __Chars::of(sep);
     let n = x.len();
@@ -404,7 +404,7 @@ fn __string_replace(s: String, a: String, b: String) -> String {
 }
 
 fn __string_from_char(c: Int) -> String {
-    let r = __Chars::new(1);
+    let mut r = __Chars::new(1);
     r.set(0, c.bit_and(65535));
     r.freeze()
 }
@@ -433,7 +433,7 @@ fn __utf8_len(cp: Int) -> Int {
 }
 
 fn __string_to_bytes(s: String) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let x = __Chars::of(s);
     let n = x.len();
     let mut i = 0;
@@ -484,7 +484,7 @@ fn __utf8_emit(d: __Utf8Dec, cp: Int) {
     }
 }
 
-fn __utf8_byte(d: __Utf8Dec, b: Int) {
+fn __utf8_byte(mut d: __Utf8Dec, b: Int) {
     if d.needed == 0 {
         if b <= 127 {
             __sb_char(d.sb, b);

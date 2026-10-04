@@ -9,7 +9,7 @@
 // mutant is KEK_MUTANT (0 or unset: none).
 
 fn __cov_hit(k: Int) {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     rt.ticks = rt.ticks + 1;
     if rt.budget > 0 && rt.ticks > rt.budget {
         // a deterministic time limit (`kek mutate`): the run took more
@@ -17,7 +17,7 @@ fn __cov_hit(k: Int) {
         __print("kek-timeout");
         __exit(3);
     }
-    let c = rt.cov;
+    let mut c = rt.cov;
     while c.len() <= k {
         c.push(false);
     }
@@ -33,7 +33,7 @@ fn __cov_flush() {
     if rt.cov_out == "" {
         return;
     }
-    let ids = Vec::new();
+    let mut ids = Vec::new();
     let mut i = 0;
     for b in rt.cov {
         if b {
@@ -124,7 +124,7 @@ fn __mut_icmp(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Bool {
 fn __batch_plan() -> Vec<String> {
     let rt = __Rt::get();
     let f = __env_lookup(__env_all(rt), "KEK_BATCH");
-    let out = Vec::new();
+    let mut out = Vec::new();
     match __fs_read(__Any::null(), f) {
         Ok(text) => {
             for l in text.split("\n") {
@@ -145,7 +145,7 @@ fn __batch_mutant(m: Int) {
 
 // __batch_test resets the state for test `name:budget` and returns name.
 fn __batch_test(tb: String) -> String {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     let parts = tb.split(":");
     let name = parts.get(0).unwrap_or("");
     __print("kek-test " + name);
@@ -163,12 +163,12 @@ fn __batch_test(tb: String) -> String {
 
 // __batch_done reports a baseline run (mutant 0).
 fn __batch_done(name: String, code: Int) {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     rt.budget = 0;
     if rt.mutant != 0 {
         return;
     }
-    let ids = Vec::new();
+    let mut ids = Vec::new();
     for k in rt.cov_hits {
         ids.push(k.to_string());
     }

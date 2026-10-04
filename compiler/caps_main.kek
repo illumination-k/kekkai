@@ -21,17 +21,57 @@ struct CapsReport {
     declassify: Vec<ChkDeclass>,
 }
 
-// caps_func_signature renders `fn name(p: T, ...) -> R` (FuncSignature).
+// caps_func_signature renders `fn name(p: T, ...) -> R` (FuncSignature);
+// shared and mutable references are shown as written (`&T`, `&mut T`,
+// `self: &Point` for `&self`).
 fn caps_func_signature(fun: ChkFunc) -> String {
     let ps = Vec::new();
+    let mut i = 0;
     for p in fun.params {
-        ps.push(p.name + ": " + ty_str(p.ty));
+        let mut t = ty_str(p.ty);
+        if !ty_is_cap(p.ty) {
+            t = caps_ref_prefix(fun.decl, i) + t;
+        }
+        ps.push(p.name + ": " + t);
+        i = i + 1;
     }
     let mut s = "fn " + fun.name + "(" + ps.join(", ") + ")";
     if !ty_is_prim(ty_prune(fun.result), "()") {
-        s = s + " -> " + ty_str(fun.result);
+        let r = match fun.decl.result {
+            Some(t) => caps_type_ref(t),
+            None => "",
+        };
+        s = s + " -> " + r + ty_str(fun.result);
     }
     s
+}
+
+// caps_ref_prefix is `&` or `&mut ` when parameter i is declared a
+// reference.
+fn caps_ref_prefix(d: AstFuncDecl, i: Int) -> String {
+    if i == 0 && d.self_kind != "" {
+        if d.self_kind == "&self" {
+            return "&";
+        }
+        if d.self_kind == "&mut self" {
+            return "&mut ";
+        }
+        return "";
+    }
+    match d.params.get(i) {
+        Some(p) => match p.ty {
+            Some(t) => caps_type_ref(t),
+            None => "",
+        },
+        None => "",
+    }
+}
+
+fn caps_type_ref(t: AstType) -> String {
+    match t {
+        AstType::Ref(r) => if r.mutable { "&mut " } else { "&" },
+        _ => "",
+    }
 }
 
 fn caps_sorted_keys(m: HashMap<String, Bool>) -> Vec<String> {

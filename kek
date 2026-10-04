@@ -355,6 +355,8 @@ Usage:
   kek mutate [-json] [-run re] [-base <file|dir> | -diff rev] [-timeout 2s] <file|dir>
                                   mutation testing (typed mutants, cached results)
   kek fmt [-w|-check] <paths>     format
+  kek fix [-w] <paths>            add the `mut` the mutability rules ask for
+                                  (each path is a program; prints a diff without -w)
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
                                   search functions by type

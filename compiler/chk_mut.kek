@@ -1,0 +1,1793 @@
+// Mutability and views (prefix mu_ / Mu*; docs/mutability.md).
+//
+// A separate pass over the checked AST, after type checking (like the
+// transaction linearity check in chk_linear.kek). Every expression of a
+// type that can reach mutable state has a view:
+//
+//   0 own              free: may be mutated (through a mutable path) and
+//                      stored in owning places
+//   1 shared-contents  a fresh container whose contents are shared: the
+//                      container may be mutated (a cursor, a collection
+//                      built from borrowed elements), its contents not
+//   2 shared           borrowed and read-only, contents included
+//
+// and is or is not a mutable path (`let mut`, `mut` / `&mut` params,
+// `&mut self`, temporaries, and their fields). Views only matter for types
+// that can reach mutable state (mu_rel): Int, String, a struct of
+// immutable fields of such types, ... are values, and sharing them is
+// harmless.
+//
+// The core library and the prelude are checked with the same rules for
+// mutation, but may build values from borrowed data (struct literals,
+// constructors, `let`, returns): every call into them taints its result
+// with the views of its arguments instead (`shared`, or `shared-contents`
+// for a function marked `#[fresh]`).
+
+struct MuBind {
+    id: Int,
+    name: String,
+    mut view: Int,
+    mut mutable: Bool,
+    // how `mut` is added: "let", "param", "self", "pat", "for",
+    // "closure", "refparam" (`&T` -> `&mut T`), "refself" (`&self` ->
+    // `&mut self`); "" when it cannot be
+    mut kind: String,
+    mut fix_pos: AstPos,
+    // where a shared view comes from (for messages)
+    mut src: String,
+    // the declared type of a param (`&Vec<Int>`)
+    mut decl: String,
+    // the binding is a param of a trait method or of an implementation of
+    // one: changing its type changes the trait's signature
+    mut sig_fixed: Bool,
+    // the binding is a parameter (of the function or a closure)
+    mut param: Bool,
+}
+
+struct MuVal {
+    mut view: Int,
+    mut mutable: Bool,
+    // the binding at the root of the path (0 for a temporary)
+    root: Int,
+    path: String,
+    mut src: String,
+}
+
+// MuDiag is a diagnostic with the fix that `kek fix` can apply: add `mut`
+// (fix: the MuBind kind) at fix_pos.
+struct MuDiag {
+    pos: AstPos,
+    msg: String,
+    fix: String,
+    fix_pos: AstPos,
+    // the fix changes a trait method's signature (not applied by `kek fix -w`)
+    ambiguous: Bool,
+}
+
+struct MuReport {
+    ran: Bool,
+    diags: Vec<MuDiag>,
+}
+
+struct MuCx {
+    info: ChkInfo,
+    mut binds: HashMap<Int, MuBind>,
+    diags: Vec<MuDiag>,
+    // struct and enum names that reach mutable state whatever their type
+    // arguments
+    always: HashMap<String, Bool>,
+    // "S.f" -> the demand of a struct field declared with a reference type
+    field_refs: HashMap<String, Int>,
+    // the names of functions implementing Clone::clone
+    clones: HashMap<String, Bool>,
+    // functions whose signature is fixed by a trait
+    fixed: HashMap<String, Bool>,
+    // implementations of `#[fresh]` trait methods
+    fresh: HashMap<String, Bool>,
+    mut lib: Bool,
+    mut fun: ChkFunc,
+    mut ret: Int,
+    mut ret_ty: String,
+    // depth of closure bodies (their results are tainted at each call)
+    mut closures: Int,
+    // let bindings of closure literals: the demands of their params
+    lam_binds: HashMap<Int, Vec<Int>>,
+    // diagnostics already reported (by position and message)
+    seen: HashMap<String, Bool>,
+}
+
+// mu_enforce reports whether the rules are errors. When false, the pass
+// runs only for `kek fix` (the two-step bootstrap: the compiler accepts
+// `mut` before its sources are migrated).
+fn mu_enforce() -> Bool {
+    false
+}
+
+fn mu_empty_report() -> MuReport {
+    MuReport { ran: false, diags: Vec::new() }
+}
+
+fn mu_max(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+// mu_elem is the view of what is reached from a value of view v (a field,
+// an element, a pattern binding): the contents of a shared-contents value
+// are shared.
+fn mu_elem(v: Int) -> Int {
+    if v == 0 { 0 } else { 2 }
+}
+
+// mu_contents is the demand on a value stored into a container of view v.
+fn mu_contents(v: Int) -> Int {
+    if v == 0 { 0 } else { 2 }
+}
+
+fn mu_val(view: Int) -> MuVal {
+    MuVal { view: view, mutable: true, root: 0, path: "", src: "" }
+}
+
+fn mu_program(info: ChkInfo, f: AstFile) -> MuReport {
+    let cx = MuCx {
+        info: info,
+        binds: HashMap::new(),
+        diags: Vec::new(),
+        always: HashMap::new(),
+        field_refs: HashMap::new(),
+        clones: HashMap::new(),
+        fixed: HashMap::new(),
+        fresh: HashMap::new(),
+        lib: false,
+        fun: chk_dummy_func(),
+        ret: 0,
+        ret_ty: "",
+        closures: 0,
+        lam_binds: HashMap::new(),
+        seen: HashMap::new(),
+    };
+    mu_relevance(cx);
+    for sd in f.structs {
+        for fd in sd.fields {
+            match fd.ty {
+                AstType::Ref(_) => {
+                    cx.field_refs.insert(sd.name + "." + fd.name, mu_demand(fd.ty));
+                }
+                _ => {
+                    if mu_has_ref(fd.ty) {
+                        cx.field_refs.insert(sd.name + "." + fd.name, 1);
+                    }
+                }
+            }
+        }
+    }
+    for trn in info.impls.keys() {
+        for ci in chk_impls_of(info, trn) {
+            for m in ci.methods.keys() {
+                match ci.methods.get(m) {
+                    Some(fun) => {
+                        cx.fixed.insert(fun.name, true);
+                        if trn == "Clone" && m == "clone" {
+                            cx.clones.insert(fun.name, true);
+                        }
+                        match info.funcs.get(trn + "::" + m) {
+                            Some(tf) => {
+                                mu_compare_sig(cx, fun, tf);
+                                if ast_has_attr(tf.decl, "fresh") {
+                                    cx.fresh.insert(fun.name, true);
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    for fun in info.func_list {
+        if fun.trait_name != "" {
+            cx.fixed.insert(fun.name, true);
+        }
+    }
+    for fun in info.func_list {
+        if fun.decl.has_body {
+            mu_func(cx, fun);
+        }
+    }
+    MuReport { ran: true, diags: cx.diags }
+}
+
+// ---- types ----
+
+// mu_relevance computes which struct and enum names reach mutable state
+// (a `mut` field, a Vec, a closure, ...) whatever their type arguments: a
+// least fixed point over the declarations.
+fn mu_relevance(cx: MuCx) {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for n in cx.info.structs.keys() {
+            if cx.always.contains_key(n) {
+                continue;
+            }
+            match cx.info.structs.get(n) {
+                Some(st) => {
+                    let mut r = false;
+                    for fd in st.fields {
+                        if fd.mutable || mu_rel_base(cx, fd.ty) {
+                            r = true;
+                        }
+                    }
+                    if r {
+                        cx.always.insert(n, true);
+                        changed = true;
+                    }
+                }
+                None => {}
+            }
+        }
+        for n in cx.info.enums.keys() {
+            if cx.always.contains_key(n) {
+                continue;
+            }
+            match cx.info.enums.get(n) {
+                Some(en) => {
+                    let mut r = false;
+                    for v in en.variants {
+                        for t in v.fields {
+                            if mu_rel_base(cx, t) {
+                                r = true;
+                            }
+                        }
+                    }
+                    if r {
+                        cx.always.insert(n, true);
+                        changed = true;
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+// mu_rel_base is mu_rel with type parameters taken as plain values (they
+// count at each use, with the type arguments).
+fn mu_rel_base(cx: MuCx, t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Param(_) => false,
+        Ty::Assoc(_, _, _) => false,
+        Ty::Var(_) => false,
+        x => mu_rel_shape(cx, x, false),
+    }
+}
+
+// mu_rel reports whether values of type t can reach mutable state: then
+// their views matter. Type parameters count (a generic value is treated
+// as an aggregate).
+fn mu_rel(cx: MuCx, t: Ty) -> Bool {
+    mu_rel_shape(cx, ty_prune(t), true)
+}
+
+fn mu_rel_shape(cx: MuCx, t: Ty, params: Bool) -> Bool {
+    match t {
+        Ty::Prim(_) => false,
+        Ty::Opaque(n) => n == "__Chars",
+        Ty::Cap(_, _) => false,
+        Ty::Var(_) => false,
+        Ty::Param(_) => params,
+        Ty::Assoc(_, _, _) => params,
+        Ty::Vec(_) => true,
+        Ty::Fn(_, _) => true,
+        Ty::Option(x) => mu_rel_shape(cx, ty_prune(x), params),
+        Ty::Result(a, b) => mu_rel_shape(cx, ty_prune(a), params)
+            || mu_rel_shape(cx, ty_prune(b), params),
+        Ty::Tuple(ts) => mu_rel_any(cx, ts, params),
+        Ty::Struct(st, args) => cx.always.contains_key(st.name) || mu_rel_any(cx, args, params),
+        Ty::Enum(en, args) => cx.always.contains_key(en.name) || mu_rel_any(cx, args, params),
+    }
+}
+
+fn mu_rel_any(cx: MuCx, ts: Vec<Ty>, params: Bool) -> Bool {
+    for x in ts {
+        if mu_rel_shape(cx, ty_prune(x), params) {
+            return true;
+        }
+    }
+    false
+}
+
+// mu_type is the type of an expression (of the expression under `&`
+// when the checker looked through it).
+fn mu_type(cx: MuCx, e: AstExpr) -> Ty {
+    match cx.info.types.get(ast_expr_id(e)) {
+        Some(t) => t,
+        None => match e {
+            AstExpr::Unary(u) => mu_type(cx, u.x),
+            _ => ty_invalid(),
+        },
+    }
+}
+
+fn mu_expr_rel(cx: MuCx, e: AstExpr) -> Bool {
+    mu_rel(cx, mu_type(cx, e))
+}
+
+// mu_demand is the view a declared type accepts: `&T` anything, a type
+// with references inside (`Vec<&T>`) shared contents, others only owned
+// values.
+fn mu_demand(t: AstType) -> Int {
+    match t {
+        AstType::Ref(r) => {
+            if r.mutable {
+                return mu_demand(r.elem);
+            }
+            2
+        }
+        _ => if mu_has_ref(t) { 1 } else { 0 },
+    }
+}
+
+fn mu_has_ref(t: AstType) -> Bool {
+    match t {
+        AstType::Ref(_) => true,
+        AstType::Named(n) => {
+            for a in n.args {
+                if mu_has_ref(a) {
+                    return true;
+                }
+            }
+            false
+        }
+        AstType::Tuple(tt) => {
+            for a in tt.elems {
+                if mu_has_ref(a) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn mu_opt_demand(t: Option<AstType>) -> Int {
+    match t {
+        Some(x) => mu_demand(x),
+        None => 0,
+    }
+}
+
+// ---- diagnostics ----
+
+fn mu_report(cx: MuCx, pos: AstPos, msg: String, fix: String, fix_pos: AstPos, ambiguous: Bool) {
+    let key = ast_pos_string(pos) + "\t" + msg;
+    if cx.seen.contains_key(key) {
+        return;
+    }
+    cx.seen.insert(key, true);
+    cx.diags.push(MuDiag { pos: pos, msg: msg, fix: fix, fix_pos: fix_pos, ambiguous: ambiguous });
+}
+
+fn mu_error(cx: MuCx, pos: AstPos, msg: String) {
+    mu_report(cx, pos, msg, "", pos, false);
+}
+
+fn mu_bind_of(cx: MuCx, id: Int) -> Option<MuBind> {
+    if id == 0 {
+        return None;
+    }
+    cx.binds.get(id)
+}
+
+fn mu_path_text(v: MuVal) -> String {
+    if v.path == "" {
+        return "this value";
+    }
+    "`" + v.path + "`"
+}
+
+// mu_hint is how to declare a binding mutable.
+fn mu_hint(b: MuBind) -> String {
+    if b.kind == "let" {
+        return "write `let mut " + b.name + "`";
+    }
+    if b.kind == "param" {
+        return "write `mut " + b.name + ": " + b.decl + "`";
+    }
+    if b.kind == "self" {
+        return "write `mut self`";
+    }
+    if b.kind == "for" || b.kind == "pat" {
+        return "write `mut " + b.name + "`";
+    }
+    if b.kind == "closure" {
+        return "write `|mut " + b.name + "|`";
+    }
+    "declare it mutable"
+}
+
+// mu_mutate requires v to be mutable: a mutable path to a value that is
+// not shared. verb is "mutate", "borrow" (`&mut`) or "assign to `f`" (a
+// field of v).
+fn mu_mutate(cx: MuCx, v: MuVal, pos: AstPos, verb: String) {
+    let mut what = "mutate " + mu_path_text(v);
+    if verb == "borrow" {
+        what = "borrow " + mu_path_text(v) + " as mutable";
+    } else if verb.starts_with("assign to ") {
+        let f = verb.slice(10, verb.len());
+        what = if v.path == "" {
+            "assign to the field `" + f + "`"
+        } else {
+            "assign to `" + v.path + "." + f + "`"
+        };
+    }
+    if v.view == 2 {
+        match mu_bind_of(cx, v.root) {
+            Some(b) => {
+                if b.kind == "refparam" {
+                    let inner = b.decl.slice(1, b.decl.len());
+                    mu_report(
+                        cx,
+                        pos,
+                        "cannot "
+                            + what
+                            + " through a shared reference `"
+                            + b.decl
+                            + "` (take `&mut "
+                            + inner
+                            + "`)",
+                        "refparam",
+                        b.fix_pos,
+                        b.sig_fixed,
+                    );
+                    return;
+                }
+                if b.kind == "refself" {
+                    mu_report(
+                        cx,
+                        pos,
+                        "cannot " + what + " through a shared reference `&self` (take `&mut self`)",
+                        "refself",
+                        b.fix_pos,
+                        b.sig_fixed,
+                    );
+                    return;
+                }
+                mu_error(
+                    cx,
+                    pos,
+                    "cannot "
+                        + what
+                        + ": it is borrowed from "
+                        + v.src
+                        + " (clone it: `"
+                        + b.name
+                        + ".clone()`)",
+                );
+            }
+            None => mu_error(
+                cx,
+                pos,
+                "cannot " + what + ": it is borrowed from " + v.src + " (clone it)",
+            ),
+        }
+        return;
+    }
+    if v.mutable {
+        return;
+    }
+    match mu_bind_of(cx, v.root) {
+        Some(b) => {
+            let subject = if v.path == b.name && !verb.starts_with("assign to ") {
+                "it is"
+            } else {
+                "`" + b.name + "` is"
+            };
+            mu_report(
+                cx,
+                pos,
+                "cannot " + what + ": " + subject + " not declared as mutable (" + mu_hint(b) + ")",
+                b.kind,
+                b.fix_pos,
+                false,
+            );
+        }
+        None => {}
+    }
+}
+
+// mu_text is the source text of a simple expression (a variable or a
+// field of one), "" for others.
+fn mu_text(e: AstExpr) -> String {
+    match e {
+        AstExpr::Ident(x) => x.name,
+        AstExpr::Field(x) => {
+            let b = mu_text(x.x);
+            if b == "" { "" } else { b + "." + x.name }
+        }
+        AstExpr::Unary(u) => if u.op == "*" || u.op == "&" {
+            mu_text(u.x)
+        } else {
+            ""
+        },
+        _ => "",
+    }
+}
+
+fn mu_clone_hint(e: AstExpr) -> String {
+    let t = mu_text(e);
+    if t == "" {
+        return "clone it";
+    }
+    "use `" + t + ".clone()`"
+}
+
+// mu_store checks a value stored into an owning place (dest describes
+// it) that accepts views up to demand.
+fn mu_store(cx: MuCx, v: MuVal, demand: Int, e: AstExpr, dest: String) {
+    if v.view <= demand {
+        return;
+    }
+    mu_error(
+        cx,
+        ast_expr_pos(e),
+        "cannot store a borrowed value in "
+            + dest
+            + ": it comes from "
+            + v.src
+            + " ("
+            + mu_clone_hint(e)
+            + ")",
+    );
+}
+
+// mu_lib_relaxed reports whether a store into a place rooted at root is
+// unchecked: in the core library and the prelude, values built from
+// borrowed data are tainted at each call, unless they go into a
+// parameter.
+fn mu_lib_relaxed(cx: MuCx, root: Int) -> Bool {
+    if !cx.lib {
+        return false;
+    }
+    match mu_bind_of(cx, root) {
+        Some(b) => !b.param,
+        None => true,
+    }
+}
+
+// ---- functions ----
+
+fn mu_func(cx: MuCx, fun: ChkFunc) {
+    cx.fun = fun;
+    cx.lib = chk_is_lib(fun);
+    cx.binds = HashMap::new();
+    cx.closures = 0;
+    let fixed = cx.fixed.contains_key(fun.name);
+    let mut i = 0;
+    for p in fun.params {
+        let dp = fun.decl.params.get(i).unwrap_or(AstParam {
+            id: 0,
+            pos: p.pos,
+            mutable: false,
+            name: p.name,
+            ty: None,
+        });
+        let b = mu_param_bind(cx, p, dp, i == 0 && fun.decl.self_kind != "", fun.decl.self_kind);
+        b.sig_fixed = fixed;
+        cx.binds.insert(p.id, b);
+        i = i + 1;
+    }
+    cx.ret = mu_opt_demand(fun.decl.result);
+    cx.ret_ty = match fun.decl.result {
+        Some(t) => fmt_typ(t),
+        None => "()",
+    };
+    let v = mu_block(cx, fun.decl.body);
+    match fun.decl.body.tail {
+        Some(t) => mu_return(cx, v, t),
+        None => {}
+    }
+}
+
+// mu_param_bind describes a parameter: its view and mutability by its
+// declaration.
+fn mu_param_bind(
+    cx: MuCx,
+    p: ChkBinding,
+    dp: AstParam,
+    is_self: Bool,
+    self_kind: String,
+) -> MuBind {
+    let b = MuBind {
+        id: p.id,
+        name: p.name,
+        view: 0,
+        mutable: dp.mutable,
+        kind: "param",
+        fix_pos: dp.pos,
+        src: "",
+        decl: "",
+        sig_fixed: false,
+        param: true,
+    };
+    if is_self {
+        b.decl = self_kind;
+        if self_kind == "self" {
+            b.kind = "self";
+            b.mutable = false;
+        } else if self_kind == "mut self" || self_kind == "&mut self" {
+            b.mutable = true;
+        } else {
+            b.kind = "refself";
+            b.view = 2;
+            b.mutable = false;
+            b.src = "`&self`";
+        }
+        if !mu_rel(cx, p.ty) {
+            b.view = 0;
+        }
+        return b;
+    }
+    match dp.ty {
+        Some(t) => {
+            b.decl = fmt_typ(t);
+            match t {
+                AstType::Ref(r) => {
+                    if r.mutable {
+                        b.view = mu_demand(r.elem);
+                        b.mutable = true;
+                        b.kind = "";
+                    } else {
+                        b.view = 2;
+                        b.kind = "refparam";
+                        b.fix_pos = r.pos;
+                        b.src = "the shared reference `" + p.name + "`";
+                    }
+                }
+                _ => {
+                    b.view = mu_demand(t);
+                    if b.view > 0 {
+                        b.src = "`" + p.name + ": " + b.decl + "`";
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    if !mu_rel(cx, p.ty) {
+        b.view = 0;
+    }
+    b
+}
+
+// mu_return checks a value returned from the function (not from a
+// closure, whose results are tainted at each call).
+fn mu_return(cx: MuCx, v: MuVal, e: AstExpr) {
+    if cx.closures > 0 || cx.lib || v.view <= cx.ret {
+        return;
+    }
+    let mut hint = "return `&" + cx.ret_ty + "` or clone it";
+    if v.view == 1 {
+        hint = "clone it";
+    }
+    mu_error(
+        cx,
+        ast_expr_pos(e),
+        "cannot return a borrowed value as `"
+            + cx.ret_ty
+            + "`: it comes from "
+            + v.src
+            + " ("
+            + hint
+            + ")",
+    );
+}
+
+// mu_compare_sig requires an implementation of a trait method to accept
+// what the trait's declaration accepts: a receiver or parameter that is
+// `&self` / `&T` in the trait must be so in the implementation too.
+fn mu_compare_sig(cx: MuCx, fun: ChkFunc, tf: ChkFunc) {
+    let n = fun.decl.params.len();
+    for i in 0..n {
+        let a = fun.decl.params.get(i);
+        let b = tf.decl.params.get(i);
+        match a {
+            Some(ip) => match b {
+                Some(tp) => {
+                    let ti = mu_param_mode(tf.decl, tp, i);
+                    let ii = mu_param_mode(fun.decl, ip, i);
+                    if ti == "ref" && ii != "ref" {
+                        let what = if i == 0 && fun.decl.self_kind != "" {
+                            "`" + fun.decl.self_kind + "`"
+                        } else {
+                            "parameter `" + ip.name + "`"
+                        };
+                        mu_error(
+                            cx,
+                            ip.pos,
+                            "method `"
+                                + fun.decl.name
+                                + "` takes "
+                                + what
+                                + " but the trait `"
+                                + tf.trait_name
+                                + "` borrows it shared: it cannot be mutated or kept",
+                        );
+                    }
+                }
+                None => {}
+            },
+            None => {}
+        }
+    }
+}
+
+// mu_param_mode is how a parameter takes its argument: "ref" (`&T`,
+// `&self`), "refmut" (`&mut T`, `&mut self`), "mut" (`mut x: T`, `mut
+// self`) or "own".
+fn mu_param_mode(d: AstFuncDecl, p: AstParam, i: Int) -> String {
+    if i == 0 && d.self_kind != "" {
+        if d.self_kind == "&self" {
+            return "ref";
+        }
+        if d.self_kind == "&mut self" {
+            return "refmut";
+        }
+        if d.self_kind == "mut self" {
+            return "mut";
+        }
+        return "own";
+    }
+    match p.ty {
+        Some(t) => match t {
+            AstType::Ref(r) => if r.mutable { "refmut" } else { "ref" },
+            _ => if p.mutable { "mut" } else { "own" },
+        },
+        None => "own",
+    }
+}
+
+// ---- statements ----
+
+fn mu_block(cx: MuCx, b: AstBlock) -> MuVal {
+    for s in b.stmts {
+        mu_stmt(cx, s);
+    }
+    match b.tail {
+        Some(e) => mu_expr(cx, e),
+        None => mu_val(0),
+    }
+}
+
+fn mu_new_bind(
+    id: Int,
+    name: String,
+    view: Int,
+    mutable: Bool,
+    kind: String,
+    pos: AstPos,
+    src: String,
+) -> MuBind {
+    MuBind {
+        id: id,
+        name: name,
+        view: view,
+        mutable: mutable,
+        kind: kind,
+        fix_pos: pos,
+        src: src,
+        decl: "",
+        sig_fixed: false,
+        param: false,
+    }
+}
+
+fn mu_stmt(cx: MuCx, s0: AstStmt) {
+    match s0 {
+        AstStmt::Let(s) => {
+            let v = mu_expr(cx, s.init);
+            match s.pat {
+                Some(pat) => {
+                    mu_pattern(cx, pat, v);
+                    return;
+                }
+                None => {}
+            }
+            match cx.info.lets.get(s.id) {
+                Some(cb) => {
+                    let rel = mu_rel(cx, cb.ty);
+                    let mut view = if rel { v.view } else { 0 };
+                    let mut top_ref = false;
+                    match s.ty {
+                        Some(t) => {
+                            let d = mu_demand(t);
+                            if rel && d > view {
+                                view = d;
+                            }
+                            match t {
+                                AstType::Ref(r) => {
+                                    top_ref = !r.mutable;
+                                }
+                                _ => {}
+                            }
+                            if rel && !cx.lib && v.view > d && s.mutable {
+                                mu_store(cx, v, d, s.init, "`" + s.name + "`");
+                            }
+                        }
+                        None => {
+                            if rel && !cx.lib && s.mutable && v.view == 2 {
+                                mu_store(cx, v, 1, s.init, "`" + s.name + "`");
+                            }
+                        }
+                    }
+                    if top_ref {
+                        view = 2;
+                    }
+                    let b = mu_new_bind(cb.id, s.name, view, s.mutable, "let", s.pos, v.src);
+                    cx.binds.insert(cb.id, b);
+                    match s.init {
+                        AstExpr::Closure(cl) => {
+                            let ds = Vec::new();
+                            for prm in cl.params {
+                                ds.push(mu_opt_demand(prm.ty));
+                            }
+                            cx.lam_binds.insert(cb.id, ds);
+                        }
+                        _ => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        AstStmt::Assign(s) => {
+            let v = mu_expr(cx, s.value);
+            match cx.info.assigns.get(s.id) {
+                Some(cb) => match cx.binds.get(cb.id) {
+                    Some(b) => {
+                        if mu_rel(cx, cb.ty) && !mu_lib_relaxed(cx, cb.id) {
+                            mu_store(cx, v, b.view, s.value, "`" + s.name + "`");
+                        }
+                    }
+                    None => {}
+                },
+                None => {}
+            }
+        }
+        AstStmt::FieldAssign(s) => {
+            let base = mu_expr(cx, s.target.x);
+            mu_mutate(cx, base, s.pos, "assign to " + s.target.name);
+            let v = mu_expr(cx, s.value);
+            if mu_expr_rel(cx, s.value) && !mu_lib_relaxed(cx, base.root) && base.view < 2 {
+                let mut d = mu_contents(base.view);
+                match ty_prune(mu_type(cx, s.target.x)) {
+                    Ty::Struct(st, _) => match cx.field_refs.get(st.name + "." + s.target.name) {
+                        Some(fd) => {
+                            d = mu_max(d, fd);
+                        }
+                        None => {}
+                    },
+                    _ => {}
+                }
+                mu_store(cx, v, d, s.value, "field `" + s.target.name + "`");
+            }
+        }
+        AstStmt::Break(_) => {}
+        AstStmt::Continue(_) => {}
+        AstStmt::While(s) => {
+            let v = mu_expr(cx, s.cond);
+            match s.pat {
+                Some(pat) => mu_pattern(cx, pat, v),
+                None => {}
+            }
+            mu_block(cx, s.body);
+        }
+        AstStmt::For(s) => {
+            let it = mu_expr(cx, s.iter);
+            let mut elem = mu_elem(it.view);
+            match s.end {
+                Some(end) => {
+                    mu_expr(cx, end);
+                    elem = 0;
+                }
+                None => match cx.info.for_iters.get(s.id) {
+                    Some(fi) => {
+                        if fi.into.is_none() && it.view == 2 && mu_expr_rel(cx, s.iter) {
+                            mu_mutate(cx, it, ast_expr_pos(s.iter), "mutate");
+                        }
+                    }
+                    None => {}
+                },
+            }
+            let ev = MuVal { view: elem, mutable: true, root: 0, path: "", src: it.src };
+            match s.pat {
+                Some(pat) => mu_pattern_kind(cx, pat, ev, "for", s.pos),
+                None => match cx.info.fors.get(s.id) {
+                    Some(cb) => {
+                        let view = if mu_rel(cx, cb.ty) { elem } else { 0 };
+                        cx.binds.insert(
+                            cb.id,
+                            mu_new_bind(cb.id, s.var, view, false, "for", s.pos, it.src),
+                        );
+                    }
+                    None => {}
+                },
+            }
+            mu_block(cx, s.body);
+        }
+        AstStmt::Return(s) => match s.value {
+            Some(e) => {
+                let v = mu_expr(cx, e);
+                mu_return(cx, v, e);
+            }
+            None => {}
+        },
+        AstStmt::Expr(s) => {
+            mu_expr(cx, s.x);
+        }
+    }
+}
+
+// mu_pattern binds the variables of a pattern matched against a value v.
+fn mu_pattern(cx: MuCx, p: AstPattern, v: MuVal) {
+    mu_pattern_kind(cx, p, v, "pat", p.pos);
+}
+
+fn mu_pattern_kind(cx: MuCx, p: AstPattern, v: MuVal, kind: String, pos: AstPos) {
+    match cx.info.patterns.get(p.id) {
+        Some(pi) => {
+            if pi.kind == "bind" {
+                match pi.bind {
+                    Some(cb) => {
+                        let rel = mu_rel(cx, cb.ty);
+                        let view = if rel { v.view } else { 0 };
+                        if p.mutable && view == 2 && !cx.lib {
+                            mu_error(
+                                cx,
+                                p.pos,
+                                "cannot bind a borrowed value to the mutable `"
+                                    + p.bind
+                                    + "`: it comes from "
+                                    + v.src
+                                    + " (drop the `mut` or clone the value)",
+                            );
+                        }
+                        cx.binds.insert(
+                            cb.id,
+                            mu_new_bind(cb.id, p.bind, view, p.mutable, "pat", p.pos, v.src),
+                        );
+                    }
+                    None => {}
+                }
+                return;
+            }
+            let sub = MuVal { view: mu_elem(v.view), mutable: true, root: 0, path: "", src: v.src };
+            for a in p.args {
+                mu_pattern(cx, a, sub);
+            }
+        }
+        None => {}
+    }
+}
+
+// ---- expressions ----
+
+fn mu_expr(cx: MuCx, e0: AstExpr) -> MuVal {
+    match e0 {
+        AstExpr::IntLit(_) => mu_val(0),
+        AstExpr::BoolLit(_) => mu_val(0),
+        AstExpr::StrLit(_) => mu_val(0),
+        AstExpr::UnitLit(_) => mu_val(0),
+        AstExpr::Ident(e) => {
+            match cx.info.uses.get(e.id) {
+                Some(cb) => match cx.binds.get(cb.id) {
+                    Some(b) => {
+                        return MuVal {
+                            view: b.view,
+                            mutable: b.mutable,
+                            root: b.id,
+                            path: b.name,
+                            src: b.src,
+                        };
+                    }
+                    None => {}
+                },
+                None => {}
+            }
+            match cx.info.calls.get(e.id) {
+                Some(ci) => {
+                    if ci.kind == "fnitem" {
+                        mu_fn_item(cx, e, ci);
+                    }
+                }
+                None => {}
+            }
+            mu_val(0)
+        }
+        AstExpr::Unary(e) => {
+            if e.op == "&" {
+                let v = mu_expr(cx, e.x);
+                if !mu_expr_rel(cx, e.x) {
+                    return v;
+                }
+                let src = if v.view == 2 {
+                    v.src
+                } else {
+                    let t = mu_text(e.x);
+                    if t == "" {
+                        "a shared borrow"
+                    } else {
+                        "the shared borrow `&" + t + "`"
+                    }
+                };
+                return MuVal { view: 2, mutable: false, root: v.root, path: v.path, src: src };
+            }
+            if e.op == "&mut " {
+                let v = mu_expr(cx, e.x);
+                if mu_expr_rel(cx, e.x) {
+                    mu_mutate(cx, v, e.pos, "borrow");
+                }
+                return MuVal { view: v.view, mutable: true, root: v.root, path: v.path, src: v.src };
+            }
+            if e.op == "*" {
+                return mu_expr(cx, e.x);
+            }
+            mu_expr(cx, e.x);
+            mu_val(0)
+        }
+        AstExpr::Binary(e) => {
+            mu_expr(cx, e.x);
+            mu_expr(cx, e.y);
+            mu_val(0)
+        }
+        AstExpr::Block(b) => mu_temp(mu_block(cx, b)),
+        AstExpr::If(e) => {
+            let c = mu_expr(cx, e.cond);
+            match e.pat {
+                Some(pat) => mu_pattern(cx, pat, c),
+                None => {}
+            }
+            let a = mu_block(cx, e.then);
+            match e.els {
+                Some(x) => {
+                    let b = mu_expr(cx, x);
+                    mu_join(a, b)
+                }
+                None => mu_val(0),
+            }
+        }
+        AstExpr::Match(e) => {
+            let x = mu_expr(cx, e.x);
+            let mut out = mu_val(0);
+            for arm in e.arms {
+                mu_pattern(cx, arm.pat, x);
+                out = mu_join(out, mu_expr(cx, arm.body));
+            }
+            out
+        }
+        AstExpr::Call(e) => mu_call(cx, e),
+        AstExpr::Path(e) => mu_val(0),
+        AstExpr::Method(e) => mu_method(cx, e),
+        AstExpr::Field(e) => {
+            let b = mu_expr(cx, e.x);
+            let mut view = mu_elem(b.view);
+            match ty_prune(mu_type(cx, e.x)) {
+                Ty::Struct(st, _) => match cx.field_refs.get(st.name + "." + e.name) {
+                    Some(d) => {
+                        view = mu_max(view, d);
+                    }
+                    None => {}
+                },
+                _ => {}
+            }
+            if !mu_expr_rel(cx, AstExpr::Field(e)) {
+                view = 0;
+            }
+            let path = if b.path == "" {
+                ""
+            } else {
+                b.path + "." + e.name
+            };
+            MuVal { view: view, mutable: b.mutable, root: b.root, path: path, src: b.src }
+        }
+        AstExpr::Index(e) => {
+            let b = mu_expr(cx, e.x);
+            mu_expr(cx, e.index);
+            let view = if mu_expr_rel(cx, AstExpr::Index(e)) {
+                mu_elem(b.view)
+            } else {
+                0
+            };
+            MuVal { view: view, mutable: b.mutable, root: b.root, path: "", src: b.src }
+        }
+        AstExpr::StructLit(e) => {
+            let mut taint = 0;
+            let mut src = "";
+            for f in e.fields {
+                let v = mu_expr(cx, f.value);
+                if !mu_expr_rel(cx, f.value) {
+                    continue;
+                }
+                let mut d = 0;
+                match cx.info.struct_lits.get(e.id) {
+                    Some(st) => match cx.field_refs.get(st.name + "." + f.name) {
+                        Some(x) => {
+                            d = x;
+                        }
+                        None => {}
+                    },
+                    None => {}
+                }
+                if cx.lib {
+                    if v.view > d && v.view > taint {
+                        taint = v.view;
+                        src = v.src;
+                    }
+                } else {
+                    mu_store(cx, v, d, f.value, "field `" + f.name + "` of `" + e.name + "`");
+                }
+            }
+            MuVal {
+                view: if taint > 0 { 1 } else { 0 },
+                mutable: true,
+                root: 0,
+                path: "",
+                src: src,
+            }
+        }
+        AstExpr::Try(e) => {
+            let v = mu_expr(cx, e.x);
+            MuVal { view: mu_elem(v.view), mutable: true, root: 0, path: "", src: v.src }
+        }
+        AstExpr::Closure(e) => mu_closure(cx, e, Vec::new(), 0),
+        AstExpr::Tuple(e) => mu_taint_all(cx, e.elems),
+        AstExpr::Range(e) => {
+            mu_expr(cx, e.start);
+            mu_expr(cx, e.end);
+            mu_val(0)
+        }
+    }
+}
+
+// mu_temp is the value of a block or branch: a temporary (a mutable
+// path) with the view of v.
+fn mu_temp(v: MuVal) -> MuVal {
+    MuVal { view: v.view, mutable: true, root: 0, path: "", src: v.src }
+}
+
+fn mu_join(a: MuVal, b: MuVal) -> MuVal {
+    if b.view > a.view {
+        return mu_temp(b);
+    }
+    mu_temp(a)
+}
+
+// mu_taint_all is the value built from the values of es (a tuple, a
+// constructor): shared contents when one of them is not owned.
+fn mu_taint_all(cx: MuCx, es: Vec<AstExpr>) -> MuVal {
+    let out = mu_val(0);
+    for x in es {
+        let v = mu_expr(cx, x);
+        if v.view > 0 && out.view == 0 && mu_expr_rel(cx, x) {
+            out.view = 1;
+            out.src = v.src;
+        }
+    }
+    out
+}
+
+// mu_closure checks a closure literal whose parameters take values of
+// view pview (pviews per parameter when known) and returns its value: a
+// closure that captures shared data is shared.
+fn mu_closure(cx: MuCx, e: AstClosure, pviews: Vec<Int>, pview: Int) -> MuVal {
+    let out = mu_val(0);
+    match cx.info.lambdas.get(e.id) {
+        Some(li) => {
+            for cb in li.captures {
+                match cx.binds.get(cb.id) {
+                    Some(b) => {
+                        if b.view > out.view && mu_rel(cx, cb.ty) {
+                            out.view = b.view;
+                            out.src = b.src;
+                        }
+                    }
+                    None => {}
+                }
+            }
+            let mut i = 0;
+            for cb in li.params {
+                let dp = e.params.get(i).unwrap_or(AstParam {
+                    id: 0,
+                    pos: cb.pos,
+                    mutable: false,
+                    name: cb.name,
+                    ty: None,
+                });
+                let mut view = pviews.get(i).unwrap_or(pview);
+                let mut src = "a value the closure is called with";
+                match dp.ty {
+                    Some(t) => {
+                        view = mu_max(view, mu_demand(t));
+                        match t {
+                            AstType::Ref(r) => {
+                                if !r.mutable {
+                                    view = 2;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    None => {}
+                }
+                if view == 2 {
+                    src = "the closure parameter `" + cb.name + "`";
+                }
+                if !mu_rel(cx, cb.ty) {
+                    view = 0;
+                }
+                if dp.mutable && view == 2 && !cx.lib {
+                    mu_error(
+                        cx,
+                        dp.pos,
+                        "cannot declare the closure parameter `"
+                            + cb.name
+                            + "` as `mut`: the closure may be called with borrowed values (clone it in the body)",
+                    );
+                }
+                let b = mu_new_bind(cb.id, cb.name, view, dp.mutable, "closure", dp.pos, src);
+                b.param = true;
+                cx.binds.insert(cb.id, b);
+                i = i + 1;
+            }
+        }
+        None => {}
+    }
+    cx.closures = cx.closures + 1;
+    mu_expr(cx, e.body);
+    cx.closures = cx.closures - 1;
+    out
+}
+
+// mu_fn_item checks a named function used as a value: a call through a
+// function value cannot borrow its arguments mutably, so it must not take
+// `&mut` parameters.
+fn mu_fn_item(cx: MuCx, e: AstIdent, ci: ChkCallInfo) {
+    match ci.func {
+        Some(fun) => {
+            let mut i = 0;
+            for p in fun.decl.params {
+                let t = match fun.params.get(i) {
+                    Some(b) => b.ty,
+                    None => ty_unit(),
+                };
+                if mu_param_mode(fun.decl, p, i) == "refmut" && mu_rel(cx, t) {
+                    mu_error(
+                        cx,
+                        e.pos,
+                        "cannot use `"
+                            + e.name
+                            + "` as a value: it borrows `"
+                            + p.name
+                            + "` mutably (wrap the call in a closure)",
+                    );
+                    return;
+                }
+                i = i + 1;
+            }
+        }
+        None => {}
+    }
+}
+
+// ---- calls ----
+
+fn mu_call(cx: MuCx, e: AstCall) -> MuVal {
+    let ci = match cx.info.calls.get(e.id) {
+        Some(x) => x,
+        None => {
+            mu_expr(cx, e.func);
+            for a in e.args {
+                mu_expr(cx, a);
+            }
+            return mu_val(0);
+        }
+    };
+    let k = ci.kind;
+    if k == "func" || k == "trait" {
+        match ci.func {
+            Some(fun) => {
+                let what = match e.func {
+                    AstExpr::Path(p) => p.ty + "::" + p.name,
+                    _ => fun.decl.name,
+                };
+                return mu_invoke(cx, fun, None, e.args, e.pos, what);
+            }
+            None => {}
+        }
+    }
+    if k == "closure" {
+        return mu_value_call(cx, e);
+    }
+    if k == "some" || k == "ok" || k == "err" || k == "variant" {
+        return mu_taint_all(cx, e.args);
+    }
+    for a in e.args {
+        mu_expr(cx, a);
+    }
+    mu_val(0)
+}
+
+// mu_value_call checks a call of a closure value. Its arguments go to
+// parameters that may keep or mutate them: they must be owned unless the
+// closure borrows them (`f: fn(&T)`, `|x: &T| ...`). The result is
+// tainted by the closure and the arguments.
+fn mu_value_call(cx: MuCx, e: AstCall) -> MuVal {
+    let f = mu_expr(cx, e.func);
+    let refs = mu_fn_value_refs(cx, e.func);
+    let out = MuVal { view: 0, mutable: true, root: 0, path: "", src: "" };
+    if f.view > 0 {
+        out.view = 2;
+        out.src = f.src;
+    }
+    let mut i = 0;
+    for a in e.args {
+        let v = mu_expr(cx, a);
+        if mu_expr_rel(cx, a) {
+            if v.view > out.view {
+                out.view = 2;
+                out.src = v.src;
+            }
+            let d = refs.get(i).unwrap_or(0);
+            if !cx.lib && v.view > d {
+                mu_error(
+                    cx,
+                    ast_expr_pos(a),
+                    "cannot pass a borrowed value to `"
+                        + mu_text(e.func)
+                        + "`, which takes its argument by value: it comes from "
+                        + v.src
+                        + " ("
+                        + mu_clone_hint(a)
+                        + ", or declare the parameter `&T`)",
+                );
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// mu_fn_value_refs returns the demand of each parameter of the function
+// value e: from its declared type when it is a parameter (`f: fn(&T)`,
+// `f: impl Fn(&T)`, `F: Fn(&T)`), from the parameters of a closure
+// literal bound by `let` or of a named function; missing ones are owned.
+fn mu_fn_value_refs(cx: MuCx, e: AstExpr) -> Vec<Int> {
+    let out = Vec::new();
+    match e {
+        AstExpr::Closure(cl) => {
+            for prm in cl.params {
+                out.push(mu_opt_demand(prm.ty));
+            }
+        }
+        AstExpr::Ident(x) => match cx.info.uses.get(x.id) {
+            None => match cx.info.calls.get(x.id) {
+                Some(ci) => match ci.func {
+                    Some(fun) => {
+                        let mut i = 0;
+                        for p in fun.decl.params {
+                            if mu_param_mode(fun.decl, p, i) == "ref" {
+                                out.push(2);
+                            } else {
+                                out.push(mu_opt_demand(p.ty));
+                            }
+                            i = i + 1;
+                        }
+                    }
+                    None => {}
+                },
+                None => {}
+            },
+            Some(cb) => {
+                match cx.lam_binds.get(cb.id) {
+                    Some(ds) => {
+                        return ds;
+                    }
+                    None => {}
+                }
+                let mut i = 0;
+                for p in cx.fun.decl.params {
+                    if p.name == x.name {
+                        match p.ty {
+                            Some(t) => match mu_fn_type_of(cx.fun.decl, t) {
+                                Some(ft) => {
+                                    for pt in ft.params {
+                                        out.push(mu_demand(pt));
+                                    }
+                                }
+                                None => {}
+                            },
+                            None => {}
+                        }
+                    }
+                    i = i + 1;
+                }
+            }
+        },
+        _ => {}
+    }
+    out
+}
+
+// mu_fn_type_of finds the function type of a declared parameter type: the
+// type itself, or the `Fn(...)` bound of a generic parameter.
+fn mu_fn_type_of(d: AstFuncDecl, t: AstType) -> Option<AstFnType> {
+    match t {
+        AstType::Fn(ft) => Some(ft),
+        AstType::Ref(r) => mu_fn_type_of(d, r.elem),
+        AstType::Named(n) => {
+            for g in d.generics {
+                if g.name == n.name {
+                    for b in g.bounds {
+                        match b {
+                            AstType::Fn(ft) => {
+                                return Some(ft);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            for w in d.wheres {
+                match w.ty {
+                    AstType::Named(wn) => {
+                        if wn.name == n.name {
+                            for b in w.bounds {
+                                match b {
+                                    AstType::Fn(ft) => {
+                                        return Some(ft);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn mu_method(cx: MuCx, e: AstMethodCall) -> MuVal {
+    let mi = match cx.info.methods.get(e.id) {
+        Some(x) => x,
+        None => {
+            mu_expr(cx, e.recv);
+            for a in e.args {
+                mu_expr(cx, a);
+            }
+            return mu_val(0);
+        }
+    };
+    if mi.kind == "func" || mi.kind == "trait" {
+        match mi.func {
+            Some(fun) => {
+                return mu_invoke(cx, fun, Some(e.recv), e.args, e.pos, e.name);
+            }
+            None => {}
+        }
+    }
+    if mi.kind == "transaction" {
+        for a in e.args {
+            match a {
+                AstExpr::Closure(cl) => {
+                    cx.closures = cx.closures + 1;
+                    mu_expr(cx, cl.body);
+                    cx.closures = cx.closures - 1;
+                }
+                _ => {
+                    mu_expr(cx, a);
+                }
+            }
+        }
+        return mu_val(0);
+    }
+    let r = mu_expr(cx, e.recv);
+    let op = if mi.kind == "builtin" {
+        match mi.builtin {
+            Some(b) => b.op,
+            None => "",
+        }
+    } else {
+        mi.op
+    };
+    let rel = mu_expr_rel(cx, e.recv);
+    let mutator = op == "vec.push"
+        || op == "vec.set"
+        || op == "vec.pop"
+        || op == "__Chars.set"
+        || op == "__Chars.copy";
+    if mutator && rel {
+        mu_mutate(cx, r, e.pos, "mutate");
+    }
+    let out = MuVal { view: 0, mutable: true, root: 0, path: "", src: "" };
+    if rel && r.view > 0 {
+        out.view = 2;
+        out.src = r.src;
+    }
+    for a in e.args {
+        let v = mu_expr(cx, a);
+        if !mu_expr_rel(cx, a) {
+            continue;
+        }
+        if (op == "vec.push" || op == "vec.set") && r.view < 2 && !mu_lib_relaxed(cx, r.root) {
+            mu_store(cx, v, mu_contents(r.view), a, mu_path_text(r));
+        }
+        if v.view > out.view {
+            out.view = 2;
+            out.src = v.src;
+        }
+    }
+    if !mu_expr_rel(cx, AstExpr::Method(e)) {
+        out.view = 0;
+    }
+    out
+}
+
+// mu_invoke checks a call of a function or method fun (recv is the
+// receiver of a method call; a function called by path takes it as its
+// first argument).
+fn mu_invoke(
+    cx: MuCx,
+    fun: ChkFunc,
+    recv: Option<AstExpr>,
+    args: Vec<AstExpr>,
+    pos: AstPos,
+    name: String,
+) -> MuVal {
+    let lib = chk_is_lib(fun);
+    let all = Vec::new();
+    match recv {
+        Some(r) => all.push(r),
+        None => {}
+    }
+    for a in args {
+        all.push(a);
+    }
+    let n = all.len();
+    // arguments first, closure literals after (their parameters take the
+    // views of the other arguments)
+    let vals: Vec<MuVal> = Vec::new();
+    let mut taint = 0;
+    let mut tsrc = "";
+    for i in 0..n {
+        let a = all.get(i).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: pos }));
+        let v = match a {
+            AstExpr::Closure(_) => mu_val(0),
+            _ => mu_expr(cx, a),
+        };
+        vals.push(v);
+        if v.view > taint && mu_expr_rel(cx, a) {
+            taint = v.view;
+            tsrc = v.src;
+        }
+    }
+    for i in 0..n {
+        let a = all.get(i).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: pos }));
+        match a {
+            AstExpr::Closure(cl) => {
+                let pviews = Vec::new();
+                let mut pview = 0;
+                if lib {
+                    pview = if taint > 0 { 2 } else { 0 };
+                } else {
+                    match fun.decl.params.get(i) {
+                        Some(dp) => match dp.ty {
+                            Some(t) => match mu_fn_type_of(fun.decl, t) {
+                                Some(ft) => {
+                                    for pt in ft.params {
+                                        pviews.push(mu_demand(pt));
+                                    }
+                                }
+                                None => {}
+                            },
+                            None => {}
+                        },
+                        None => {}
+                    }
+                }
+                let v = mu_closure(cx, cl, pviews, pview);
+                vals.set(i, v);
+                if v.view > taint {
+                    taint = v.view;
+                    tsrc = v.src;
+                }
+            }
+            _ => {}
+        }
+    }
+    let callee = "`" + name + "`";
+    let mut recv_view = 0;
+    for i in 0..n {
+        let a = all.get(i).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: pos }));
+        let v = vals.get(i).unwrap_or(mu_val(0));
+        let dp = match fun.decl.params.get(i) {
+            Some(x) => x,
+            None => {
+                continue;
+            }
+        };
+        if !mu_expr_rel(cx, a) {
+            continue;
+        }
+        let mode = mu_param_mode(fun.decl, dp, i);
+        let is_self = i == 0 && fun.decl.self_kind != "";
+        if is_self {
+            recv_view = v.view;
+        }
+        let pdesc = if is_self {
+            "`" + fun.decl.self_kind + "`"
+        } else {
+            "`" + dp.name + ": " + fmt_opt_typ(dp.ty) + "`"
+        };
+        let inner = match dp.ty {
+            Some(t) => match t {
+                AstType::Ref(r) => mu_demand(r.elem),
+                _ => mu_demand(t),
+            },
+            None => 0,
+        };
+        if mode == "refmut" {
+            mu_mutate(cx, v, ast_expr_pos(a), "borrow");
+            if !lib && v.view == 1 && inner == 0 && !cx.lib {
+                mu_error(
+                    cx,
+                    ast_expr_pos(a),
+                    "cannot pass a value with borrowed contents as "
+                        + pdesc
+                        + " of "
+                        + callee
+                        + ": they come from "
+                        + v.src
+                        + " ("
+                        + mu_clone_hint(a)
+                        + ")",
+                );
+            }
+            continue;
+        }
+        if mode == "ref" {
+            continue;
+        }
+        if lib {
+            if mode == "mut" && v.view == 2 {
+                mu_mutate(cx, v, ast_expr_pos(a), "mutate");
+            }
+            // the other arguments of a mutating method are stored into
+            // the receiver
+            if !is_self
+                && fun.decl.self_kind == "&mut self"
+                && !mu_fn_typed(cx, a)
+                && !mu_lib_relaxed(cx, mu_recv_root(vals))
+                && recv_view < 2 {
+                mu_store(cx, v, mu_contents(recv_view), a, "the receiver of " + callee);
+            }
+            continue;
+        }
+        if cx.lib {
+            continue;
+        }
+        if v.view > inner {
+            let ty = fmt_opt_typ(dp.ty);
+            let take = if is_self { "`&self`" } else { "`&" + ty + "`" };
+            mu_error(
+                cx,
+                ast_expr_pos(a),
+                "cannot pass a borrowed value as "
+                    + pdesc
+                    + " of "
+                    + callee
+                    + ": it comes from "
+                    + v.src
+                    + " ("
+                    + mu_clone_hint(a)
+                    + ", or take "
+                    + take
+                    + ")",
+            );
+        }
+    }
+    // a function value (not a closure literal) passed where it receives
+    // borrowed values must borrow them
+    if lib && taint > 0 && !cx.lib {
+        for a in all {
+            match a {
+                AstExpr::Closure(_) => {}
+                _ => {
+                    if mu_fn_typed(cx, a) {
+                        mu_fn_value_shared(cx, a, callee);
+                    }
+                }
+            }
+        }
+    }
+    if mu_is_clone(cx, fun) {
+        return mu_val(0);
+    }
+    let rd = mu_opt_demand(fun.decl.result);
+    if lib {
+        if taint > 0 {
+            let v = if ast_has_attr(fun.decl, "fresh") || cx.fresh.contains_key(fun.name) {
+                1
+            } else {
+                2
+            };
+            return MuVal { view: mu_max(v, rd), mutable: true, root: 0, path: "", src: tsrc };
+        }
+        return mu_val(rd);
+    }
+    MuVal { view: rd, mutable: true, root: 0, path: "", src: "the result of " + callee }
+}
+
+fn mu_recv_root(vals: Vec<MuVal>) -> Int {
+    match vals.get(0) {
+        Some(v) => v.root,
+        None => 0,
+    }
+}
+
+fn mu_fn_typed(cx: MuCx, e: AstExpr) -> Bool {
+    match ty_prune(mu_type(cx, e)) {
+        Ty::Fn(_, _) => true,
+        Ty::Param(p) => {
+            for b in p.bounds {
+                if b.trait_name == "Fn" {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+// mu_fn_value_shared checks a function value passed to a core function
+// that calls it with borrowed values: its parameters must borrow them.
+fn mu_fn_value_shared(cx: MuCx, a: AstExpr, callee: String) {
+    let ps = match chk_fn_sig(mu_type(cx, a)) {
+        Some(Ty::Fn(ps, _)) => ps,
+        _ => {
+            return;
+        }
+    };
+    let refs = mu_fn_value_refs(cx, a);
+    for j in 0..ps.len() {
+        let t = ps.get(j).unwrap_or(ty_unit());
+        if mu_rel(cx, t) && refs.get(j).unwrap_or(0) < 2 {
+            let name = mu_text(a);
+            let what = if name == "" {
+                "this function"
+            } else {
+                "`" + name + "`"
+            };
+            mu_error(
+                cx,
+                ast_expr_pos(a),
+                "cannot pass "
+                    + what
+                    + " to "
+                    + callee
+                    + " over borrowed values: it takes them by value (pass a closure literal, or take `&"
+                    + ty_str(t)
+                    + "`)",
+            );
+            return;
+        }
+    }
+}
+
+fn mu_is_clone(cx: MuCx, fun: ChkFunc) -> Bool {
+    fun.name == "Clone::clone" || cx.clones.contains_key(fun.name)
+}

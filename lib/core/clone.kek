@@ -1,0 +1,62 @@
+// Cloning, as in Rust's core::clone. A value reached through a shared
+// reference (`&T`, `&self`, an element of a shared collection) cannot be
+// mutated or kept in an owning place; `x.clone()` is an owned deep copy
+// of it that can (docs/mutability.md). `#[derive(Clone)]` clones every
+// field; HashMap, HashSet and Pii implement it in their files, tuples
+// with the other derived traits.
+
+trait Clone {
+    fn clone(&self) -> Self;
+}
+
+impl Clone for Int {
+    fn clone(&self) -> Int {
+        *self
+    }
+}
+
+impl Clone for Bool {
+    fn clone(&self) -> Bool {
+        *self
+    }
+}
+
+impl Clone for String {
+    fn clone(&self) -> String {
+        *self
+    }
+}
+
+impl Clone for () {
+    fn clone(&self) -> () {
+        ()
+    }
+}
+
+impl<T: Clone> Clone for Option<T> {
+    fn clone(&self) -> Option<T> {
+        match self {
+            Some(x) => Some(x.clone()),
+            None => None,
+        }
+    }
+}
+
+impl<T: Clone, E: Clone> Clone for Result<T, E> {
+    fn clone(&self) -> Result<T, E> {
+        match self {
+            Ok(x) => Ok(x.clone()),
+            Err(e) => Err(e.clone()),
+        }
+    }
+}
+
+impl<T: Clone> Clone for Vec<T> {
+    fn clone(&self) -> Vec<T> {
+        let mut out = Vec::new();
+        for x in self.iter() {
+            out.push(x.clone());
+        }
+        out
+    }
+}

@@ -42,7 +42,7 @@ fn __hashmap_treeify_len() -> Int {
 
 // __hash_of hashes a value with the default hasher.
 fn __hash_of<T: Hash>(x: &T) -> Int {
-    let h = DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     x.hash(&mut h);
     h.finish()
 }
@@ -57,7 +57,7 @@ impl<K, V> HashMap<K, V> {
         while size * 3 < n * 4 {
             size = size * 2;
         }
-        let m = HashMap {
+        let mut m = HashMap {
             entries: Vec::new(),
             live: Vec::new(),
             buckets: Vec::new(),
@@ -93,14 +93,17 @@ impl<K, V> HashMap<K, V> {
     }
 
     // iter returns the (key, value) pairs in insertion order.
+    #[fresh]
     fn iter(&self) -> HashMapIter<K, V> {
         HashMapIter { map: *self, i: 0, epoch: self.epoch, last_seq: -1 }
     }
 
+    #[fresh]
     fn keys(&self) -> Keys<K, V> {
         Keys { it: self.iter() }
     }
 
+    #[fresh]
     fn values(&self) -> Values<K, V> {
         Values { it: self.iter() }
     }
@@ -141,7 +144,7 @@ impl<K, V> HashMap<K, V> {
 
     fn set_children(&mut self, i: Int, l: Int, r: Int) {
         match self.entries.get(i) {
-            Some(e) => {
+            Some(mut e) => {
                 e.next = l;
                 e.right = r;
                 e.height = 1 + self.height(l).max(self.height(r));
@@ -268,7 +271,7 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
         let i = self.find(&k, hash);
         if i >= 0 {
             match self.entries.get(i) {
-                Some(e) => {
+                Some(mut e) => {
                     let old = e.value;
                     e.value = v;
                     return Some(old);
@@ -319,7 +322,7 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
                 self.buckets.set(b, nx);
             } else {
                 match self.entries.get(prev) {
-                    Some(pe) => {
+                    Some(mut pe) => {
                         pe.next = nx;
                     }
                     None => {}
@@ -348,7 +351,7 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
         }
         // append to the chain, counting it
         match self.entries.get(i) {
-            Some(e) => {
+            Some(mut e) => {
                 e.next = -1;
                 e.right = -1;
                 e.height = 1;
@@ -366,7 +369,7 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
             n = n + 1;
         }
         match self.entries.get(j) {
-            Some(e) => {
+            Some(mut e) => {
                 e.next = i;
             }
             None => {}
@@ -449,8 +452,8 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
     // rebuild drops removed entries and rehashes into a table with room for
     // at least want entries.
     fn rebuild(&mut self, want: Int) {
-        let es = Vec::new();
-        let lv = Vec::new();
+        let mut es = Vec::new();
+        let mut lv = Vec::new();
         for i in 0..self.entries.len() {
             if self.is_live(i) {
                 match self.entries.get(i) {
@@ -491,7 +494,7 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
     }
 
     fn retain(&mut self, f: impl Fn(K, V) -> Bool) {
-        let drop = Vec::new();
+        let mut drop = Vec::new();
         for (k, v) in self.iter() {
             if !f(k, v) {
                 drop.push(k);
@@ -502,7 +505,7 @@ impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
         }
     }
 
-    fn extend<I: Iterator<Item = (K, V)>>(&mut self, iter: I) {
+    fn extend<I: Iterator<Item = (K, V)>>(&mut self, mut iter: I) {
         while let Some((k, v)) = iter.next() {
             self.insert(k, v);
         }
@@ -601,8 +604,18 @@ impl<K, V> IntoIterator for HashMap<K, V> {
 
 impl<K: Hash + Eq + Ord, V> FromIterator<(K, V)> for HashMap<K, V> {
     fn from_iter<I: Iterator<Item = (K, V)>>(iter: I) -> HashMap<K, V> {
-        let m = HashMap::new();
+        let mut m = HashMap::new();
         m.extend(iter);
+        m
+    }
+}
+
+impl<K: Hash + Eq + Ord + Clone, V: Clone> Clone for HashMap<K, V> {
+    fn clone(&self) -> HashMap<K, V> {
+        let mut m = HashMap::with_capacity(self.len());
+        for (k, v) in self.iter() {
+            m.insert(k.clone(), v.clone());
+        }
         m
     }
 }
@@ -641,6 +654,7 @@ impl<T> HashSet<T> {
     }
 
     // iter returns the elements in insertion order.
+    #[fresh]
     fn iter(&self) -> Keys<T, ()> {
         self.map.keys()
     }
@@ -661,14 +675,14 @@ impl<T: Hash + Eq + Ord> HashSet<T> {
         self.map.remove(x).is_some()
     }
 
-    fn extend<I: Iterator<Item = T>>(&mut self, iter: I) {
+    fn extend<I: Iterator<Item = T>>(&mut self, mut iter: I) {
         while let Some(x) = iter.next() {
             self.insert(x);
         }
     }
 
     fn retain(&mut self, f: impl Fn(T) -> Bool) {
-        let drop = Vec::new();
+        let mut drop = Vec::new();
         for x in self.iter() {
             if !f(x) {
                 drop.push(x);
@@ -690,8 +704,9 @@ impl<T: Hash + Eq + Ord> HashSet<T> {
 
     // union, intersection and difference return the resulting elements in
     // order (self's first).
+    #[fresh]
     fn union(&self, other: &HashSet<T>) -> Vec<T> {
-        let out: Vec<T> = self.iter().collect();
+        let mut out: Vec<T> = self.iter().collect();
         for x in other.iter() {
             if !self.contains(&x) {
                 out.push(x);
@@ -700,8 +715,9 @@ impl<T: Hash + Eq + Ord> HashSet<T> {
         out
     }
 
+    #[fresh]
     fn intersection(&self, other: &HashSet<T>) -> Vec<T> {
-        let out = Vec::new();
+        let mut out = Vec::new();
         for x in self.iter() {
             if other.contains(&x) {
                 out.push(x);
@@ -710,8 +726,9 @@ impl<T: Hash + Eq + Ord> HashSet<T> {
         out
     }
 
+    #[fresh]
     fn difference(&self, other: &HashSet<T>) -> Vec<T> {
-        let out = Vec::new();
+        let mut out = Vec::new();
         for x in self.iter() {
             if !other.contains(&x) {
                 out.push(x);
@@ -732,8 +749,18 @@ impl<T> IntoIterator for HashSet<T> {
 
 impl<T: Hash + Eq + Ord> FromIterator<T> for HashSet<T> {
     fn from_iter<I: Iterator<Item = T>>(iter: I) -> HashSet<T> {
-        let s = HashSet::new();
+        let mut s = HashSet::new();
         s.extend(iter);
+        s
+    }
+}
+
+impl<T: Hash + Eq + Ord + Clone> Clone for HashSet<T> {
+    fn clone(&self) -> HashSet<T> {
+        let mut s = HashSet::with_capacity(self.len());
+        for x in self.iter() {
+            s.insert(x.clone());
+        }
         s
     }
 }

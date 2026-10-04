@@ -597,7 +597,7 @@ fn fmt_trait_decl(p: FmtPrinter, d: AstTraitDecl, ind: Int) -> String {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
     }
     for f in d.funcs {
-        units.push(FmtUnit { start: f.pos, kind: FmtUnitKind::Func(f) });
+        units.push(FmtUnit { start: fmt_attrs_start(f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
     }
     fmt_sort_units(units);
     let mut head = "trait " + d.name + fmt_generics(d.generics);
@@ -712,7 +712,7 @@ fn fmt_impl_decl(p: FmtPrinter, d: AstImplDecl, ind: Int) -> String {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
     }
     for f in d.funcs {
-        units.push(FmtUnit { start: f.pos, kind: FmtUnitKind::Func(f) });
+        units.push(FmtUnit { start: fmt_attrs_start(f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
     }
     fmt_sort_units(units);
     let mut head = "impl" + fmt_generics(d.generics) + " ";
@@ -783,7 +783,8 @@ fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
         if i == 0 && d.self_kind != "" {
             params.push(d.self_kind);
         } else {
-            params.push(prm.name + ": " + fmt_opt_typ(prm.ty));
+            let m = if prm.mutable { "mut " } else { "" };
+            params.push(m + prm.name + ": " + fmt_opt_typ(prm.ty));
         }
         i = i + 1;
     }
@@ -1161,9 +1162,10 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
             if x.params.len() > 0 {
                 let ps = Vec::new();
                 for prm in x.params {
+                    let m = if prm.mutable { "mut " } else { "" };
                     match prm.ty {
-                        Some(t) => ps.push(prm.name + ": " + fmt_typ(t)),
-                        None => ps.push(prm.name),
+                        Some(t) => ps.push(m + prm.name + ": " + fmt_typ(t)),
+                        None => ps.push(m + prm.name),
                     }
                 }
                 h = if x.is_move { "move |" } else { "|" } + ps.join(", ") + "|";

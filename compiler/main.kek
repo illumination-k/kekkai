@@ -66,11 +66,14 @@ fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
     if cmd == "fmt" {
         return fmt_main(args, fs, log);
     }
+    if cmd == "fix" {
+        return fix_main(args, fs, log);
+    }
     if cmd == "embed-prelude" {
         return prelude_embed_main(args, fs, log);
     }
     log.error(
-        "usage: kek (lex|ast|check|ir|build|test-build|fmt|caps|search|hash|config|similar|assure|cover-build|cover-report|mutate-build|mutate-report|embed-prelude) ...",
+        "usage: kek (lex|ast|check|ir|build|test-build|fmt|fix|caps|search|hash|config|similar|assure|cover-build|cover-report|mutate-build|mutate-report|embed-prelude) ...",
     );
     2
 }

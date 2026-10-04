@@ -1,0 +1,401 @@
+// `kek fix [-w] <paths>` (prefix fix_ / Fix*): adds the `mut` that the
+// mutability rules (compiler/chk_mut.kek, docs/mutability.md) ask for.
+//
+// Each path is one program, like `kek check` (a file, or a directory of
+// .kek files); the directories of the core library (`.../lib/core`) and
+// of the runtime prelude (`.../lib/prelude`) are checked as such. The
+// program is checked, `mut` is inserted where a diagnostic of the pass
+// names a binding or parameter that is not declared mutable (`let mut x`,
+// `mut x: T`, `mut self`, `Some(mut x)`, `for mut x`, `|mut x|`), a `&T`
+// parameter that is mutated becomes `&mut T` (`&self` becomes `&mut self`)
+// unless it is part of a trait's signature, and the program is checked
+// again until nothing changes. The edits are textual (comments and
+// layout are kept). Without -w the changes are printed as a diff; the
+// errors left (which need `clone()` or `&T` by hand) are listed.
+
+struct FixFile {
+    path: String,
+    // the name the parser gives the file (`<core>/iter.kek` for the core
+    // library)
+    name: String,
+    mut text: String,
+    orig: String,
+}
+
+struct FixEdit {
+    file: String,
+    off: Int,
+    // the text inserted at off
+    text: String,
+}
+
+fn fix_usage(log: &Log) {
+    log.error("usage: kek fix [-w] <paths>  (each path is a program: a file or a directory)");
+}
+
+fn fix_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let mut write = false;
+    let paths = Vec::new();
+    for i in 1..args.len() {
+        let a = args.get(i).unwrap_or("");
+        if a == "-w" || a == "--w" {
+            write = true;
+        } else if a == "-h" || a == "--help" {
+            fix_usage(log);
+            return 0;
+        } else if a.starts_with("-") {
+            log.error("flag provided but not defined: " + a);
+            fix_usage(log);
+            return 2;
+        } else {
+            paths.push(a);
+        }
+    }
+    if paths.len() == 0 {
+        fix_usage(log);
+        return 2;
+    }
+    let mut code = 0;
+    let mut nfix = 0;
+    for path in paths {
+        let r = fix_program(path, write, fs, log);
+        if r < 0 {
+            code = 1;
+        } else {
+            nfix = nfix + r;
+        }
+    }
+    if write {
+        log.info("kek fix: " + nfix.to_string() + " change(s)");
+    }
+    code
+}
+
+// fix_kind is "core", "prelude" or "" (a program) for a path.
+fn fix_kind(path: String) -> String {
+    let d = frontend_clean_dir(path);
+    if d == "lib/core" || d.ends_with("/lib/core") {
+        return "core";
+    }
+    if d == "lib/prelude" || d.ends_with("/lib/prelude") {
+        return "prelude";
+    }
+    ""
+}
+
+// fix_program fixes one program; returns the number of edits, or -1 when
+// errors are left.
+fn fix_program(path: String, write: Bool, fs: &Fs, log: &Log) -> Int {
+    let srcs = match frontend_read_sources(path, fs, log) {
+        Some(s) => s,
+        None => {
+            return -1;
+        }
+    };
+    let kind = fix_kind(path);
+    let files = Vec::new();
+    for s in srcs {
+        let base = s.name.slice(s.name.len() - fix_base_len(s.name), s.name.len());
+        let name = if kind == "core" {
+            "<core>/" + base
+        } else if kind == "prelude" {
+            "<prelude>/" + base
+        } else {
+            s.name
+        };
+        files.push(FixFile { path: s.name, name: name, text: s.text, orig: s.text });
+    }
+    let mut total = 0;
+    let mut left: Vec<AstError> = Vec::new();
+    let mut ambiguous: Vec<MuDiag> = Vec::new();
+    let mut round = 0;
+    while round < 50 {
+        round = round + 1;
+        let res = fix_check(files, kind);
+        left = Vec::new();
+        ambiguous = Vec::new();
+        let edits: HashMap<String, FixEdit> = HashMap::new();
+        let mu_keys: HashMap<String, Bool> = HashMap::new();
+        for d in res.mu.diags {
+            mu_keys.insert(ast_pos_string(d.pos) + "\t" + d.msg, true);
+            if fix_find(files, d.fix_pos.file).is_none() {
+                continue;
+            }
+            if d.fix == "" {
+                if fix_find(files, d.pos.file).is_some() {
+                    left.push(AstError { pos: d.pos, msg: d.msg });
+                }
+                continue;
+            }
+            if d.ambiguous {
+                ambiguous.push(d);
+                continue;
+            }
+            match fix_edit(files, d) {
+                Some(ed) => {
+                    edits.insert(ed.file + ":" + ed.off.to_string(), ed);
+                }
+                None => {
+                    left.push(AstError { pos: d.pos, msg: d.msg });
+                }
+            }
+        }
+        // other errors (parse or type errors) stop the fixing
+        let mut other = false;
+        for e in res.errs {
+            if !mu_keys.contains_key(ast_pos_string(e.pos) + "\t" + e.msg)
+                && fix_find(files, e.pos.file).is_some() {
+                left.push(e);
+                other = true;
+            }
+        }
+        if other || edits.len() == 0 {
+            break;
+        }
+        fix_apply(files, edits);
+        total = total + edits.len();
+    }
+    for f in files {
+        if f.text == f.orig {
+            continue;
+        }
+        if write {
+            if !tool_write(fs, log, f.path, f.text) {
+                return -1;
+            }
+        } else {
+            log.info(fix_diff(f));
+        }
+    }
+    let msgs = Vec::new();
+    for d in ambiguous {
+        msgs.push(
+            ast_pos_string(d.pos)
+                + ": "
+                + d.msg
+                + " (not changed: it is part of a trait's signature)",
+        );
+    }
+    for e in ast_sort_errors(left) {
+        msgs.push(fix_display(files, ast_error_string(e)));
+    }
+    if msgs.len() > 0 {
+        log.error(msgs.join("\n"));
+        return -1;
+    }
+    total
+}
+
+// fix_base_len is the length of the file name of a path.
+fn fix_base_len(p: String) -> Int {
+    let mut i = p.len();
+    while i > 0 && p.char_at(i - 1).unwrap_or(0) != 47 {
+        i = i - 1;
+    }
+    p.len() - i
+}
+
+// fix_display replaces the internal names of library files by their paths.
+fn fix_display(files: Vec<FixFile>, s: String) -> String {
+    for f in files {
+        if f.name != f.path && s.starts_with(f.name + ":") {
+            return f.path + s.slice(f.name.len(), s.len());
+        }
+    }
+    s
+}
+
+fn fix_find(files: Vec<FixFile>, name: String) -> Option<FixFile> {
+    for f in files {
+        if f.name == name {
+            return Some(f);
+        }
+    }
+    None
+}
+
+// fix_check checks the program made of files (with the mutability pass).
+fn fix_check(files: Vec<FixFile>, kind: String) -> ChkResult {
+    let srcs = Vec::new();
+    for f in files {
+        srcs.push(FeSource { name: f.name, text: f.text });
+    }
+    if kind == "core" {
+        let core = chk_parse_core_from(srcs);
+        let empty = frontend_parse_all(Vec::new());
+        return chk_check_full(empty.file, false, core, ref_config_default(), true);
+    }
+    if kind == "prelude" {
+        let prog = frontend_parse_all(srcs);
+        if prog.errs.len() > 0 {
+            return fix_parse_failed(prog.errs);
+        }
+        return chk_check_full(prog.file, true, chk_parse_core(), ref_config_default(), true);
+    }
+    let prog = frontend_parse_all(srcs);
+    if prog.errs.len() > 0 {
+        return fix_parse_failed(prog.errs);
+    }
+    chk_check_full(prog.file, false, chk_parse_core(), ref_config_default(), true)
+}
+
+fn fix_parse_failed(errs: Vec<AstError>) -> ChkResult {
+    let empty = frontend_parse_all(Vec::new());
+    let res = chk_check_full(empty.file, false, chk_parse_core(), ref_config_default(), false);
+    ChkResult { info: res.info, errs: errs, mu: mu_empty_report(), refine: res.refine }
+}
+
+// fix_offset is the UTF-16 offset of a position (1-based line, 1-based
+// byte column) in text.
+fn fix_offset(text: String, line: Int, col: Int) -> Int {
+    let mut i = 0;
+    let mut l = 1;
+    let n = text.len();
+    while l < line && i < n {
+        if text.char_at(i).unwrap_or(0) == 10 {
+            l = l + 1;
+        }
+        i = i + 1;
+    }
+    // columns count bytes: walk the code units of the line
+    let mut b = 1;
+    while b < col && i < n {
+        let c = text.char_at(i).unwrap_or(0);
+        if c < 128 {
+            b = b + 1;
+        } else if c < 2048 {
+            b = b + 2;
+        } else if c >= 55296 && c < 56320 {
+            b = b + 4;
+            i = i + 1;
+        } else {
+            b = b + 3;
+        }
+        i = i + 1;
+    }
+    i
+}
+
+// fix_skip_word returns the offset after the word w at off and the
+// spaces that follow it (off itself when the text there is not w).
+fn fix_skip_word(text: String, off: Int, w: String) -> Int {
+    if text.slice(off, off + w.len()) != w {
+        return off;
+    }
+    let mut i = off + w.len();
+    while i < text.len()
+        && (text.char_at(i).unwrap_or(0) == 32 || text.char_at(i).unwrap_or(0) == 9) {
+        i = i + 1;
+    }
+    i
+}
+
+// fix_edit is the insertion that fixes a diagnostic.
+fn fix_edit(files: Vec<FixFile>, d: MuDiag) -> Option<FixEdit> {
+    let f = match fix_find(files, d.fix_pos.file) {
+        Some(x) => x,
+        None => {
+            return None;
+        }
+    };
+    let off = fix_offset(f.text, d.fix_pos.line, d.fix_pos.col);
+    let k = d.fix;
+    if k == "let" {
+        let at = fix_skip_word(f.text, off, "let");
+        if at == off {
+            return None;
+        }
+        return Some(FixEdit { file: f.name, off: at, text: "mut " });
+    }
+    if k == "for" {
+        let at = fix_skip_word(f.text, off, "for");
+        if at == off {
+            return None;
+        }
+        return Some(FixEdit { file: f.name, off: at, text: "mut " });
+    }
+    if k == "refparam" || k == "refself" {
+        if f.text.slice(off, off + 1) != "&" {
+            return None;
+        }
+        return Some(FixEdit { file: f.name, off: off + 1, text: "mut " });
+    }
+    if k == "param" || k == "self" || k == "pat" || k == "closure" {
+        if f.text.slice(off, off + 4) == "mut " {
+            return None;
+        }
+        return Some(FixEdit { file: f.name, off: off, text: "mut " });
+    }
+    None
+}
+
+// fix_apply applies insertions (from the end of each file, so that the
+// offsets stay valid).
+fn fix_apply(files: Vec<FixFile>, edits: HashMap<String, FixEdit>) {
+    for f in files {
+        let mine = Vec::new();
+        for k in edits.keys() {
+            match edits.get(k) {
+                Some(ed) => {
+                    if ed.file == f.name {
+                        mine.push(ed);
+                    }
+                }
+                None => {}
+            }
+        }
+        if mine.len() == 0 {
+            continue;
+        }
+        // sort by offset, descending
+        let n = mine.len();
+        for i in 1..n {
+            let mut j = i;
+            while j > 0 && fix_edit_at(mine, j).off > fix_edit_at(mine, j - 1).off {
+                let a = fix_edit_at(mine, j);
+                mine.set(j, fix_edit_at(mine, j - 1));
+                mine.set(j - 1, a);
+                j = j - 1;
+            }
+        }
+        let parts = Vec::new();
+        let mut end = f.text.len();
+        for ed in mine {
+            parts.push(f.text.slice(ed.off, end));
+            parts.push(ed.text);
+            end = ed.off;
+        }
+        parts.push(f.text.slice(0, end));
+        let out = Vec::new();
+        let mut i = parts.len() - 1;
+        while i >= 0 {
+            out.push(parts.get(i).unwrap_or(""));
+            i = i - 1;
+        }
+        f.text = out.join("");
+    }
+}
+
+fn fix_edit_at(v: Vec<FixEdit>, i: Int) -> FixEdit {
+    v.get(i).unwrap_or(FixEdit { file: "", off: 0, text: "" })
+}
+
+// fix_diff shows the changed lines of a file.
+fn fix_diff(f: FixFile) -> String {
+    let a = f.orig.split("\n");
+    let b = f.text.split("\n");
+    let out = Vec::new();
+    out.push("--- " + f.path);
+    out.push("+++ " + f.path);
+    // edits only insert within lines: the files have the same lines
+    for i in 0..a.len() {
+        let x = a.get(i).unwrap_or("");
+        let y = b.get(i).unwrap_or("");
+        if x != y {
+            out.push("@@ -" + (i + 1).to_string() + " +" + (i + 1).to_string() + " @@");
+            out.push("-" + x);
+            out.push("+" + y);
+        }
+    }
+    out.join("\n")
+}

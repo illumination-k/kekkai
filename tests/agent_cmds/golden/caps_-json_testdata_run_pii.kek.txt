@@ -131,7 +131,7 @@
     },
     {
       "name": "<Customer as PartialEq>::eq",
-      "signature": "fn <Customer as PartialEq>::eq(self: Customer, other: Customer) -> Bool",
+      "signature": "fn <Customer as PartialEq>::eq(self: &Customer, other: &Customer) -> Bool",
       "line": 5,
       "col": 1,
       "handler": false,

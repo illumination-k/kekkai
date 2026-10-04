@@ -136,18 +136,20 @@ struct AstEnumDecl {
     variants: Vec<AstVariant>,
 }
 
-// Param of a function (ty always present) or a closure (ty optional).
+// Param of a function (ty always present) or a closure (ty optional);
+// `mut name: T` (mutable) may be mutated in the body.
 struct AstParam {
     id: Int,
     pos: AstPos,
+    mutable: Bool,
     name: String,
     ty: Option<AstType>,
 }
 
 // A function, or a method in an `impl` block. A method's receiver is
 // params[0], named `self` without a type; self_kind is its spelling
-// ("self", "&self" or "&mut self", all the same since structs are
-// references) and "" for functions without a receiver.
+// ("self", "mut self", "&self" or "&mut self"; see docs/mutability.md)
+// and "" for functions without a receiver.
 struct AstFuncDecl {
     id: Int,
     pos: AstPos,

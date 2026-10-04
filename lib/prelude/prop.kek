@@ -34,12 +34,12 @@ fn __test_cases(n: Int) -> Int {
 }
 
 // __gen_case starts case i of n.
-fn __gen_case(g: __Gen, i: Int, n: Int) {
+fn __gen_case(mut g: __Gen, i: Int, n: Int) {
     g.size = i * 100 / n;
     g.fuel = g.size * 2 + 10;
 }
 
-fn __gen_next(g: __Gen) -> Int {
+fn __gen_next(mut g: __Gen) -> Int {
     g.s = g.s + -7046029254386353131;
     let mut z = g.s;
     z = z.bit_xor(z.ushr(30)) * -4658895280553007687;
@@ -59,7 +59,7 @@ fn __gen_stop(g: __Gen, d: Int) -> Bool {
     g.fuel <= 0 || d > 12
 }
 
-fn __gen_tick(g: __Gen) {
+fn __gen_tick(mut g: __Gen) {
     g.fuel = g.fuel - 1;
 }
 
@@ -149,8 +149,8 @@ fn __gen_string(g: __Gen) -> String {
     __sb_finish(b)
 }
 
-fn __gen_vec<T>(g: __Gen, d: Int, f: fn(__Gen, Int) -> T) -> Vec<T> {
-    let v: Vec<T> = Vec::new();
+fn __gen_vec<T>(mut g: __Gen, d: Int, f: fn(__Gen, Int) -> T) -> Vec<T> {
+    let mut v: Vec<T> = Vec::new();
     if __gen_stop(g, d) || __gen_below(g, 8) == 0 {
         return v;
     }
@@ -212,7 +212,7 @@ fn __gen_variant(g: __Gen, d: Int, n: Int, base: Int) -> Int {
 // ---- shrinking: candidates, most aggressive first ----
 
 fn __shrink_int(x: Int) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     if x == 0 {
         return out;
     }
@@ -232,7 +232,7 @@ fn __shrink_int(x: Int) -> Vec<Int> {
 }
 
 fn __shrink_bool(x: Bool) -> Vec<Bool> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     if x {
         out.push(false);
     }
@@ -244,7 +244,7 @@ fn __shrink_unit(x: ()) -> Vec<()> {
 }
 
 fn __shrink_char(c: String) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     if c != "a" {
         out.push("a");
     }
@@ -254,7 +254,7 @@ fn __shrink_char(c: String) -> Vec<String> {
 // __shrink_vec removes chunks (all, halves, quarters, ... single
 // elements), then shrinks one element at a time. At most 500 candidates.
 fn __shrink_vec<T>(v: Vec<T>, f: fn(T) -> Vec<T>) -> Vec<Vec<T>> {
-    let out: Vec<Vec<T>> = Vec::new();
+    let mut out: Vec<Vec<T>> = Vec::new();
     let n = v.len();
     if n == 0 {
         return out;
@@ -264,7 +264,7 @@ fn __shrink_vec<T>(v: Vec<T>, f: fn(T) -> Vec<T>) -> Vec<Vec<T>> {
     while k > 0 {
         let mut st = 0;
         while st < n {
-            let w: Vec<T> = Vec::new();
+            let mut w: Vec<T> = Vec::new();
             for i in 0..n {
                 if i < st || i >= st + k {
                     match v.get(i) {
@@ -285,7 +285,7 @@ fn __shrink_vec<T>(v: Vec<T>, f: fn(T) -> Vec<T>) -> Vec<Vec<T>> {
         match v.get(i) {
             Some(x) => {
                 for c in f(x) {
-                    let w: Vec<T> = Vec::new();
+                    let mut w: Vec<T> = Vec::new();
                     for j in 0..n {
                         if j == i {
                             w.push(c);
@@ -310,7 +310,7 @@ fn __shrink_vec<T>(v: Vec<T>, f: fn(T) -> Vec<T>) -> Vec<Vec<T>> {
 
 // Strings shrink like a Vec of their code points (each toward "a").
 fn __shrink_string(s: String) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for v in __shrink_vec(s.split(""), __shrink_char) {
         out.push(v.join(""));
     }
@@ -318,7 +318,7 @@ fn __shrink_string(s: String) -> Vec<String> {
 }
 
 fn __shrink_option<T>(o: Option<T>, f: fn(T) -> Vec<T>) -> Vec<Option<T>> {
-    let out: Vec<Option<T>> = Vec::new();
+    let mut out: Vec<Option<T>> = Vec::new();
     match o {
         Some(x) => {
             out.push(None);
@@ -336,7 +336,7 @@ fn __shrink_result<T, E>(
     f: fn(T) -> Vec<T>,
     e: fn(E) -> Vec<E>,
 ) -> Vec<Result<T, E>> {
-    let out: Vec<Result<T, E>> = Vec::new();
+    let mut out: Vec<Result<T, E>> = Vec::new();
     match r {
         Ok(x) => {
             for c in f(x) {
@@ -398,7 +398,7 @@ fn __show_bool(x: Bool) -> String {
 }
 
 fn __show_vec<T>(v: Vec<T>, f: fn(T) -> String) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for x in v {
         parts.push(f(x));
     }
@@ -422,7 +422,7 @@ fn __show_result<T, E>(r: Result<T, E>, f: fn(T) -> String, e: fn(E) -> String) 
 // ---- copies (a property may mutate its input) ----
 
 fn __copy_vec<T>(v: Vec<T>, f: fn(T) -> T) -> Vec<T> {
-    let w: Vec<T> = Vec::new();
+    let mut w: Vec<T> = Vec::new();
     for x in v {
         w.push(f(x));
     }
@@ -463,7 +463,7 @@ fn __shrink_new(why: String, label: String) -> __Shrink {
 }
 
 // __shrink_try spends one run of the budget on the candidate input.
-fn __shrink_try(s: __Shrink, input: String) -> Bool {
+fn __shrink_try(mut s: __Shrink, input: String) -> Bool {
     if s.budget <= 0 {
         return false;
     }
@@ -472,7 +472,7 @@ fn __shrink_try(s: __Shrink, input: String) -> Bool {
     true
 }
 
-fn __shrink_ok(s: __Shrink, why: String) {
+fn __shrink_ok(mut s: __Shrink, why: String) {
     s.why = why;
     s.steps = s.steps + 1;
 }

@@ -11,7 +11,7 @@ trait Iterator {
 
     // ---- consumers ----
 
-    fn count(self) -> Int {
+    fn count(mut self) -> Int {
         let mut n = 0;
         while let Some(_) = self.next() {
             n = n + 1;
@@ -19,7 +19,7 @@ trait Iterator {
         n
     }
 
-    fn last(self) -> Option<Self::Item> {
+    fn last(mut self) -> Option<Self::Item> {
         let mut last = None;
         while let Some(x) = self.next() {
             last = Some(x);
@@ -38,7 +38,7 @@ trait Iterator {
         self.next()
     }
 
-    fn fold<B>(self, init: B, f: impl Fn(B, Self::Item) -> B) -> B {
+    fn fold<B>(mut self, init: B, f: impl Fn(B, Self::Item) -> B) -> B {
         let mut acc = init;
         while let Some(x) = self.next() {
             acc = f(acc, x);
@@ -46,7 +46,7 @@ trait Iterator {
         acc
     }
 
-    fn for_each(self, f: impl Fn(Self::Item)) {
+    fn for_each(mut self, f: impl Fn(Self::Item)) {
         while let Some(x) = self.next() {
             f(x);
         }
@@ -102,6 +102,7 @@ trait Iterator {
         None
     }
 
+    #[fresh]
     fn collect<B: FromIterator<Self::Item>>(self) -> B {
         B::from_iter(self)
     }
@@ -114,7 +115,7 @@ trait Iterator {
         P::product(self)
     }
 
-    fn max(self) -> Option<Self::Item>
+    fn max(mut self) -> Option<Self::Item>
     where
         Self::Item: Ord,
     {
@@ -128,7 +129,7 @@ trait Iterator {
         best
     }
 
-    fn min(self) -> Option<Self::Item>
+    fn min(mut self) -> Option<Self::Item>
     where
         Self::Item: Ord,
     {
@@ -142,7 +143,7 @@ trait Iterator {
         best
     }
 
-    fn max_by_key<B: Ord>(self, f: impl Fn(Self::Item) -> B) -> Option<Self::Item> {
+    fn max_by_key<B: Ord>(mut self, f: impl Fn(Self::Item) -> B) -> Option<Self::Item> {
         let mut best = None;
         let mut best_k = None;
         while let Some(x) = self.next() {
@@ -159,7 +160,7 @@ trait Iterator {
         best
     }
 
-    fn min_by_key<B: Ord>(self, f: impl Fn(Self::Item) -> B) -> Option<Self::Item> {
+    fn min_by_key<B: Ord>(mut self, f: impl Fn(Self::Item) -> B) -> Option<Self::Item> {
         let mut best = None;
         let mut best_k = None;
         while let Some(x) = self.next() {
@@ -178,50 +179,62 @@ trait Iterator {
 
     // ---- adapters ----
 
+    #[fresh]
     fn map<B>(self, f: impl Fn(Self::Item) -> B) -> Map<Self, Self::Item, B> {
         Map { iter: self, f: f }
     }
 
+    #[fresh]
     fn filter(self, p: impl Fn(Self::Item) -> Bool) -> Filter<Self, Self::Item> {
         Filter { iter: self, p: p }
     }
 
+    #[fresh]
     fn filter_map<B>(self, f: impl Fn(Self::Item) -> Option<B>) -> FilterMap<Self, Self::Item, B> {
         FilterMap { iter: self, f: f }
     }
 
+    #[fresh]
     fn enumerate(self) -> Enumerate<Self> {
         Enumerate { iter: self, i: 0 }
     }
 
+    #[fresh]
     fn zip<U: Iterator>(self, other: U) -> Zip<Self, U> {
         Zip { a: self, b: other }
     }
 
+    #[fresh]
     fn chain<U: Iterator<Item = Self::Item>>(self, other: U) -> Chain<Self, U> {
         Chain { a: self, b: other, first: true }
     }
 
+    #[fresh]
     fn take(self, n: Int) -> Take<Self> {
         Take { iter: self, n: n }
     }
 
+    #[fresh]
     fn skip(self, n: Int) -> Skip<Self> {
         Skip { iter: self, n: n }
     }
 
+    #[fresh]
     fn take_while(self, p: impl Fn(Self::Item) -> Bool) -> TakeWhile<Self, Self::Item> {
         TakeWhile { iter: self, p: p, done: false }
     }
 
+    #[fresh]
     fn skip_while(self, p: impl Fn(Self::Item) -> Bool) -> SkipWhile<Self, Self::Item> {
         SkipWhile { iter: self, p: p, started: false }
     }
 
+    #[fresh]
     fn step_by(self, step: Int) -> StepBy<Self> {
         StepBy { iter: self, step: step, first: true }
     }
 
+    #[fresh]
     fn peekable(self) -> Peekable<Self, Self::Item> {
         Peekable { iter: self, peeked: None, has: false }
     }
@@ -231,6 +244,7 @@ trait Iterator {
 trait DoubleEndedIterator: Iterator {
     fn next_back(&mut self) -> Option<Self::Item>;
 
+    #[fresh]
     fn rev(self) -> Rev<Self> {
         Rev { iter: self }
     }
@@ -241,11 +255,13 @@ trait IntoIterator {
     type Item;
     type IntoIter;
 
+    #[fresh]
     fn into_iter(self) -> Self::IntoIter;
 }
 
 // Building a collection from an iterator (`collect`).
 trait FromIterator<A> {
+    #[fresh]
     fn from_iter<I: Iterator<Item = A>>(iter: I) -> Self;
 }
 
@@ -632,6 +648,7 @@ struct Iter<T> {
 }
 
 impl<T> Vec<T> {
+    #[fresh]
     fn iter(&self) -> Iter<T> {
         Iter { v: *self, i: 0, end: -1 }
     }
@@ -676,8 +693,8 @@ impl<T> IntoIterator for Vec<T> {
 }
 
 impl<T> FromIterator<T> for Vec<T> {
-    fn from_iter<I: Iterator<Item = T>>(iter: I) -> Vec<T> {
-        let v = Vec::new();
+    fn from_iter<I: Iterator<Item = T>>(mut iter: I) -> Vec<T> {
+        let mut v = Vec::new();
         while let Some(x) = iter.next() {
             v.push(x);
         }
@@ -686,8 +703,8 @@ impl<T> FromIterator<T> for Vec<T> {
 }
 
 impl FromIterator<String> for String {
-    fn from_iter<I: Iterator<Item = String>>(iter: I) -> String {
-        let parts = Vec::new();
+    fn from_iter<I: Iterator<Item = String>>(mut iter: I) -> String {
+        let mut parts = Vec::new();
         while let Some(s) = iter.next() {
             parts.push(s);
         }
@@ -696,7 +713,7 @@ impl FromIterator<String> for String {
 }
 
 impl Sum<Int> for Int {
-    fn sum<I: Iterator<Item = Int>>(iter: I) -> Int {
+    fn sum<I: Iterator<Item = Int>>(mut iter: I) -> Int {
         let mut s = 0;
         while let Some(x) = iter.next() {
             s = s + x;
@@ -706,7 +723,7 @@ impl Sum<Int> for Int {
 }
 
 impl Product<Int> for Int {
-    fn product<I: Iterator<Item = Int>>(iter: I) -> Int {
+    fn product<I: Iterator<Item = Int>>(mut iter: I) -> Int {
         let mut p = 1;
         while let Some(x) = iter.next() {
             p = p * x;

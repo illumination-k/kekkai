@@ -216,7 +216,8 @@ fn ast_dump_type(d: AstDumper, depth: Int, t: AstType) {
 }
 
 fn ast_dump_param(d: AstDumper, depth: Int, p: AstParam) {
-    ast_line(d, depth, "param " + p.name + " @" + ast_dump_pos(p.pos));
+    let m = if p.mutable { " mut" } else { "" };
+    ast_line(d, depth, "param " + p.name + m + " @" + ast_dump_pos(p.pos));
     match p.ty {
         Some(t) => ast_dump_type(d, depth + 1, t),
         None => {}

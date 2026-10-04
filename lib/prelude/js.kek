@@ -5,7 +5,7 @@ fn __js_string(a: __Any) -> String {
     let n = __Js::str_len(a);
     __mem_ensure(1024 + n * 2);
     __Js::str_to_mem(a, 1024);
-    let r = __Chars::new(n);
+    let mut r = __Chars::new(n);
     for i in 0..n {
         r.set(i, __Mem::load16(1024 + i * 2));
     }

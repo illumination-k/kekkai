@@ -3,7 +3,7 @@
 
 // ---- linear memory scratch area ----
 
-fn __mem_reset(rt: __Rt) {
+fn __mem_reset(mut rt: __Rt) {
     rt.brk = rt.base;
 }
 
@@ -16,7 +16,7 @@ fn __mem_ensure(end: Int) {
 }
 
 // __mem_alloc reserves n bytes (8-aligned) of scratch memory.
-fn __mem_alloc(rt: __Rt, n: Int) -> Int {
+fn __mem_alloc(mut rt: __Rt, n: Int) -> Int {
     let a = (rt.brk + 7).bit_and(-8);
     rt.brk = a + n;
     __mem_ensure(rt.brk);
@@ -124,7 +124,7 @@ fn __exit(code: Int) {
 // ---- arguments and environment ----
 
 fn __read_strings(rt: __Rt, count: Int, ptrs: Int, end: Int) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for i in 0..count {
         let p = __Mem::load32(ptrs + i * 4);
         let mut q = p;
@@ -148,7 +148,7 @@ fn __args() -> Vec<String> {
     let buf = __mem_alloc(rt, bytes + 1);
     __Wasi::args_get(ptrs, buf);
     let all = __read_strings(rt, argc, ptrs, buf + bytes);
-    let out = Vec::new();
+    let mut out = Vec::new();
     for i in 1..all.len() {
         out.push(all.get(i).unwrap_or(""));
     }
@@ -202,7 +202,7 @@ fn __random_u64() -> Int {
 // __path_abs makes p absolute (against cwd) and normalizes `.` and `..`.
 fn __path_abs(cwd: String, p: String) -> String {
     let full = if p.starts_with("/") { p } else { cwd + "/" + p };
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for seg in full.split("/") {
         if seg == "" || seg == "." {
             continue;
@@ -385,7 +385,7 @@ fn __fs_read_line(fs: __Any) -> Option<String> {
 
 // __fs_set_cwd sets the directory relative paths are resolved against.
 fn __fs_set_cwd(fs: __Any, dir: String) {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     rt.cwd = "/" + __path_abs("/", dir);
 }
 
@@ -398,7 +398,7 @@ fn __fs_list(fs: __Any, path: String) -> Result<Vec<String>, IoError> {
     if fd < 0 {
         return Err(__io_err(0 - fd, "scandir", path));
     }
-    let names = Vec::new();
+    let mut names = Vec::new();
     let used = __mem_alloc(rt, 8);
     let size = 65536;
     let buf = __mem_alloc(rt, size);
@@ -436,7 +436,7 @@ fn __fs_list(fs: __Any, path: String) -> Result<Vec<String>, IoError> {
 }
 
 // insertion sort by UTF-16 code units
-fn __sort_strings(v: Vec<String>) {
+fn __sort_strings(mut v: Vec<String>) {
     let n = v.len();
     for i in 1..n {
         let x = v.get(i).unwrap_or("");

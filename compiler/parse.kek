@@ -43,6 +43,14 @@ fn parse_at(p: ParseState, k: String) -> Bool {
 }
 
 // parse_peek_at reports whether the token after the current one is k.
+// parse_peek_text is the text of the token after the current one.
+fn parse_peek_text(p: ParseState) -> String {
+    match p.toks.get(p.pos + 1) {
+        Some(t) => t.text,
+        None => "",
+    }
+}
+
 fn parse_peek_at(p: ParseState, k: String) -> Bool {
     if p.failed {
         return false;
@@ -142,43 +150,7 @@ fn parse_items(p: ParseState) -> AstFile {
         aliases: Vec::new(),
     };
     while !parse_at(p, "EOF") {
-        let attrs = Vec::new();
-        while parse_at(p, "#") {
-            let pos = parse_next(p).pos;
-            parse_expect(p, "[");
-            let name = parse_expect(p, "IDENT");
-            let a = AstAttr { pos: pos, name: name.text, args: Vec::new() };
-            if parse_accept(p, "(") {
-                while !parse_at(p, ")") {
-                    // `name` or `name = "text"` / `name = 12`, kept as
-                    // source text (ast_attr_value reads the value)
-                    let mut arg = parse_expect(p, "IDENT").text;
-                    if parse_accept(p, "=") {
-                        let v = parse_tok(p);
-                        if v.kind == "STRING" {
-                            parse_next(p);
-                            arg = arg + " = " + ast_quote(v.text);
-                        } else if v.kind == "INT" {
-                            parse_next(p);
-                            arg = arg + " = " + v.text;
-                        } else {
-                            parse_fail(
-                                p,
-                                v.pos,
-                                "expected a string or integer literal, found " + parse_describe(v),
-                            );
-                        }
-                    }
-                    a.args.push(arg);
-                    if !parse_accept(p, ",") {
-                        break;
-                    }
-                }
-                parse_expect(p, ")");
-            }
-            parse_expect(p, "]");
-            attrs.push(a);
-        }
+        let attrs = parse_attrs(p);
         let k = parse_tok(p).kind;
         if k == "fn" {
             let fd = parse_func(p, false);
@@ -231,6 +203,48 @@ fn parse_items(p: ParseState) -> AstFile {
     f
 }
 
+// parse_attrs parses attributes `#[name]` / `#[name(arg, ...)]`.
+fn parse_attrs(p: ParseState) -> Vec<AstAttr> {
+    let attrs = Vec::new();
+    while parse_at(p, "#") {
+        let pos = parse_next(p).pos;
+        parse_expect(p, "[");
+        let name = parse_expect(p, "IDENT");
+        let a = AstAttr { pos: pos, name: name.text, args: Vec::new() };
+        if parse_accept(p, "(") {
+            while !parse_at(p, ")") {
+                // `name` or `name = "text"` / `name = 12`, kept as
+                // source text (ast_attr_value reads the value)
+                let mut arg = parse_expect(p, "IDENT").text;
+                if parse_accept(p, "=") {
+                    let v = parse_tok(p);
+                    if v.kind == "STRING" {
+                        parse_next(p);
+                        arg = arg + " = " + ast_quote(v.text);
+                    } else if v.kind == "INT" {
+                        parse_next(p);
+                        arg = arg + " = " + v.text;
+                    } else {
+                        parse_fail(
+                            p,
+                            v.pos,
+                            "expected a string or integer literal, found " + parse_describe(v),
+                        );
+                    }
+                }
+                a.args.push(arg);
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, ")");
+        }
+        parse_expect(p, "]");
+        attrs.push(a);
+    }
+    attrs
+}
+
 // parse_type_alias parses `type Name = T;` and `type Name = T where pred;`.
 fn parse_type_alias(p: ParseState) -> AstTypeAlias {
     let pos = parse_expect(p, "type").pos;
@@ -280,10 +294,13 @@ fn parse_trait(p: ParseState) -> AstTraitDecl {
     }
     parse_expect(p, "{");
     while !parse_at(p, "}") && !parse_at(p, "EOF") {
+        let attrs = parse_attrs(p);
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
         } else {
-            d.funcs.push(parse_func(p, true));
+            let fd = parse_func(p, true);
+            fd.attrs = attrs;
+            d.funcs.push(fd);
         }
     }
     parse_expect(p, "}");
@@ -415,13 +432,13 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
     d.wheres = parse_wheres(p, None);
     parse_expect(p, "{");
     while !parse_at(p, "}") && !parse_at(p, "EOF") {
-        if parse_at(p, "#") {
-            parse_fail(p, parse_tok(p).pos, "attributes are not allowed on methods");
-        }
+        let attrs = parse_attrs(p);
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
         } else {
-            d.funcs.push(parse_func(p, false));
+            let fd = parse_func(p, false);
+            fd.attrs = attrs;
+            d.funcs.push(fd);
         }
     }
     parse_expect(p, "}");
@@ -501,11 +518,15 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
     let params = Vec::new();
     let mut self_kind = "";
     parse_expect(p, "(");
-    // receiver: `self`, `&self` or `&mut self`
+    // receiver: `self`, `mut self`, `&self` or `&mut self`
     let sp = parse_tok(p).pos;
     if parse_at(p, "IDENT") && parse_tok(p).text == "self" {
         parse_next(p);
         self_kind = "self";
+    } else if parse_at(p, "mut") && parse_peek_text(p) == "self" {
+        parse_next(p);
+        parse_next(p);
+        self_kind = "mut self";
     } else if parse_at(p, "&") {
         parse_next(p);
         self_kind = if parse_accept(p, "mut") {
@@ -519,7 +540,13 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
         }
     }
     if self_kind != "" {
-        params.push(AstParam { id: parse_id(p), pos: sp, name: "self", ty: None });
+        params.push(AstParam {
+            id: parse_id(p),
+            pos: sp,
+            mutable: self_kind == "mut self" || self_kind == "&mut self",
+            name: "self",
+            ty: None,
+        });
         if !parse_accept(p, ",") && !parse_at(p, ")") {
             parse_fail(
                 p,
@@ -530,6 +557,7 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
     }
     while !parse_at(p, ")") {
         let pp = parse_tok(p).pos;
+        let pmut = parse_accept(p, "mut");
         let mut pname = "_";
         if parse_at(p, "_") {
             parse_next(p);
@@ -538,7 +566,7 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
         }
         parse_expect(p, ":");
         let ty = parse_type(p);
-        params.push(AstParam { id: parse_id(p), pos: pp, name: pname, ty: Some(ty) });
+        params.push(AstParam { id: parse_id(p), pos: pp, mutable: pmut, name: pname, ty: Some(ty) });
         if !parse_accept(p, ",") {
             break;
         }
@@ -788,7 +816,7 @@ fn parse_block(p: ParseState) -> AstBlock {
             parse_next(p);
             let mut var = "_";
             let mut pat = None;
-            if parse_at(p, "(") {
+            if parse_at(p, "(") || parse_at(p, "mut") {
                 pat = Some(parse_pattern(p));
             } else if !parse_accept(p, "_") {
                 var = parse_expect(p, "IDENT").text;
@@ -1226,12 +1254,13 @@ fn parse_closure(p: ParseState) -> AstExpr {
         parse_expect(p, "|");
         while !parse_at(p, "|") {
             let pp = parse_tok(p).pos;
+            let pmut = parse_accept(p, "mut");
             let name = parse_expect(p, "IDENT").text;
             let mut ty = None;
             if parse_accept(p, ":") {
                 ty = Some(parse_type(p));
             }
-            params.push(AstParam { id: parse_id(p), pos: pp, name: name, ty: ty });
+            params.push(AstParam { id: parse_id(p), pos: pp, mutable: pmut, name: name, ty: ty });
             if !parse_accept(p, ",") {
                 break;
             }

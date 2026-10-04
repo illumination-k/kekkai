@@ -1,6 +1,6 @@
 // Comparison: equality (`==`) and ordering (`<`), as in Rust's core::cmp.
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 enum Ordering {
     Less,
     Equal,

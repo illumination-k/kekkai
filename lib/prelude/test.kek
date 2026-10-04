@@ -11,7 +11,7 @@
 //   KEK_TEST_NET=file     canned &Net responses: {"GET url": "body", "POST url": {"error": "msg"}}
 //   KEK_TEST_DB=file      initial contents of &Db: {"key": "value"}
 
-fn __test_setup(rt: __Rt, env: Vec<String>) {
+fn __test_setup(mut rt: __Rt, env: Vec<String>) {
     rt.clock_ms = __env_lookup(env, "KEK_TEST_CLOCK").parse_int().unwrap_or(0);
     rt.seed = __env_lookup(env, "KEK_TEST_SEED").parse_int().unwrap_or(0);
     rt.rand = rt.seed;
@@ -30,7 +30,7 @@ fn __fnv64(s: String) -> Int {
 // __test_begin loads the mocks for test `name` and starts its clock. It
 // returns false (after reporting) when a mock file is invalid.
 fn __test_begin(name: String) -> Bool {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     let env = __env_all(rt);
     rt.test_name = name;
     rt.rand = rt.rand.bit_xor(__fnv64(name));
@@ -77,7 +77,7 @@ fn __test_begin(name: String) -> Bool {
 // sequence of the test's first run. Runs are independent, so a
 // counterexample reproduces on its own.
 fn __test_case_reset() {
-    let rt = __Rt::get();
+    let mut rt = __Rt::get();
     rt.rand = rt.rand0;
     rt.lines = Vec::new();
     rt.sent = Vec::new();
@@ -139,7 +139,7 @@ fn __json_peek(p: __Json) -> Int {
     p.s.char_at(p.i).unwrap_or(-1)
 }
 
-fn __json_ws(p: __Json) {
+fn __json_ws(mut p: __Json) {
     while true {
         let c = __json_peek(p);
         if c == 32 || c == 9 || c == 10 || c == 13 {
@@ -150,7 +150,7 @@ fn __json_ws(p: __Json) {
     }
 }
 
-fn __json_fail(p: __Json, m: String) -> Bool {
+fn __json_fail(mut p: __Json, m: String) -> Bool {
     if p.err == "" {
         p.err = m;
     }
@@ -166,7 +166,7 @@ fn __json_hex(c: Int) -> Int {
 }
 
 // __json_string reads a string literal (the opening quote is current).
-fn __json_string(p: __Json) -> Option<String> {
+fn __json_string(mut p: __Json) -> Option<String> {
     p.i = p.i + 1;
     let b = __sb_new(16);
     while true {
@@ -218,7 +218,7 @@ fn __json_string(p: __Json) -> Option<String> {
 }
 
 // __json_scalar reads a number, true, false or null as its source text.
-fn __json_scalar(p: __Json) -> Option<String> {
+fn __json_scalar(mut p: __Json) -> Option<String> {
     let start = p.i;
     while true {
         let c = __json_peek(p);
@@ -236,7 +236,7 @@ fn __json_scalar(p: __Json) -> Option<String> {
 
 // __json_error_obj reads `{"error": "msg"}` (other members are ignored)
 // and returns the message, or "" when there is none.
-fn __json_error_obj(p: __Json) -> Option<String> {
+fn __json_error_obj(mut p: __Json) -> Option<String> {
     p.i = p.i + 1;
     let mut msg = "";
     __json_ws(p);
@@ -282,7 +282,7 @@ fn __json_error_obj(p: __Json) -> Option<String> {
 
 // __json_object reads the top-level object of a mock file into rt (the
 // &Db store when db is set, else the canned &Net responses).
-fn __json_object(p: __Json, rt: __Rt, file: String, db: Bool) -> Bool {
+fn __json_object(mut p: __Json, mut rt: __Rt, file: String, db: Bool) -> Bool {
     __json_ws(p);
     if __json_peek(p) != 123 {
         return __json_fail(p, if db {

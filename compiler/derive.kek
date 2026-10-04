@@ -1,11 +1,11 @@
 // `#[derive(...)]` (prefix derive_): the implementations of PartialEq, Eq,
-// PartialOrd, Ord, Hash and Default for a struct or enum, generated as
+// PartialOrd, Ord, Hash, Default and Clone for a struct or enum, generated as
 // source text and parsed with every position at the attribute (so that
 // errors in them point at the derive). The core library also gets these
 // traits for tuples this way.
 
 fn derive_traits() -> Vec<String> {
-    "PartialEq Eq PartialOrd Ord Hash Default".split(" ")
+    "PartialEq Eq PartialOrd Ord Hash Default Clone".split(" ")
 }
 
 // derive_items adds the derived implementations of f's structs and enums
@@ -92,12 +92,12 @@ fn derive_items(f: AstFile, ids: AstIds, errs: Vec<AstError>) {
     }
 }
 
-// Personal data: Pii (lib/core/pii.kek) implements only PartialEq and Eq,
-// so only these can be derived for a type that holds one (a derived Hash,
+// Personal data: Pii (lib/core/pii.kek) implements only PartialEq, Eq and
+// Clone, so only these can be derived for a type that holds one (a derived Hash,
 // order or default would need the same of Pii).
 
 fn derive_pii_ok(tr: String) -> Bool {
-    tr == "PartialEq" || tr == "Eq"
+    tr == "PartialEq" || tr == "Eq" || tr == "Clone"
 }
 
 fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstError {
@@ -111,7 +111,7 @@ fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstE
             + what
             + " holds personal data (`Pii`), which has no `"
             + tr
-            + "` (only `PartialEq` and `Eq` can be derived)",
+            + "` (only `PartialEq`, `Eq` and `Clone` can be derived)",
     }
 }
 
@@ -262,6 +262,28 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         }
         return h + " {\n    fn hash<H: Hasher>(&self, state: &mut H) {\n" + body + "    }\n}\n";
     }
+    if tr == "Clone" {
+        // an owned deep copy: every field cloned
+        let mut lit_s = "";
+        if lit == "" {
+            let es = Vec::new();
+            for f in fields {
+                es.push("self." + f + ".clone()");
+            }
+            lit_s = "(" + es.join(", ");
+            if fields.len() == 1 {
+                lit_s = lit_s + ",";
+            }
+            lit_s = lit_s + ")";
+        } else {
+            let inits = Vec::new();
+            for f in fields {
+                inits.push(f + ": self." + f + ".clone()");
+            }
+            lit_s = lit + " { " + inits.join(", ") + " }";
+        }
+        return h + " {\n    fn clone(&self) -> Self {\n        " + lit_s + "\n    }\n}\n";
+    }
     // Default (structs only)
     let inits = Vec::new();
     for f in fields {
@@ -387,6 +409,24 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
             + arms.join("")
             + "        }\n    }\n}\n";
     }
+    if tr == "Clone" {
+        let arms = Vec::new();
+        for v in ed.variants {
+            let mut r = ed.name + "::" + v.name;
+            if v.fields.len() > 0 {
+                let es = Vec::new();
+                for i in 0..v.fields.len() {
+                    es.push("a" + i.to_string() + ".clone()");
+                }
+                r = r + "(" + es.join(", ") + ")";
+            }
+            arms.push("            " + derive_pat(ed.name, v, "a") + " => " + r + ",\n");
+        }
+        return h
+            + " {\n    fn clone(&self) -> Self {\n        match self {\n"
+            + arms.join("")
+            + "        }\n    }\n}\n";
+    }
     // Hash: the variant index, then the fields
     let arms = Vec::new();
     let mut i = 0;
@@ -432,7 +472,7 @@ fn derive_tuples() -> String {
         } else {
             "(" + ns.join(", ") + ")"
         };
-        for tr in "PartialEq Eq PartialOrd Ord Hash".split(" ") {
+        for tr in "PartialEq Eq PartialOrd Ord Hash Clone".split(" ") {
             let ps = Vec::new();
             for x in ns {
                 ps.push(x + ": " + tr);

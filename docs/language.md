@@ -6,9 +6,9 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`）が含まれる。core の型名と trait 名は予約されている。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・個人情報の `Pii`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
-  - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ
+  - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
 - `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`#[test(cases = N)]` でケース数を指定）。
 
@@ -22,6 +22,7 @@
 | `Option<T>`, `Result<T, E>` | `Some`/`None`, `Ok`/`Err` |
 | `Vec<T>` | 伸長可能な配列（参照型） |
 | `HashMap<K, V>`, `HashSet<T>` | core ライブラリのコレクション（下記） |
+| `Pii<T>` | 個人情報。文字列にできない（下記） |
 | `struct S<T> { f: T, mut g: T }` | フィールドは既定で不変、`mut` を付けたものだけ代入できる（参照型） |
 | `enum E<T> { A, B(T, U) }` | 再帰的に定義してよい |
 | `fn(A, B) -> R` | 関数・クロージャの値（純粋） |
@@ -82,7 +83,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 - 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Pii` を含む型（フィールドの型に `Pii` が現れる）に導出できるのは `PartialEq` と `Eq` だけ。
 
 ### 演算子と core の trait
 
@@ -146,6 +147,52 @@ fn transfer(db: &Db, from: String, to: String, n: Int) -> Result<(), TxError> {
 - トランザクション本体の中では、取り消せない capability（`&Net`、`&Db`、`&Fs`）は見えない。効果は `tx.outbox` に積んでおけば、commit の成功後に実行される。
 - 関数は `&Tx` を借りられるだけで、終わらせられない。
 - バックエンドは実行時アダプタで差し替えられる（インメモリ、D1、Durable Objects、分散 KV）。`commit()` は楽観的並行制御の競合で失敗しうる。その場合 `TxError.retryable()` は true になる。
+
+### 冪等なハンドラ（`#[handler(idempotent)]`）
+
+```kek
+#[handler(idempotent)]
+fn handle(req: Request, db: &Db, log: &Log) -> Response { ... }
+```
+
+- 冪等なハンドラと、そこから呼び出しグラフで到達できる関数は、冪等な capability の操作しか使えない。リトライ（同じリクエストの再送、Workers の再実行）で状態が変わらないことを型検査で保証する。
+- 冪等とみなす操作：`log.*`、`clock.now_ms`、`net.get`、`db.get`、`db.transaction`、`tx.get`、`tx.put`（同じキーの上書き）、`tx.delete`（2 回目は何もしない）、`tx.commit`・`tx.rollback`、`fs.read`・`fs.list`・`fs.set_cwd`。
+- それ以外は冪等でない：`net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`、`fs.read_line`（入力を消費する）、`random.int`（リトライで別の ID などを作ってしまう）。新しい操作は一覧に加えるまで冪等でないとみなす。
+- 違反はハンドラに報告する：``idempotent handler `h` reaches `net.post` via `settle` -> `charge` (payments.kek:12), which is not idempotent: a retry would do it again``。
+- 冪等性は操作の種類で判定する。`tx.put` に乱数や時刻を書く・キーの有無で分岐して別の効果を起こす、といった値に依存する性質は見ない。Idempotency-Key で重複を検出する `tx.outbox` のような、実装上冪等なパターンも型では冪等と認めない（`#[handler]` のまま使う）。
+- `kek caps` は冪等なハンドラに `#[handler(idempotent)]`、capability を受け取る関数に `idempotent: true|false` を表示する（JSON は全関数の `idempotent`）。`kek assure` は `idempotent` の保証を記録する。
+- 実行時の動作は変えない。Workers 側のリトライの設定（Queues・Workflows の再試行など）に使う場合は、`kek caps -json` の `idempotent` を参照する（ビルド出力にはまだ含めない）。
+
+## 個人情報（`Pii<T>`）
+
+```kek
+struct User {
+    id: Int,
+    email: Pii<String>,
+}
+
+fn greet(log: &Log, u: User) {
+    log.info("hello " + u.email.mask());       // "a****@example.com"
+    log.info("user " + u.email.hash());        // 16 桁の16進数
+    // log.info(u.email);                      // 型エラー
+}
+```
+
+`Pii<T>` は core の generic な struct（`lib/core/pii.kek`）で、値を包むだけで中身を文字列として取り出せない。フィールド `__value` は core の外から書けない名前なので、読むことも `Pii { ... }` で作ることもできない。
+
+| 操作 | 内容 |
+| --- | --- |
+| `Pii::new(x)` | 包む |
+| `p.mask() -> String` | `Pii<String>` のみ。先頭の 1 文字と最後の `@` 以降を残し、ほかの文字（コードポイント）を `*` にする：`"alice@example.com"` → `"a****@example.com"`、`"bob"` → `"b**"`。`@` の前が 1 文字ならそれも隠す（`"a@x.com"` → `"*@x.com"`、`"x"` → `"*"`）。`""` は `""` |
+| `p.hash() -> String` | `T: Hash`。core の固定（seed なし）のハッシュ（`DefaultHasher`）を 16 桁の小文字の16進数で。等しい値は等しいハッシュになるので、突き合わせや集計のキーに使える |
+| `p.expose_unchecked() -> T` | 値そのもの（脱出口） |
+| `==`・`!=` | `Pii` どうしの比較（`PartialEq`・`Eq`）。`Pii<String>` と `String` の比較は型エラーで、`expose_unchecked` が要る |
+
+- `Pii` は表示・変換・順序・ハッシュの trait を実装しない。`to_string` も `+`（`Int`・`String` のみ）もなく、`log.info(p)`・`"x" + p`・`Response::text(200, p)`・`tx.put(k, p)`・`p.to_string()` はどれも型エラーになり、エラーには格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。
+- `Hash` を実装しない理由：`HashMap` のキーには `Hash + Eq + Ord` が要るが、`Ord` は `Pii::new(候補)` との比較で二分探索して値を割り出せるので実装しない。`Ord` がなければ `Hash` はキーとして役に立たず、`h.finish()` で整数として値が漏れる経路にしかならない。キーにしたいときは `p.hash()`（記録される格下げ）の結果を使う。
+- `==` は残るので、候補を `Pii::new` で包んで比べる総当たりは防げない（最小版の制限。本格版は情報フロー型）。
+- 格下げ（`mask`・`hash`・`expose_unchecked` の呼び出し）は `kek caps` に関数ごとに一覧され（`declassify`）、`kek assure` に前提 `pii.declassify` として記録される。関数に `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けると、その関数の格下げの承認者・理由・期限になる（`kekkai.toml` の `[pii] declassify_requires` で必須にでき、`[pii] max_declassify_per_module` でファイルごとの数を制限できる。[assure.md](assure.md)）。
+- `#[derive]` は `Pii` を含む型に `PartialEq`・`Eq` だけを導出できる。`kek test` は `Pii` の値を生成しない（ライブラリの型）。
 
 ## 文と式
 

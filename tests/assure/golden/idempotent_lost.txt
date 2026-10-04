@@ -96,6 +96,6 @@ Auto-approved (3): strengthen 2, change 1
 # #[handler(idempotent)] on handle does not compile: buy queues an outbox message
 $ kek assure plan app
 --- stderr
-app/shop.kek:28:1: idempotent handler `handle` reaches `tx.outbox` via `buy` (app/shop.kek:19), which is not idempotent: a retry would do it again
+app/shop.kek:28:1: idempotent handler `handle` reaches `tx.outbox` via `buy` (shop.kek:19), which is not idempotent: a retry would do it again
 --- exit 1
 

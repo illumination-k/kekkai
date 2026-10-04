@@ -87,7 +87,7 @@ new_extern_decl = "core"
 4. 設定ファイル（許可リストと「弱化は要承認」から始める）（実装済み）
 5. 設定の階層と継承（最小版を実装済み：`[assure] extends` と `[module."path"]`）
 
-kek サーバー、LSP、`[pii]`（言語に個人情報の型がまだない）、SMT の根拠、`new_extern_decl` は未実装。
+kek サーバー、LSP、SMT の根拠、`new_extern_decl` は未実装。`[pii]` は最小版の個人情報の型（`Pii<T>`）に対して実装済み（下記）。
 
 ---
 
@@ -115,13 +115,14 @@ kek assure check [-json] <file|dir>
 | `effects` | 集合（上限） | `type` | 引数で受け取る capability の種類（`Log`, `Net`, `Db`, `Fs`, `Clock`, `Random`, `Tx`）。capability は第二級でアンビエントな権限がないので、これが関数とその呼び出し先が起こしうる副作用の上限になる。空なら純粋 |
 | `net.hosts` | 集合（上限） | `type` | `net.get`・`net.post`・`tx.outbox` の URL から読み取った通信先ホスト。呼び出しグラフで到達できる関数の分を含む。URL が文字列リテラルか、ホストの終わり（`/`・`?`・`#`）まで含むリテラルで始まる `+` の連結のときだけホストが分かり、それ以外は `*`（不明） |
 | `tx.linear` | 真偽 | `type` | `db.transaction` を開く関数。`Tx` の線形性（commit／rollback をちょうど1回）を型検査器が保証している |
+| `idempotent` | 真偽 | `type` | capability を受け取る関数で、呼び出しグラフで到達できる capability の操作がすべて冪等（リトライしても状態が変わらない：読み取り、ログ、時計、`tx.put`・`tx.delete`、トランザクション）。偽なら省く。成り立たなくなると弱化（関数が純粋になった場合は除く）。`#[handler(idempotent)]` はこれを型エラーとして要求する |
 | `tested` | 真偽 | `test` | いずれかの `#[test]` から呼び出しグラフ（定義ハッシュの依存）で到達できる。`#[test]` 自身には付かない |
 
 保証のほかに次を持つ。
 
 - `hash`：定義ハッシュ（名前に依存しない。変数名の変更では変わらない）
 - `file`、`entry`（`handler`・`main`・`test`・空）、`async`（I/O に到達するのでステートマシンになる）
-- `assumptions`：コード側の前提。`#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` と `#[rare]`
+- `assumptions`：コード側の前提。`#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` と `#[rare]`、個人情報の格下げ（`pii.declassify`：`Pii` の `mask`・`hash`・`expose_unchecked` の呼び出し 1 つにつき 1 つ。ロックには `call` を記録し、理由・責任者・期限はその関数の `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` から取る）。同じ種類の前提は順番で対応づけるので、格下げの追加・削除・`#[declassify]` の変更が plan に現れる（位置は `pii.declassify mask() at 24:46` のようにメッセージに出る）
 - `waivers`：`apply` で承認した弱化の記録（理由・責任者・期限・承認日）
 
 集合の保証は「この範囲のことしかしない」という上限なので、要素が増えると弱化、減ると強化。真偽の保証は成り立たなくなると弱化。将来の保証（`pii.*`、契約）や根拠（`smt`）も同じ形（名前・種類・値・根拠）で追加できる。
@@ -182,7 +183,7 @@ JSON。キーの順序は固定で、定義は名前順、配列の要素は1行
 
 ポリシーの判定とは別に、現在のプログラムの状態について次を調べる。
 
-- **ポリシー違反**（承認できない。コードかポリシーを直す）：その場所で禁止された capability（`forbid`）、`allowed_hosts` にないホスト（不明な `*` を含む）、日付として読めない `expires`
+- **ポリシー違反**（承認できない。コードかポリシーを直す）：その場所で禁止された capability（`forbid`）、`allowed_hosts` にないホスト（不明な `*` を含む）、日付として読めない `expires`、`[pii] declassify_requires` の項目が `#[declassify]` にない格下げ（`declassify_requires`）、`[pii] max_declassify_per_module` を超えて格下げするファイル（`max_declassify_per_module`、上限を超えた最初の格下げの位置に出す）
 - **期限切れ**：`expires` が今日より前の `#[allow(similar)]` と、ロックの `waivers`
 
 ## ポリシー（`kekkai.toml`）
@@ -214,6 +215,10 @@ config = false
 weaken = "owner"                         # 既定。外せない
 new_assumption = "security"              # 任意
 
+[pii]                                    # 個人情報（Pii）の格下げ（mask・hash・expose_unchecked）
+max_declassify_per_module = 2            # 1 ファイル（モジュール）あたりの格下げの上限
+declassify_requires = ["reason", "owner"] # 格下げする関数の #[declassify(...)] に必須の項目
+
 [module."app/billing"]                   # このファイル・ディレクトリ以下だけに効く（厳しくする方向のみ）
 allowed_hosts = ["api.stripe.com"]       # 上位の allowed_hosts の部分集合でなければエラー
 forbid = ["Net"]                         # 追加の禁止
@@ -223,7 +228,8 @@ review = ["change", "added"]             # 上位で自動承認でも、ここ�
 - モジュールのパスはファイル（`app/rates.kek`）かディレクトリ（`app`）。入れ子のモジュールはすべて適用され、許可ホストは共通部分、禁止と要レビューは和集合になる。
 - `extends` は再帰的にたどる（深さ 8 まで）。下位の `allowed_hosts` は上位の部分集合、上位で要レビューの rule を下位で `true` にはできない。`forbid`・`escalate`・`require` は合わせる。
 - 知らないキー、知らない capability・rule、上記の「緩める」上書き、`[auto_approve] X = true` と `[escalate] X` の両立、`forbid` に `Net` があるのに `allowed_hosts` が空でないこと、は設定エラーとして報告する（plan・check・apply は終了コード 1）。
-- ほかのツールのセクション（`[pii]` など）は無視する。
+- `[pii]` は `extends` で継承し、下位は `max_declassify_per_module` を小さくする方向にのみ変えられる（`declassify_requires` は合わせる）。`[pii]` を書かない設定のハッシュは変わらない。
+- ほかのツールのセクション（`[similar]` など）は無視する。
 
 ## apply
 

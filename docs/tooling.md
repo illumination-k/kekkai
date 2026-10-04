@@ -37,9 +37,11 @@ Prints one entry per function, in declaration order. The file must type-check.
 {"file": "bank.kek", "functions": [
   {"name": "transfer", "signature": "fn transfer(db: &Db, log: &Log, ...) -> Result<Int, TransferError>",
    "line": 25, "col": 4, "handler": false, "pure": false, "async": true,
+   "idempotent": false,
    "caps": [{"name": "db", "type": "&Db", "used": true}, {"name": "log", "type": "&Log", "used": true}],
    "direct_effects": ["db.transaction", "log.info", "tx.commit", "..."],
-   "unused_caps": [], "calls": ["balance_key", "read_balance"]}
+   "unused_caps": [], "calls": ["balance_key", "read_balance"],
+   "declassify": [{"call": "mask", "line": 31, "col": 40}]}
 ]}
 ```
 
@@ -47,6 +49,15 @@ Capabilities are second-class and there is no ambient authority, so `caps` lists
 every effect that the function and its callees can perform. A function is
 `pure` when `caps` is empty. `async` means the function can reach an
 asynchronous builtin, so it is compiled to a resumable state machine.
+`idempotent` means every capability operation the function can reach
+through the call graph is idempotent (true for pure functions; a
+`#[handler(idempotent)]` must have it, see [language.md](language.md)).
+`declassify` lists the calls of `mask`, `hash` and `expose_unchecked` on
+personal data (`Pii`) in the function's body, at the method name.
+
+The text form adds, per function with capabilities, `idempotent: true` or
+`idempotent: false (<op> via <callee>)`, a line `declassify: mask (31:40),
+...` when the function declassifies, and the tag `#[handler(idempotent)]`.
 
 ## `kek hash [-json] <file|dir>`
 
@@ -236,8 +247,11 @@ PUT, or a `file://` directory). See [parallel-build.md](parallel-build.md).
 
 The guarantee ledger (design and policy reference: [assure.md](assure.md)).
 For every function it records the guarantees the compiler establishes
-(`effects`, `net.hosts`, `tx.linear`, `tested`) and the assumptions written
-in the code (`#[allow(similar, ...)]`, `#[rare]`) in `kekkai.assure.lock`.
+(`effects`, `net.hosts`, `tx.linear`, `idempotent`, `tested`) and the
+assumptions written in the code (`#[allow(similar, ...)]`, `#[rare]`, and
+one `pii.declassify` per call of `mask`/`hash`/`expose_unchecked`, with its
+`call` and the reason/owner/expiry of the function's `#[declassify(...)]`)
+in `kekkai.assure.lock`.
 `plan` diffs the lock against the program and applies the policy in
 `kekkai.toml`; `apply` rewrites the lock (`-yes` approves changes that need
 review, and weakenings also need `-reason`, `-owner`, `-expires`); `check`
@@ -282,12 +296,18 @@ expired escape hatches. The launcher passes today's date as `-today`
   `file`, `entry`, `async`, `name` (a rename: same definition hash),
   `assumption`, `definition` (added/removed) or `config` (the policy).
 - `from`/`to` are display strings; `added`/`removed` are the items of a
-  set guarantee (or the assumption kind).
+  set guarantee (or the assumption: its kind, `pii.declassify(mask)` for a
+  declassification). The message of a declassification gives its position
+  (`new assumption pii.declassify mask() at 24:46`).
 - `review` is true when the policy does not auto-approve the change;
   `escalate` is the role it is escalated to (approval then needs the
   metadata of `[assure] require`).
-- `violations[].rule` is `forbid`, `allowed_hosts` or `expires`;
-  violations cannot be approved. `expired[].source` is `code` (an
+- `violations[].rule` is `forbid`, `allowed_hosts`, `expires`,
+  `declassify_requires` (a declassifying function whose `#[declassify]`
+  lacks a field of `[pii] declassify_requires`; `items` are the missing
+  fields) or `max_declassify_per_module` (a file with more
+  declassifications than `[pii] max_declassify_per_module`, reported at
+  the first one over the limit); violations cannot be approved. `expired[].source` is `code` (an
   attribute) or `lock` (a waiver recorded by `apply`).
 - `ok` is what `check` requires: a lock exists, no changes, no violations,
   nothing expired, no configuration errors.

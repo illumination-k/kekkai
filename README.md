@@ -5,6 +5,7 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 - **capability 渡し**：`&Log` `&Net` `&Db` `&Clock` `&Random` を引数で受け取らない関数は副作用を持てない（第二級値なので保存も返却もできない）
 - **線形なトランザクション**：`db.transaction(|tx| ...)` の `Tx` は必ず一度だけ commit / rollback される。トランザクション内で取り消せない副作用は書けない（`tx.outbox` で commit 後に送る）
 - **個人情報の型**：`Pii<T>` に包んだ値は文字列にできず、ログ・レスポンス・ストアに渡すと型エラーになる。取り出す（格下げ）のは `mask()`・`hash()`・`expose_unchecked()` だけで、その呼び出しは `kek caps` と `kek assure` に記録される
+- **篩型（refinement types）**：`where 0 <= i, i < v.len()` のような線形の事前条件・事後条件（`result`）と、`type Port = Int where 0 < self && self < 65536;` のような述語付きの型の別名。`v[i]` は範囲内であることを証明できなければ型エラーで、反例（`i = 0, v.len() = 0`）を示す。証明は自作の QF\_LIA ソルバ（Omega test、Kekkai で実装）。ゼロ除算・オーバーフローは lint（`kekkai.toml` の `[refine]` でエラーにできる）
 - **冪等なハンドラ**：`#[handler(idempotent)]` のハンドラと、そこから呼ばれる関数は、冪等でない操作（`net.post`、`tx.outbox`、ファイルへの書き込み、乱数）を使えない
 - **コア計算の健全性を Lean で証明**（`lean/`）
 
@@ -34,14 +35,14 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 
 | コマンド | 内容 |
 | --- | --- |
-| `kek check <file>` | 型検査（capability、エフェクト、トランザクション） |
+| `kek check [-v] [-json] <file>` | 型検査（capability、エフェクト、トランザクション、篩型）。篩型の違反は反例付きのエラー、ゼロ除算・オーバーフローは警告。`-v` は証明に使った事実と証明できた条件も表示 |
 | `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧。冪等か（`idempotent`）と個人情報の格下げ（`declassify`）も表示 |
 | `kek ir [-json] <file>` | 中間表現を表示（`-json` は Lean 参照インタプリタの入力形式） |
 | `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力。`module.wasm` はプログラムの定義ハッシュをキーにキャッシュする（コメントや整形だけの変更では再コンパイルしない） |
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
 | `kek test [-run re] [-j n] [-json] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス、並列）。引数を取るテストはプロパティベーステスト。結果は定義ハッシュでキャッシュし、変更の影響を受けたテストだけを実行する |
-| `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)） |
+| `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)）。篩型の証明（`refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow`）も記録する |
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
 | `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
@@ -81,7 +82,7 @@ capability を受け取らないテストは純粋なので hermetic で、出�
 
 #### プロパティベーステスト
 
-capability 以外の引数を取るテストはプロパティです。ランナーが引数を生成して 100 ケース（`-cases n`、テストごとには `#[test(cases = N)]`）実行し、失敗した入力を最小の反例まで縮めて報告します。
+capability 以外の引数を取るテストはプロパティです。ランナーが引数を生成して 100 ケース（`-cases n`、テストごとには `#[test(cases = N)]`）実行し、失敗した入力を最小の反例まで縮めて報告します。引数の型が篩型の別名（`p: Port`）なら、述語を満たす値だけを生成します（棄却法。縮小も述語の中で行います）。
 
 ```kek
 #[test]
@@ -187,7 +188,7 @@ LLM が既存の実装を探さずに似た関数を書き足すのを防ぐた�
 | リテラル | 整数 n → n+1・0、真偽値の反転、文字列 → `""` |
 | 文・結果 | 呼び出しや代入の文の削除、関数の結果を `0`・`""`・`None`・`Vec::new()` に（`Bool` は否定） |
 
-文の削除や結果の置き換えは 1 つずつ型検査し、通らないものを**型で検出**（killed by types）として別に数えます。たとえば `tx.commit()?;` の削除は `Tx` の線形性検査で弾かれます。型で検出された割合は、型システムがどれだけバグを防いでいるかの指標です。
+文の削除や結果の置き換えは 1 つずつ型検査し、通らないものを**型で検出**（killed by types）として別に数えます。たとえば `tx.commit()?;` の削除は `Tx` の線形性検査で弾かれます。篩型を使う関数ではすべての変異体をこうして検査し、証明が崩れる変異体（`v[i]` の前の `i < n` を `i <= n` にするなど）も型で検出になります。型で検出された割合は、型システムがどれだけバグを防いでいるかの指標です。
 
 残りの変異体は**ミュータントスキーマ**として 1 つのモジュールにまとめます。各箇所は `__mut_iop(k, x, y, op, alt)` や `if __mut_on(k) { 変異 } else { 元 }` のような prelude の呼び出しになり、実行時に 1 つを選びます。型が付かないかもしれない変異体（文の削除・結果の置き換え）は、まとめて型検査して失敗したグループだけを二分探索します（変異体ごとにプログラム全体を検査し直さない）。
 

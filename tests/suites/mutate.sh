@@ -3,7 +3,8 @@
 # no mutant is active: every testdata/run program, built with all its
 # mutants (mutate-build -main), prints the same output. The report of
 # testdata/mutate/calc.kek (survivors, a timeout, a mutant killed by the
-# Tx linearity check), -json, the result cache, -base, -diff (in a
+# Tx linearity check), testdata/mutate/refine.kek (mutants killed by the
+# refinement checker), -json, the result cache, -base, -diff (in a
 # temporary git repository), the [mutate] min_score threshold and usage
 # errors.
 . "$(dirname "$0")/../lib.sh"
@@ -84,6 +85,21 @@ t_report() {
 		"$summary" \
 		"mutation score 72.4% (21/29; covered mutants 72.4%); killed by types 3.3% of the mutants")"
 	result report "$r" "$d/out"
+	rm -rf "$d"
+}
+
+# refinement types: mutants that break a proof are killed by types
+t_refine() {
+	d=$(tmpdir)
+	r=
+	"$KEK" mutate testdata/mutate/refine.kek >"$d/out" 2>&1 || r="exit $?"
+	r="$r$(contains "$d/out" "killed by types (the mutant does not type-check):" \
+		"  refine.kek:12:13  total: \`<\` → \`<=\`" \
+		"      while i < n {   →   while i <= n {" \
+		"refine.kek:13:18: cannot prove the index is in bounds: \`0 <= i && i < v.len()\`" \
+		"  refine.kek:14:15  total: \`+\` → \`-\`" \
+		"generated 12: killed by types 3, killed 7, survived 0, timeout 2, no coverage 0")"
+	result refine "$r" "$d/out"
 	rm -rf "$d"
 }
 
@@ -226,4 +242,4 @@ if [ "${1:-}" = --case ]; then
 	esac
 	exit 0
 fi
-run_parallel "$0" report json cache shard base diff threshold usage testdata/run/*.kek
+run_parallel "$0" report refine json cache shard base diff threshold usage testdata/run/*.kek

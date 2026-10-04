@@ -1091,6 +1091,7 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
         }
         AstExpr::Try(e) => lower_try(l, e, e0),
         AstExpr::Closure(e) => lower_closure(l, e),
+        AstExpr::Index(e) => lower_index(l, e, e0),
         AstExpr::Range(e) => {
             let ins = lower_instr("struct");
             ins.ty = lower_agg(l, lower_type_of_id(l, e.id));
@@ -1104,6 +1105,51 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
             lower_emit_to(l, lower_type_of(l, e0), ins)
         }
     }
+}
+
+// lower_index lowers `v[i]` to the existing IR: a bounds check that traps
+// (`unreachable`) and `vec.at`. The refinement pass has proved
+// `0 <= i < v.len()`; the check keeps the access memory-safe anyway (wasm's
+// array.get alone would not catch len <= i < capacity) and costs two
+// compares.
+//
+//	n = vec.len(v); if i < n goto c2 else trap
+//	c2: if 0 <= i goto ok else trap
+//	trap: unreachable
+//	ok: x = vec.at(v, i)
+fn lower_index(l: Lower, e: AstIndex, e0: AstExpr) -> Int {
+    let int_ty = ir_ty("int");
+    let bool_ty = ir_ty("bool");
+    let v = lower_expr(l, e.x);
+    let i = lower_expr(l, e.index);
+    let agg = lower_agg(l, lower_type_of_id(l, ast_expr_id(e.x)));
+    let ln = lower_instr("host");
+    ln.name = "vec.len";
+    ln.ty = agg;
+    ln.args = lower_args1(v);
+    let n = lower_emit_to(l, int_ty, ln);
+    let lt = lower_instr("binop");
+    lt.name = "lt";
+    lt.args = lower_args2(i, n);
+    let c1 = lower_emit_to(l, bool_ty, lt);
+    let c2b = lower_new_block(l);
+    let trap = lower_new_block(l);
+    let ok = lower_new_block(l);
+    lower_br(l, c1, c2b, trap);
+    lower_set_block(l, c2b);
+    let ge = lower_instr("binop");
+    ge.name = "le";
+    ge.args = lower_args2(lower_intc(l, 0), i);
+    let c2 = lower_emit_to(l, bool_ty, ge);
+    lower_br(l, c2, ok, trap);
+    lower_set_block(l, trap);
+    lower_terminate(l, lower_term("unreachable", Vec::new(), Vec::new()));
+    lower_set_block(l, ok);
+    let at = lower_instr("host");
+    at.name = "vec.at";
+    at.ty = agg;
+    at.args = lower_args2(v, i);
+    lower_emit_to(l, lower_type_of(l, e0), at)
 }
 
 fn lower_binop_name(op: String) -> String {

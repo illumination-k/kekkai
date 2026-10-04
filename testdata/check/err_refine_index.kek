@@ -1,0 +1,56 @@
+// Refinement types: `v[i]` needs a proof of `0 <= i && i < v.len()`.
+
+fn first(v: Vec<Int>) -> Int {
+    v[0] // ERROR "cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)"
+}
+
+fn first_checked(v: Vec<Int>) -> Int {
+    if v.len() > 0 { v[0] } else { -1 }
+}
+
+fn at(v: Vec<Int>, i: Int) -> Int {
+    v[i] // ERROR "(counterexample: i = 0, v.len() = 0)"
+}
+
+fn at_checked(v: Vec<Int>, i: Int) -> Int {
+    if 0 <= i && i < v.len() {
+        return v[i];
+    }
+    0
+}
+
+fn last(v: Vec<Int>) -> Int {
+    let n = v.len();
+    if n == 0 {
+        return 0;
+    }
+    v[n - 1]
+}
+
+fn after_push(v: Vec<Int>) -> Int {
+    let n = v.len();
+    v.push(1);
+    v[n]
+}
+
+fn stale_length(v: Vec<Int>, w: Vec<Int>) -> Int {
+    if v.len() == 0 {
+        return 0;
+    }
+    // a Vec reachable from another argument may have been emptied
+    clear_all(w);
+    v[0] // ERROR "cannot prove the index is in bounds"
+}
+
+fn clear_all(w: Vec<Int>) {
+    while w.len() > 0 {
+        w.pop();
+    }
+}
+
+fn negative(v: Vec<Int>, i: Int) -> Int {
+    if i < v.len() {
+        return v[i]; // ERROR "counterexample: i = -1"
+    }
+    0
+}

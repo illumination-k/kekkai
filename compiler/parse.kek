@@ -139,6 +139,7 @@ fn parse_items(p: ParseState) -> AstFile {
         funcs: Vec::new(),
         impls: Vec::new(),
         traits: Vec::new(),
+        aliases: Vec::new(),
     };
     while !parse_at(p, "EOF") {
         let attrs = Vec::new();
@@ -207,15 +208,20 @@ fn parse_items(p: ParseState) -> AstFile {
             if !p.failed {
                 f.traits.push(td);
             }
+        } else if k == "type" {
+            let ad = parse_type_alias(p);
+            if !p.failed {
+                f.aliases.push(ad);
+            }
         } else {
             parse_fail(
                 p,
                 parse_tok(p).pos,
-                "expected item (`fn`, `struct`, `enum`, `trait` or `impl`), found "
+                "expected item (`fn`, `struct`, `enum`, `trait`, `impl` or `type`), found "
                     + parse_describe(parse_tok(p)),
             );
         }
-        if attrs.len() > 0 && (k == "impl" || k == "trait") {
+        if attrs.len() > 0 && (k == "impl" || k == "trait" || k == "type") {
             match attrs.get(0) {
                 Some(a) => parse_fail(p, a.pos, "attributes are not allowed on `" + k + "` items"),
                 None => {}
@@ -223,6 +229,21 @@ fn parse_items(p: ParseState) -> AstFile {
         }
     }
     f
+}
+
+// parse_type_alias parses `type Name = T;` and `type Name = T where pred;`.
+fn parse_type_alias(p: ParseState) -> AstTypeAlias {
+    let pos = parse_expect(p, "type").pos;
+    let name = parse_expect(p, "IDENT").text;
+    let id = parse_id(p);
+    parse_expect(p, "=");
+    let ty = parse_type(p);
+    let a = AstTypeAlias { id: id, pos: pos, name: name, ty: ty, pred: None };
+    if parse_accept(p, "where") {
+        a.pred = Some(parse_expr(p));
+    }
+    parse_expect(p, ";");
+    a
 }
 
 // parse_assoc_type parses `type Name;` or `type Name = T;`.
@@ -293,14 +314,33 @@ fn parse_generics(p: ParseState) -> Vec<AstGeneric> {
     gs
 }
 
-// parse_wheres parses `where T: A + B, U: C` (nothing when absent).
-fn parse_wheres(p: ParseState) -> Vec<AstWhere> {
+// parse_wheres parses `where T: A + B, U: C` (nothing when absent). With
+// preds set, items that are not trait bounds are refinement predicates
+// (`0 <= i`, `result <= hi`) and are added to preds.
+fn parse_wheres(p: ParseState, preds: Option<Vec<AstExpr>>) -> Vec<AstWhere> {
     let ws = Vec::new();
     if !parse_accept(p, "where") {
         return ws;
     }
     while !parse_at(p, "{") && !parse_at(p, ";") && !parse_at(p, "EOF") {
         let pos = parse_tok(p).pos;
+        if !parse_where_is_bound(p) {
+            match preds {
+                Some(ps) => {
+                    let saved = p.no_struct;
+                    p.no_struct = true;
+                    ps.push(parse_expr(p));
+                    p.no_struct = saved;
+                }
+                None => {
+                    parse_fail(p, pos, "refinement predicates are only allowed on functions");
+                }
+            }
+            if !parse_accept(p, ",") {
+                break;
+            }
+            continue;
+        }
         let ty = parse_type(p);
         parse_expect(p, ":");
         let w = AstWhere { id: parse_id(p), pos: pos, ty: ty, bounds: Vec::new() };
@@ -314,6 +354,41 @@ fn parse_wheres(p: ParseState) -> Vec<AstWhere> {
         }
     }
     ws
+}
+
+// parse_where_is_bound reports whether the `where` item at the current
+// token is a trait bound `Type: Bound`: a type (identifiers, `::`, `<>`,
+// `&`, `mut`, parentheses, `,` inside brackets) followed by a single `:`.
+// Anything else is a refinement predicate.
+fn parse_where_is_bound(p: ParseState) -> Bool {
+    if p.failed {
+        return false;
+    }
+    let mut i = p.pos;
+    let mut depth = 0;
+    while i < p.toks.len() {
+        let t = p.toks.get(i).unwrap_or(p.eof);
+        let k = t.kind;
+        if k == ":" {
+            return depth == 0;
+        }
+        if k == "<" || k == "(" {
+            depth = depth + 1;
+        } else if k == ">" || k == ")" {
+            depth = depth - 1;
+            if depth < 0 {
+                return false;
+            }
+        } else if k == "," {
+            if depth == 0 {
+                return false;
+            }
+        } else if !(k == "IDENT" || k == "::" || k == "&" || k == "mut" || k == "fn" || k == "->") {
+            return false;
+        }
+        i = i + 1;
+    }
+    false
 }
 
 // parse_impl parses `impl<T> Target<T> { fn ... }` and
@@ -337,7 +412,7 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
         d.trait_ty = Some(first);
         d.target = parse_type(p);
     }
-    d.wheres = parse_wheres(p);
+    d.wheres = parse_wheres(p, None);
     parse_expect(p, "{");
     while !parse_at(p, "}") && !parse_at(p, "EOF") {
         if parse_at(p, "#") {
@@ -473,7 +548,8 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
     if parse_accept(p, "->") {
         result = Some(parse_type(p));
     }
-    let wheres = parse_wheres(p);
+    let preds = Vec::new();
+    let wheres = parse_wheres(p, Some(preds));
     let mut has_body = true;
     let mut body = AstBlock { id: parse_id(p), pos: pos, stmts: Vec::new(), tail: None, end: pos };
     if in_trait && parse_at(p, ";") {
@@ -492,6 +568,7 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
         params: params,
         result: result,
         wheres: wheres,
+        preds: preds,
         has_body: has_body,
         body: body,
     }
@@ -975,6 +1052,14 @@ fn parse_postfix(p: ParseState, x0: AstExpr) -> AstExpr {
                     name: name.text,
                 });
             }
+        } else if t.kind == "[" {
+            parse_next(p);
+            let saved = p.no_struct;
+            p.no_struct = false;
+            let ix = parse_expr(p);
+            p.no_struct = saved;
+            parse_expect(p, "]");
+            x = AstExpr::Index(AstIndex { id: parse_id(p), pos: t.pos, x: x, index: ix });
         } else if t.kind == "?" {
             parse_next(p);
             x = AstExpr::Try(AstTry { id: parse_id(p), pos: t.pos, x: x });

@@ -408,6 +408,10 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
             let s1 = lin_expr(lc, e.start, s);
             lin_expr(lc, e.end, s1)
         }
+        AstExpr::Index(e) => {
+            let s1 = lin_expr(lc, e.x, s);
+            lin_expr(lc, e.index, s1)
+        }
         _ => s,
     }
 }

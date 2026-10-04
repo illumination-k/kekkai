@@ -1,0 +1,25 @@
+// Property tests over refined aliases: generated values (and shrink
+// candidates) satisfy the alias predicate.
+
+type Port = Int where 1024 <= self && self < 65536;
+type Nonempty = Vec<Int> where self.len() > 0;
+
+fn first(v: Nonempty) -> Int {
+    v[0]
+}
+
+#[test]
+fn ports_are_unprivileged(p: Port) -> Bool {
+    p >= 1024 && p < 65536
+}
+
+#[test]
+fn first_is_an_element(v: Nonempty) -> Bool {
+    v[0] == first(v)
+}
+
+// fails: the counterexample is the smallest port that is not small
+#[test]
+fn small_ports(p: Port) -> Bool {
+    p < 2000
+}

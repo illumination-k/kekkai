@@ -1,0 +1,95 @@
+// Refinement predicates are linear integer arithmetic over the parameters
+// and `result`; they are type-checked like `Bool` expressions.
+
+type Loop = Loop2; // ERROR "type alias `Loop2` refers to itself"
+type Loop2 = Loop; // ERROR "type alias `Loop` refers to itself"
+type Nat = Int where self >= 0;
+type Bad = Int where self * self > 0; // ERROR "multiplies two variables"
+type Text = String where self.len() > 0;
+
+struct Counter {
+    mut n: Int,
+    limit: Int,
+}
+
+fn area(x: Int, y: Int) -> Int
+where
+    x * y > 0, // ERROR "refinement predicates must be linear: `x * y` multiplies two variables"
+{
+    x * y
+}
+
+fn scaled(x: Int) -> Int
+where
+    2 * x + 1 > 0,
+    x * 3 < 100,
+{
+    x
+}
+
+fn called(x: Int) -> Int
+where
+    area(x, x) > 0, // ERROR "`area(x, x)` is not supported in a refinement predicate"
+{
+    x
+}
+
+fn not_bool(x: Int) -> Int
+where
+    x + 1, // ERROR "mismatched types in refinement predicate: expected `Bool`, found `Int`"
+{
+    x
+}
+
+fn strings(s: String, t: String) -> Int
+where
+    s == t, // ERROR "refinement predicates compare integers only"
+    s.len() > 0,
+{
+    0
+}
+
+fn mutable_field(c: Counter) -> Int
+where
+    c.n < 10, // ERROR "can only mention immutable fields: `n` of `Counter` is `mut`"
+    c.limit > 0,
+{
+    0
+}
+
+struct Bag {
+    items: Vec<Int>,
+}
+
+fn field_length(b: Bag) -> Int
+where
+    b.items.len() > 0, // ERROR "`b.items.len()` is not supported in a refinement predicate"
+{
+    0
+}
+
+fn named_result(result: Int) -> Int
+where
+    result > 0, // ERROR "cannot have a parameter named `result`"
+{
+    result
+}
+
+fn unknown_name(x: Int) -> Int
+where
+    y > 0, // ERROR "cannot find value `y` in this scope"
+{
+    x
+}
+
+fn index_string(s: String) -> Int {
+    s[0] // ERROR "cannot index a value of type `String`"
+}
+
+fn index_by_bool(v: Vec<Int>) -> Int {
+    v[true] // ERROR "mismatched types in index: expected `Int`, found `Bool`"
+}
+
+fn uses(n: Nat, t: Text) -> Int {
+    n + t.len()
+}

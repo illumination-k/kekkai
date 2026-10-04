@@ -1,0 +1,26 @@
+// `kek mutate` with refinement types: a mutant that breaks a proof (an
+// off-by-one bound, a dropped guard) does not type-check and counts as
+// killed by types.
+
+fn total(v: Vec<Int>, n: Int) -> Int
+where
+    0 <= n,
+    n <= v.len(),
+{
+    let mut t = 0;
+    let mut i = 0;
+    while i < n {
+        t = t + v[i];
+        i = i + 1;
+    }
+    t
+}
+
+#[test]
+fn total_of_three() -> Bool {
+    let v = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    total(v, 3) == 6 && total(v, 0) == 0
+}

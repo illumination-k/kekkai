@@ -363,6 +363,38 @@ case_idempotent_lost() {
 	step assure plan app
 }
 
+case_refine() {
+	note "refinement proofs: the indexes, divisions and arithmetic of a function are all proved"
+	cat >"$d/w/app/stats.kek" <<'EOF'
+fn largest_share(v: Vec<Int>) -> Int {
+    let mut best = 0;
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] > best {
+            best = v[i];
+        }
+        i = i + 1;
+    }
+    if v.len() == 0 {
+        return 0;
+    }
+    best / v.len()
+}
+EOF
+	step assure plan app
+	step assure apply -yes app
+	grep -A 30 '"largest_share": {' "$d/w/kekkai.assure.lock" | sed '/"assumptions"/q' >>"$d/got"
+	echo >>"$d/got"
+	note "an off-by-one loop does not type-check: the index is out of bounds for i == v.len()"
+	edit app/stats.kek 's/while i < v.len()/while i <= v.len()/'
+	step assure plan app
+	note "best + 1 may overflow: refine.no_overflow is lost (a weakening)"
+	edit app/stats.kek 's/while i <= v.len()/while i < v.len()/'
+	edit app/stats.kek 's|    best / v.len()|    (best + 1) / v.len()|'
+	step assure plan app
+	step assure check app
+}
+
 case_pii() {
 	note "notify_rate declassifies personal data twice: new assumptions"
 	cat >>"$d/w/app/rates.kek" <<'EOF'
@@ -437,7 +469,7 @@ case_usage() {
 
 cases="initial no_changes strengthen weaken_capability allowed_host forbidden_host unknown_host
 weaken_host_no_allowlist forbidden_capability expired_assumption tested_lost tx_and_body module_review
-config_errors extends idempotent_lost pii usage"
+config_errors extends idempotent_lost pii refine usage"
 
 one() {
 	name=$1

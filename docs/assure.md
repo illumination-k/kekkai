@@ -115,6 +115,7 @@ kek assure check [-json] <file|dir>
 | `effects` | 集合（上限） | `type` | 引数で受け取る capability の種類（`Log`, `Net`, `Db`, `Fs`, `Clock`, `Random`, `Tx`）。capability は第二級でアンビエントな権限がないので、これが関数とその呼び出し先が起こしうる副作用の上限になる。空なら純粋 |
 | `net.hosts` | 集合（上限） | `type` | `net.get`・`net.post`・`tx.outbox` の URL から読み取った通信先ホスト。呼び出しグラフで到達できる関数の分を含む。URL が文字列リテラルか、ホストの終わり（`/`・`?`・`#`）まで含むリテラルで始まる `+` の連結のときだけホストが分かり、それ以外は `*`（不明） |
 | `tx.linear` | 真偽 | `type` | `db.transaction` を開く関数。`Tx` の線形性（commit／rollback をちょうど1回）を型検査器が保証している |
+| `refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow` | 真偽 | `smt` | 関数の `v[i]` の範囲・除数（0 でも `MIN / -1` でもない）・`+ - *` のオーバーフローの検証条件が、その種類について 1 つ以上あり、すべて篩型の検査器（`compiler/refine.kek`、ソルバは `compiler/smt.kek`）で証明できた。`kekkai.toml` の `[refine]` にかかわらず全関数で全種類を調べる。検証条件のない種類は省く。成り立たなくなると弱化。推論は数学的な整数で行うので、`refine.no_overflow` のない関数の他の証明はラップアラウンドがないことを前提にする（[refinement.md](refinement.md)） |
 | `idempotent` | 真偽 | `type` | capability を受け取る関数で、呼び出しグラフで到達できる capability の操作がすべて冪等（リトライしても状態が変わらない：読み取り、ログ、時計、`tx.put`・`tx.delete`、トランザクション）。偽なら省く。成り立たなくなると弱化（関数が純粋になった場合は除く）。`#[handler(idempotent)]` はこれを型エラーとして要求する |
 | `tested` | 真偽 | `test` | いずれかの `#[test]` から呼び出しグラフ（定義ハッシュの依存）で到達できる。`#[test]` 自身には付かない |
 

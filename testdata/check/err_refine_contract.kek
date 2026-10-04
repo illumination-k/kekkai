@@ -1,0 +1,76 @@
+// Refinement types: preconditions are proved at every call, postconditions
+// at every return.
+
+fn get(v: Vec<Int>, i: Int) -> Int
+where
+    0 <= i,
+    i < v.len(),
+{
+    v[i]
+}
+
+fn caller_missing(v: Vec<Int>) -> Int {
+    get(v, 0) // ERROR "cannot prove the precondition `i < v.len()` of `get` at `get(v, 0)` (counterexample: v.len() = 0)"
+}
+
+fn caller_ok(v: Vec<Int>) -> Int {
+    if v.len() == 0 {
+        return 0;
+    }
+    get(v, v.len() - 1)
+}
+
+fn caller_negative(v: Vec<Int>, k: Int) -> Int {
+    if k < v.len() {
+        return get(v, k); // ERROR "cannot prove the precondition `0 <= i` of `get`"
+    }
+    0
+}
+
+fn abs(x: Int) -> Int
+where
+    x > -1000000,
+    result >= 0,
+{
+    if x < 0 { -x } else { x }
+}
+
+fn wrong_abs(x: Int) -> Int
+where
+    result >= 0,
+{
+    if x < -5 {
+        // overflow is a lint (a warning by default) in functions with refinements
+        return -x; // WARN "cannot prove `-x` does not overflow"
+    }
+    x // ERROR "cannot prove the postcondition `result >= 0` of `wrong_abs` (counterexample: x = -1)"
+}
+
+fn positive(x: Int) -> Int
+where
+    result > x,
+{
+    x // ERROR "postcondition `result > x`"
+}
+
+// the postcondition of a callee is a fact at the call
+fn use_abs(v: Vec<Int>, x: Int) -> Int
+where
+    x > 0,
+    x < 100,
+{
+    let a = abs(x - 50);
+    if a < v.len() {
+        return v[a];
+    }
+    0
+}
+
+fn shrink(n: Int) -> Int
+where
+    0 <= n,
+    0 <= result,
+    result <= n,
+{
+    n / 2
+}

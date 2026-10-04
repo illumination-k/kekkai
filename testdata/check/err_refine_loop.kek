@@ -1,0 +1,110 @@
+// Refinement types in loops: `for` ranges, `while` conditions and the
+// bounds that survive the loop (monotone variables).
+
+fn sum(v: Vec<Int>) -> Int {
+    let mut t = 0;
+    for i in 0..v.len() {
+        t = t + v[i]; // WARN "cannot prove `t + v[i]` does not overflow"
+    }
+    t
+}
+
+fn off_by_one(v: Vec<Int>) -> Int {
+    let mut t = 0;
+    for i in 0..=v.len() {
+        t = t - v[i]; // ERROR "cannot prove the index is in bounds: `0 <= i && i < v.len()` (counterexample: i = 0, v.len() = 0)" WARN "cannot prove `t - v[i]` does not overflow"
+    }
+    t
+}
+
+fn while_off_by_one(v: Vec<Int>) -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i <= v.len() {
+        if v[i] > 0 { // ERROR "cannot prove the index is in bounds"
+            n = n + 1; // WARN "cannot prove `n + 1` does not overflow"
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn count_positive(v: Vec<Int>) -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < v.len() {
+        if v[i] > 0 {
+            n = n + 1; // WARN "cannot prove `n + 1` does not overflow"
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn backwards(v: Vec<Int>) -> Int {
+    let mut i = v.len();
+    let mut last = 0;
+    while i > 0 {
+        i = i - 1;
+        last = v[i];
+    }
+    last
+}
+
+// the loop may grow v: its length is forgotten at the head
+fn growing(v: Vec<Int>) -> Int {
+    let n = v.len();
+    let mut i = 0;
+    while i < n {
+        v.push(0);
+        i = i + 1;
+    }
+    v[0] // ERROR "cannot prove the index is in bounds"
+}
+
+// pushing to a local vector does not change the input's length
+fn doubled(v: Vec<Int>) -> Vec<Int> {
+    let out = Vec::new();
+    for i in 0..v.len() {
+        out.push(v[i] * 2); // WARN "cannot prove `v[i] * 2` does not overflow"
+    }
+    out
+}
+
+fn search(v: Vec<Int>, x: Int) -> Int {
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if v[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn bad_search(v: Vec<Int>, x: Int) -> Int {
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if v[mid] < x { // ERROR "cannot prove the index is in bounds"
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+fn by_match(v: Vec<Int>, k: Int) -> Int {
+    match k {
+        0 => v.len(),
+        1 => {
+            if v.len() > 1 { v[k] } else { 0 }
+        }
+        _ => v[k], // ERROR "counterexample: k = -1"
+    }
+}

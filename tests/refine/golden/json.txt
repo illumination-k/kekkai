@@ -1,0 +1,69 @@
+$ kek check -json demo.kek
+{
+  "file": "demo.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "demo.kek",
+      "line": 18,
+      "col": 6,
+      "end_line": 18,
+      "end_col": 7,
+      "severity": "error",
+      "phase": "refine",
+      "message": "cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)",
+      "counterexample": {
+        "v.len()": 0
+      },
+      "facts": [
+        {
+          "line": 14,
+          "col": 13,
+          "fact": "`v.len() >= 0`"
+        },
+        {
+          "line": 15,
+          "col": 16,
+          "fact": "condition `!(v.len() > 0)`"
+        }
+      ]
+    },
+    {
+      "file": "demo.kek",
+      "line": 18,
+      "col": 10,
+      "end_line": 18,
+      "end_col": 11,
+      "severity": "warning",
+      "phase": "lint",
+      "message": "cannot prove `v[0] + d` does not overflow (|value| <= 2^60) (counterexample: v[0] = 1152921504606846977, d = 0)",
+      "counterexample": {
+        "v[0]": 1152921504606846977,
+        "d": 0
+      },
+      "facts": []
+    },
+    {
+      "file": "demo.kek",
+      "line": 30,
+      "col": 7,
+      "end_line": 30,
+      "end_col": 8,
+      "severity": "error",
+      "phase": "refine",
+      "message": "cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)",
+      "counterexample": {
+        "p": 65535
+      },
+      "facts": [
+        {
+          "line": 29,
+          "col": 9,
+          "fact": "parameter `p` is a `Port` (`0 < self && self < 65536`)"
+        }
+      ]
+    }
+  ]
+}
+--- exit 1
+

@@ -622,6 +622,11 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
             dh_expr(w, x.start);
             dh_expr(w, x.end);
         }
+        AstExpr::Index(x) => {
+            dh_emit(w, "index");
+            dh_expr(w, x.x);
+            dh_expr(w, x.index);
+        }
     }
 }
 
@@ -699,6 +704,10 @@ fn dh_def(info: ChkInfo, impls: HashMap<String, Vec<String>>, fun: ChkFunc) -> D
         dh_declare(w, p.name);
     }
     dh_emit(w, "result:" + dh_opt_type(d.result));
+    for e in d.preds {
+        dh_emit(w, "pred");
+        dh_expr(w, e);
+    }
     for a in d.attrs {
         if a.name == "handler" || a.name == "main" || a.name == "test" {
             dh_emit(w, "attr:" + a.name + "(" + a.args.join(",") + ")");
@@ -818,6 +827,16 @@ fn dh_types_hash(f: AstFile) -> String {
                 + assoc.join(",")
                 + "}",
         );
+    }
+    for a in f.aliases {
+        if dh_is_lib_pos(a.pos) {
+            continue;
+        }
+        let pred = match a.pred {
+            Some(e) => " where " + ref_show(e),
+            None => "",
+        };
+        xs.push("type " + a.name + "=" + dh_type(a.ty) + pred);
     }
     chk_sort_strings(xs);
     dh_hash_strs(xs)

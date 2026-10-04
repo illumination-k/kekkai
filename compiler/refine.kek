@@ -1,0 +1,3259 @@
+// Refinement checking (prefix ref_ / Ref*): the verification conditions
+// of docs/refinement.md ("検証条件と事実"), proved by the QF_LIA solver
+// (compiler/smt.kek).
+//
+// The pass runs after type checking, once per user function that has
+// something to prove (a postcondition, a refined alias in its signature,
+// `v[i]`, a call of a function with preconditions, a conversion into a
+// refined alias, or division / overflow checks when they are enabled).
+// It walks the body once, symbolically:
+//
+//   - every Int variable is an SMT atom; an assignment makes a new version
+//     (`x`, `x#1`, ...), an immutable `let x = e` adds `x == e`;
+//   - the facts on a path are the preconditions, the predicates of refined
+//     parameters, `len(v) >= 0`, branch conditions (`if`, `while`, `match`
+//     integer patterns, `&&` / `||`), `for` ranges, callee postconditions
+//     and the bounds of indexes already performed;
+//   - at a join (after `if` / `match`), the variables that differ get a
+//     new version and the branch facts become one disjunction;
+//   - a loop forgets the variables it assigns (new versions at its head)
+//     but keeps the monotone bounds that survive a Houdini-style check
+//     (`x >= x_entry` / `x <= x_entry` when every assignment in the body
+//     preserves it, checked by the solver);
+//   - `v.len()` is a variable of its own, forgotten (havocked) after a
+//     possible mutation: `push` / `pop` on v, or a call that may reach a
+//     Vec (any non-primitive argument). Vecs created locally with
+//     `Vec::new()` that never escape (only used as receivers, index bases
+//     and `for` iterables) are tracked separately, so pushing to an output
+//     vector does not forget the length of the input.
+//
+// Each VC is sliced to the facts that share atoms with it (transitively)
+// before it goes to smt_prove.
+
+// ---- configuration ----
+
+// RefConfig is the `[refine]` section of kekkai.toml. overflow and
+// division are "auto" (lints in functions that use refinements; the
+// default), "off", "lint" (in every function) or "error" (in every
+// function, as errors).
+struct RefConfig {
+    mut overflow: String,
+    mut division: String,
+    // kek assure: every VC kind in every user function, as lints
+    mut all: Bool,
+    // kek check -v: report proved VCs with the facts they used
+    mut verbose: Bool,
+    // no refinement pass at all (the mutant schema of `kek mutate`, whose
+    // mutants were checked one by one as plain code)
+    mut off: Bool,
+}
+
+fn ref_config_default() -> RefConfig {
+    RefConfig { overflow: "auto", division: "auto", all: false, verbose: false, off: false }
+}
+
+fn ref_config_parse(cfg: ToolJson) -> Result<RefConfig, String> {
+    let rc = ref_config_default();
+    let keys = Vec::new();
+    keys.push("overflow");
+    keys.push("division");
+    for k in keys {
+        match tool_config_get(cfg, "refine", k) {
+            ToolJson::Null => {}
+            ToolJson::Str(s) => {
+                if s != "auto" && s != "off" && s != "lint" && s != "error" {
+                    return Err(
+                        "kekkai.toml: [refine] "
+                            + k
+                            + " must be \"auto\", \"off\", \"lint\" or \"error\", found "
+                            + ast_quote(s),
+                    );
+                }
+                if k == "overflow" {
+                    rc.overflow = s;
+                } else {
+                    rc.division = s;
+                }
+            }
+            _ => {
+                return Err("kekkai.toml: [refine] " + k + " must be a string");
+            }
+        }
+    }
+    Ok(rc)
+}
+
+// ref_config_load reads `[refine]` from ./kekkai.toml (errors are reported).
+fn ref_config_load(fs: &Fs, log: &Log) -> Option<RefConfig> {
+    match tool_config(fs, log) {
+        Some(cfg) => match ref_config_parse(cfg) {
+            Ok(rc) => Some(rc),
+            Err(e) => {
+                log.error(e);
+                None
+            }
+        },
+        None => None,
+    }
+}
+
+// ---- results ----
+
+struct RefFactUse {
+    pos: AstPos,
+    text: String,
+}
+
+// A diagnostic. kind: "index", "pre", "post", "alias", "div",
+// "overflow"; severity "error", "warning" or (verbose) "note" for a proved
+// VC; phase "refine" (index, pre, post, alias) or "lint" (div, overflow).
+// cex is the counterexample (source names); facts are those the solver
+// was given (the unsat core for a note).
+struct RefDiag {
+    pos: AstPos,
+    mut msg: String,
+    mut severity: String,
+    phase: String,
+    kind: String,
+    func: String,
+    cex: Vec<SmtBinding>,
+    facts: Vec<RefFactUse>,
+}
+
+// RefSum counts the VCs of a user function by kind ("index",
+// "index_ok", ...): kek assure records a guarantee when all are proved.
+struct RefSum {
+    func: String,
+    counts: HashMap<String, Int>,
+}
+
+struct RefReport {
+    diags: Vec<RefDiag>,
+    sums: Vec<RefSum>,
+}
+
+fn ref_report_empty() -> RefReport {
+    RefReport { diags: Vec::new(), sums: Vec::new() }
+}
+
+fn ref_sum_get(s: RefSum, k: String) -> Int {
+    s.counts.get(k).unwrap_or(0)
+}
+
+fn ref_sum_find(r: RefReport, func: String) -> Option<RefSum> {
+    for s in r.sums {
+        if s.func == func {
+            return Some(s);
+        }
+    }
+    None
+}
+
+// ---- state ----
+
+struct RefFact {
+    label: String,
+    f: SmtF,
+    atoms: Vec<String>,
+}
+
+// RefSt is the symbolic state of a path: its facts and the current atom of
+// every slot ("v<id>": the Int variable with binding id, "l<id>": the
+// length of the Vec / String variable id).
+struct RefSt {
+    facts: Vec<RefFact>,
+    env: HashMap<String, String>,
+    mut dead: Bool,
+}
+
+// A loop-invariant candidate: slot key stays >= (ge) or <= its atom at
+// loop entry (entry), or stays <= the slot other (relational, entry "").
+struct RefCand {
+    key: String,
+    entry: String,
+    other: String,
+    ge: Bool,
+    mut alive: Bool,
+}
+
+// ref_cand_goal is the formula of a candidate in a state.
+fn ref_cand_goal(c: RefCand, env: HashMap<String, String>) -> SmtF {
+    let a = ref_la(env.get(c.key).unwrap_or(""));
+    if c.other != "" {
+        return SmtF::Le(
+            ref_ladd(a, ref_la(env.get(c.other).unwrap_or("")), -1).unwrap_or(ref_lc(1)),
+        );
+    }
+    if c.ge {
+        return SmtF::Le(ref_ladd(ref_la(c.entry), a, -1).unwrap_or(ref_lc(1)));
+    }
+    SmtF::Le(ref_ladd(a, ref_la(c.entry), -1).unwrap_or(ref_lc(1)))
+}
+
+fn ref_cand_text(cx: RefCtx, c: RefCand, env: HashMap<String, String>) -> String {
+    let a = env.get(c.key).unwrap_or("");
+    let d = cx.display.get(a).unwrap_or(a);
+    if c.other != "" {
+        let b = env.get(c.other).unwrap_or("");
+        return "loop invariant `" + d + " <= " + cx.display.get(b).unwrap_or(b) + "`";
+    }
+    if c.ge {
+        return "loop invariant `" + d + "` only increases";
+    }
+    "loop invariant `" + d + "` only decreases"
+}
+
+// RefVal is the value of an expression: kind "int" (lin), "bool" (f),
+// "seq" (a Vec or String: len) or "other".
+struct RefVal {
+    kind: String,
+    lin: SmtLin,
+    f: SmtF,
+    len: SmtLin,
+}
+
+// RefSub maps the names of a predicate (parameters, `result`, `self`) to
+// values.
+struct RefSub {
+    ints: HashMap<String, SmtLin>,
+    bools: HashMap<String, SmtF>,
+    lens: HashMap<String, SmtLin>,
+    // name -> binding id of an immutable variable (for fields `p.x`)
+    bids: HashMap<Int, Int>,
+    names: HashMap<String, Int>,
+}
+
+struct RefCtx {
+    info: ChkInfo,
+    cfg: RefConfig,
+    // "Struct.field" -> alias name, for fields declared with an alias
+    field_alias: HashMap<String, String>,
+    fun: ChkFunc,
+    // "off", "lint" or "error" for the current function
+    mut ovf: String,
+    mut div: String,
+    // false while probing loop invariants (no diagnostics)
+    mut emit: Bool,
+    mut in_closure: Int,
+    used: HashMap<String, Int>,
+    display: HashMap<String, String>,
+    labels: HashMap<String, RefFactUse>,
+    mut nlabel: Int,
+    cands: Vec<RefCand>,
+    // immutable things (fields of immutable variables): key -> atom
+    fixed: HashMap<String, String>,
+    // immutable Bool variables -> their formula
+    bools: HashMap<Int, SmtF>,
+    // Vec variables (length slot key -> isolated)
+    vec_keys: HashMap<String, Bool>,
+    isolated: HashMap<Int, Bool>,
+    // per loop statement id: the slots it may change, and whether it has
+    // a `break` of its own
+    loop_touch: HashMap<Int, HashMap<String, Bool>>,
+    loop_break: HashMap<Int, Bool>,
+    report: RefReport,
+    sum: RefSum,
+}
+
+// ---- linear terms ----
+
+fn ref_max() -> Int {
+    9223372036854775807
+}
+
+fn ref_min() -> Int {
+    -9223372036854775807 - 1
+}
+
+fn ref_cadd(a: Int, b: Int) -> Option<Int> {
+    if b > 0 && a > ref_max() - b {
+        return None;
+    }
+    if b < 0 && a < ref_min() - b {
+        return None;
+    }
+    Some(a + b)
+}
+
+fn ref_cmul(a: Int, b: Int) -> Option<Int> {
+    if a == 0 || b == 0 {
+        return Some(0);
+    }
+    if a == -1 {
+        if b == ref_min() {
+            return None;
+        }
+        return Some(-b);
+    }
+    if b == -1 {
+        if a == ref_min() {
+            return None;
+        }
+        return Some(-a);
+    }
+    let r = a * b;
+    if r / b != a {
+        return None;
+    }
+    Some(r)
+}
+
+fn ref_lc(k: Int) -> SmtLin {
+    SmtLin { terms: Vec::new(), k: k }
+}
+
+fn ref_la(a: String) -> SmtLin {
+    let t = Vec::new();
+    t.push(SmtMono { coef: 1, atom: a });
+    SmtLin { terms: t, k: 0 }
+}
+
+// ref_ladd is a + s * b (s is 1 or -1); None on overflow.
+fn ref_ladd(a: SmtLin, b: SmtLin, s: Int) -> Option<SmtLin> {
+    let out = Vec::new();
+    for m in a.terms {
+        out.push(SmtMono { coef: m.coef, atom: m.atom });
+    }
+    for m in b.terms {
+        let c = match ref_cmul(m.coef, s) {
+            Some(c) => c,
+            None => {
+                return None;
+            }
+        };
+        let mut found = false;
+        let mut i = 0;
+        while i < out.len() {
+            let o = out.get(i).unwrap_or(SmtMono { coef: 0, atom: "" });
+            if o.atom == m.atom {
+                match ref_cadd(o.coef, c) {
+                    Some(n) => {
+                        out.set(i, SmtMono { coef: n, atom: o.atom });
+                    }
+                    None => {
+                        return None;
+                    }
+                }
+                found = true;
+                break;
+            }
+            i = i + 1;
+        }
+        if !found {
+            out.push(SmtMono { coef: c, atom: m.atom });
+        }
+    }
+    let kb = match ref_cmul(b.k, s) {
+        Some(x) => x,
+        None => {
+            return None;
+        }
+    };
+    let k = match ref_cadd(a.k, kb) {
+        Some(x) => x,
+        None => {
+            return None;
+        }
+    };
+    let terms = Vec::new();
+    for m in out {
+        if m.coef != 0 {
+            terms.push(m);
+        }
+    }
+    Some(SmtLin { terms: terms, k: k })
+}
+
+fn ref_lscale(a: SmtLin, c: Int) -> Option<SmtLin> {
+    let terms = Vec::new();
+    for m in a.terms {
+        match ref_cmul(m.coef, c) {
+            Some(x) => {
+                if x != 0 {
+                    terms.push(SmtMono { coef: x, atom: m.atom });
+                }
+            }
+            None => {
+                return None;
+            }
+        }
+    }
+    match ref_cmul(a.k, c) {
+        Some(k) => Some(SmtLin { terms: terms, k: k }),
+        None => None,
+    }
+}
+
+fn ref_lconst(a: SmtLin) -> Option<Int> {
+    if a.terms.len() == 0 {
+        return Some(a.k);
+    }
+    None
+}
+
+// ref_cmp is the formula `a op b` for a comparison operator.
+fn ref_cmp(op: String, a: SmtLin, b: SmtLin) -> Option<SmtF> {
+    if op == "<=" || op == "<" {
+        let mut d = ref_ladd(a, b, -1);
+        if op == "<" {
+            d = match d {
+                Some(x) => ref_ladd(x, ref_lc(1), 1),
+                None => None,
+            };
+        }
+        return match d {
+            Some(x) => Some(SmtF::Le(x)),
+            None => None,
+        };
+    }
+    if op == ">=" || op == ">" {
+        return ref_cmp(if op == ">=" { "<=" } else { "<" }, b, a);
+    }
+    match ref_ladd(a, b, -1) {
+        Some(x) => {
+            if op == "==" {
+                Some(SmtF::Eq(x))
+            } else {
+                Some(SmtF::Not(SmtF::Eq(x)))
+            }
+        }
+        None => None,
+    }
+}
+
+// ref_eq is `a == b` as a fact: True (no information) when the
+// difference does not fit in 64 bits. Never negate it: use ref_cmp.
+fn ref_eq(a: SmtLin, b: SmtLin) -> SmtF {
+    match ref_cmp("==", a, b) {
+        Some(f) => f,
+        None => SmtF::True,
+    }
+}
+
+fn ref_and2(a: SmtF, b: SmtF) -> SmtF {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    SmtF::And(v)
+}
+
+fn ref_or2(a: SmtF, b: SmtF) -> SmtF {
+    let v = Vec::new();
+    v.push(a);
+    v.push(b);
+    SmtF::Or(v)
+}
+
+// ref_atoms_into adds the atoms of f to out (in order of appearance).
+fn ref_atoms_into(f: SmtF, seen: HashMap<String, Bool>, out: Vec<String>) {
+    match f {
+        SmtF::Le(l) => ref_lin_atoms(l, seen, out),
+        SmtF::Eq(l) => ref_lin_atoms(l, seen, out),
+        SmtF::Not(g) => ref_atoms_into(g, seen, out),
+        SmtF::And(gs) => {
+            for g in gs {
+                ref_atoms_into(g, seen, out);
+            }
+        }
+        SmtF::Or(gs) => {
+            for g in gs {
+                ref_atoms_into(g, seen, out);
+            }
+        }
+        SmtF::Named(_, g) => ref_atoms_into(g, seen, out),
+        _ => {}
+    }
+}
+
+fn ref_lin_atoms(l: SmtLin, seen: HashMap<String, Bool>, out: Vec<String>) {
+    for m in l.terms {
+        if !seen.contains_key(m.atom) {
+            seen.insert(m.atom, true);
+            out.push(m.atom);
+        }
+    }
+}
+
+fn ref_atoms(f: SmtF) -> Vec<String> {
+    let out = Vec::new();
+    ref_atoms_into(f, HashMap::new(), out);
+    out
+}
+
+// ---- helpers over the AST (also used by the type checker) ----
+
+// ref_const_expr is the value of an integer literal, possibly negated.
+fn ref_const_expr(e: AstExpr) -> Option<Int> {
+    match e {
+        AstExpr::IntLit(x) => Some(x.value),
+        AstExpr::Unary(u) => {
+            if u.op == "-" {
+                match ref_const_expr(u.x) {
+                    Some(v) => {
+                        if v == ref_min() {
+                            return None;
+                        }
+                        return Some(-v);
+                    }
+                    None => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+// ref_path_expr reports a variable or a chain of fields of one (`p`,
+// `p.x`, `t.0`).
+fn ref_path_expr(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Ident(_) => true,
+        AstExpr::Field(f) => ref_path_expr(f.x),
+        AstExpr::Unary(u) => (u.op == "&" || u.op == "*" || u.op == "&mut ") && ref_path_expr(u.x),
+        _ => false,
+    }
+}
+
+fn ref_strip(e: AstExpr) -> AstExpr {
+    match e {
+        AstExpr::Unary(u) => {
+            if u.op == "&" || u.op == "*" || u.op == "&mut " {
+                return ref_strip(u.x);
+            }
+            e
+        }
+        _ => e,
+    }
+}
+
+// ref_mentions reports whether e uses the identifier name.
+fn ref_mentions(e: AstExpr, name: String) -> Bool {
+    match e {
+        AstExpr::Ident(x) => x.name == name,
+        AstExpr::Unary(u) => ref_mentions(u.x, name),
+        AstExpr::Binary(b) => ref_mentions(b.x, name) || ref_mentions(b.y, name),
+        AstExpr::Method(m) => {
+            if ref_mentions(m.recv, name) {
+                return true;
+            }
+            for a in m.args {
+                if ref_mentions(a, name) {
+                    return true;
+                }
+            }
+            false
+        }
+        AstExpr::Field(f) => ref_mentions(f.x, name),
+        AstExpr::Call(c) => {
+            for a in c.args {
+                if ref_mentions(a, name) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn ref_prec(e: AstExpr) -> Int {
+    match e {
+        AstExpr::Binary(b) => fmt_precedence(b.op),
+        AstExpr::Unary(_) => 6,
+        AstExpr::Range(_) => 0,
+        _ => 8,
+    }
+}
+
+fn ref_show_sub(e: AstExpr, paren: Bool, from: String, to: String) -> String {
+    if paren {
+        return "(" + ref_show_r(e, from, to) + ")";
+    }
+    ref_show_r(e, from, to)
+}
+
+fn ref_show_args(args: Vec<AstExpr>, from: String, to: String) -> String {
+    let parts = Vec::new();
+    for a in args {
+        parts.push(ref_show_r(a, from, to));
+    }
+    "(" + parts.join(", ") + ")"
+}
+
+// ref_show prints an expression for messages (one line; blocks elided).
+fn ref_show(e: AstExpr) -> String {
+    ref_show_r(e, "", "")
+}
+
+// ref_show_r is ref_show with the identifier from renamed to (`kek test`
+// prints alias predicates over a generated value).
+fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
+    match e {
+        AstExpr::IntLit(x) => x.value.to_string(),
+        AstExpr::BoolLit(x) => if x.value { "true" } else { "false" },
+        AstExpr::StrLit(x) => ast_quote(x.value),
+        AstExpr::UnitLit(_) => "()",
+        AstExpr::Ident(x) => if x.name == from { to } else { x.name },
+        AstExpr::Path(x) => x.ty + "::" + x.name,
+        AstExpr::Unary(u) => u.op + ref_show_sub(u.x, ref_prec(u.x) < 6, from, to),
+        AstExpr::Binary(b) => {
+            let p = fmt_precedence(b.op);
+            ref_show_sub(b.x, ref_prec(b.x) < p, from, to)
+                + " "
+                + b.op
+                + " "
+                + ref_show_sub(b.y, ref_prec(b.y) <= p, from, to)
+        }
+        AstExpr::Call(c) => ref_show_sub(c.func, ref_prec(c.func) < 7, from, to)
+            + ref_show_args(c.args, from, to),
+        AstExpr::Method(m) => ref_show_sub(m.recv, ref_prec(m.recv) < 7, from, to)
+            + "."
+            + m.name
+            + ref_show_args(m.args, from, to),
+        AstExpr::Field(f) => ref_show_sub(f.x, ref_prec(f.x) < 7, from, to) + "." + f.name,
+        AstExpr::Index(x) => ref_show_sub(x.x, ref_prec(x.x) < 7, from, to)
+            + "["
+            + ref_show_r(x.index, from, to)
+            + "]",
+        AstExpr::Try(t) => ref_show_sub(t.x, ref_prec(t.x) < 7, from, to) + "?",
+        AstExpr::Tuple(t) => ref_show_args(t.elems, from, to),
+        AstExpr::Range(r) => ref_show_r(r.start, from, to)
+            + if r.inclusive { "..=" } else { ".." }
+            + ref_show_r(r.end, from, to),
+        _ => "...",
+    }
+}
+
+// ref_alias_pred_text is the predicate of a refined alias as source text
+// over the variable v ("" for an alias without one).
+fn ref_alias_pred_text(info: ChkInfo, alias: String, v: String) -> String {
+    let parts = Vec::new();
+    for p in ref_alias_preds(info, alias) {
+        parts.push("(" + ref_show_r(p, "self", v) + ")");
+    }
+    parts.join(" && ")
+}
+
+// ref_alias_range returns the constant bounds of `self` that the
+// predicates of an Int alias state directly (top-level conjuncts `self op
+// k` / `k op self`): the expression of a value in range drawn from the
+// generator g of `kek test` ("" when there is no bound).
+fn ref_alias_range(info: ChkInfo, alias: String, g: String) -> String {
+    let lo = Vec::new();
+    let hi = Vec::new();
+    for p in ref_alias_preds(info, alias) {
+        ref_bounds_of(p, lo, hi);
+    }
+    let mut l = 0;
+    let mut has_l = false;
+    for x in lo {
+        if !has_l || x > l {
+            l = x;
+        }
+        has_l = true;
+    }
+    let mut h = 0;
+    let mut has_h = false;
+    for x in hi {
+        if !has_h || x < h {
+            h = x;
+        }
+        has_h = true;
+    }
+    if has_l && has_h {
+        if h < l {
+            return "";
+        }
+        match ref_cadd(h, -l) {
+            Some(w) => {
+                if w < 1099511627776 {
+                    return "("
+                        + l.to_string()
+                        + " + __gen_below("
+                        + g
+                        + ", "
+                        + (w + 1).to_string()
+                        + "))";
+                }
+            }
+            None => {}
+        }
+        return "";
+    }
+    if has_l {
+        return "(" + l.to_string() + " + __gen_below(" + g + ", " + g + ".size + 1))";
+    }
+    if has_h {
+        return "(" + h.to_string() + " - __gen_below(" + g + ", " + g + ".size + 1))";
+    }
+    ""
+}
+
+fn ref_bounds_of(e: AstExpr, lo: Vec<Int>, hi: Vec<Int>) {
+    match e {
+        AstExpr::Binary(b) => {
+            if b.op == "&&" {
+                ref_bounds_of(b.x, lo, hi);
+                ref_bounds_of(b.y, lo, hi);
+                return;
+            }
+            let xs = ref_is_self(b.x);
+            let ys = ref_is_self(b.y);
+            let mut op = b.op;
+            let mut k = None;
+            if xs {
+                k = ref_const_expr(b.y);
+            } else if ys {
+                k = ref_const_expr(b.x);
+                // k op self is self op' k
+                if op == "<" {
+                    op = ">";
+                } else if op == "<=" {
+                    op = ">=";
+                } else if op == ">" {
+                    op = "<";
+                } else if op == ">=" {
+                    op = "<=";
+                }
+            }
+            match k {
+                Some(c) => {
+                    if op == ">=" || op == "==" {
+                        lo.push(c);
+                    }
+                    if op == ">" && c < ref_max() {
+                        lo.push(c + 1);
+                    }
+                    if op == "<=" || op == "==" {
+                        hi.push(c);
+                    }
+                    if op == "<" && c > ref_min() {
+                        hi.push(c - 1);
+                    }
+                }
+                None => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn ref_is_self(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Ident(x) => x.name == "self",
+        _ => false,
+    }
+}
+
+// ---- the program ----
+
+// ref_program checks every user function of a type-checked program (f is
+// the program with the core library, for the struct declarations).
+fn ref_program(info: ChkInfo, cfg: RefConfig, f: AstFile) -> RefReport {
+    let report = ref_report_empty();
+    let field_alias: HashMap<String, String> = HashMap::new();
+    for sd in f.structs {
+        for fl in sd.fields {
+            let a = ref_alias_of(info, fl.ty);
+            if a != "" {
+                field_alias.insert(sd.name + "." + fl.name, a);
+            }
+        }
+    }
+    // with the default configuration, only functions that use
+    // refinements have VCs (recorded by the type checker)
+    let every = cfg.all
+        || cfg.overflow == "lint"
+        || cfg.overflow == "error"
+        || cfg.division == "lint"
+        || cfg.division == "error";
+    for fun in info.func_list {
+        if !fun.decl.has_body || chk_is_lib(fun) {
+            continue;
+        }
+        if !every && !ref_fun_uses(info, fun) {
+            continue;
+        }
+        ref_func(info, cfg, field_alias, report, fun);
+    }
+    report
+}
+
+// ref_fun_uses reports whether a function uses refinements: its
+// signature, its body (`v[i]`, refined aliases and fields) or a call of a
+// function with a contract.
+fn ref_fun_uses(info: ChkInfo, fun: ChkFunc) -> Bool {
+    if info.refine_fns.contains_key(fun.name) || ref_fun_contract(info, fun) {
+        return true;
+    }
+    for k in fun.calls.keys() {
+        match info.funcs.get(k) {
+            Some(f) => {
+                if ref_fun_contract(info, f) {
+                    return true;
+                }
+            }
+            None => {}
+        }
+    }
+    false
+}
+
+// ref_alias_of returns the name of the refined alias a type is spelled
+// with ("" if none; `&T` is T).
+fn ref_alias_of(info: ChkInfo, t: AstType) -> String {
+    match t {
+        AstType::Named(n) => {
+            if n.args.len() == 0 {
+                match info.aliases.get(n.name) {
+                    Some(ad) => {
+                        if ref_alias_preds(info, n.name).len() > 0 {
+                            return ad.name;
+                        }
+                    }
+                    None => {}
+                }
+            }
+            ""
+        }
+        AstType::Ref(r) => ref_alias_of(info, r.elem),
+        _ => "",
+    }
+}
+
+// ref_alias_preds returns the predicates of an alias and of the aliases it
+// is defined with (`type B = A where ...`).
+fn ref_alias_preds(info: ChkInfo, name: String) -> Vec<AstExpr> {
+    let out = Vec::new();
+    let mut cur = name;
+    let mut depth = 0;
+    while depth < 16 {
+        match info.aliases.get(cur) {
+            Some(ad) => {
+                match ad.pred {
+                    Some(e) => out.push(e),
+                    None => {}
+                }
+                match ad.ty {
+                    AstType::Named(n) => {
+                        cur = n.name;
+                    }
+                    _ => {
+                        return out;
+                    }
+                }
+            }
+            None => {
+                return out;
+            }
+        }
+        depth = depth + 1;
+    }
+    out
+}
+
+fn ref_param_alias(info: ChkInfo, fun: ChkFunc, i: Int) -> String {
+    match fun.decl.params.get(i) {
+        Some(p) => match p.ty {
+            Some(t) => ref_alias_of(info, t),
+            None => "",
+        },
+        None => "",
+    }
+}
+
+fn ref_result_alias(info: ChkInfo, fun: ChkFunc) -> String {
+    match fun.decl.result {
+        Some(t) => ref_alias_of(info, t),
+        None => "",
+    }
+}
+
+// ref_fun_refined reports whether a function's signature carries
+// refinements (callers have something to prove).
+fn ref_fun_contract(info: ChkInfo, fun: ChkFunc) -> Bool {
+    if fun.decl.preds.len() > 0 || ref_result_alias(info, fun) != "" {
+        return true;
+    }
+    for i in 0..fun.decl.params.len() {
+        if ref_param_alias(info, fun, i) != "" {
+            return true;
+        }
+    }
+    false
+}
+
+fn ref_mode(v: String, refined: Bool, all: Bool) -> String {
+    if all {
+        if v == "error" {
+            return "error";
+        }
+        return "lint";
+    }
+    if v == "auto" {
+        return if refined { "lint" } else { "off" };
+    }
+    v
+}
+
+fn ref_func(
+    info: ChkInfo,
+    cfg: RefConfig,
+    field_alias: HashMap<String, String>,
+    report: RefReport,
+    fun: ChkFunc,
+) {
+    let cx = RefCtx {
+        info: info,
+        cfg: cfg,
+        field_alias: field_alias,
+        fun: fun,
+        ovf: "off",
+        div: "off",
+        emit: true,
+        in_closure: 0,
+        used: HashMap::new(),
+        display: HashMap::new(),
+        labels: HashMap::new(),
+        nlabel: 0,
+        cands: Vec::new(),
+        fixed: HashMap::new(),
+        bools: HashMap::new(),
+        vec_keys: HashMap::new(),
+        isolated: HashMap::new(),
+        loop_touch: HashMap::new(),
+        loop_break: HashMap::new(),
+        report: report,
+        sum: RefSum { func: fun.name, counts: HashMap::new() },
+    };
+    let sc = ref_scan_new();
+    // returning a Vec does not alias it while the function runs
+    for s in fun.decl.body.stmts {
+        ref_scan_stmt(cx, sc, s);
+    }
+    match fun.decl.body.tail {
+        Some(e) => ref_scan_expr(cx, sc, e, ref_is_ident(e)),
+        None => {}
+    }
+    let refined = ref_fun_contract(info, fun) || sc.uses;
+    cx.ovf = ref_mode(cfg.overflow, refined, cfg.all);
+    cx.div = ref_mode(cfg.division, refined, cfg.all);
+    if !refined && !(cx.ovf != "off" && sc.arith) && !(cx.div != "off" && sc.divs) {
+        return;
+    }
+    ref_scan_finish(cx, sc);
+    report.sums.push(cx.sum);
+    let st = RefSt { facts: Vec::new(), env: HashMap::new(), dead: false };
+    // parameters
+    let sub = ref_sub_new();
+    let mut i = 0;
+    for p in fun.params {
+        let v = ref_bind_new(cx, st, p, p.pos);
+        ref_sub_put(sub, p.name, v, p.id);
+        let a = ref_param_alias(info, fun, i);
+        if a != "" {
+            ref_alias_facts(cx, st, a, v, p.pos, "parameter `" + p.name + "`");
+        }
+        i = i + 1;
+    }
+    for e in fun.decl.preds {
+        if !ref_mentions(e, "result") {
+            ref_fact(
+                cx,
+                st,
+                ref_pred(cx, st, e, sub),
+                ast_expr_pos(e),
+                "precondition `" + ref_show(e) + "`",
+            );
+        }
+    }
+    let v = ref_block(cx, st, fun.decl.body);
+    if !st.dead {
+        ref_post(cx, st, v, fun.decl.body.tail, chk_tail_pos(fun.decl.body));
+    }
+}
+
+// ---- the pre-scan ----
+
+// RefScan collects, before the walk: whether the body uses refinements
+// (uses), has arithmetic or division, the Vec variables created by
+// `Vec::new()` and those that escape, and the slots each loop may change.
+struct RefScan {
+    mut uses: Bool,
+    mut arith: Bool,
+    mut divs: Bool,
+    fresh: HashMap<Int, Bool>,
+    escaped: HashMap<Int, Bool>,
+    loops: Vec<Int>,
+    mut closure: Int,
+}
+
+fn ref_scan_new() -> RefScan {
+    RefScan {
+        uses: false,
+        arith: false,
+        divs: false,
+        fresh: HashMap::new(),
+        escaped: HashMap::new(),
+        loops: Vec::new(),
+        closure: 0,
+    }
+}
+
+fn ref_scan_touch(cx: RefCtx, sc: RefScan, key: String) {
+    for id in sc.loops {
+        match cx.loop_touch.get(id) {
+            Some(m) => {
+                m.insert(key, true);
+            }
+            None => {}
+        }
+    }
+}
+
+fn ref_ty_of(cx: RefCtx, e: AstExpr) -> Ty {
+    ty_prune(cx.info.types.get(ast_expr_id(e)).unwrap_or(ty_invalid()))
+}
+
+fn ref_is_vec(t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Vec(_) => true,
+        _ => false,
+    }
+}
+
+// ref_prim reports a type whose values cannot reach a Vec.
+fn ref_prim(t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Prim(_) => true,
+        Ty::Cap(_, _) => true,
+        Ty::Opaque(_) => true,
+        _ => false,
+    }
+}
+
+fn ref_scan_block(cx: RefCtx, sc: RefScan, b: AstBlock) {
+    for s in b.stmts {
+        ref_scan_stmt(cx, sc, s);
+    }
+    match b.tail {
+        Some(e) => ref_scan_expr(cx, sc, e, false),
+        None => {}
+    }
+}
+
+fn ref_is_ident(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Ident(_) => true,
+        _ => false,
+    }
+}
+
+fn ref_is_vec_new(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Call(c) => match c.func {
+            AstExpr::Path(p) => p.ty == "Vec" && p.name == "new" && c.args.len() == 0,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn ref_scan_stmt(cx: RefCtx, sc: RefScan, s0: AstStmt) {
+    match s0 {
+        AstStmt::Let(s) => {
+            ref_scan_expr(cx, sc, s.init, false);
+            match s.ty {
+                Some(t) => {
+                    if ref_alias_of(cx.info, t) != "" {
+                        sc.uses = true;
+                    }
+                }
+                None => {}
+            }
+            match cx.info.lets.get(s.id) {
+                Some(b) => {
+                    if ref_is_vec(b.ty) && ref_is_vec_new(s.init) && sc.closure == 0 {
+                        sc.fresh.insert(b.id, true);
+                    }
+                }
+                None => {}
+            }
+        }
+        AstStmt::Assign(s) => {
+            ref_scan_expr(cx, sc, s.value, false);
+            match cx.info.assigns.get(s.id) {
+                Some(b) => {
+                    if ref_is_vec(b.ty) {
+                        sc.escaped.insert(b.id, true);
+                        ref_scan_touch(cx, sc, "l" + b.id.to_string());
+                    } else {
+                        ref_scan_touch(cx, sc, "v" + b.id.to_string());
+                    }
+                }
+                None => {}
+            }
+        }
+        AstStmt::FieldAssign(s) => {
+            ref_scan_expr(cx, sc, s.target.x, false);
+            ref_scan_expr(cx, sc, s.value, false);
+        }
+        AstStmt::Break(_) => {
+            match sc.loops.get(sc.loops.len() - 1) {
+                Some(id) => {
+                    cx.loop_break.insert(id, true);
+                }
+                None => {}
+            }
+        }
+        AstStmt::Continue(_) => {}
+        AstStmt::While(s) => {
+            cx.loop_touch.insert(s.id, HashMap::new());
+            sc.loops.push(s.id);
+            ref_scan_expr(cx, sc, s.cond, false);
+            ref_scan_block(cx, sc, s.body);
+            sc.loops.pop();
+        }
+        AstStmt::For(s) => {
+            ref_scan_expr(cx, sc, s.iter, true);
+            match s.end {
+                Some(e) => ref_scan_expr(cx, sc, e, false),
+                None => {}
+            }
+            cx.loop_touch.insert(s.id, HashMap::new());
+            sc.loops.push(s.id);
+            ref_scan_block(cx, sc, s.body);
+            sc.loops.pop();
+        }
+        AstStmt::Return(s) => match s.value {
+            Some(e) => ref_scan_expr(cx, sc, e, ref_is_ident(e) && sc.closure == 0),
+            None => {}
+        },
+        AstStmt::Expr(s) => ref_scan_expr(cx, sc, s.x, false),
+    }
+}
+
+fn ref_scan_exprs(cx: RefCtx, sc: RefScan, es: Vec<AstExpr>) {
+    for e in es {
+        ref_scan_expr(cx, sc, e, false);
+    }
+}
+
+// ref_scan_call records a call that may mutate any Vec reachable from its
+// arguments.
+fn ref_scan_call(cx: RefCtx, sc: RefScan, args: Vec<AstExpr>, func: Option<ChkFunc>) {
+    let mut reach = false;
+    for a in args {
+        if !ref_prim(ref_ty_of(cx, a)) {
+            reach = true;
+        }
+    }
+    match func {
+        Some(f) => {
+            if ref_fun_contract(cx.info, f) {
+                sc.uses = true;
+            }
+            if chk_is_lib(f) {
+                reach = false;
+            }
+        }
+        None => {}
+    }
+    if reach {
+        ref_scan_touch(cx, sc, "*");
+    }
+}
+
+// ref_scan_expr scans an expression; recv is set when its value is only
+// read in place (a method receiver, an index base, a `for` iterable), so a
+// Vec variable there does not escape.
+fn ref_scan_expr(cx: RefCtx, sc: RefScan, e: AstExpr, recv: Bool) {
+    match e {
+        AstExpr::Ident(x) => {
+            match cx.info.uses.get(x.id) {
+                Some(b) => {
+                    if ref_is_vec(b.ty) && (!recv || sc.closure > 0) {
+                        sc.escaped.insert(b.id, true);
+                    }
+                }
+                None => {}
+            }
+        }
+        AstExpr::Unary(u) => {
+            if u.op == "-" {
+                sc.arith = true;
+            }
+            ref_scan_expr(cx, sc, u.x, recv);
+        }
+        AstExpr::Binary(b) => {
+            if b.op == "+" || b.op == "-" || b.op == "*" {
+                if ty_is_prim(ref_ty_of(cx, e), "Int") {
+                    sc.arith = true;
+                }
+            }
+            if b.op == "/" || b.op == "%" {
+                sc.divs = true;
+            }
+            ref_scan_expr(cx, sc, b.x, false);
+            ref_scan_expr(cx, sc, b.y, false);
+        }
+        AstExpr::Call(c) => {
+            ref_scan_expr(cx, sc, c.func, false);
+            ref_scan_exprs(cx, sc, c.args);
+            match cx.info.calls.get(c.id) {
+                Some(ci) => {
+                    if ci.kind == "func" {
+                        ref_scan_call(cx, sc, c.args, ci.func);
+                    } else if ci.kind == "closure" {
+                        ref_scan_touch(cx, sc, "*");
+                    }
+                }
+                None => {}
+            }
+        }
+        AstExpr::Method(m) => {
+            ref_scan_expr(cx, sc, m.recv, true);
+            ref_scan_exprs(cx, sc, m.args);
+            let rt = ref_ty_of(cx, m.recv);
+            match cx.info.methods.get(m.id) {
+                Some(mi) => {
+                    if mi.kind == "func" || (mi.kind == "generic" && !ref_is_vec(rt)) {
+                        let all = Vec::new();
+                        all.push(m.recv);
+                        for a in m.args {
+                            all.push(a);
+                        }
+                        ref_scan_call(cx, sc, all, mi.func);
+                    } else if mi.kind == "transaction" {
+                        ref_scan_touch(cx, sc, "*");
+                    }
+                }
+                None => {}
+            }
+            if ref_is_vec(rt) && (m.name == "push" || m.name == "pop") {
+                match ref_strip(m.recv) {
+                    AstExpr::Ident(x) => match cx.info.uses.get(x.id) {
+                        Some(b) => ref_scan_touch(cx, sc, "m" + b.id.to_string()),
+                        None => ref_scan_touch(cx, sc, "*"),
+                    },
+                    _ => ref_scan_touch(cx, sc, "*"),
+                }
+            }
+        }
+        AstExpr::Field(f) => ref_scan_expr(cx, sc, f.x, true),
+        AstExpr::StructLit(s) => {
+            match cx.info.struct_lits.get(s.id) {
+                Some(st) => {
+                    for fl in s.fields {
+                        if cx.field_alias.contains_key(st.name + "." + fl.name) {
+                            sc.uses = true;
+                        }
+                    }
+                }
+                None => {}
+            }
+            for fl in s.fields {
+                ref_scan_expr(cx, sc, fl.value, false);
+            }
+        }
+        AstExpr::If(x) => {
+            ref_scan_expr(cx, sc, x.cond, false);
+            ref_scan_block(cx, sc, x.then);
+            match x.els {
+                Some(el) => ref_scan_expr(cx, sc, el, false),
+                None => {}
+            }
+        }
+        AstExpr::Match(x) => {
+            ref_scan_expr(cx, sc, x.x, false);
+            for a in x.arms {
+                ref_scan_expr(cx, sc, a.body, false);
+            }
+        }
+        AstExpr::Block(b) => ref_scan_block(cx, sc, b),
+        AstExpr::Try(t) => ref_scan_expr(cx, sc, t.x, false),
+        AstExpr::Closure(c) => {
+            sc.closure = sc.closure + 1;
+            let saved = Vec::new();
+            for l in sc.loops {
+                saved.push(l);
+            }
+            // a closure body runs later: its effects do not belong to
+            // the enclosing loops (calling it havocs everything)
+            while sc.loops.len() > 0 {
+                sc.loops.pop();
+            }
+            ref_scan_expr(cx, sc, c.body, false);
+            for l in saved {
+                sc.loops.push(l);
+            }
+            sc.closure = sc.closure - 1;
+        }
+        AstExpr::Tuple(t) => ref_scan_exprs(cx, sc, t.elems),
+        AstExpr::Range(r) => {
+            ref_scan_expr(cx, sc, r.start, false);
+            ref_scan_expr(cx, sc, r.end, false);
+        }
+        AstExpr::Index(x) => {
+            sc.uses = true;
+            ref_scan_expr(cx, sc, x.x, true);
+            ref_scan_expr(cx, sc, x.index, false);
+        }
+        _ => {}
+    }
+}
+
+// ref_scan_finish decides the isolated Vec variables and resolves the
+// loop slots ("m<id>": a push / pop on variable id).
+fn ref_scan_finish(cx: RefCtx, sc: RefScan) {
+    for id in sc.fresh.keys() {
+        if !sc.escaped.contains_key(id) {
+            cx.isolated.insert(id, true);
+        }
+    }
+    for lid in cx.loop_touch.keys() {
+        let m = cx.loop_touch.get(lid).unwrap_or(HashMap::new());
+        let out: HashMap<String, Bool> = HashMap::new();
+        for k in m.keys() {
+            if k.starts_with("m") {
+                let id = k.slice(1, k.len()).parse_int().unwrap_or(0);
+                if cx.isolated.contains_key(id) {
+                    out.insert("l" + id.to_string(), true);
+                } else {
+                    out.insert("*", true);
+                }
+            } else {
+                out.insert(k, true);
+            }
+        }
+        cx.loop_touch.insert(lid, out);
+    }
+}
+
+// ---- states ----
+
+fn ref_clone(st: RefSt) -> RefSt {
+    let facts = Vec::new();
+    for f in st.facts {
+        facts.push(f);
+    }
+    let env: HashMap<String, String> = HashMap::new();
+    for k in st.env.keys() {
+        env.insert(k, st.env.get(k).unwrap_or(""));
+    }
+    RefSt { facts: facts, env: env, dead: st.dead }
+}
+
+fn ref_atom(cx: RefCtx, base: String, disp: String) -> String {
+    let n = cx.used.get(base).unwrap_or(0);
+    cx.used.insert(base, n + 1);
+    let a = if n == 0 {
+        base
+    } else {
+        base + "#" + n.to_string()
+    };
+    cx.display.insert(a, disp);
+    a
+}
+
+fn ref_fact(cx: RefCtx, st: RefSt, f: SmtF, pos: AstPos, text: String) {
+    match f {
+        SmtF::True => {
+            return;
+        }
+        _ => {}
+    }
+    cx.nlabel = cx.nlabel + 1;
+    let label = "h" + cx.nlabel.to_string();
+    cx.labels.insert(label, RefFactUse { pos: pos, text: text });
+    st.facts.push(RefFact { label: label, f: f, atoms: ref_atoms(f) });
+}
+
+fn ref_val_int(l: SmtLin) -> RefVal {
+    RefVal { kind: "int", lin: l, f: SmtF::True, len: ref_lc(0) }
+}
+
+fn ref_val_bool(f: SmtF) -> RefVal {
+    RefVal { kind: "bool", lin: ref_lc(0), f: f, len: ref_lc(0) }
+}
+
+fn ref_val_seq(l: SmtLin) -> RefVal {
+    RefVal { kind: "seq", lin: ref_lc(0), f: SmtF::True, len: l }
+}
+
+fn ref_val_other() -> RefVal {
+    RefVal { kind: "other", lin: ref_lc(0), f: SmtF::True, len: ref_lc(0) }
+}
+
+fn ref_is_seq(t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Vec(_) => true,
+        Ty::Prim(n) => n == "String",
+        _ => false,
+    }
+}
+
+// ref_fresh is an unknown value of type t (disp names it in messages).
+fn ref_fresh(cx: RefCtx, st: RefSt, t: Ty, disp: String, pos: AstPos) -> RefVal {
+    let tp = ty_prune(t);
+    if ty_is_prim(tp, "Int") {
+        return ref_val_int(ref_la(ref_atom(cx, "$" + disp, disp)));
+    }
+    if ty_is_prim(tp, "Bool") {
+        let a = ref_atom(cx, "$" + disp, disp);
+        ref_fact(
+            cx,
+            st,
+            ref_and2(
+                SmtF::Le(ref_lscale(ref_la(a), -1).unwrap_or(ref_lc(0))),
+                SmtF::Le(SmtLin { terms: ref_la(a).terms, k: -1 }),
+            ),
+            pos,
+            "`" + disp + "` is a Bool",
+        );
+        return ref_val_bool(SmtF::Eq(SmtLin { terms: ref_la(a).terms, k: -1 }));
+    }
+    if ref_is_seq(tp) {
+        let a = ref_atom(cx, "len(" + disp + ")", disp + ".len()");
+        ref_fact(cx, st, ref_len_fact(a), pos, "`" + disp + ".len() >= 0`");
+        return ref_val_seq(ref_la(a));
+    }
+    ref_val_other()
+}
+
+// ref_bind_new gives a new variable (a parameter, a `let`, a pattern
+// binding) its slot, without facts beyond `len >= 0`.
+fn ref_bind_new(cx: RefCtx, st: RefSt, b: ChkBinding, pos: AstPos) -> RefVal {
+    let t = ty_prune(b.ty);
+    if ty_is_prim(t, "Int") {
+        let a = ref_atom(cx, b.name, b.name);
+        st.env.insert("v" + b.id.to_string(), a);
+        return ref_val_int(ref_la(a));
+    }
+    if ref_is_seq(t) {
+        let a = ref_atom(cx, "len(" + b.name + ")", b.name + ".len()");
+        st.env.insert("l" + b.id.to_string(), a);
+        if ref_is_vec(t) {
+            cx.vec_keys.insert("l" + b.id.to_string(), cx.isolated.contains_key(b.id));
+        }
+        ref_fact(cx, st, ref_len_fact(a), pos, "`" + b.name + ".len() >= 0`");
+        return ref_val_seq(ref_la(a));
+    }
+    if ty_is_prim(t, "Bool") {
+        let v = ref_fresh(cx, st, t, b.name, pos);
+        if !b.mutable {
+            cx.bools.insert(b.id, v.f);
+        }
+        return v;
+    }
+    ref_val_other()
+}
+
+// ref_var is the current value of a variable.
+fn ref_var(cx: RefCtx, st: RefSt, b: ChkBinding, pos: AstPos) -> RefVal {
+    let t = ty_prune(b.ty);
+    if ty_is_prim(t, "Int") {
+        match st.env.get("v" + b.id.to_string()) {
+            Some(a) => {
+                return ref_val_int(ref_la(a));
+            }
+            None => {
+                return ref_bind_new(cx, st, b, pos);
+            }
+        }
+    }
+    if ref_is_seq(t) {
+        match st.env.get("l" + b.id.to_string()) {
+            Some(a) => {
+                return ref_val_seq(ref_la(a));
+            }
+            None => {
+                return ref_bind_new(cx, st, b, pos);
+            }
+        }
+    }
+    if ty_is_prim(t, "Bool") {
+        match cx.bools.get(b.id) {
+            Some(f) => {
+                return ref_val_bool(f);
+            }
+            None => {}
+        }
+        return ref_fresh(cx, st, t, b.name, pos);
+    }
+    ref_val_other()
+}
+
+// ref_update gives slot key a new atom (equal to v when known) and checks
+// the active loop-invariant candidates on it.
+fn ref_update(
+    cx: RefCtx,
+    st: RefSt,
+    key: String,
+    base: String,
+    disp: String,
+    v: Option<SmtLin>,
+    pos: AstPos,
+) {
+    let a = ref_atom(cx, base, disp);
+    st.env.insert(key, a);
+    match v {
+        Some(l) => ref_fact(cx, st, ref_eq(ref_la(a), l), pos, "`" + disp + "` assigned"),
+        None => {
+            if key.starts_with("l") {
+                ref_fact(cx, st, ref_len_fact(a), pos, "`" + disp + " >= 0`");
+            }
+        }
+    }
+    if st.dead {
+        return;
+    }
+    // every candidate on this slot must survive the update; a candidate
+    // that does is a fact from here on
+    for c in cx.cands {
+        if c.alive && (c.key == key || c.other == key) {
+            let goal = ref_cand_goal(c, st.env);
+            match smt_prove(ref_hyps(ref_slice(st, goal), false), goal) {
+                SmtResult::Valid(_) => ref_fact(cx, st, goal, pos, ref_cand_text(cx, c, st.env)),
+                _ => {
+                    c.alive = false;
+                }
+            }
+        }
+    }
+}
+
+// ref_havoc_vecs forgets the length of every Vec that a call may reach
+// (all but the isolated ones).
+fn ref_havoc_vecs(cx: RefCtx, st: RefSt, pos: AstPos) {
+    let ks = Vec::new();
+    for k in st.env.keys() {
+        match cx.vec_keys.get(k) {
+            Some(iso) => {
+                if !iso {
+                    ks.push(k);
+                }
+            }
+            None => {}
+        }
+    }
+    for k in ks {
+        let a = st.env.get(k).unwrap_or("");
+        let d = cx.display.get(a).unwrap_or("len");
+        ref_update(cx, st, k, ref_atom_base(a), d, None, pos);
+    }
+}
+
+// ref_len_fact bounds a length: 0 <= a <= 2^32 - 1 (Vec and String
+// lengths are 32-bit in the runtime).
+fn ref_len_fact(a: String) -> SmtF {
+    let lo = Vec::new();
+    lo.push(SmtMono { coef: -1, atom: a });
+    let hi = Vec::new();
+    hi.push(SmtMono { coef: 1, atom: a });
+    ref_and2(SmtF::Le(SmtLin { terms: lo, k: 0 }), SmtF::Le(SmtLin { terms: hi, k: -4294967295 }))
+}
+
+// ref_keys returns the keys of a map (to update it while going through
+// them).
+fn ref_keys(m: HashMap<String, String>) -> Vec<String> {
+    let out = Vec::new();
+    for k in m.keys() {
+        out.push(k);
+    }
+    out
+}
+
+fn ref_atom_base(a: String) -> String {
+    match a.index_of("#") {
+        Some(i) => a.slice(0, i),
+        None => a,
+    }
+}
+
+// ---- facts and VCs ----
+
+// ref_slice returns the facts that share atoms with goal (transitively),
+// and those without atoms (contradictions).
+fn ref_slice(st: RefSt, goal: SmtF) -> Vec<RefFact> {
+    let set: HashMap<String, Bool> = HashMap::new();
+    for a in ref_atoms(goal) {
+        set.insert(a, true);
+    }
+    let n = st.facts.len();
+    let inc = Vec::new();
+    for i in 0..n {
+        inc.push(false);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            if inc.get(i).unwrap_or(true) {
+                continue;
+            }
+            let f = st.facts.get(i).unwrap_or(RefFact {
+                label: "",
+                f: SmtF::True,
+                atoms: Vec::new(),
+            });
+            let mut hit = f.atoms.len() == 0;
+            for a in f.atoms {
+                if set.contains_key(a) {
+                    hit = true;
+                    break;
+                }
+            }
+            if hit {
+                inc.set(i, true);
+                for a in f.atoms {
+                    if !set.contains_key(a) {
+                        set.insert(a, true);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    let out = Vec::new();
+    for i in 0..n {
+        if inc.get(i).unwrap_or(false) {
+            out.push(
+                st.facts.get(i).unwrap_or(RefFact { label: "", f: SmtF::True, atoms: Vec::new() }),
+            );
+        }
+    }
+    out
+}
+
+// ref_hyps names the facts for the solver; with ranges, every atom is
+// also in the 64-bit range (overflow VCs).
+fn ref_hyps(fs: Vec<RefFact>, ranges: Bool) -> Vec<SmtF> {
+    let out = Vec::new();
+    for f in fs {
+        out.push(SmtF::Named(f.label, f.f));
+    }
+    out
+}
+
+fn ref_severity(cx: RefCtx, kind: String) -> String {
+    if kind == "overflow" {
+        return if cx.ovf == "error" {
+            "error"
+        } else {
+            "warning"
+        };
+    }
+    if kind == "div" {
+        return if cx.div == "error" {
+            "error"
+        } else {
+            "warning"
+        };
+    }
+    "error"
+}
+
+fn ref_count(cx: RefCtx, k: String) {
+    cx.sum.counts.insert(k, cx.sum.counts.get(k).unwrap_or(0) + 1);
+}
+
+// ref_vc proves goal from the facts of st; what describes the condition
+// ("the index `i` is in bounds (`...`)").
+fn ref_vc(cx: RefCtx, st: RefSt, goal: SmtF, kind: String, pos: AstPos, what: String) -> Bool {
+    ref_vc_x(cx, st, goal, goal, Vec::new(), ref_atoms(goal), kind, pos, what)
+}
+
+// ref_vc_x is ref_vc with the facts sliced for sf, extra hypotheses
+// (definitions of auxiliary atoms) and the atoms shown in a
+// counterexample.
+fn ref_vc_x(
+    cx: RefCtx,
+    st: RefSt,
+    goal: SmtF,
+    sf: SmtF,
+    extra: Vec<SmtF>,
+    show: Vec<String>,
+    kind: String,
+    pos: AstPos,
+    what: String,
+) -> Bool {
+    if st.dead || !cx.emit {
+        return true;
+    }
+    ref_count(cx, kind);
+    let sl = ref_slice(st, sf);
+    let hyps = ref_hyps(sl, false);
+    for h in extra {
+        hyps.push(h);
+    }
+    let r = smt_prove(hyps, goal);
+    let phase = if kind == "overflow" || kind == "div" {
+        "lint"
+    } else {
+        "refine"
+    };
+    let d = RefDiag {
+        pos: pos,
+        msg: "",
+        severity: ref_severity(cx, kind),
+        phase: phase,
+        kind: kind,
+        func: cx.fun.name,
+        cex: Vec::new(),
+        facts: Vec::new(),
+    };
+    match r {
+        SmtResult::Valid(core) => {
+            ref_count(cx, kind + "_ok");
+            if cx.cfg.verbose {
+                d.severity = "note";
+                d.msg = "proved " + what;
+                for l in core {
+                    match cx.labels.get(l) {
+                        Some(u) => d.facts.push(u),
+                        None => {}
+                    }
+                }
+                cx.report.diags.push(d);
+            }
+            return true;
+        }
+        SmtResult::Invalid(bs) => {
+            let shown = Vec::new();
+            let dseen: HashMap<String, Bool> = HashMap::new();
+            for a in show {
+                for b in bs {
+                    let disp = cx.display.get(a).unwrap_or(a);
+                    if b.atom == a && !dseen.contains_key(disp) {
+                        dseen.insert(disp, true);
+                        d.cex.push(SmtBinding { atom: disp, value: b.value });
+                        shown.push(disp + " = " + b.value.to_string());
+                    }
+                }
+            }
+            d.msg = "cannot prove " + what;
+            if shown.len() > 0 {
+                d.msg = d.msg + " (counterexample: " + shown.join(", ") + ")";
+            }
+        }
+        SmtResult::Unknown(why) => {
+            d.msg = "unknown (solver budget: " + why + "): cannot prove " + what;
+        }
+    }
+    for f in sl {
+        match cx.labels.get(f.label) {
+            Some(u) => d.facts.push(u),
+            None => {}
+        }
+    }
+    cx.report.diags.push(d);
+    false
+}
+
+// ---- predicates ----
+
+fn ref_sub_new() -> RefSub {
+    RefSub {
+        ints: HashMap::new(),
+        bools: HashMap::new(),
+        lens: HashMap::new(),
+        bids: HashMap::new(),
+        names: HashMap::new(),
+    }
+}
+
+// ref_sub_put binds name to a value (bid: the immutable variable holding
+// it, or 0).
+fn ref_sub_put(sub: RefSub, name: String, v: RefVal, bid: Int) {
+    if v.kind == "int" {
+        sub.ints.insert(name, v.lin);
+    } else if v.kind == "bool" {
+        sub.bools.insert(name, v.f);
+    } else if v.kind == "seq" {
+        sub.lens.insert(name, v.len);
+    }
+    if bid != 0 {
+        sub.names.insert(name, bid);
+    }
+}
+
+// ref_pred translates a predicate (checked by chk_pred_formula) under sub.
+fn ref_pred(cx: RefCtx, st: RefSt, e: AstExpr, sub: RefSub) -> SmtF {
+    match e {
+        AstExpr::BoolLit(b) => if b.value { SmtF::True } else { SmtF::False },
+        AstExpr::Ident(x) => match sub.bools.get(x.name) {
+            Some(f) => f,
+            None => ref_fresh(cx, st, ty_bool(), x.name, x.pos).f,
+        },
+        AstExpr::Unary(u) => SmtF::Not(ref_pred(cx, st, u.x, sub)),
+        AstExpr::Binary(b) => {
+            if b.op == "&&" {
+                return ref_and2(ref_pred(cx, st, b.x, sub), ref_pred(cx, st, b.y, sub));
+            }
+            if b.op == "||" {
+                return ref_or2(ref_pred(cx, st, b.x, sub), ref_pred(cx, st, b.y, sub));
+            }
+            let x = ref_pred_lin(cx, st, b.x, sub);
+            let y = ref_pred_lin(cx, st, b.y, sub);
+            match ref_cmp(b.op, x, y) {
+                Some(f) => f,
+                None => ref_fresh(cx, st, ty_bool(), ref_show(e), b.pos).f,
+            }
+        }
+        _ => ref_fresh(cx, st, ty_bool(), ref_show(e), ast_expr_pos(e)).f,
+    }
+}
+
+fn ref_pred_lin(cx: RefCtx, st: RefSt, e: AstExpr, sub: RefSub) -> SmtLin {
+    let r = match e {
+        AstExpr::IntLit(x) => Some(ref_lc(x.value)),
+        AstExpr::Ident(x) => sub.ints.get(x.name),
+        AstExpr::Unary(u) => {
+            if u.op == "-" {
+                ref_lscale(ref_pred_lin(cx, st, u.x, sub), -1)
+            } else {
+                None
+            }
+        }
+        AstExpr::Binary(b) => {
+            let x = ref_pred_lin(cx, st, b.x, sub);
+            let y = ref_pred_lin(cx, st, b.y, sub);
+            if b.op == "+" {
+                ref_ladd(x, y, 1)
+            } else if b.op == "-" {
+                ref_ladd(x, y, -1)
+            } else if b.op == "*" {
+                match ref_lconst(x) {
+                    Some(c) => ref_lscale(y, c),
+                    None => match ref_lconst(y) {
+                        Some(c) => ref_lscale(x, c),
+                        None => None,
+                    },
+                }
+            } else {
+                None
+            }
+        }
+        AstExpr::Method(m) => match ref_strip(m.recv) {
+            AstExpr::Ident(x) => sub.lens.get(x.name),
+            _ => None,
+        },
+        AstExpr::Field(f) => match ref_strip(f.x) {
+            AstExpr::Ident(x) => match sub.names.get(x.name) {
+                Some(bid) => Some(ref_field_atom(cx, st, bid, x.name, f.name, f.id)),
+                None => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    match r {
+        Some(l) => l,
+        None => ref_fresh(cx, st, ty_int(), ref_show(e), ast_expr_pos(e)).lin,
+    }
+}
+
+// ref_field_atom is the atom of the immutable Int field `name.field` of
+// the immutable variable bid.
+fn ref_field_atom(
+    cx: RefCtx,
+    st: RefSt,
+    bid: Int,
+    name: String,
+    field: String,
+    eid: Int,
+) -> SmtLin {
+    let key = "f" + bid.to_string() + "." + field;
+    match cx.fixed.get(key) {
+        Some(a) => ref_la(a),
+        None => {
+            let a = ref_atom(cx, name + "." + field, name + "." + field);
+            cx.fixed.insert(key, a);
+            ref_la(a)
+        }
+    }
+}
+
+// ref_alias_facts adds the predicates of alias name for the value v.
+fn ref_alias_facts(cx: RefCtx, st: RefSt, name: String, v: RefVal, pos: AstPos, what: String) {
+    let sub = ref_sub_new();
+    ref_sub_put(sub, "self", v, 0);
+    for p in ref_alias_preds(cx.info, name) {
+        ref_fact(
+            cx,
+            st,
+            ref_pred(cx, st, p, sub),
+            pos,
+            what + " is a `" + name + "` (`" + ref_show(p) + "`)",
+        );
+    }
+}
+
+// ref_alias_vc proves that v (described by what) satisfies alias name.
+fn ref_alias_vc(cx: RefCtx, st: RefSt, name: String, v: RefVal, pos: AstPos, what: String) {
+    let sub = ref_sub_new();
+    ref_sub_put(sub, "self", v, 0);
+    for p in ref_alias_preds(cx.info, name) {
+        ref_vc(
+            cx,
+            st,
+            ref_pred(cx, st, p, sub),
+            "alias",
+            pos,
+            what + " is a `" + name + "` (`" + ref_show(p) + "`)",
+        );
+    }
+}
+
+// ref_own_sub binds the current function's parameters.
+fn ref_own_sub(cx: RefCtx, st: RefSt) -> RefSub {
+    let sub = ref_sub_new();
+    for p in cx.fun.params {
+        let bid = if p.mutable { 0 } else { p.id };
+        ref_sub_put(sub, p.name, ref_var(cx, st, p, p.pos), bid);
+    }
+    sub
+}
+
+// ref_post checks the postconditions and the result alias at a return of
+// value v (e: the returned expression, for `result.len()`).
+fn ref_post(cx: RefCtx, st: RefSt, v: RefVal, e: Option<AstExpr>, pos: AstPos) {
+    if cx.in_closure > 0 || st.dead {
+        return;
+    }
+    let mut any = false;
+    for p in cx.fun.decl.preds {
+        if ref_mentions(p, "result") {
+            any = true;
+        }
+    }
+    let ra = ref_result_alias(cx.info, cx.fun);
+    if !any && ra == "" {
+        return;
+    }
+    let sub = ref_own_sub(cx, st);
+    ref_sub_put(sub, "result", v, 0);
+    for p in cx.fun.decl.preds {
+        if ref_mentions(p, "result") {
+            ref_vc(
+                cx,
+                st,
+                ref_pred(cx, st, p, sub),
+                "post",
+                pos,
+                "the postcondition `" + ref_show(p) + "` of `" + cx.fun.name + "`",
+            );
+        }
+    }
+    if ra != "" {
+        ref_alias_vc(cx, st, ra, v, pos, "the result of `" + cx.fun.name + "`");
+    }
+}
+
+// ---- statements ----
+
+fn ref_block(cx: RefCtx, st: RefSt, b: AstBlock) -> RefVal {
+    for s in b.stmts {
+        ref_stmt(cx, st, s);
+    }
+    match b.tail {
+        Some(e) => ref_expr(cx, st, e),
+        None => ref_val_other(),
+    }
+}
+
+fn ref_stmt(cx: RefCtx, st: RefSt, s0: AstStmt) {
+    match s0 {
+        AstStmt::Let(s) => {
+            let v = ref_expr(cx, st, s.init);
+            match s.ty {
+                Some(t) => {
+                    let a = ref_alias_of(cx.info, t);
+                    if a != "" {
+                        ref_alias_vc(
+                            cx,
+                            st,
+                            a,
+                            v,
+                            ast_expr_pos(s.init),
+                            "`" + ref_show(s.init) + "`",
+                        );
+                    }
+                }
+                None => {}
+            }
+            match cx.info.lets.get(s.id) {
+                Some(b) => ref_assign_new(cx, st, b, v, s.pos),
+                None => {}
+            }
+        }
+        AstStmt::Assign(s) => {
+            let v = ref_expr(cx, st, s.value);
+            match cx.info.assigns.get(s.id) {
+                Some(b) => {
+                    let t = ty_prune(b.ty);
+                    if ty_is_prim(t, "Int") {
+                        ref_update(
+                            cx,
+                            st,
+                            "v" + b.id.to_string(),
+                            b.name,
+                            b.name,
+                            Some(v.lin),
+                            s.pos,
+                        );
+                    } else if ref_is_seq(t) {
+                        let l = if v.kind == "seq" { Some(v.len) } else { None };
+                        ref_update(
+                            cx,
+                            st,
+                            "l" + b.id.to_string(),
+                            "len(" + b.name + ")",
+                            b.name + ".len()",
+                            l,
+                            s.pos,
+                        );
+                    }
+                }
+                None => {}
+            }
+        }
+        AstStmt::FieldAssign(s) => {
+            ref_expr(cx, st, s.target.x);
+            let v = ref_expr(cx, st, s.value);
+            match cx.info.types.get(ast_expr_id(s.target.x)) {
+                Some(xt) => match ty_prune(xt) {
+                    Ty::Struct(sd, _) => {
+                        match cx.field_alias.get(sd.name + "." + s.target.name) {
+                            Some(a) => ref_alias_vc(
+                                cx,
+                                st,
+                                a,
+                                v,
+                                ast_expr_pos(s.value),
+                                "field `" + s.target.name + "`",
+                            ),
+                            None => {}
+                        }
+                    }
+                    _ => {}
+                },
+                None => {}
+            }
+        }
+        AstStmt::Break(_) => {
+            st.dead = true;
+        }
+        AstStmt::Continue(_) => {
+            st.dead = true;
+        }
+        AstStmt::While(s) => ref_loop(cx, st, s0),
+        AstStmt::For(s) => ref_loop(cx, st, s0),
+        AstStmt::Return(s) => {
+            let mut v = ref_val_other();
+            match s.value {
+                Some(e) => {
+                    v = ref_expr(cx, st, e);
+                }
+                None => {}
+            }
+            ref_post(cx, st, v, s.value, s.pos);
+            st.dead = true;
+        }
+        AstStmt::Expr(s) => {
+            ref_expr(cx, st, s.x);
+            if ty_is_prim(ref_ty_of(cx, s.x), "!") {
+                st.dead = true;
+            }
+        }
+    }
+}
+
+// ref_assign_new binds a new variable b to v (`let`): `b == v`.
+fn ref_assign_new(cx: RefCtx, st: RefSt, b: ChkBinding, v: RefVal, pos: AstPos) {
+    let t = ty_prune(b.ty);
+    if ty_is_prim(t, "Int") && v.kind == "int" {
+        let a = ref_atom(cx, b.name, b.name);
+        st.env.insert("v" + b.id.to_string(), a);
+        ref_fact(cx, st, ref_eq(ref_la(a), v.lin), pos, "`let " + b.name + "`");
+        return;
+    }
+    if ty_is_prim(t, "Bool") && v.kind == "bool" {
+        if !b.mutable {
+            cx.bools.insert(b.id, v.f);
+        }
+        return;
+    }
+    if ref_is_seq(t) && v.kind == "seq" {
+        let a = ref_atom(cx, "len(" + b.name + ")", b.name + ".len()");
+        st.env.insert("l" + b.id.to_string(), a);
+        if ref_is_vec(t) {
+            cx.vec_keys.insert("l" + b.id.to_string(), cx.isolated.contains_key(b.id));
+        }
+        ref_fact(cx, st, ref_eq(ref_la(a), v.len), pos, "`let " + b.name + "`");
+        return;
+    }
+    ref_bind_new(cx, st, b, pos);
+}
+
+// ---- loops ----
+
+// ref_loop_keys are the slots of st a loop may change.
+fn ref_loop_keys(cx: RefCtx, st: RefSt, id: Int) -> Vec<String> {
+    let out = Vec::new();
+    let m = cx.loop_touch.get(id).unwrap_or(HashMap::new());
+    let all = m.contains_key("*");
+    for k in st.env.keys() {
+        let mut hit = m.contains_key(k);
+        if all {
+            match cx.vec_keys.get(k) {
+                Some(iso) => {
+                    if !iso {
+                        hit = true;
+                    }
+                }
+                None => {}
+            }
+        }
+        if hit {
+            out.push(k);
+        }
+    }
+    out
+}
+
+// ref_loop_head is the state at the head of a loop: the changed slots get
+// new atoms; the surviving candidates are facts.
+fn ref_loop_head(
+    cx: RefCtx,
+    st: RefSt,
+    keys: Vec<String>,
+    cands: Vec<RefCand>,
+    pos: AstPos,
+) -> RefSt {
+    let h = ref_clone(st);
+    for k in keys {
+        let a = h.env.get(k).unwrap_or("");
+        let na = ref_atom(cx, ref_atom_base(a), cx.display.get(a).unwrap_or(a));
+        h.env.insert(k, na);
+        if k.starts_with("l") {
+            ref_fact(
+                cx,
+                h,
+                ref_len_fact(na),
+                pos,
+                "`" + cx.display.get(na).unwrap_or(na) + " >= 0`",
+            );
+        }
+    }
+    for c in cands {
+        if c.alive {
+            ref_fact(cx, h, ref_cand_goal(c, h.env), pos, ref_cand_text(cx, c, h.env));
+        }
+    }
+    h
+}
+
+// ref_loop_enter evaluates the loop condition (or binds the loop variable)
+// in h and returns the state of the body; the exit facts go to ex.
+fn ref_loop_enter(cx: RefCtx, h: RefSt, s0: AstStmt, a: RefVal, b: RefVal) -> RefSt {
+    match s0 {
+        AstStmt::While(s) => {
+            match s.pat {
+                Some(_) => {
+                    ref_expr(cx, h, s.cond);
+                    ref_clone(h)
+                }
+                None => {
+                    let f = ref_cond(cx, h, s.cond);
+                    let body = ref_clone(h);
+                    ref_fact(
+                        cx,
+                        body,
+                        f,
+                        ast_expr_pos(s.cond),
+                        "loop condition `" + ref_show(s.cond) + "`",
+                    );
+                    if !cx.loop_break.contains_key(s.id) {
+                        ref_fact(
+                            cx,
+                            h,
+                            SmtF::Not(f),
+                            ast_expr_pos(s.cond),
+                            "loop exit `!(" + ref_show(s.cond) + ")`",
+                        );
+                    }
+                    body
+                }
+            }
+        }
+        AstStmt::For(s) => {
+            let body = ref_clone(h);
+            match cx.info.fors.get(s.id) {
+                Some(bnd) => {
+                    let iv = ref_bind_new(cx, body, bnd, s.pos);
+                    let range = s.end.is_some() || ref_is_incl_range(s.iter);
+                    if iv.kind == "int" && range && a.kind == "int" && b.kind == "int" {
+                        let incl = s.end.is_none();
+                        let lo = ref_cmp("<=", a.lin, iv.lin);
+                        let hi = ref_cmp(if incl { "<=" } else { "<" }, iv.lin, b.lin);
+                        match lo {
+                            Some(f) => ref_fact(
+                                cx,
+                                body,
+                                f,
+                                s.pos,
+                                "`for` range `" + bnd.name + " in " + ref_for_text(s) + "`",
+                            ),
+                            None => {}
+                        }
+                        match hi {
+                            Some(f) => ref_fact(
+                                cx,
+                                body,
+                                f,
+                                s.pos,
+                                "`for` range `" + bnd.name + " in " + ref_for_text(s) + "`",
+                            ),
+                            None => {}
+                        }
+                    }
+                }
+                None => {}
+            }
+            body
+        }
+        _ => ref_clone(h),
+    }
+}
+
+fn ref_for_text(s: AstForStmt) -> String {
+    match s.end {
+        Some(e) => ref_show(s.iter) + ".." + ref_show(e),
+        None => ref_show(s.iter),
+    }
+}
+
+fn ref_is_incl_range(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Range(r) => r.inclusive,
+        _ => false,
+    }
+}
+
+fn ref_loop(cx: RefCtx, st: RefSt, s0: AstStmt) {
+    let mut id = 0;
+    let mut pos = chk_dummy_pos();
+    let mut body = AstBlock { id: 0, pos: pos, stmts: Vec::new(), tail: None, end: pos };
+    let mut a = ref_val_other();
+    let mut b = ref_val_other();
+    match s0 {
+        AstStmt::While(s) => {
+            id = s.id;
+            pos = s.pos;
+            body = s.body;
+        }
+        AstStmt::For(s) => {
+            id = s.id;
+            pos = s.pos;
+            body = s.body;
+            match s.end {
+                Some(e) => {
+                    a = ref_expr(cx, st, s.iter);
+                    b = ref_expr(cx, st, e);
+                }
+                None => match s.iter {
+                    AstExpr::Range(r) => {
+                        a = ref_expr(cx, st, r.start);
+                        b = ref_expr(cx, st, r.end);
+                    }
+                    _ => {
+                        ref_expr(cx, st, s.iter);
+                    }
+                },
+            }
+        }
+        _ => {}
+    }
+    if st.dead {
+        return;
+    }
+    let keys = ref_loop_keys(cx, st, id);
+    let mut cands = Vec::new();
+    for k in keys {
+        if k.starts_with("v") {
+            let e = st.env.get(k).unwrap_or("");
+            cands.push(RefCand { key: k, entry: e, other: "", ge: true, alive: true });
+            cands.push(RefCand { key: k, entry: e, other: "", ge: false, alive: true });
+        }
+    }
+    // relational candidates `x <= y` (x assigned in the loop, y any Int or
+    // length slot) that hold at entry
+    let touched: HashMap<String, Bool> = HashMap::new();
+    for k in keys {
+        touched.insert(k, true);
+    }
+    let mut nrel = 0;
+    for k in keys {
+        if !k.starts_with("v") {
+            continue;
+        }
+        for o in ref_keys(st.env) {
+            if o == k || !(o.starts_with("v") || o.starts_with("l")) || nrel >= 48 {
+                continue;
+            }
+            let pairs = Vec::new();
+            pairs.push(RefCand { key: k, entry: "", other: o, ge: false, alive: true });
+            if !touched.contains_key(o) {
+                pairs.push(RefCand { key: o, entry: "", other: k, ge: false, alive: true });
+            }
+            for c in pairs {
+                let g = ref_cand_goal(c, st.env);
+                match smt_prove(ref_hyps(ref_slice(st, g), false), g) {
+                    SmtResult::Valid(_) => {
+                        cands.push(c);
+                        nrel = nrel + 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Houdini: drop the candidates an iteration breaks, until stable
+    let mut round = 0;
+    let mut stable = cands.len() == 0;
+    while !stable && round < 3 {
+        let saved_emit = cx.emit;
+        cx.emit = false;
+        let base = cx.cands.len();
+        for c in cands {
+            cx.cands.push(c);
+        }
+        let h = ref_loop_head(cx, st, keys, cands, pos);
+        let bs = ref_loop_enter(cx, h, s0, a, b);
+        ref_block(cx, bs, body);
+        while cx.cands.len() > base {
+            cx.cands.pop();
+        }
+        cx.emit = saved_emit;
+        let alive = Vec::new();
+        for c in cands {
+            if c.alive {
+                alive.push(c);
+            }
+        }
+        stable = alive.len() == cands.len();
+        cands = alive;
+        round = round + 1;
+    }
+    if !stable {
+        cands = Vec::new();
+    }
+    let h = ref_loop_head(cx, st, keys, cands, pos);
+    let bs = ref_loop_enter(cx, h, s0, a, b);
+    ref_block(cx, bs, body);
+    // after the loop: the head state (and the negated condition)
+    let n0 = st.facts.len();
+    let mut i = 0;
+    for f in h.facts {
+        if i >= n0 {
+            st.facts.push(f);
+        }
+        i = i + 1;
+    }
+    for k in h.env.keys() {
+        st.env.insert(k, h.env.get(k).unwrap_or(""));
+    }
+}
+
+// ---- joins ----
+
+// ref_join merges the branches brs (clones of st, with values vals) into
+// st: slots that differ get new atoms; the facts of the branches become
+// one disjunction. Returns the value of the whole (type t).
+fn ref_join(
+    cx: RefCtx,
+    st: RefSt,
+    brs: Vec<RefSt>,
+    vals: Vec<RefVal>,
+    t: Ty,
+    pos: AstPos,
+) -> RefVal {
+    let n0 = st.facts.len();
+    let live = Vec::new();
+    let lvals = Vec::new();
+    let mut i = 0;
+    for b in brs {
+        if !b.dead {
+            live.push(b);
+            lvals.push(vals.get(i).unwrap_or(ref_val_other()));
+        }
+        i = i + 1;
+    }
+    if live.len() == 0 {
+        st.dead = true;
+        return ref_val_other();
+    }
+    if live.len() == 1 {
+        let b = live.get(0).unwrap_or(st);
+        let mut j = 0;
+        for f in b.facts {
+            if j >= n0 {
+                st.facts.push(f);
+            }
+            j = j + 1;
+        }
+        for k in ref_keys(st.env) {
+            st.env.insert(k, b.env.get(k).unwrap_or(st.env.get(k).unwrap_or("")));
+        }
+        return lvals.get(0).unwrap_or(ref_val_other());
+    }
+    // slots that differ
+    let changed = Vec::new();
+    for k in st.env.keys() {
+        let a0 = st.env.get(k).unwrap_or("");
+        for b in live {
+            if b.env.get(k).unwrap_or(a0) != a0 {
+                changed.push(k);
+                break;
+            }
+        }
+    }
+    let news = Vec::new();
+    for k in changed {
+        let a0 = st.env.get(k).unwrap_or("");
+        news.push(ref_atom(cx, ref_atom_base(a0), cx.display.get(a0).unwrap_or(a0)));
+    }
+    let res = ref_fresh(cx, st, t, "if", pos);
+    let ors = Vec::new();
+    let mut any = false;
+    let mut bi = 0;
+    for b in live {
+        let conj = Vec::new();
+        let mut j = 0;
+        for f in b.facts {
+            if j >= n0 {
+                conj.push(f.f);
+            }
+            j = j + 1;
+        }
+        let mut ci = 0;
+        for k in changed {
+            let na = news.get(ci).unwrap_or("");
+            conj.push(ref_eq(ref_la(na), ref_la(b.env.get(k).unwrap_or(""))));
+            ci = ci + 1;
+        }
+        let v = lvals.get(bi).unwrap_or(ref_val_other());
+        if res.kind == "int" && v.kind == "int" {
+            conj.push(ref_eq(res.lin, v.lin));
+        } else if res.kind == "bool" && v.kind == "bool" {
+            conj.push(ref_or2(ref_and2(res.f, v.f), ref_and2(SmtF::Not(res.f), SmtF::Not(v.f))));
+        } else if res.kind == "seq" && v.kind == "seq" {
+            conj.push(ref_eq(res.len, v.len));
+        }
+        if conj.len() > 0 {
+            any = true;
+        }
+        ors.push(SmtF::And(conj));
+        bi = bi + 1;
+    }
+    let mut ci = 0;
+    for k in changed {
+        st.env.insert(k, news.get(ci).unwrap_or(""));
+        ci = ci + 1;
+    }
+    if any {
+        ref_fact(cx, st, SmtF::Or(ors), pos, "the branches of `if` / `match`");
+    }
+    res
+}
+
+// ---- expressions ----
+
+// ref_cond is the formula of a Bool expression.
+fn ref_cond(cx: RefCtx, st: RefSt, e: AstExpr) -> SmtF {
+    let v = ref_expr(cx, st, e);
+    if v.kind == "bool" {
+        return v.f;
+    }
+    ref_fresh(cx, st, ty_bool(), ref_show(e), ast_expr_pos(e)).f
+}
+
+fn ref_int_or_fresh(cx: RefCtx, st: RefSt, v: RefVal, e: AstExpr) -> SmtLin {
+    if v.kind == "int" {
+        return v.lin;
+    }
+    ref_fresh(cx, st, ty_int(), ref_show(e), ast_expr_pos(e)).lin
+}
+
+// ref_ovf checks that r, the exact value of e, fits in 64 bits.
+fn ref_ovf(cx: RefCtx, st: RefSt, r: Option<SmtLin>, e: AstExpr, pos: AstPos) {
+    if cx.ovf == "off" || st.dead || !cx.emit {
+        return;
+    }
+    let what = "`" + ref_show(e) + "` does not overflow (|value| <= 2^60)";
+    // The goal is |l| <= 2^60, stronger than the 64-bit range: the
+    // solver works with 64-bit constants, and bounds at 2^63 overflow as
+    // soon as they are negated or combined. A counterexample is then a
+    // value beyond 2^60 (coefficients up to 8 still fit).
+    let extra = Vec::new();
+    let mut goal = SmtF::False;
+    let mut sf = SmtF::True;
+    let bound = 1152921504606846976;
+    match r {
+        Some(l) => match ref_ladd(l, ref_lc(bound), -1) {
+            Some(hi) => match ref_lscale(l, -1) {
+                Some(nl) => match ref_ladd(nl, ref_lc(bound), -1) {
+                    Some(lo) => {
+                        goal = ref_and2(SmtF::Le(hi), SmtF::Le(lo));
+                        sf = SmtF::Le(l);
+                    }
+                    None => {}
+                },
+                None => {}
+            },
+            None => {}
+        },
+        None => {}
+    }
+    match sf {
+        SmtF::True => {
+            ref_count(cx, "overflow");
+            cx.report.diags.push(RefDiag {
+                pos: pos,
+                msg: "cannot prove " + what + " (non-linear or out-of-range arithmetic)",
+                severity: ref_severity(cx, "overflow"),
+                phase: "lint",
+                kind: "overflow",
+                func: cx.fun.name,
+                cex: Vec::new(),
+                facts: Vec::new(),
+            });
+        }
+        _ => {
+            ref_vc_x(cx, st, goal, sf, extra, ref_atoms(sf), "overflow", pos, what);
+        }
+    }
+}
+
+fn ref_expr(cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
+    match e {
+        AstExpr::IntLit(x) => ref_val_int(ref_lc(x.value)),
+        AstExpr::BoolLit(x) => ref_val_bool(if x.value { SmtF::True } else { SmtF::False }),
+        AstExpr::StrLit(x) => ref_val_seq(ref_lc(x.value.len())),
+        AstExpr::Ident(x) => match cx.info.uses.get(x.id) {
+            Some(b) => ref_var(cx, st, b, x.pos),
+            None => ref_fresh(cx, st, ref_ty_of(cx, e), x.name, x.pos),
+        },
+        AstExpr::Unary(u) => {
+            let v = ref_expr(cx, st, u.x);
+            if u.op == "-" {
+                let x = ref_int_or_fresh(cx, st, v, u.x);
+                let r = ref_lscale(x, -1);
+                ref_ovf(cx, st, r, e, u.pos);
+                return match r {
+                    Some(l) => ref_val_int(l),
+                    None => ref_fresh(cx, st, ty_int(), ref_show(e), u.pos),
+                };
+            }
+            if u.op == "!" {
+                if v.kind == "bool" {
+                    return ref_val_bool(SmtF::Not(v.f));
+                }
+                return ref_fresh(cx, st, ty_bool(), ref_show(e), u.pos);
+            }
+            v
+        }
+        AstExpr::Binary(b) => ref_binary(cx, st, b, e),
+        AstExpr::Block(b) => ref_block(cx, st, b),
+        AstExpr::If(x) => ref_if(cx, st, x, e),
+        AstExpr::Match(m) => ref_match(cx, st, m, e),
+        AstExpr::Call(c) => ref_call_expr(cx, st, c, e),
+        AstExpr::Method(m) => ref_method(cx, st, m, e),
+        AstExpr::Field(f) => {
+            let xv = ref_expr(cx, st, f.x);
+            let t = ref_ty_of(cx, e);
+            match ref_strip(f.x) {
+                AstExpr::Ident(x) => match cx.info.uses.get(x.id) {
+                    Some(bnd) => {
+                        if !bnd.mutable && ty_is_prim(t, "Int") && ref_field_immutable(cx, f) {
+                            return ref_val_int(
+                                ref_field_atom(cx, st, bnd.id, bnd.name, f.name, f.id),
+                            );
+                        }
+                    }
+                    None => {}
+                },
+                _ => {}
+            }
+            ref_fresh(cx, st, t, ref_show(e), f.pos)
+        }
+        AstExpr::StructLit(s) => {
+            let sname = match cx.info.struct_lits.get(s.id) {
+                Some(sd) => sd.name,
+                None => "",
+            };
+            for fl in s.fields {
+                let v = ref_expr(cx, st, fl.value);
+                match cx.field_alias.get(sname + "." + fl.name) {
+                    Some(a) => ref_alias_vc(
+                        cx,
+                        st,
+                        a,
+                        v,
+                        ast_expr_pos(fl.value),
+                        "field `" + fl.name + "`",
+                    ),
+                    None => {}
+                }
+            }
+            ref_val_other()
+        }
+        AstExpr::Try(t) => {
+            ref_expr(cx, st, t.x);
+            ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), t.pos)
+        }
+        AstExpr::Closure(c) => {
+            // the body runs later, with the captured values: the facts
+            // about them hold, the lengths of Vecs may have changed
+            let s2 = ref_clone(st);
+            ref_havoc_vecs(cx, s2, c.pos);
+            cx.in_closure = cx.in_closure + 1;
+            let saved = Vec::new();
+            for x in cx.cands {
+                saved.push(x);
+            }
+            while cx.cands.len() > 0 {
+                cx.cands.pop();
+            }
+            ref_expr(cx, s2, c.body);
+            for x in saved {
+                cx.cands.push(x);
+            }
+            cx.in_closure = cx.in_closure - 1;
+            ref_val_other()
+        }
+        AstExpr::Tuple(t) => {
+            for x in t.elems {
+                ref_expr(cx, st, x);
+            }
+            ref_val_other()
+        }
+        AstExpr::Range(r) => {
+            ref_expr(cx, st, r.start);
+            ref_expr(cx, st, r.end);
+            ref_val_other()
+        }
+        AstExpr::Index(x) => ref_index(cx, st, x, e),
+        _ => ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), ast_expr_pos(e)),
+    }
+}
+
+fn ref_field_immutable(cx: RefCtx, f: AstFieldExpr) -> Bool {
+    match ref_ty_of(cx, f.x) {
+        Ty::Struct(sd, _) => match chk_struct_field(sd, f.name) {
+            Some(fi) => !fi.mutable,
+            None => false,
+        },
+        Ty::Tuple(_) => true,
+        _ => false,
+    }
+}
+
+fn ref_binary(cx: RefCtx, st: RefSt, b: AstBinary, e: AstExpr) -> RefVal {
+    if b.op == "&&" || b.op == "||" {
+        let fa = ref_cond(cx, st, b.x);
+        let s2 = ref_clone(st);
+        let lab = if b.op == "&&" {
+            "`&&` left operand"
+        } else {
+            "`||` left operand is false"
+        };
+        ref_fact(
+            cx,
+            s2,
+            if b.op == "&&" { fa } else { SmtF::Not(fa) },
+            ast_expr_pos(b.x),
+            lab + " `" + ref_show(b.x) + "`",
+        );
+        let fb = ref_cond(cx, s2, b.y);
+        // effects of the right operand (lengths) carry over, its facts do
+        // not
+        for k in ref_keys(st.env) {
+            let a0 = st.env.get(k).unwrap_or("");
+            let a1 = s2.env.get(k).unwrap_or(a0);
+            if a1 != a0 {
+                let na = ref_atom(cx, ref_atom_base(a0), cx.display.get(a0).unwrap_or(a0));
+                st.env.insert(k, na);
+                if k.starts_with("l") {
+                    ref_fact(cx, st, ref_len_fact(na), b.pos, "length");
+                }
+            }
+        }
+        if b.op == "&&" {
+            return ref_val_bool(ref_and2(fa, fb));
+        }
+        return ref_val_bool(ref_or2(fa, fb));
+    }
+    let xv = ref_expr(cx, st, b.x);
+    let yv = ref_expr(cx, st, b.y);
+    let op = b.op;
+    let it = ty_is_prim(ref_ty_of(cx, b.x), "Int");
+    if op == "<" || op == "<=" || op == ">" || op == ">=" || op == "==" || op == "!=" {
+        if it && xv.kind == "int" && yv.kind == "int" {
+            match ref_cmp(op, xv.lin, yv.lin) {
+                Some(f) => {
+                    return ref_val_bool(f);
+                }
+                None => {}
+            }
+        }
+        if (op == "==" || op == "!=") && xv.kind == "bool" && yv.kind == "bool" {
+            let eq = ref_or2(ref_and2(xv.f, yv.f), ref_and2(SmtF::Not(xv.f), SmtF::Not(yv.f)));
+            return ref_val_bool(if op == "==" { eq } else { SmtF::Not(eq) });
+        }
+        return ref_fresh(cx, st, ty_bool(), ref_show(e), b.pos);
+    }
+    if !it {
+        return ref_fresh(cx, st, ref_ty_of(cx, e), "(" + ref_show(e) + ")", b.pos);
+    }
+    let x = ref_int_or_fresh(cx, st, xv, b.x);
+    let y = ref_int_or_fresh(cx, st, yv, b.y);
+    if op == "+" || op == "-" {
+        let r = ref_ladd(x, y, if op == "+" { 1 } else { -1 });
+        ref_ovf(cx, st, r, e, b.pos);
+        return match r {
+            Some(l) => ref_val_int(l),
+            None => ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos),
+        };
+    }
+    if op == "*" {
+        let r = match ref_lconst(x) {
+            Some(c) => ref_lscale(y, c),
+            None => match ref_lconst(y) {
+                Some(c) => ref_lscale(x, c),
+                None => None,
+            },
+        };
+        ref_ovf(cx, st, r, e, b.pos);
+        return match r {
+            Some(l) => ref_val_int(l),
+            None => ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos),
+        };
+    }
+    if op == "/" || op == "%" {
+        if cx.div != "off" {
+            let nz = SmtF::Not(SmtF::Eq(y));
+            if op == "/" {
+                // x == MIN as -x + MIN == 0 (x - MIN does not fit)
+                let xmin = match ref_lscale(x, -1) {
+                    Some(nx) => match ref_ladd(nx, ref_lc(ref_min()), 1) {
+                        Some(d) => SmtF::Eq(d),
+                        None => SmtF::True,
+                    },
+                    None => SmtF::True,
+                };
+                let ym1 = ref_eq(y, ref_lc(-1));
+                // two VCs: the second only once the first holds (one
+                // diagnostic per division)
+                if ref_vc(
+                    cx,
+                    st,
+                    nz,
+                    "div",
+                    b.pos,
+                    "the divisor `" + ref_show(b.y) + "` is nonzero",
+                ) {
+                    ref_vc(
+                        cx,
+                        st,
+                        SmtF::Not(ref_and2(xmin, ym1)),
+                        "div",
+                        b.pos,
+                        "`" + ref_show(e) + "` is not `MIN / -1` (the one overflowing division)",
+                    );
+                }
+            } else {
+                ref_vc(cx, st, nz, "div", b.pos, "the divisor `" + ref_show(b.y) + "` is nonzero");
+            }
+        }
+        let r = ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos);
+        match ref_lconst(y) {
+            Some(c) => {
+                if c > 0 {
+                    ref_divc(cx, st, x, c, op, r.lin, b.pos, e);
+                }
+            }
+            None => {}
+        }
+        return r;
+    }
+    ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos)
+}
+
+// ref_divc adds the facts of r = x / c or x % c for a constant c > 0
+// (truncating division): with q the quotient, x >= 0 && c*q <= x <= c*q +
+// c - 1 or x < 0 && c*q - c + 1 <= x <= c*q; r = q or r = x - c*q.
+fn ref_divc(
+    cx: RefCtx,
+    st: RefSt,
+    x: SmtLin,
+    c: Int,
+    op: String,
+    r: SmtLin,
+    pos: AstPos,
+    e: AstExpr,
+) {
+    let q = if op == "/" {
+        r
+    } else {
+        ref_la(ref_atom(cx, "$q", "quotient"))
+    };
+    // every term must be exact: a fact built from a failed (overflowing)
+    // computation would be unsound, so then there is no fact at all
+    let cq = match ref_lscale(q, c) {
+        Some(v) => v,
+        None => {
+            return;
+        }
+    };
+    let nx = ref_lscale(x, -1);
+    let cq_x = ref_ladd(cq, x, -1);
+    let x_cq = ref_ladd(x, cq, -1);
+    let c1 = ref_cadd(1, -c);
+    let x1 = ref_cadd(x.k, 1);
+    if nx.is_none() || cq_x.is_none() || x_cq.is_none() || c1.is_none() || x1.is_none() {
+        return;
+    }
+    let nxv = nx.unwrap_or(ref_lc(0));
+    let a = cq_x.unwrap_or(ref_lc(0));
+    let d = x_cq.unwrap_or(ref_lc(0));
+    let k1 = c1.unwrap_or(0);
+    let ak = ref_cadd(a.k, k1);
+    let dk = ref_cadd(d.k, k1);
+    if ak.is_none() || dk.is_none() {
+        return;
+    }
+    // x >= 0 && c*q <= x && x - c*q - (c - 1) <= 0
+    let pos_side = Vec::new();
+    pos_side.push(SmtF::Le(nxv));
+    pos_side.push(SmtF::Le(a));
+    pos_side.push(SmtF::Le(SmtLin { terms: d.terms, k: dk.unwrap_or(0) }));
+    // x + 1 <= 0 && c*q - x - (c - 1) <= 0 && x - c*q <= 0
+    let neg_side = Vec::new();
+    neg_side.push(SmtF::Le(SmtLin { terms: x.terms, k: x1.unwrap_or(0) }));
+    neg_side.push(SmtF::Le(SmtLin { terms: a.terms, k: ak.unwrap_or(0) }));
+    neg_side.push(SmtF::Le(d));
+    let f = ref_or2(SmtF::And(pos_side), SmtF::And(neg_side));
+    if op == "/" {
+        ref_fact(cx, st, f, pos, "`" + ref_show(e) + "` (division by a constant)");
+    } else {
+        ref_fact(
+            cx,
+            st,
+            ref_and2(f, ref_eq(r, d)),
+            pos,
+            "`" + ref_show(e) + "` (remainder by a constant)",
+        );
+    }
+}
+
+fn ref_if(cx: RefCtx, st: RefSt, x: AstIf, e: AstExpr) -> RefVal {
+    let t = ref_ty_of(cx, e);
+    let brs = Vec::new();
+    let vals = Vec::new();
+    match x.pat {
+        Some(_) => {
+            ref_expr(cx, st, x.cond);
+            let s1 = ref_clone(st);
+            vals.push(ref_block(cx, s1, x.then));
+            brs.push(s1);
+            let s2 = ref_clone(st);
+            match x.els {
+                Some(el) => vals.push(ref_expr(cx, s2, el)),
+                None => vals.push(ref_val_other()),
+            }
+            brs.push(s2);
+        }
+        None => {
+            let f = ref_cond(cx, st, x.cond);
+            let s1 = ref_clone(st);
+            ref_fact(cx, s1, f, ast_expr_pos(x.cond), "condition `" + ref_show(x.cond) + "`");
+            vals.push(ref_block(cx, s1, x.then));
+            brs.push(s1);
+            let s2 = ref_clone(st);
+            ref_fact(
+                cx,
+                s2,
+                SmtF::Not(f),
+                ast_expr_pos(x.cond),
+                "condition `!(" + ref_show(x.cond) + ")`",
+            );
+            match x.els {
+                Some(el) => vals.push(ref_expr(cx, s2, el)),
+                None => vals.push(ref_val_other()),
+            }
+            brs.push(s2);
+        }
+    }
+    ref_join(cx, st, brs, vals, t, x.pos)
+}
+
+fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
+    let sv = ref_expr(cx, st, m.x);
+    let t = ref_ty_of(cx, e);
+    let brs = Vec::new();
+    let vals = Vec::new();
+    let prev = Vec::new();
+    for arm in m.arms {
+        let s = ref_clone(st);
+        let p = arm.pat;
+        let text = ref_show(m.x);
+        match p.int_value {
+            Some(k) => {
+                if sv.kind == "int" {
+                    ref_fact(
+                        cx,
+                        s,
+                        ref_eq(sv.lin, ref_lc(k)),
+                        p.pos,
+                        "`match` arm `" + text + " == " + k.to_string() + "`",
+                    );
+                    prev.push(k);
+                }
+            }
+            None => {}
+        }
+        match p.bool_lit {
+            Some(bv) => {
+                if sv.kind == "bool" {
+                    ref_fact(
+                        cx,
+                        s,
+                        if bv { sv.f } else { SmtF::Not(sv.f) },
+                        p.pos,
+                        "`match` arm `" + text + "`",
+                    );
+                }
+            }
+            None => {}
+        }
+        if (p.wildcard || (p.bind != "" && p.ctor == "")) && sv.kind == "int" {
+            for k in prev {
+                match ref_cmp("!=", sv.lin, ref_lc(k)) {
+                    Some(f) => ref_fact(
+                        cx,
+                        s,
+                        f,
+                        p.pos,
+                        "`match` arm `" + text + " != " + k.to_string() + "`",
+                    ),
+                    None => {}
+                }
+            }
+            match cx.info.patterns.get(p.id) {
+                Some(pi) => match pi.bind {
+                    Some(bnd) => ref_assign_new(cx, s, bnd, sv, p.pos),
+                    None => {}
+                },
+                None => {}
+            }
+        }
+        vals.push(ref_expr(cx, s, arm.body));
+        brs.push(s);
+    }
+    ref_join(cx, st, brs, vals, t, m.pos)
+}
+
+// ref_len is the length of a Vec / String expression (an atom of its
+// variable when it is one).
+fn ref_len_of(cx: RefCtx, st: RefSt, v: RefVal, e: AstExpr) -> SmtLin {
+    if v.kind == "seq" {
+        return v.len;
+    }
+    ref_fresh(cx, st, ty_string(), ref_show(e), ast_expr_pos(e)).len
+}
+
+fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
+    let bv = ref_expr(cx, st, x.x);
+    let iv = ref_expr(cx, st, x.index);
+    let n = ref_len_of(cx, st, bv, x.x);
+    let i = ref_int_or_fresh(cx, st, iv, x.index);
+    let lo = SmtF::Le(ref_lscale(i, -1).unwrap_or(ref_lc(1)));
+    let hi = match ref_cmp("<", i, n) {
+        Some(f) => f,
+        None => SmtF::False,
+    };
+    let goal = ref_and2(lo, hi);
+    ref_vc(
+        cx,
+        st,
+        goal,
+        "index",
+        x.pos,
+        "the index is in bounds: `0 <= "
+            + ref_show(x.index)
+            + " && "
+            + ref_show(x.index)
+            + " < "
+            + ref_show(x.x)
+            + ".len()`",
+    );
+    // past the access (it traps otherwise), the bounds hold
+    if ref_lscale(i, -1).is_some() && ref_cmp("<", i, n).is_some() {
+        ref_fact(cx, st, goal, x.pos, "`" + ref_show(e) + "` is in bounds");
+    }
+    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), x.pos)
+}
+
+// ref_call checks a call of fun with argument values args (exprs: the
+// argument expressions) and returns its result.
+fn ref_call(
+    cx: RefCtx,
+    st: RefSt,
+    fun: ChkFunc,
+    args: Vec<RefVal>,
+    exprs: Vec<AstExpr>,
+    pos: AstPos,
+    show: String,
+) -> RefVal {
+    let contract = ref_fun_contract(cx.info, fun);
+    let mut i = 0;
+    let mut reach = false;
+    for p in fun.params {
+        match exprs.get(i) {
+            Some(a) => {
+                if !ref_prim(ref_ty_of(cx, a)) {
+                    reach = true;
+                }
+            }
+            None => {}
+        }
+        i = i + 1;
+    }
+    if contract {
+        let sub = ref_call_sub(cx, st, fun, args, exprs);
+        for p in fun.decl.preds {
+            if !ref_mentions(p, "result") {
+                ref_vc(
+                    cx,
+                    st,
+                    ref_pred(cx, st, p, sub),
+                    "pre",
+                    pos,
+                    "the precondition `" + ref_show(p) + "` of `" + fun.name + "` at `" + show + "`",
+                );
+            }
+        }
+        let mut j = 0;
+        for p in fun.params {
+            let a = ref_param_alias(cx.info, fun, j);
+            if a != "" {
+                ref_alias_vc(
+                    cx,
+                    st,
+                    a,
+                    args.get(j).unwrap_or(ref_val_other()),
+                    pos,
+                    "the argument `" + p.name + "` of `" + fun.name + "`",
+                );
+            }
+            j = j + 1;
+        }
+    }
+    if reach && !chk_is_lib(fun) {
+        ref_havoc_vecs(cx, st, pos);
+    }
+    let r = ref_fresh(cx, st, fun.result, show, pos);
+    if contract {
+        let sub = ref_call_sub(cx, st, fun, args, exprs);
+        ref_sub_put(sub, "result", r, 0);
+        for p in fun.decl.preds {
+            if ref_mentions(p, "result") {
+                ref_fact(
+                    cx,
+                    st,
+                    ref_pred(cx, st, p, sub),
+                    pos,
+                    "postcondition `" + ref_show(p) + "` of `" + show + "`",
+                );
+            }
+        }
+        let ra = ref_result_alias(cx.info, fun);
+        if ra != "" {
+            ref_alias_facts(cx, st, ra, r, pos, "the result of `" + show + "`");
+        }
+    }
+    r
+}
+
+// ref_call_sub binds the callee's parameters to the arguments (lengths
+// are read again: a call may have changed them).
+fn ref_call_sub(
+    cx: RefCtx,
+    st: RefSt,
+    fun: ChkFunc,
+    args: Vec<RefVal>,
+    exprs: Vec<AstExpr>,
+) -> RefSub {
+    let sub = ref_sub_new();
+    let mut i = 0;
+    for p in fun.params {
+        let mut v = args.get(i).unwrap_or(ref_val_other());
+        let mut bid = 0;
+        match exprs.get(i) {
+            Some(a) => match ref_strip(a) {
+                AstExpr::Ident(x) => match cx.info.uses.get(x.id) {
+                    Some(b) => {
+                        if v.kind == "seq" {
+                            v = ref_var(cx, st, b, x.pos);
+                        }
+                        if !b.mutable {
+                            bid = b.id;
+                        }
+                    }
+                    None => {}
+                },
+                _ => {}
+            },
+            None => {}
+        }
+        ref_sub_put(sub, p.name, v, bid);
+        i = i + 1;
+    }
+    sub
+}
+
+fn ref_call_expr(cx: RefCtx, st: RefSt, c: AstCall, e: AstExpr) -> RefVal {
+    let ci = cx.info.calls.get(c.id).unwrap_or(chk_call_info("", ty_unit()));
+    if ci.kind == "closure" {
+        ref_expr(cx, st, c.func);
+    }
+    let args = Vec::new();
+    for a in c.args {
+        args.push(ref_expr(cx, st, a));
+    }
+    if ci.kind == "func" {
+        match ci.func {
+            Some(fun) => {
+                return ref_call(cx, st, fun, args, c.args, c.pos, ref_show(e));
+            }
+            None => {}
+        }
+    }
+    if ci.kind == "closure" {
+        ref_havoc_vecs(cx, st, c.pos);
+    }
+    if ref_is_vec_new(e) {
+        return ref_val_seq(ref_lc(0));
+    }
+    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), c.pos)
+}
+
+fn ref_method(cx: RefCtx, st: RefSt, m: AstMethodCall, e: AstExpr) -> RefVal {
+    let rv = ref_expr(cx, st, m.recv);
+    let rt = ref_ty_of(cx, m.recv);
+    let args = Vec::new();
+    for a in m.args {
+        args.push(ref_expr(cx, st, a));
+    }
+    let mi = cx.info.methods.get(m.id);
+    if m.name == "len" && m.args.len() == 0 && ref_is_seq(rt) {
+        return ref_val_int(ref_len_of(cx, st, rv, m.recv));
+    }
+    if ref_is_vec(rt) && (m.name == "push" || m.name == "pop") {
+        let old = ref_len_of(cx, st, rv, m.recv);
+        let r = ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), m.pos);
+        match ref_strip(m.recv) {
+            AstExpr::Ident(x) => match cx.info.uses.get(x.id) {
+                Some(b) => {
+                    let key = "l" + b.id.to_string();
+                    let iso = cx.isolated.contains_key(b.id);
+                    if !iso {
+                        // an alias of b may be another variable
+                        ref_havoc_vecs(cx, st, m.pos);
+                    }
+                    if m.name == "push" {
+                        ref_update(
+                            cx,
+                            st,
+                            key,
+                            "len(" + b.name + ")",
+                            b.name + ".len()",
+                            ref_ladd(old, ref_lc(1), 1),
+                            m.pos,
+                        );
+                    } else {
+                        ref_update(
+                            cx,
+                            st,
+                            key,
+                            "len(" + b.name + ")",
+                            b.name + ".len()",
+                            None,
+                            m.pos,
+                        );
+                        let na = ref_la(st.env.get(key).unwrap_or(""));
+                        // pop: 0 stays 0, otherwise one less (no fact when
+                        // a term does not fit)
+                        let one_le = ref_ladd(ref_lc(1), old, -1);
+                        let less = ref_ladd(old, ref_lc(1), -1);
+                        if one_le.is_some() && less.is_some() {
+                            let f = ref_or2(
+                                ref_and2(ref_eq(old, ref_lc(0)), ref_eq(na, ref_lc(0))),
+                                ref_and2(
+                                    SmtF::Le(one_le.unwrap_or(ref_lc(0))),
+                                    ref_eq(na, less.unwrap_or(old)),
+                                ),
+                            );
+                            ref_fact(cx, st, f, m.pos, "`" + ref_show(e) + "`");
+                        }
+                    }
+                }
+                None => ref_havoc_vecs(cx, st, m.pos),
+            },
+            _ => ref_havoc_vecs(cx, st, m.pos),
+        }
+        return r;
+    }
+    match mi {
+        Some(info) => {
+            if info.kind == "func" || (info.kind == "generic" && !ref_is_vec(rt)) {
+                let all = Vec::new();
+                all.push(rv);
+                for a in args {
+                    all.push(a);
+                }
+                let exprs = Vec::new();
+                exprs.push(m.recv);
+                for a in m.args {
+                    exprs.push(a);
+                }
+                match info.func {
+                    Some(fun) => {
+                        if fun.decl.self_kind != "" && fun.params.len() == all.len() {
+                            return ref_call(cx, st, fun, all, exprs, m.pos, ref_show(e));
+                        }
+                    }
+                    None => {}
+                }
+                let mut reach = false;
+                for x in exprs {
+                    if !ref_prim(ref_ty_of(cx, x)) {
+                        reach = true;
+                    }
+                }
+                if reach {
+                    ref_havoc_vecs(cx, st, m.pos);
+                }
+            }
+            if info.kind == "transaction" {
+                ref_havoc_vecs(cx, st, m.pos);
+            }
+        }
+        None => {}
+    }
+    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), m.pos)
+}

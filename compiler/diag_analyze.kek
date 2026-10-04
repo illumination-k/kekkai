@@ -11,8 +11,13 @@ struct DiagDiag {
     end_line: Int,
     mut end_col: Int,
     severity: String, // "error" or "warning"
-    phase: String, // "parse", "type" or "lint"
+    phase: String, // "parse", "type", "refine" or "lint"
     message: String,
+    // refinement diagnostics: the counterexample (source names) and the
+    // facts the solver was given
+    cex: Vec<SmtBinding>,
+    facts: Vec<RefFactUse>,
+    refine: Bool,
 }
 
 struct DiagAnalysis {
@@ -35,6 +40,11 @@ fn diag_pos_key(line: Int, col: Int) -> Int {
 
 // diag_analyze parses and type-checks one source text (tooling.Analyze).
 fn diag_analyze(src: String) -> DiagAnalysis {
+    diag_analyze_cfg(src, ref_config_default())
+}
+
+// diag_analyze_cfg is diag_analyze with a `[refine]` configuration.
+fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
     let bytes = src.to_bytes();
     let lines = Vec::new();
     lines.push(0);
@@ -53,7 +63,7 @@ fn diag_analyze(src: String) -> DiagAnalysis {
         k = k + 1;
     }
     let pr = parse_file("", src, AstIds { next: 0 });
-    let res = chk_check(pr.file);
+    let res = chk_check_cfg(pr.file, false, chk_parse_core(), cfg);
     let a = DiagAnalysis {
         src: src,
         bytes: bytes,
@@ -67,10 +77,69 @@ fn diag_analyze(src: String) -> DiagAnalysis {
     };
     diag_add_errors(a, pr.errs, "parse");
     if a.parse_ok {
-        diag_add_errors(a, res.errs, "type");
+        // refinement errors are among res.errs: report them with their
+        // phase and details instead
+        let skip: HashMap<String, Bool> = HashMap::new();
+        for d in res.refine.diags {
+            if d.severity == "error" {
+                skip.insert(ast_pos_string(d.pos) + "\t" + d.msg, true);
+            }
+        }
+        let errs = Vec::new();
+        for e in res.errs {
+            if !skip.contains_key(ast_pos_string(e.pos) + "\t" + e.msg) {
+                errs.push(e);
+            }
+        }
+        diag_add_errors(a, errs, "type");
         diag_add_lints(a);
+        for d in res.refine.diags {
+            if d.severity == "note" {
+                continue;
+            }
+            a.diags.push(DiagDiag {
+                line: d.pos.line,
+                col: d.pos.col,
+                end_line: d.pos.line,
+                end_col: diag_token_end(a, d.pos.line, d.pos.col),
+                severity: d.severity,
+                phase: d.phase,
+                message: d.msg,
+                cex: d.cex,
+                facts: d.facts,
+                refine: true,
+            });
+        }
+        if res.refine.diags.len() > 0 {
+            let sorted = diag_sort(a.diags);
+            while a.diags.len() > 0 {
+                a.diags.pop();
+            }
+            for d in sorted {
+                a.diags.push(d);
+            }
+        }
     }
     a
+}
+
+// diag_sort orders diagnostics by position (stable).
+fn diag_sort(ds: Vec<DiagDiag>) -> Vec<DiagDiag> {
+    let out = Vec::new();
+    for d in ds {
+        out.push(d);
+        let mut j = out.len() - 1;
+        while j > 0 {
+            let p = out.get(j - 1).unwrap_or(d);
+            if p.line < d.line || (p.line == d.line && p.col <= d.col) {
+                break;
+            }
+            out.set(j, p);
+            out.set(j - 1, d);
+            j = j - 1;
+        }
+    }
+    out
 }
 
 // diag_offset returns the byte offset of a position, clamped to the text.
@@ -131,6 +200,9 @@ fn diag_add_errors(a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
             severity: "error",
             phase: phase,
             message: e.msg,
+            cex: Vec::new(),
+            facts: Vec::new(),
+            refine: false,
         };
         let mut skip = false;
         if e.msg.starts_with("unexpected character") {
@@ -177,6 +249,9 @@ fn diag_add_lints(a: DiagAnalysis) {
                     end_line: c.pos.line,
                     end_col: diag_token_end(a, c.pos.line, c.pos.col),
                     severity: "warning",
+                    cex: Vec::new(),
+                    facts: Vec::new(),
+                    refine: false,
                     phase: "lint",
                     message: "capability `"
                         + c.name
@@ -303,7 +378,7 @@ fn diag_flag_usage(cmd: String) -> String {
         return "Usage of caps:\n  -json\n    \temit JSON: per function caps, pure, async, direct effects, unused caps";
     }
     if cmd == "check" {
-        return "Usage of check:\n  -json\n    \temit diagnostics as JSON (exit status 1 if there are errors)";
+        return "Usage of check:\n  -json\n    \temit diagnostics as JSON (exit status 1 if there are errors)\n  -v\n    \tverbose: the facts of refinement diagnostics and the proved conditions";
     }
     "Usage of ir:\n  -json\n    \temit JSON (input format of the Lean reference interpreter)"
 }
@@ -352,7 +427,7 @@ fn diag_parse_flags(args: Vec<String>, start: Int, cmd: String) -> DiagFlags {
             }
             None => {}
         }
-        if name == "json" {
+        if name == "json" || (name == "v" && cmd == "check") {
             if !has_value {
                 value = "true";
             }
@@ -469,7 +544,11 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let path = fl.rest.get(0).unwrap_or("");
     if !diag_flag_bool(fl, "json") {
         let plain = Vec::new();
-        plain.push(cmd);
+        plain.push(if diag_flag_bool(fl, "v") {
+            cmd + "-v"
+        } else {
+            cmd
+        });
         plain.push(path);
         return frontend_main(plain, fs, log);
     }
@@ -482,7 +561,13 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             return 1;
         }
     };
-    let a = diag_analyze(src);
+    let cfg = match ref_config_load(fs, log) {
+        Some(c) => c,
+        None => {
+            return 1;
+        }
+    };
+    let a = diag_analyze_cfg(src, cfg);
     let ds = Vec::new();
     for d in a.diags {
         let o = irjson_obj();
@@ -494,6 +579,22 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         irjson_set(o, "severity", IrjVal::Str(d.severity));
         irjson_set(o, "phase", IrjVal::Str(d.phase));
         irjson_set(o, "message", IrjVal::Str(d.message));
+        if d.refine {
+            let cx = irjson_obj();
+            for b in d.cex {
+                irjson_set(cx, b.atom, irjson_int(b.value));
+            }
+            irjson_set(o, "counterexample", irjson_val(cx));
+            let fs2 = Vec::new();
+            for u in d.facts {
+                let fo = irjson_obj();
+                irjson_set(fo, "line", irjson_int(u.pos.line));
+                irjson_set(fo, "col", irjson_int(u.pos.col));
+                irjson_set(fo, "fact", IrjVal::Str(u.text));
+                fs2.push(irjson_val(fo));
+            }
+            irjson_set(o, "facts", IrjVal::Arr(fs2));
+        }
         ds.push(irjson_val(o));
     }
     let ok = diag_error_count(a) == 0;

@@ -1,0 +1,44 @@
+// Division by a possibly zero value is an error with this configuration
+// (a warning by default, and only in functions that use refinements):
+//
+// kekkai.toml: [refine]
+// kekkai.toml: division = "error"
+
+fn ratio(a: Int, b: Int) -> Int {
+    a / b // ERROR "cannot prove the divisor `b` is nonzero (counterexample: b = 0)"
+}
+
+fn ratio_checked(a: Int, b: Int) -> Int {
+    if b == 0 {
+        return 0;
+    }
+    // MIN / -1 overflows: the solver cannot build that counterexample
+    // within 64 bits, so it is reported as unknown
+    a / b // ERROR "unknown (solver budget: overflow): cannot prove `a / b` is not `MIN / -1`"
+}
+
+fn ratio_positive(a: Int, b: Int) -> Int {
+    if b > 0 {
+        return a / b;
+    }
+    0
+}
+
+fn rem(a: Int, b: Int) -> Int {
+    a % b // ERROR "cannot prove the divisor `b` is nonzero (counterexample: b = 0)"
+}
+
+fn rem_checked(a: Int, b: Int) -> Int {
+    if b != 0 {
+        return a % b;
+    }
+    a
+}
+
+fn by_constant(a: Int) -> Int {
+    a / 2 + a % 7
+}
+
+fn average(v: Vec<Int>, total: Int) -> Int {
+    total / v.len() // ERROR "counterexample: v.len() = 0"
+}

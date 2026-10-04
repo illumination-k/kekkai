@@ -1,0 +1,50 @@
+// Refinement types: aliases, `where` predicates, indexing.
+type Port = Int where 0 < self && self < 65536;
+type Index = Int where 0 <= self;
+type Name = String;
+
+// a comment before an alias
+
+type Small = Index where self < 10;
+
+fn get(v: Vec<Int>, i: Int) -> Int
+where
+    0 <= i,
+    i < v.len(),
+{
+    v[i]
+}
+
+fn clamp<T: Ord>(x: Int, lo: Int, hi: Int, t: T) -> Int
+where
+    T: Ord + Hash,
+    lo <= hi,
+    lo <= result,
+    result <= hi,
+{
+    if x < lo {
+        lo
+    } else if x > hi { hi } else { x }
+}
+
+fn nested(m: Vec<Vec<Int>>, i: Int, j: Int) -> Int
+where
+    0 <= i,
+    i < m.len(),
+    0 <= j,
+{
+    let row = m[i];
+    if j < row.len() {
+        row[j] + m[i][0] * 2
+    } else {
+        0
+    }
+}
+
+fn long_predicates(a_long_name: Int, another_long_name: Int, yet_another_long_name: Int) -> Int
+where
+    a_long_name + another_long_name + yet_another_long_name < 1000000,
+    2 * a_long_name - 3 * another_long_name >= -yet_another_long_name,
+{
+    0
+}

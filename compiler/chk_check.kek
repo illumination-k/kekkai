@@ -133,6 +133,15 @@ struct ChkInfo {
     binops: HashMap<Int, ChkMethodInfo>,
     // structs and enums of the core library and the runtime prelude
     lib_types: HashMap<String, Bool>,
+    // `type` aliases (transparent; refined ones carry a predicate) and
+    // the aliases being resolved (to report cycles)
+    aliases: HashMap<String, AstTypeAlias>,
+    alias_busy: HashMap<String, Bool>,
+    // functions whose bodies use refinements (`v[i]`, a refined alias, a
+    // struct with refined fields) and those structs: the refinement pass
+    // skips the other functions quickly
+    refine_fns: HashMap<String, Bool>,
+    alias_structs: HashMap<String, Bool>,
 }
 
 // A closure's body is a scope with lambda set to the closure's id: a
@@ -187,6 +196,9 @@ struct Chk {
 struct ChkResult {
     info: ChkInfo,
     errs: Vec<AstError>,
+    // the refinement pass (compiler/refine.kek): its diagnostics (errors
+    // are also in errs) and per-function summaries
+    refine: RefReport,
 }
 
 fn chk_dummy_pos() -> AstPos {
@@ -221,6 +233,7 @@ fn chk_dummy_func() -> ChkFunc {
             params: Vec::new(),
             result: None,
             wheres: Vec::new(),
+            preds: Vec::new(),
             has_body: true,
             body: AstBlock { id: 0, pos: p, stmts: Vec::new(), tail: None, end: p },
         },
@@ -263,6 +276,7 @@ fn chk_parse_core() -> ChkCore {
         funcs: Vec::new(),
         impls: Vec::new(),
         traits: Vec::new(),
+        aliases: Vec::new(),
     };
     let errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
@@ -289,6 +303,7 @@ fn chk_with_core(f: AstFile, errs: Vec<AstError>, core: ChkCore) -> AstFile {
         funcs: Vec::new(),
         impls: Vec::new(),
         traits: Vec::new(),
+        aliases: Vec::new(),
     };
     for e in core.errs {
         errs.push(e);
@@ -314,6 +329,9 @@ fn chk_append_file(out: AstFile, f: AstFile) {
     }
     for x in f.traits {
         out.traits.push(x);
+    }
+    for x in f.aliases {
+        out.aliases.push(x);
     }
 }
 
@@ -409,6 +427,12 @@ fn chk_is_lib_pos(p: AstPos) -> Bool {
 }
 
 fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
+    chk_check_cfg(user, prelude, core, ref_config_default())
+}
+
+// chk_check_cfg type-checks a program, then runs the refinement pass with
+// the `[refine]` configuration cfg (when there are no type errors).
+fn chk_check_cfg(user: AstFile, prelude: Bool, core: ChkCore, cfg: RefConfig) -> ChkResult {
     let info = ChkInfo {
         funcs: HashMap::new(),
         func_list: Vec::new(),
@@ -435,6 +459,10 @@ fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
         impls: HashMap::new(),
         binops: HashMap::new(),
         lib_types: HashMap::new(),
+        aliases: HashMap::new(),
+        alias_busy: HashMap::new(),
+        refine_fns: HashMap::new(),
+        alias_structs: HashMap::new(),
     };
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs, core);
@@ -468,7 +496,16 @@ fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
     for fun in c.info.func_list {
         lin_check(c.info, fun, c.errs);
     }
-    ChkResult { info: c.info, errs: ast_sort_errors(c.errs) }
+    let mut rr = ref_report_empty();
+    if c.errs.len() == 0 && !cfg.off {
+        rr = ref_program(c.info, cfg, f);
+        for d in rr.diags {
+            if d.severity == "error" {
+                c.errs.push(AstError { pos: d.pos, msg: d.msg });
+            }
+        }
+    }
+    ChkResult { info: c.info, errs: ast_sort_errors(c.errs), refine: rr }
 }
 
 fn chk_errorf(c: Chk, pos: AstPos, msg: String) {
@@ -520,8 +557,16 @@ fn chk_prelude_type(n: String) -> Bool {
 }
 
 fn chk_declare(c: Chk, f: AstFile) {
+    for ad in f.aliases {
+        if chk_reserved(ad.name) || c.info.aliases.contains_key(ad.name) {
+            chk_errorf(c, ad.pos, "type `" + ad.name + "` is already defined");
+            continue;
+        }
+        c.info.aliases.insert(ad.name, ad);
+    }
     for sd in f.structs {
         if (chk_reserved(sd.name) && !(c.prelude && chk_prelude_type(sd.name)))
+            || c.info.aliases.contains_key(sd.name)
             || c.info.structs.contains_key(sd.name)
             || c.info.enums.contains_key(sd.name) {
             chk_errorf(c, sd.pos, "type `" + sd.name + "` is already defined");
@@ -538,6 +583,7 @@ fn chk_declare(c: Chk, f: AstFile) {
     }
     for ed in f.enums {
         if chk_reserved(ed.name)
+            || c.info.aliases.contains_key(ed.name)
             || c.info.structs.contains_key(ed.name)
             || c.info.enums.contains_key(ed.name) {
             chk_errorf(c, ed.pos, "type `" + ed.name + "` is already defined");
@@ -565,6 +611,9 @@ fn chk_declare(c: Chk, f: AstFile) {
                         }
                         seen.insert(fl.name, true);
                         let t = chk_resolve_type(c, fl.ty, false);
+                        if ref_alias_of(c.info, fl.ty) != "" {
+                            c.info.alias_structs.insert(sd.name, true);
+                        }
                         st.fields.push(TyField { name: fl.name, ty: t, mutable: fl.mutable });
                     }
                     c.tscope = HashMap::new();
@@ -624,6 +673,222 @@ fn chk_declare(c: Chk, f: AstFile) {
     chk_declare_trait_methods(c);
     chk_declare_impl_methods(c);
     chk_check_supertraits(c);
+    chk_alias_preds(c, f);
+}
+
+// chk_alias_preds type-checks the predicates of refined aliases: `Bool`
+// expressions over `self` (the value, of the aliased type) in the linear
+// fragment.
+fn chk_alias_preds(c: Chk, f: AstFile) {
+    for ad in f.aliases {
+        // resolve every alias (reports cycles even in unused ones)
+        let n = c.errs.len();
+        chk_resolve_type(c, ad.ty, false);
+        if c.errs.len() > n {
+            continue;
+        }
+        match ad.pred {
+            Some(e) => {
+                let t = chk_resolve_type(
+                    c,
+                    AstType::Named(AstNamedType {
+                        id: ad.id,
+                        pos: ad.pos,
+                        name: ad.name,
+                        args: Vec::new(),
+                    }),
+                    false,
+                );
+                c.scopes = Vec::new();
+                chk_push(c, false);
+                chk_bind(c, chk_new_binding(c, "self", t, ad.pos));
+                let n2 = c.errs.len();
+                let pt = chk_expr(c, e);
+                chk_expect(c, ast_expr_pos(e), pt, ty_bool(), "refinement predicate");
+                if c.errs.len() == n2 {
+                    chk_pred_formula(c, e);
+                }
+                chk_pop(c);
+                c.scopes = Vec::new();
+            }
+            None => {}
+        }
+    }
+}
+
+// chk_preds type-checks a function's refinement predicates: `Bool`
+// expressions over the parameters and `result` (the return value) in the
+// linear fragment (docs/refinement.md).
+fn chk_preds(c: Chk, fun: ChkFunc) {
+    if fun.decl.preds.len() == 0 {
+        return;
+    }
+    for p in fun.params {
+        if p.name == "result" {
+            let at = match fun.decl.preds.get(0) {
+                Some(e) => ast_expr_pos(e),
+                None => p.pos,
+            };
+            chk_errorf(
+                c,
+                at,
+                "`result` in a predicate is the return value: a function with refinement predicates cannot have a parameter named `result`",
+            );
+        }
+    }
+    chk_push(c, false);
+    chk_bind(c, chk_new_binding(c, "result", fun.result, fun.decl.pos));
+    for e in fun.decl.preds {
+        let n = c.errs.len();
+        let t = chk_expr(c, e);
+        chk_expect(c, ast_expr_pos(e), t, ty_bool(), "refinement predicate");
+        if c.errs.len() == n {
+            chk_pred_formula(c, e);
+        }
+    }
+    chk_pop(c);
+}
+
+// chk_pred_formula reports a predicate outside the language of
+// refinements: comparisons of linear integer terms, `&&`, `||`, `!` and
+// boolean literals. Returns false after an error.
+fn chk_pred_formula(c: Chk, e: AstExpr) -> Bool {
+    match e {
+        AstExpr::BoolLit(_) => true,
+        AstExpr::Unary(u) => {
+            if u.op == "!" {
+                return chk_pred_formula(c, u.x);
+            }
+            chk_pred_unsupported(c, e)
+        }
+        AstExpr::Binary(b) => {
+            if b.op == "&&" || b.op == "||" {
+                return chk_pred_formula(c, b.x) && chk_pred_formula(c, b.y);
+            }
+            if b.op == "<"
+                || b.op == "<="
+                || b.op == ">"
+                || b.op == ">="
+                || b.op == "=="
+                || b.op == "!=" {
+                if !ty_is_prim(
+                    ty_prune(c.info.types.get(ast_expr_id(b.x)).unwrap_or(ty_invalid())),
+                    "Int",
+                ) {
+                    chk_errorf(
+                        c,
+                        b.pos,
+                        "refinement predicates compare integers only: `" + ref_show(e) + "`",
+                    );
+                    return false;
+                }
+                return chk_pred_term(c, b.x) && chk_pred_term(c, b.y);
+            }
+            chk_pred_unsupported(c, e)
+        }
+        _ => chk_pred_unsupported(c, e),
+    }
+}
+
+fn chk_pred_unsupported(c: Chk, e: AstExpr) -> Bool {
+    chk_errorf(
+        c,
+        ast_expr_pos(e),
+        "`"
+            + ref_show(e)
+            + "` is not supported in a refinement predicate (linear integer arithmetic: integers, `+`, `-`, `*` by a constant, comparisons, `&&`, `||`, `!`, `v.len()`, immutable fields)",
+    );
+    false
+}
+
+// chk_pred_term reports an integer term that is not linear.
+fn chk_pred_term(c: Chk, e: AstExpr) -> Bool {
+    match e {
+        AstExpr::IntLit(_) => true,
+        AstExpr::Ident(x) => {
+            if ty_is_prim(ty_prune(c.info.types.get(x.id).unwrap_or(ty_invalid())), "Int") {
+                return true;
+            }
+            chk_pred_unsupported(c, e)
+        }
+        AstExpr::Unary(u) => {
+            if u.op == "-" {
+                return chk_pred_term(c, u.x);
+            }
+            chk_pred_unsupported(c, e)
+        }
+        AstExpr::Binary(b) => {
+            if b.op == "+" || b.op == "-" {
+                return chk_pred_term(c, b.x) && chk_pred_term(c, b.y);
+            }
+            if b.op == "*" {
+                if ref_const_expr(b.x).is_some() || ref_const_expr(b.y).is_some() {
+                    return chk_pred_term(c, b.x) && chk_pred_term(c, b.y);
+                }
+                chk_errorf(
+                    c,
+                    b.pos,
+                    "refinement predicates must be linear: `"
+                        + ref_show(e)
+                        + "` multiplies two variables (one side of `*` must be a constant)",
+                );
+                return false;
+            }
+            chk_pred_unsupported(c, e)
+        }
+        AstExpr::Method(m) => {
+            // the length of a parameter (or `self`, `result`): a Vec in a
+            // field can change through aliases, so `p.items.len()` is not
+            // allowed
+            if m.name == "len" && m.args.len() == 0 && ref_is_ident(ref_strip(m.recv)) {
+                match ty_prune(c.info.types.get(ast_expr_id(m.recv)).unwrap_or(ty_invalid())) {
+                    Ty::Vec(_) => {
+                        return true;
+                    }
+                    Ty::Prim(n) => {
+                        if n == "String" {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            chk_pred_unsupported(c, e)
+        }
+        AstExpr::Field(f) => {
+            if ref_path_expr(f.x)
+                && ty_is_prim(ty_prune(c.info.types.get(f.id).unwrap_or(ty_invalid())), "Int") {
+                match ty_prune(c.info.types.get(ast_expr_id(f.x)).unwrap_or(ty_invalid())) {
+                    Ty::Struct(st, _) => {
+                        match chk_struct_field(st, f.name) {
+                            Some(fi) => {
+                                if fi.mutable {
+                                    chk_errorf(
+                                        c,
+                                        f.pos,
+                                        "refinement predicates can only mention immutable fields: `"
+                                            + f.name
+                                            + "` of `"
+                                            + st.name
+                                            + "` is `mut`",
+                                    );
+                                    return false;
+                                }
+                                return true;
+                            }
+                            None => {}
+                        }
+                    }
+                    Ty::Tuple(_) => {
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            chk_pred_unsupported(c, e)
+        }
+        _ => chk_pred_unsupported(c, e),
+    }
 }
 
 // chk_tparams creates the params of a generic item. The caller resolves
@@ -826,6 +1091,13 @@ fn chk_declare_func(
     let wheres = chk_resolve_wheres(c, fd.wheres);
     if !fd.has_body && scope.get("Self").is_none() {
         chk_errorf(c, fd.pos, "free function without a body");
+    }
+    if !fd.has_body && fd.preds.len() > 0 {
+        chk_errorf(
+            c,
+            fd.pos,
+            "refinement predicates are not supported on trait method declarations",
+        );
     }
     let fun = ChkFunc {
         name: name,
@@ -1234,6 +1506,26 @@ fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 }
                 return Ty::Cap(n, false);
             }
+            match c.info.aliases.get(n) {
+                Some(ad) => {
+                    chk_type_args(c, te, 0);
+                    if c.info.alias_busy.contains_key(n) {
+                        chk_errorf(c, te.pos, "type alias `" + n + "` refers to itself");
+                        return ty_invalid();
+                    }
+                    c.info.alias_busy.insert(n, true);
+                    if ad.pred.is_some() {
+                        c.info.refine_fns.insert(c.cur.name, true);
+                    }
+                    let saved = c.tscope;
+                    c.tscope = HashMap::new();
+                    let t = chk_resolve_type(c, ad.ty, false);
+                    c.tscope = saved;
+                    c.info.alias_busy.remove(n);
+                    return t;
+                }
+                None => {}
+            }
             match c.info.structs.get(n) {
                 Some(st) => {
                     return Ty::Struct(st, chk_type_args(c, te, st.params.len()));
@@ -1306,6 +1598,7 @@ fn chk_func(c: Chk, fun: ChkFunc) {
     c.rets.push(ChkRet { ty: fun.result, closure: None });
     let t = chk_block(c, fun.decl.body);
     chk_expect(c, chk_tail_pos(fun.decl.body), t, fun.result, "function result");
+    chk_preds(c, fun);
     chk_pop(c);
     chk_check_obls(c);
     c.info.wheres = Vec::new();
@@ -1535,6 +1828,14 @@ fn chk_stmt(c: Chk, s0: AstStmt) -> Bool {
             }
             let vt = chk_expr(c, s.value);
             chk_expect(c, ast_expr_pos(s.value), vt, ft, "field assignment");
+            match ty_prune(c.info.types.get(ast_expr_id(s.target.x)).unwrap_or(ty_invalid())) {
+                Ty::Struct(st, _) => {
+                    if c.info.alias_structs.contains_key(st.name) {
+                        c.info.refine_fns.insert(c.cur.name, true);
+                    }
+                }
+                _ => {}
+            }
             false
         }
         AstStmt::Break(s) => {
@@ -1896,6 +2197,9 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 }
                 Some(st) => {
                     c.info.struct_lits.insert(e.id, st);
+                    if c.info.alias_structs.contains_key(st.name) {
+                        c.info.refine_fns.insert(c.cur.name, true);
+                    }
                     let sty = match lit_ty {
                         Some(t) => t,
                         None => Ty::Struct(st, chk_instantiate(c, st.params)),
@@ -1962,6 +2266,27 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 ts.push(chk_expr(c, el));
             }
             chk_record(c, e.id, Ty::Tuple(ts))
+        }
+        AstExpr::Index(e) => {
+            c.info.refine_fns.insert(c.cur.name, true);
+            let vt = ty_prune(chk_expr(c, e.x));
+            let it = chk_expr(c, e.index);
+            chk_expect(c, ast_expr_pos(e.index), it, ty_int(), "index");
+            match vt {
+                Ty::Vec(el) => chk_record(c, e.id, el),
+                _ => {
+                    if !ty_is_prim(vt, "<invalid>") {
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "cannot index a value of type `"
+                                + ty_str(vt)
+                                + "`: `x[i]` is only defined for `Vec` (use `get(i)` for an `Option`)",
+                        );
+                    }
+                    chk_record(c, e.id, ty_invalid())
+                }
+            }
         }
         AstExpr::Range(e) => {
             let a = chk_expr(c, e.start);

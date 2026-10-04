@@ -30,11 +30,15 @@ struct TestrunTest {
 }
 
 // TestrunArg is a test parameter: a capability (cap is its kind) or a
-// generated value (cap is "").
+// generated value (cap is ""). pred is the predicate of its refined alias
+// type over `__x` ("" if none): generated values must satisfy it; range
+// draws an Int within the bounds the predicate states ("" if none).
 struct TestrunArg {
     name: String,
     cap: String,
     ty: Ty,
+    pred: String,
+    range: String,
 }
 
 fn testrun_main_name() -> String {
@@ -50,14 +54,33 @@ fn testrun_discover(info: ChkInfo) -> Vec<TestrunTest> {
         }
         let caps = Vec::new();
         let args = Vec::new();
+        let mut pi = 0;
         for p in fun.params {
             match p.ty {
                 Ty::Cap(k, _) => {
                     caps.push(k);
-                    args.push(TestrunArg { name: p.name, cap: k, ty: p.ty });
+                    args.push(TestrunArg { name: p.name, cap: k, ty: p.ty, pred: "", range: "" });
                 }
-                _ => args.push(TestrunArg { name: p.name, cap: "", ty: p.ty }),
+                _ => {
+                    let alias = ref_param_alias(info, fun, pi);
+                    let mut pred = "";
+                    let mut range = "";
+                    if alias != "" {
+                        pred = ref_alias_pred_text(info, alias, "__x");
+                        if ty_is_prim(ty_prune(p.ty), "Int") {
+                            range = ref_alias_range(info, alias, "__g");
+                        }
+                    }
+                    args.push(TestrunArg {
+                        name: p.name,
+                        cap: "",
+                        ty: p.ty,
+                        pred: pred,
+                        range: range,
+                    });
+                }
             }
+            pi = pi + 1;
         }
         let mut cases = 0;
         match ast_find_attr(fun.decl.attrs, "test") {
@@ -307,7 +330,25 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
     for d in vdecl {
         all_decl.push(d);
     }
-    let mut b = "fn __kp_" + n + "(" + all_decl.join(", ") + ") -> String {\n";
+    let mut b = "";
+    // __kq_n_k: the refinement of parameter k (rejection sampling)
+    k = 0;
+    for p in ps {
+        if p.pred != "" {
+            b = b
+                + "fn __kq_"
+                + n
+                + "_"
+                + k.to_string()
+                + "(__x: "
+                + ty_str(p.ty)
+                + ") -> Bool {\n    "
+                + p.pred
+                + "\n}\n\n";
+        }
+        k = k + 1;
+    }
+    b = b + "fn __kp_" + n + "(" + all_decl.join(", ") + ") -> String {\n";
     b = b + "    __test_case_reset();\n";
     if t.result == "bool" {
         b = b + "    if " + call + " { \"\" } else { \"returned false\" }\n";
@@ -351,9 +392,56 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
     b = b + "    let __n = __test_cases(" + t.cases.to_string() + ");\n";
     b = b + "    let mut __i = 0;\n    while __i < __n {\n        __gen_case(__g, __i, __n);\n";
     k = 0;
+    let mut skip = "";
     for id in ids {
-        b = b + "        let __a" + k.to_string() + " = __kg_" + id + "(__g, 0);\n";
+        let ks = k.to_string();
+        let pred = match ps.get(k) {
+            Some(p) => p.pred,
+            None => "",
+        };
+        let range = match ps.get(k) {
+            Some(p) => p.range,
+            None => "",
+        };
+        let gen = if range == "" {
+            "__kg_" + id + "(__g, 0)"
+        } else {
+            // every other try draws within the bounds the predicate states
+            "if __j" + ks + " % 2 == 0 { " + range + " } else { __kg_" + id + "(__g, 0) }"
+        };
+        if pred == "" {
+            b = b + "        let __a" + ks + " = __kg_" + id + "(__g, 0);\n";
+        } else {
+            // values of a refined alias: retry until the predicate holds
+            // (bounded); a case without one is skipped
+            let q = "__kq_" + n + "_" + ks;
+            b = b + "        let mut __a" + ks + " = __kg_" + id + "(__g, 0);\n";
+            b = b + "        let mut __j" + ks + " = 0;\n";
+            b = b
+                + "        while !"
+                + q
+                + "(__a"
+                + ks
+                + ") && __j"
+                + ks
+                + " < 1000 {\n            __a"
+                + ks
+                + " = "
+                + gen
+                + ";\n            __j"
+                + ks
+                + " = __j"
+                + ks
+                + " + 1;\n        }\n";
+            skip = skip + " || !" + q + "(__a" + ks + ")";
+        }
         k = k + 1;
+    }
+    if skip != "" {
+        b = b
+            + "        if false"
+            + skip
+            + " {\n            __i = __i + 1;\n            continue;\n        }\n";
     }
     b = b + "        let __in = __kd_" + n + "(" + gen_args.join(", ") + ");\n";
     b = b + "        __test_note(\"case \" + (__i + 1).to_string() + \": \" + __in);\n";
@@ -380,6 +468,19 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
                 + "                if __more {\n                    continue;\n                }\n";
         }
         b = b + "                for __c in __ks_" + id + "(__b" + k.to_string() + ") {\n";
+        match ps.get(k) {
+            Some(p) => {
+                if p.pred != "" {
+                    b = b
+                        + "                    if !__kq_"
+                        + n
+                        + "_"
+                        + k.to_string()
+                        + "(__c) {\n                        continue;\n                    }\n";
+                }
+            }
+            None => {}
+        }
         b = b
             + "                    if !__shrink_try(__s, __kd_"
             + n

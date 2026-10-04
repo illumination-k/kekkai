@@ -85,6 +85,7 @@ fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
         funcs: Vec::new(),
         impls: Vec::new(),
         traits: Vec::new(),
+        aliases: Vec::new(),
     };
     let errs = Vec::new();
     for s in srcs {
@@ -107,30 +108,110 @@ fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
         for x in pr.file.traits {
             out.traits.push(x);
         }
+        for x in pr.file.aliases {
+            out.aliases.push(x);
+        }
     }
     FeProgram { file: out, errs: ast_sort_errors(errs) }
 }
 
 // frontend_load parses and type-checks a program, printing diagnostics
-// like `kek check`.
+// like `kek check`. The `[refine]` section of ./kekkai.toml configures
+// the refinement checks.
 fn frontend_load(path: String, fs: &Fs, log: &Log) -> Option<ChkResult> {
+    frontend_load_v(path, fs, log, false, false)
+}
+
+// frontend_load_v is frontend_load; warn also prints the warnings (lints)
+// and verbose the facts of every refinement diagnostic and the proved VCs
+// (`kek check -v`).
+fn frontend_load_v(
+    path: String,
+    fs: &Fs,
+    log: &Log,
+    warn: Bool,
+    verbose: Bool,
+) -> Option<ChkResult> {
     let srcs = match frontend_read_sources(path, fs, log) {
         Some(s) => s,
         None => {
             return None;
         }
     };
+    let cfg = match ref_config_load(fs, log) {
+        Some(c) => c,
+        None => {
+            return None;
+        }
+    };
+    cfg.verbose = verbose;
     let prog = frontend_parse_all(srcs);
     if prog.errs.len() > 0 {
         frontend_print_errors(log, prog.errs);
         return None;
     }
-    let res = chk_check(prog.file);
-    if res.errs.len() > 0 {
-        frontend_print_errors(log, res.errs);
+    let res = chk_check_cfg(prog.file, false, chk_parse_core(), cfg);
+    if !frontend_report(log, res, warn, verbose) {
         return None;
     }
     Some(res)
+}
+
+// frontend_report prints the diagnostics of a check (errors, and with warn
+// the warnings; with verbose the facts of the refinement diagnostics and
+// the proved VCs as notes), sorted by position. Returns whether there were
+// no errors.
+fn frontend_report(log: &Log, res: ChkResult, warn: Bool, verbose: Bool) -> Bool {
+    if res.errs.len() == 0 && (!warn || res.refine.diags.len() == 0) {
+        return true;
+    }
+    let facts: HashMap<String, Vec<RefFactUse>> = HashMap::new();
+    let all = Vec::new();
+    for e in res.errs {
+        all.push(e);
+    }
+    for d in res.refine.diags {
+        if d.severity != "error" {
+            if !warn {
+                continue;
+            }
+            all.push(AstError { pos: d.pos, msg: d.severity + ": " + d.msg });
+        }
+        if verbose {
+            let key = ast_pos_string(d.pos) + "\t" + if d.severity == "error" {
+                d.msg
+            } else {
+                d.severity + ": " + d.msg
+            };
+            facts.insert(key, d.facts);
+        }
+    }
+    let errs = Vec::new();
+    let notes = Vec::new();
+    for e in ast_sort_errors(all) {
+        let line = ast_error_string(e);
+        let mut more = "";
+        match facts.get(ast_pos_string(e.pos) + "\t" + e.msg) {
+            Some(fs) => {
+                for u in fs {
+                    more = more + "\n    fact: " + ast_pos_string(u.pos) + ": " + u.text;
+                }
+            }
+            None => {}
+        }
+        if e.msg.starts_with("note: ") {
+            notes.push(line + more);
+        } else {
+            errs.push(line + more);
+        }
+    }
+    if notes.len() > 0 {
+        log.info(notes.join("\n"));
+    }
+    if errs.len() > 0 {
+        log.error(errs.join("\n"));
+    }
+    res.errs.len() == 0
 }
 
 // frontend_check_prelude checks srcs together with the runtime prelude.
@@ -190,8 +271,8 @@ fn frontend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         return 2;
     }
     let path = args.get(1).unwrap_or("");
-    if cmd == "check" {
-        match frontend_load(path, fs, log) {
+    if cmd == "check" || cmd == "check-v" {
+        match frontend_load_v(path, fs, log, true, cmd == "check-v") {
             Some(_) => {
                 log.info(path + ": ok");
                 return 0;
@@ -293,7 +374,13 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             frontend_print_errors(log, parsed.errs);
             return 1;
         }
-        let res = chk_check_prelude(parsed.file);
+        let cfg = match ref_config_load(fs, log) {
+            Some(c) => c,
+            None => {
+                return 1;
+            }
+        };
+        let res = chk_check_cfg(parsed.file, true, chk_parse_core(), cfg);
         if res.errs.len() > 0 {
             // the diagnostics of the program alone, as `kek check` reports them
             match frontend_load(path, fs, log) {
@@ -528,6 +615,7 @@ fn frontend_parse_cached(c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
         funcs: Vec::new(),
         impls: Vec::new(),
         traits: Vec::new(),
+        aliases: Vec::new(),
     };
     let errs = Vec::new();
     for s in srcs {
@@ -570,6 +658,7 @@ fn parse_file_dummy() -> ParseResult {
             funcs: Vec::new(),
             impls: Vec::new(),
             traits: Vec::new(),
+            aliases: Vec::new(),
         },
         errs: Vec::new(),
     }
@@ -602,9 +691,15 @@ fn frontend_build_c(c: FeCache, args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         frontend_print_errors(log, parsed.errs);
         return 1;
     }
-    let res = chk_check_prelude_c(parsed.file, c.core);
+    let cfg = match ref_config_load(fs, log) {
+        Some(x) => x,
+        None => {
+            return 1;
+        }
+    };
+    let res = chk_check_cfg(parsed.file, true, c.core, cfg);
     if res.errs.len() > 0 {
-        match frontend_check_c(c, path, fs, log) {
+        match frontend_check_c(c, path, fs, log, false) {
             0 => frontend_print_errors(log, res.errs),
             _ => {}
         }
@@ -658,8 +753,9 @@ fn frontend_build_c(c: FeCache, args: Vec<String>, fs: &Fs, log: &Log) -> Int {
 }
 
 // frontend_check_c is `check <path>` with the cache (diagnostics are
-// printed; 0 when the program checks, without printing "ok").
-fn frontend_check_c(c: FeCache, path: String, fs: &Fs, log: &Log) -> Int {
+// printed, warnings too with warn; 0 when the program checks, without
+// printing "ok").
+fn frontend_check_c(c: FeCache, path: String, fs: &Fs, log: &Log, warn: Bool) -> Int {
     let srcs = match frontend_read_sources(path, fs, log) {
         Some(s) => s,
         None => {
@@ -671,9 +767,14 @@ fn frontend_check_c(c: FeCache, path: String, fs: &Fs, log: &Log) -> Int {
         frontend_print_errors(log, prog.errs);
         return 1;
     }
-    let res = chk_check_c(prog.file, c.core);
-    if res.errs.len() > 0 {
-        frontend_print_errors(log, res.errs);
+    let cfg = match ref_config_load(fs, log) {
+        Some(x) => x,
+        None => {
+            return 1;
+        }
+    };
+    let res = chk_check_cfg(prog.file, false, c.core, cfg);
+    if !frontend_report(log, res, warn, false) {
         return 1;
     }
     0

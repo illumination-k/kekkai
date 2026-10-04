@@ -57,6 +57,17 @@ where
     0
 }
 
+struct Bag {
+    items: Vec<Int>,
+}
+
+fn field_length(b: Bag) -> Int
+where
+    b.items.len() > 0, // ERROR "`b.items.len()` is not supported in a refinement predicate"
+{
+    0
+}
+
 fn named_result(result: Int) -> Int
 where
     result > 0, // ERROR "cannot have a parameter named `result`"

@@ -833,7 +833,10 @@ fn chk_pred_term(c: Chk, e: AstExpr) -> Bool {
             chk_pred_unsupported(c, e)
         }
         AstExpr::Method(m) => {
-            if m.name == "len" && m.args.len() == 0 && ref_path_expr(m.recv) {
+            // the length of a parameter (or `self`, `result`): a Vec in a
+            // field can change through aliases, so `p.items.len()` is not
+            // allowed
+            if m.name == "len" && m.args.len() == 0 && ref_is_ident(ref_strip(m.recv)) {
                 match ty_prune(c.info.types.get(ast_expr_id(m.recv)).unwrap_or(ty_invalid())) {
                     Ty::Vec(_) => {
                         return true;

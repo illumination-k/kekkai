@@ -1,0 +1,97 @@
+# the #[allow(similar)] on rate_key expires 2027-03-31
+$ kek assure plan app
+Expired (1):
+  x #[allow(similar)] expired 2027-03-31   rate_key  owner: shogo  reason: "kept apart from price_key"
+    -> app/rates.kek:18
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+$ kek assure plan -strict app
+Expired (1):
+  x #[allow(similar)] expired 2027-03-31   rate_key  owner: shogo  reason: "kept apart from price_key"
+    -> app/rates.kek:18
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 1
+
+$ kek assure check app
+Expired (1):
+  x #[allow(similar)] expired 2027-03-31   rate_key  owner: shogo  reason: "kept apart from price_key"
+    -> app/rates.kek:18
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- stderr
+kek assure check: 1 expired escape hatch(es)
+--- exit 1
+
+$ kek assure check -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2027-04-01",
+  "ok": false,
+  "summary": {
+    "definitions": 8,
+    "changes": 0,
+    "needs_review": 0,
+    "auto_approved": 0,
+    "violations": 0,
+    "expired": 1,
+    "config_errors": 0
+  },
+  "changes": [],
+  "violations": [],
+  "expired": [
+    {
+      "definition": "rate_key",
+      "file": "app/rates.kek",
+      "line": 18,
+      "source": "code",
+      "kind": "#[allow(similar)]",
+      "expires": "2027-03-31",
+      "reason": "kept apart from price_key",
+      "owner": "shogo"
+    }
+  ],
+  "config_errors": []
+}
+--- stderr
+kek assure check: 1 expired escape hatch(es)
+--- exit 1
+
+# extending it in the code is a changed assumption (needs review)
+$ kek assure plan app
+Needs review (1):
+  ! changed assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-09-30)   rate_key
+    -> app/rates.kek:19
+--- exit 0
+
+$ kek assure apply -yes app
+Needs review (1):
+  ! changed assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-09-30)   rate_key
+    -> app/rates.kek:19
+kekkai.assure.lock updated: 8 definitions, 1 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+# a malformed date is a violation
+$ kek assure plan app
+Needs review (1):
+  ! changed assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: next year)   rate_key
+    -> app/rates.kek:19
+
+Policy violations (1):
+  x #[allow(similar)] expires = "next year" is not a date (YYYY-MM-DD)   rate_key
+    -> app/rates.kek:18
+--- exit 1
+

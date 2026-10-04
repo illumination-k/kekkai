@@ -1,0 +1,73 @@
+# contradictory and malformed policies
+$ kek assure plan -config bad.toml app
+Configuration errors (8):
+  x bad.toml [auto_approve]: unknown rule bogus (rules: strengthen, new_contract, change, allowed_host, added, removed, weaken, new_assumption, config)
+  x bad.toml [escalate]: only weaken and new_assumption can be escalated, not change
+  x [effects] forbid: unknown capability Network (expected Log, Clock, Random, Net, Fs, Db, Tx)
+  x [assure] require: unknown field signature (expected reason, owner, expires)
+  x [auto_approve] weaken = true contradicts [escalate] weaken = "owner": a weakening always needs review
+  x [auto_approve] new_assumption = true contradicts [escalate] new_assumption: an escalated change cannot be auto-approved
+  x [module."app/rates.kek"] allowed_hosts: elsewhere.example not allowed by the enclosing [module."app"] (a module may only tighten)
+  x [module."app/rates.kek"] forbids Net but allows hosts api.rates.example, elsewhere.example (contradictory)
+
+Needs review (1):
+  ! change policy 39e08b1a536b -> 0aed420a94f1   (policy)
+    -> bad.toml
+
+Policy violations (2):
+  x host not in allowed_hosts: hooks.warehouse.example   buy (+1 more: handle)
+    -> app/shop.kek:16
+  x forbidden capability Net in app/rates.kek   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- exit 1
+
+$ kek assure check -config bad_net.toml app
+Configuration errors (1):
+  x [effects] forbid = Net contradicts [net] allowed_hosts = api.rates.example
+
+Needs review (1):
+  ! change policy 39e08b1a536b -> 6ff851747a06   (policy)
+    -> bad_net.toml
+
+Policy violations (2):
+  x host not in allowed_hosts: hooks.warehouse.example   buy (+1 more: handle)
+    -> app/shop.kek:16
+  x forbidden capability Net in app/rates.kek   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- stderr
+kek assure check: 1 configuration error(s); kekkai.assure.lock is out of date: 1 change(s), 1 needing review (run kek assure plan, then kek assure apply); 4 policy violation(s)
+--- exit 1
+
+$ kek assure apply -yes -config bad.toml app
+Configuration errors (8):
+  x bad.toml [auto_approve]: unknown rule bogus (rules: strengthen, new_contract, change, allowed_host, added, removed, weaken, new_assumption, config)
+  x bad.toml [escalate]: only weaken and new_assumption can be escalated, not change
+  x [effects] forbid: unknown capability Network (expected Log, Clock, Random, Net, Fs, Db, Tx)
+  x [assure] require: unknown field signature (expected reason, owner, expires)
+  x [auto_approve] weaken = true contradicts [escalate] weaken = "owner": a weakening always needs review
+  x [auto_approve] new_assumption = true contradicts [escalate] new_assumption: an escalated change cannot be auto-approved
+  x [module."app/rates.kek"] allowed_hosts: elsewhere.example not allowed by the enclosing [module."app"] (a module may only tighten)
+  x [module."app/rates.kek"] forbids Net but allows hosts api.rates.example, elsewhere.example (contradictory)
+
+Needs review (1):
+  ! change policy 39e08b1a536b -> 0aed420a94f1   (policy)
+    -> bad.toml
+
+Policy violations (2):
+  x host not in allowed_hosts: hooks.warehouse.example   buy (+1 more: handle)
+    -> app/shop.kek:16
+  x forbidden capability Net in app/rates.kek   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- stderr
+kek assure apply: fix the configuration errors first
+--- exit 1
+
+$ kek assure plan -config missing.toml app
+Configuration errors (1):
+  x missing.toml: ENOENT: no such file or directory, open 'missing.toml'
+
+Needs review (1):
+  ! change policy 39e08b1a536b -> dd9bc1b99bbe   (policy)
+    -> missing.toml
+--- exit 1
+

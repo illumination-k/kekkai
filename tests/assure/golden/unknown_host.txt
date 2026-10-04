@@ -1,0 +1,23 @@
+# the URL is not a literal: the host is unknown (*)
+$ kek assure plan app
+Needs review (1):
+  ! weaken net.hosts: +* -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+
+Policy violations (1):
+  x host not in allowed_hosts: * (a URL that is not a literal)   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- exit 1
+
+$ kek assure check app
+Needs review (1):
+  ! weaken net.hosts: +* -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+
+Policy violations (1):
+  x host not in allowed_hosts: * (a URL that is not a literal)   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 2 change(s), 2 needing review (run kek assure plan, then kek assure apply); 2 policy violation(s)
+--- exit 1
+

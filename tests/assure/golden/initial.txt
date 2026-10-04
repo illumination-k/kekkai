@@ -1,0 +1,64 @@
+$ kek assure check app
+No lock file kekkai.assure.lock: every definition is new (kek assure apply creates it).
+
+Needs review (2):
+  ! new assumption #[rare]   convert
+    -> app/rates.kek:14
+  ! new assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-03-31)   rate_key
+    -> app/rates.kek:19
+
+Auto-approved (8): added 8
+--- stderr
+kek assure check: no lock file kekkai.assure.lock (run kek assure apply)
+--- exit 1
+
+$ kek assure plan app
+No lock file kekkai.assure.lock: every definition is new (kek assure apply creates it).
+
+Needs review (2):
+  ! new assumption #[rare]   convert
+    -> app/rates.kek:14
+  ! new assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-03-31)   rate_key
+    -> app/rates.kek:19
+
+Auto-approved (8): added 8
+--- exit 0
+
+# new assumptions need review
+$ kek assure apply app
+No lock file kekkai.assure.lock: every definition is new (kek assure apply creates it).
+
+Needs review (2):
+  ! new assumption #[rare]   convert
+    -> app/rates.kek:14
+  ! new assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-03-31)   rate_key
+    -> app/rates.kek:19
+
+Auto-approved (8): added 8
+--- stderr
+kek assure apply: 2 change(s) need review: rerun with -yes to approve them
+--- exit 1
+
+$ kek assure apply -yes app
+No lock file kekkai.assure.lock: every definition is new (kek assure apply creates it).
+
+Needs review (2):
+  ! new assumption #[rare]   convert
+    -> app/rates.kek:14
+  ! new assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-03-31)   rate_key
+    -> app/rates.kek:19
+
+Auto-approved (8): added 8
+kekkai.assure.lock updated: 8 definitions, 10 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+# the lock equals testdata/assure/kekkai.assure.lock
+$ kek assure apply app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+kekkai.assure.lock is up to date (8 definitions)
+--- exit 0
+

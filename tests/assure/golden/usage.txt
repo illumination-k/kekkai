@@ -1,0 +1,44 @@
+$ kek assure
+--- stderr
+usage: kek assure (plan|apply|check) [-json] [-v] [-strict] [-yes] [-reason r] [-owner o] [-expires YYYY-MM-DD] [-renew] [-lock f] [-config f] [-today YYYY-MM-DD] <file|dir>
+--- exit 2
+
+$ kek assure plan
+--- stderr
+usage: kek assure (plan|apply|check) [-json] [-v] [-strict] [-yes] [-reason r] [-owner o] [-expires YYYY-MM-DD] [-renew] [-lock f] [-config f] [-today YYYY-MM-DD] <file|dir>
+--- exit 2
+
+$ kek assure frobnicate app
+--- stderr
+usage: kek assure (plan|apply|check) [-json] [-v] [-strict] [-yes] [-reason r] [-owner o] [-expires YYYY-MM-DD] [-renew] [-lock f] [-config f] [-today YYYY-MM-DD] <file|dir>
+--- exit 2
+
+$ kek assure plan -today 2026-13-01 app
+--- stderr
+kek assure: -today 2026-13-01: expected YYYY-MM-DD
+--- exit 2
+
+$ kek assure plan -bogus app
+--- stderr
+flag provided but not defined: -bogus
+usage: kek assure (plan|apply|check) [-json] [-v] [-strict] [-yes] [-reason r] [-owner o] [-expires YYYY-MM-DD] [-renew] [-lock f] [-config f] [-today YYYY-MM-DD] <file|dir>
+--- exit 2
+
+$ kek assure plan nonexistent.kek
+--- stderr
+nonexistent.kek: ENOENT: no such file or directory, open 'nonexistent.kek'
+--- exit 1
+
+$ kek assure plan app
+Configuration errors (1):
+  x kekkai.assure.lock: unsupported lock version 2 (this compiler writes version 1)
+
+Needs review (2):
+  ! new assumption #[rare]   convert
+    -> app/rates.kek:14
+  ! new assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-03-31)   rate_key
+    -> app/rates.kek:19
+
+Auto-approved (8): added 8
+--- exit 1
+

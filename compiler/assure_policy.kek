@@ -1,0 +1,580 @@
+// The guarantee ledger, part 2: the policy (kekkai.toml) that decides which
+// changes of the plan are auto-approved, which need review, and what the
+// program may never do (prefix asr_ / Asr*). See docs/assure.md.
+//
+//   [assure]        lock = "kekkai.assure.lock", extends = "org.toml",
+//                   require = ["reason", "owner", "expires"]
+//   [net]           allowed_hosts = ["api.example.com"]
+//   [effects]       forbid = ["Random"]
+//   [auto_approve]  <rule> = true|false
+//   [escalate]      weaken = "owner", new_assumption = "security"
+//   [module."path"] allowed_hosts, forbid, review   (may only tighten)
+//
+// Configurations inherit: `extends` names a parent file (an organization's
+// policy) that this one may only make stricter; module sections apply to
+// the files under their path and may only make the repository policy
+// stricter. Rules that contradict each other are configuration errors.
+
+// The rules of the plan, in display order: a change of the plan is decided
+// by exactly one of them.
+fn asr_rules() -> Vec<String> {
+    "strengthen new_contract change allowed_host added removed weaken new_assumption config".split(
+        " ",
+    )
+}
+
+fn asr_rule_default(rule: String) -> Bool {
+    !(rule == "weaken" || rule == "new_assumption" || rule == "config")
+}
+
+fn asr_cap_names() -> Vec<String> {
+    "Log Clock Random Net Fs Db Tx".split(" ")
+}
+
+fn asr_meta_names() -> Vec<String> {
+    "reason owner expires".split(" ")
+}
+
+struct AsrModule {
+    path: String,
+    mut has_hosts: Bool,
+    mut hosts: Vec<String>,
+    mut forbid: Vec<String>,
+    mut review: Vec<String>,
+}
+
+struct AsrPolicy {
+    mut has_hosts: Bool,
+    mut hosts: Vec<String>,
+    mut forbid: Vec<String>,
+    // explicit [auto_approve] entries (defaults: asr_rule_default)
+    auto: HashMap<String, Bool>,
+    // explicit [escalate] entries (weaken = "owner" always applies)
+    escalate: HashMap<String, String>,
+    mut has_require: Bool,
+    mut require: Vec<String>,
+    modules: Vec<AsrModule>,
+    errors: Vec<String>,
+    mut lock: String,
+    mut extends: String,
+    mut hash: String,
+    // the configuration file it was read from
+    mut src: String,
+}
+
+fn asr_policy_empty() -> AsrPolicy {
+    AsrPolicy {
+        has_hosts: false,
+        hosts: Vec::new(),
+        forbid: Vec::new(),
+        auto: HashMap::new(),
+        escalate: HashMap::new(),
+        has_require: false,
+        require: Vec::new(),
+        modules: Vec::new(),
+        errors: Vec::new(),
+        lock: "",
+        extends: "",
+        hash: "",
+        src: "",
+    }
+}
+
+fn asr_auto(p: AsrPolicy, rule: String) -> Bool {
+    match p.auto.get(rule) {
+        Some(b) => b,
+        None => asr_rule_default(rule),
+    }
+}
+
+fn asr_escalate(p: AsrPolicy, rule: String) -> String {
+    match p.escalate.get(rule) {
+        Some(r) => r,
+        None => if rule == "weaken" { "owner" } else { "" },
+    }
+}
+
+fn asr_require(p: AsrPolicy) -> Vec<String> {
+    if p.has_require {
+        return p.require;
+    }
+    asr_meta_names()
+}
+
+fn asr_lock_path(p: AsrPolicy) -> String {
+    if p.lock == "" {
+        return "kekkai.assure.lock";
+    }
+    p.lock
+}
+
+// ---- reading ----
+
+fn asr_cfg_strs(p: AsrPolicy, v: ToolJson, what: String) -> Vec<String> {
+    match v {
+        ToolJson::Arr(xs) => {
+            let out = Vec::new();
+            for x in xs {
+                match x {
+                    ToolJson::Str(s) => out.push(s),
+                    _ => {
+                        p.errors.push(what + ": expected an array of strings");
+                        return out;
+                    }
+                }
+            }
+            out
+        }
+        _ => {
+            p.errors.push(what + ": expected an array of strings");
+            Vec::new()
+        }
+    }
+}
+
+fn asr_cfg_str(p: AsrPolicy, v: ToolJson, what: String) -> String {
+    match v {
+        ToolJson::Str(s) => s,
+        _ => {
+            p.errors.push(what + ": expected a string");
+            ""
+        }
+    }
+}
+
+fn asr_unquote(s: String) -> String {
+    let t = s.trim();
+    if t.len() >= 2 && t.starts_with("\"") && t.ends_with("\"") {
+        return t.slice(1, t.len() - 1);
+    }
+    t
+}
+
+// asr_policy_raw reads the assure sections of one parsed configuration
+// file (no defaults, no inheritance). Other sections are ignored.
+fn asr_policy_raw(cfg: ToolJson, src: String) -> AsrPolicy {
+    let p = asr_policy_empty();
+    for sec in tool_json_keys(cfg) {
+        let body = tool_json_get(cfg, sec);
+        let at = src + " [" + sec + "]";
+        if sec == "assure" {
+            for k in tool_json_keys(body) {
+                let v = tool_json_get(body, k);
+                if k == "lock" {
+                    p.lock = asr_cfg_str(p, v, at + " lock");
+                } else if k == "extends" {
+                    p.extends = asr_cfg_str(p, v, at + " extends");
+                } else if k == "require" {
+                    p.has_require = true;
+                    p.require = asr_cfg_strs(p, v, at + " require");
+                } else {
+                    p.errors.push(at + ": unknown key " + k + " (expected lock, extends, require)");
+                }
+            }
+        } else if sec == "net" {
+            for k in tool_json_keys(body) {
+                if k == "allowed_hosts" {
+                    p.has_hosts = true;
+                    p.hosts = asr_lower_all(asr_cfg_strs(p, tool_json_get(body, k), at + " " + k));
+                } else {
+                    p.errors.push(at + ": unknown key " + k + " (expected allowed_hosts)");
+                }
+            }
+        } else if sec == "effects" {
+            for k in tool_json_keys(body) {
+                if k == "forbid" {
+                    p.forbid = asr_cfg_strs(p, tool_json_get(body, k), at + " forbid");
+                } else {
+                    p.errors.push(at + ": unknown key " + k + " (expected forbid)");
+                }
+            }
+        } else if sec == "auto_approve" {
+            for k in tool_json_keys(body) {
+                if !asr_has(asr_rules(), k) {
+                    p.errors.push(
+                        at + ": unknown rule " + k + " (rules: " + asr_rules().join(", ") + ")",
+                    );
+                    continue;
+                }
+                match tool_json_get(body, k) {
+                    ToolJson::Bool(b) => {
+                        p.auto.insert(k, b);
+                    }
+                    _ => p.errors.push(at + " " + k + ": expected true or false"),
+                }
+            }
+        } else if sec == "escalate" {
+            for k in tool_json_keys(body) {
+                if k != "weaken" && k != "new_assumption" {
+                    p.errors.push(
+                        at + ": only weaken and new_assumption can be escalated, not " + k,
+                    );
+                    continue;
+                }
+                let r = asr_cfg_str(p, tool_json_get(body, k), at + " " + k);
+                if r == "" {
+                    p.errors.push(at + " " + k + ": the role must not be empty");
+                } else {
+                    p.escalate.insert(k, r);
+                }
+            }
+        } else if sec.starts_with("module.") {
+            let path = asr_clean_file(asr_unquote(sec.slice(7, sec.len())));
+            let m = AsrModule {
+                path: path,
+                has_hosts: false,
+                hosts: Vec::new(),
+                forbid: Vec::new(),
+                review: Vec::new(),
+            };
+            if path == "" {
+                p.errors.push(at + ": empty module path");
+            }
+            for k in tool_json_keys(body) {
+                let v = tool_json_get(body, k);
+                if k == "allowed_hosts" {
+                    m.has_hosts = true;
+                    m.hosts = asr_lower_all(asr_cfg_strs(p, v, at + " " + k));
+                } else if k == "forbid" {
+                    m.forbid = asr_cfg_strs(p, v, at + " " + k);
+                } else if k == "review" {
+                    m.review = asr_cfg_strs(p, v, at + " " + k);
+                } else {
+                    p.errors.push(
+                        at + ": unknown key " + k + " (expected allowed_hosts, forbid, review)",
+                    );
+                }
+            }
+            p.modules.push(m);
+        }
+    }
+    p
+}
+
+fn asr_lower_all(xs: Vec<String>) -> Vec<String> {
+    let out = Vec::new();
+    for x in xs {
+        out.push(x.to_lower());
+    }
+    out
+}
+
+fn asr_union(a: Vec<String>, b: Vec<String>) -> Vec<String> {
+    let all = Vec::new();
+    for x in a {
+        all.push(x);
+    }
+    for x in b {
+        all.push(x);
+    }
+    asr_sorted_set(all)
+}
+
+// asr_policy_merge applies child on top of parent (its `extends`): the
+// child may only tighten.
+fn asr_policy_merge(parent: AsrPolicy, child: AsrPolicy, child_src: String) -> AsrPolicy {
+    let p = asr_policy_empty();
+    for e in parent.errors {
+        p.errors.push(e);
+    }
+    for e in child.errors {
+        p.errors.push(e);
+    }
+    p.has_hosts = parent.has_hosts || child.has_hosts;
+    p.hosts = parent.hosts;
+    if child.has_hosts {
+        if parent.has_hosts {
+            let extra = asr_minus(child.hosts, parent.hosts);
+            if extra.len() > 0 {
+                p.errors.push(
+                    child_src
+                        + " [net] allowed_hosts: "
+                        + extra.join(", ")
+                        + " not allowed by "
+                        + child.extends
+                        + " (a configuration may only tighten the one it extends)",
+                );
+            }
+        }
+        p.hosts = child.hosts;
+    }
+    p.forbid = asr_union(parent.forbid, child.forbid);
+    for k in parent.auto.keys() {
+        p.auto.insert(k, parent.auto.get(k).unwrap_or(false));
+    }
+    for k in child.auto.keys() {
+        let v = child.auto.get(k).unwrap_or(false);
+        if v && !asr_auto(parent, k) {
+            p.errors.push(
+                child_src
+                    + " [auto_approve] "
+                    + k
+                    + " = true: "
+                    + child.extends
+                    + " requires review (a configuration may only tighten the one it extends)",
+            );
+        }
+        p.auto.insert(k, v);
+    }
+    for k in parent.escalate.keys() {
+        p.escalate.insert(k, parent.escalate.get(k).unwrap_or(""));
+    }
+    for k in child.escalate.keys() {
+        p.escalate.insert(k, child.escalate.get(k).unwrap_or(""));
+    }
+    p.has_require = parent.has_require || child.has_require;
+    p.require = asr_union(asr_require(parent), asr_require(child));
+    for m in parent.modules {
+        p.modules.push(m);
+    }
+    for m in child.modules {
+        p.modules.push(m);
+    }
+    p.lock = child.lock;
+    p.extends = child.extends;
+    p
+}
+
+// asr_policy_file reads one configuration file and its `extends` chain.
+fn asr_policy_file(fs: &Fs, path: String, optional: Bool, depth: Int) -> AsrPolicy {
+    let text = match fs.read(path) {
+        Ok(t) => t,
+        Err(e) => {
+            let p = asr_policy_empty();
+            if !optional {
+                p.errors.push(path + ": " + e.message());
+            }
+            return p;
+        }
+    };
+    let cfg = match tool_toml_parse(text) {
+        Ok(c) => c,
+        Err(e) => {
+            let p = asr_policy_empty();
+            p.errors.push(path + ": " + e);
+            return p;
+        }
+    };
+    let child = asr_policy_raw(cfg, path);
+    if child.extends == "" {
+        return child;
+    }
+    if depth >= 8 {
+        child.errors.push(path + ": [assure] extends: too deep (a cycle?)");
+        return child;
+    }
+    let parent = asr_policy_file(fs, child.extends, false, depth + 1);
+    asr_policy_merge(parent, child, path)
+}
+
+// asr_policy_load reads the policy (path "" = ./kekkai.toml, which may be
+// absent), validates it and computes its hash.
+fn asr_policy_load(fs: &Fs, path: String) -> AsrPolicy {
+    let p = if path == "" {
+        asr_policy_file(fs, "kekkai.toml", true, 0)
+    } else {
+        asr_policy_file(fs, path, false, 0)
+    };
+    asr_policy_validate(p);
+    p.hash = asr_policy_hash(p);
+    p.src = if path == "" { "kekkai.toml" } else { path };
+    p
+}
+
+// ---- contradictions ----
+
+fn asr_path_under(file: String, path: String) -> Bool {
+    if path == "*" || file == path {
+        return true;
+    }
+    if path.ends_with("/") {
+        return file.starts_with(path);
+    }
+    file.starts_with(path + "/")
+}
+
+fn asr_check_caps(p: AsrPolicy, caps: Vec<String>, what: String) {
+    for c in caps {
+        if !asr_has(asr_cap_names(), c) {
+            p.errors.push(
+                what
+                    + ": unknown capability "
+                    + c
+                    + " (expected "
+                    + asr_cap_names().join(", ")
+                    + ")",
+            );
+        }
+    }
+}
+
+fn asr_policy_validate(p: AsrPolicy) {
+    asr_check_caps(p, p.forbid, "[effects] forbid");
+    for r in asr_require(p) {
+        if !asr_has(asr_meta_names(), r) {
+            p.errors.push(
+                "[assure] require: unknown field " + r + " (expected reason, owner, expires)",
+            );
+        }
+    }
+    if asr_auto(p, "weaken") {
+        p.errors.push(
+            "[auto_approve] weaken = true contradicts [escalate] weaken = \""
+                + asr_escalate(p, "weaken")
+                + "\": a weakening always needs review",
+        );
+    }
+    for k in p.escalate.keys() {
+        if k != "weaken" && asr_auto(p, k) {
+            p.errors.push(
+                "[auto_approve] "
+                    + k
+                    + " = true contradicts [escalate] "
+                    + k
+                    + ": an escalated change cannot be auto-approved",
+            );
+        }
+    }
+    for m in p.modules {
+        let at = "[module.\"" + m.path + "\"]";
+        asr_check_caps(p, m.forbid, at + " forbid");
+        for r in m.review {
+            if !asr_has(asr_rules(), r) {
+                p.errors.push(at + " review: unknown rule " + r);
+            }
+        }
+        if m.has_hosts {
+            if p.has_hosts {
+                let extra = asr_minus(m.hosts, p.hosts);
+                if extra.len() > 0 {
+                    p.errors.push(
+                        at
+                            + " allowed_hosts: "
+                            + extra.join(", ")
+                            + " not in [net] allowed_hosts (a module may only tighten)",
+                    );
+                }
+            }
+            for o in p.modules {
+                if o.path != m.path && o.has_hosts && asr_path_under(m.path, o.path) {
+                    let extra = asr_minus(m.hosts, o.hosts);
+                    if extra.len() > 0 {
+                        p.errors.push(
+                            at
+                                + " allowed_hosts: "
+                                + extra.join(", ")
+                                + " not allowed by the enclosing [module.\""
+                                + o.path
+                                + "\"] (a module may only tighten)",
+                        );
+                    }
+                }
+            }
+        }
+        for c in m.forbid {
+            if c == "Net" && m.has_hosts && m.hosts.len() > 0 {
+                p.errors.push(
+                    at + " forbids Net but allows hosts " + m.hosts.join(", ") + " (contradictory)",
+                );
+            }
+        }
+    }
+    for c in p.forbid {
+        if c == "Net" && p.has_hosts && p.hosts.len() > 0 {
+            p.errors.push(
+                "[effects] forbid = Net contradicts [net] allowed_hosts = " + p.hosts.join(", "),
+            );
+        }
+    }
+}
+
+// asr_policy_hash fingerprints the effective policy (not its formatting).
+fn asr_policy_hash(p: AsrPolicy) -> String {
+    let parts = Vec::new();
+    if p.has_hosts {
+        parts.push("hosts=" + asr_sorted_set(p.hosts).join(","));
+    } else {
+        parts.push("hosts=-");
+    }
+    parts.push("forbid=" + asr_sorted_set(p.forbid).join(","));
+    for r in asr_rules() {
+        parts.push("auto." + r + "=" + asr_auto(p, r).to_string());
+        parts.push("escalate." + r + "=" + asr_escalate(p, r));
+    }
+    parts.push("require=" + asr_sorted_set(asr_require(p)).join(","));
+    let ms = Vec::new();
+    for m in p.modules {
+        let mut h = "-";
+        if m.has_hosts {
+            h = asr_sorted_set(m.hosts).join(",");
+        }
+        ms.push(
+            "module "
+                + m.path
+                + " hosts="
+                + h
+                + " forbid="
+                + asr_sorted_set(m.forbid).join(",")
+                + " review="
+                + asr_sorted_set(m.review).join(","),
+        );
+    }
+    chk_sort_strings(ms);
+    for m in ms {
+        parts.push(m);
+    }
+    dh_hash_strs(parts)
+}
+
+// ---- the policy of one file ----
+
+struct AsrScope {
+    has_hosts: Bool,
+    hosts: Vec<String>,
+    forbid: Vec<String>,
+    review: Vec<String>,
+}
+
+fn asr_scope(p: AsrPolicy, file: String) -> AsrScope {
+    let mut has_hosts = p.has_hosts;
+    let mut hosts = p.hosts;
+    let forbid = Vec::new();
+    for c in p.forbid {
+        forbid.push(c);
+    }
+    let review = Vec::new();
+    for m in p.modules {
+        if !asr_path_under(file, m.path) {
+            continue;
+        }
+        if m.has_hosts {
+            if has_hosts {
+                let keep = Vec::new();
+                for h in hosts {
+                    if asr_has(m.hosts, h) {
+                        keep.push(h);
+                    }
+                }
+                hosts = keep;
+            } else {
+                hosts = m.hosts;
+            }
+            has_hosts = true;
+        }
+        for c in m.forbid {
+            forbid.push(c);
+        }
+        for r in m.review {
+            review.push(r);
+        }
+    }
+    AsrScope { has_hosts: has_hosts, hosts: hosts, forbid: asr_sorted_set(forbid), review: review }
+}
+
+// asr_needs_review decides a rule for a file.
+fn asr_needs_review(p: AsrPolicy, file: String, rule: String) -> Bool {
+    if !asr_auto(p, rule) {
+        return true;
+    }
+    asr_has(asr_scope(p, file).review, rule)
+}

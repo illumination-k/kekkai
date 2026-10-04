@@ -1,0 +1,43 @@
+# a function in app/shop.kek takes &Random (forbidden there)
+$ kek assure plan app
+Auto-approved (1): added 1
+
+Policy violations (1):
+  x forbidden capability Random in app/shop.kek   discount
+    -> app/shop.kek:41
+--- exit 1
+
+$ kek assure apply -yes app
+Auto-approved (1): added 1
+
+Policy violations (1):
+  x forbidden capability Random in app/shop.kek   discount
+    -> app/shop.kek:41
+--- stderr
+kek assure apply: refusing: 1 policy violation(s) (change the code or the policy; they cannot be approved)
+--- exit 1
+
+$ kek assure check app
+Auto-approved (1): added 1
+
+Policy violations (1):
+  x forbidden capability Random in app/shop.kek   discount
+    -> app/shop.kek:41
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 1 change(s), 0 needing review (run kek assure plan, then kek assure apply); 1 policy violation(s)
+--- exit 1
+
+# the same function in app/rates.kek is allowed
+$ kek assure plan app
+Auto-approved (1): added 1
+--- exit 0
+
+$ kek assure apply app
+Auto-approved (1): added 1
+kekkai.assure.lock updated: 9 definitions, 1 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (9 definitions).
+--- exit 0
+

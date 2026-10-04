@@ -1,0 +1,1064 @@
+// The guarantee ledger, part 4: the plan (prefix asr_). The plan compares
+// the lock with the guarantees of the current program, classifies every
+// change and applies the policy:
+//
+//   class        strengthen | change | weaken | assumption | added | removed
+//   rule         the policy key that decides it: strengthen, new_contract,
+//                change, allowed_host, added, removed, weaken,
+//                new_assumption, config
+//
+// Besides the changes, the plan reports policy violations (state of the
+// program the policy forbids: a forbidden capability, a host outside
+// allowed_hosts, a malformed expiry date) and expired escape hatches.
+
+struct AsrChange {
+    def: String,
+    file: String,
+    line: Int,
+    class: String,
+    rule: String,
+    guarantee: String,
+    evidence: String,
+    from: String,
+    to: String,
+    added: Vec<String>,
+    removed: Vec<String>,
+    message: String,
+    mut review: Bool,
+    mut escalate: String,
+}
+
+struct AsrViolation {
+    def: String,
+    file: String,
+    line: Int,
+    rule: String,
+    guarantee: String,
+    items: Vec<String>,
+    message: String,
+}
+
+struct AsrExpired {
+    def: String,
+    file: String,
+    line: Int,
+    // "code" (an attribute) or "lock" (a waiver)
+    source: String,
+    kind: String,
+    expires: String,
+    reason: String,
+    owner: String,
+}
+
+struct AsrPlan {
+    path: String,
+    lock: String,
+    lock_found: Bool,
+    lock_config: String,
+    config: String,
+    today: String,
+    cur: AsrState,
+    old: AsrState,
+    changes: Vec<AsrChange>,
+    violations: Vec<AsrViolation>,
+    expired: Vec<AsrExpired>,
+    errors: Vec<String>,
+}
+
+// ---- rendering values ----
+
+fn asr_items_str(name: String, xs: Vec<String>) -> String {
+    if xs.len() == 0 {
+        if name == "effects" {
+            return "pure";
+        }
+        return "none";
+    }
+    xs.join(", ")
+}
+
+fn asr_guar_str(g: Option<AsrGuar>, name: String, kind: String) -> String {
+    match g {
+        Some(x) => if x.kind == "set" {
+            asr_items_str(name, x.items)
+        } else {
+            x.holds.to_string()
+        },
+        None => if kind == "set" {
+            asr_items_str(name, Vec::new())
+        } else {
+            "false"
+        },
+    }
+}
+
+fn asr_plus(xs: Vec<String>, sign: String) -> String {
+    let out = Vec::new();
+    for x in xs {
+        out.push(sign + x);
+    }
+    out.join(" ")
+}
+
+fn asr_entry_str(e: String) -> String {
+    if e == "" {
+        return "(none)";
+    }
+    e
+}
+
+fn asr_assume_str(a: AsrAssume) -> String {
+    let mut s = "#[" + a.kind + "]";
+    let meta = Vec::new();
+    if a.reason != "" {
+        meta.push("reason: \"" + a.reason + "\"");
+    }
+    if a.owner != "" {
+        meta.push("owner: " + a.owner);
+    }
+    if a.expires != "" {
+        meta.push("expires: " + a.expires);
+    }
+    if meta.len() > 0 {
+        s = s + " (" + meta.join(", ") + ")";
+    }
+    s
+}
+
+// ---- diff ----
+
+fn asr_change(
+    pl: AsrPlan,
+    d: AsrDef,
+    class: String,
+    rule: String,
+    guarantee: String,
+    evidence: String,
+    from: String,
+    to: String,
+    added: Vec<String>,
+    removed: Vec<String>,
+    message: String,
+) {
+    pl.changes.push(AsrChange {
+        def: d.name,
+        file: d.file,
+        line: d.line,
+        class: class,
+        rule: rule,
+        guarantee: guarantee,
+        evidence: evidence,
+        from: from,
+        to: to,
+        added: added,
+        removed: removed,
+        message: message,
+        review: false,
+        escalate: "",
+    });
+}
+
+fn asr_none() -> Vec<String> {
+    Vec::new()
+}
+
+fn asr_one(x: String) -> Vec<String> {
+    let v = Vec::new();
+    v.push(x);
+    v
+}
+
+fn asr_find_assume(xs: Vec<AsrAssume>, kind: String) -> Option<AsrAssume> {
+    for a in xs {
+        if a.kind == kind {
+            return Some(a);
+        }
+    }
+    None
+}
+
+fn asr_diff_guar(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef, name: String) {
+    let og = asr_guar_get(o, name);
+    let ng = asr_guar_get(n, name);
+    let mut kind = "set";
+    let mut ev = "";
+    match og {
+        Some(g) => {
+            kind = g.kind;
+            ev = g.evidence;
+        }
+        None => {}
+    }
+    match ng {
+        Some(g) => {
+            kind = g.kind;
+            ev = g.evidence;
+        }
+        None => {}
+    }
+    let from = asr_guar_str(og, name, kind);
+    let to = asr_guar_str(ng, name, kind);
+    if kind == "set" {
+        let oi = match og {
+            Some(g) => g.items,
+            None => Vec::new(),
+        };
+        let ni = match ng {
+            Some(g) => g.items,
+            None => Vec::new(),
+        };
+        let added = asr_minus(ni, oi);
+        let removed = asr_minus(oi, ni);
+        if added.len() > 0 {
+            let mut rule = "weaken";
+            if name == "net.hosts" {
+                let sc = asr_scope(pol, n.file);
+                if sc.has_hosts && asr_minus(added, sc.hosts).len() == 0 {
+                    rule = "allowed_host";
+                }
+            }
+            let mut msg = "weaken " + name + ": " + asr_plus(added, "+");
+            if removed.len() > 0 {
+                msg = msg + " " + asr_plus(removed, "-");
+            }
+            asr_change(pl, n, "weaken", rule, name, ev, from, to, added, removed, msg);
+        } else if removed.len() > 0 {
+            asr_change(
+                pl,
+                n,
+                "strengthen",
+                "strengthen",
+                name,
+                ev,
+                from,
+                to,
+                added,
+                removed,
+                "strengthen " + name + ": " + asr_plus(removed, "-"),
+            );
+        }
+        return;
+    }
+    let oh = match og {
+        Some(g) => g.holds,
+        None => false,
+    };
+    let nh = match ng {
+        Some(g) => g.holds,
+        None => false,
+    };
+    if !oh && nh {
+        if og.is_none() {
+            asr_change(
+                pl,
+                n,
+                "strengthen",
+                "new_contract",
+                name,
+                ev,
+                from,
+                to,
+                asr_none(),
+                asr_none(),
+                "new contract " + name,
+            );
+        } else {
+            let mut msg = "strengthen " + name;
+            if name == "tested" {
+                msg = msg + " (a #[test] now reaches it)";
+            }
+            asr_change(
+                pl,
+                n,
+                "strengthen",
+                "strengthen",
+                name,
+                ev,
+                from,
+                to,
+                asr_none(),
+                asr_none(),
+                msg,
+            );
+        }
+    } else if oh && !nh {
+        if name == "tx.linear" {
+            asr_change(
+                pl,
+                n,
+                "change",
+                "change",
+                name,
+                ev,
+                from,
+                to,
+                asr_none(),
+                asr_none(),
+                "change tx.linear (no transaction any more)",
+            );
+        } else {
+            let mut msg = "weaken " + name + " (no longer holds)";
+            if name == "tested" {
+                msg = "weaken tested (no #[test] reaches it any more)";
+            }
+            asr_change(pl, n, "weaken", "weaken", name, ev, from, to, asr_none(), asr_none(), msg);
+        }
+    }
+}
+
+fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
+    let before = pl.changes.len();
+    if o.file != n.file {
+        asr_change(
+            pl,
+            n,
+            "change",
+            "change",
+            "file",
+            "",
+            o.file,
+            n.file,
+            asr_none(),
+            asr_none(),
+            "change file: " + o.file + " -> " + n.file,
+        );
+    }
+    if o.entry != n.entry {
+        asr_change(
+            pl,
+            n,
+            "change",
+            "change",
+            "entry",
+            "type",
+            o.entry,
+            n.entry,
+            asr_none(),
+            asr_none(),
+            "change entry: " + asr_entry_str(o.entry) + " -> " + asr_entry_str(n.entry),
+        );
+    }
+    if o.async != n.async {
+        asr_change(
+            pl,
+            n,
+            "change",
+            "change",
+            "async",
+            "type",
+            o.async.to_string(),
+            n.async.to_string(),
+            asr_none(),
+            asr_none(),
+            "change async: " + o.async.to_string() + " -> " + n.async.to_string(),
+        );
+    }
+    let names = Vec::new();
+    for g in asr_sorted_guars(o.guars) {
+        names.push(g.name);
+    }
+    for g in asr_sorted_guars(n.guars) {
+        if !asr_has(names, g.name) {
+            names.push(g.name);
+        }
+    }
+    for name in names {
+        asr_diff_guar(pl, pol, o, n, name);
+    }
+    for a in n.assumes {
+        match asr_find_assume(o.assumes, a.kind) {
+            None => asr_change(
+                pl,
+                n,
+                "assumption",
+                "new_assumption",
+                "assumption",
+                "assumption",
+                "",
+                asr_assume_str(a),
+                asr_one(a.kind),
+                asr_none(),
+                "new assumption " + asr_assume_str(a),
+            ),
+            Some(x) => {
+                if x.reason != a.reason || x.owner != a.owner || x.expires != a.expires {
+                    asr_change(
+                        pl,
+                        n,
+                        "assumption",
+                        "new_assumption",
+                        "assumption",
+                        "assumption",
+                        asr_assume_str(x),
+                        asr_assume_str(a),
+                        asr_one(a.kind),
+                        asr_none(),
+                        "changed assumption " + asr_assume_str(a),
+                    );
+                }
+            }
+        }
+    }
+    for a in o.assumes {
+        if asr_find_assume(n.assumes, a.kind).is_none() {
+            asr_change(
+                pl,
+                n,
+                "strengthen",
+                "strengthen",
+                "assumption",
+                "assumption",
+                asr_assume_str(a),
+                "",
+                asr_none(),
+                asr_one(a.kind),
+                "strengthen: assumption #[" + a.kind + "] removed",
+            );
+        }
+    }
+    if pl.changes.len() == before && o.hash != n.hash {
+        asr_change(
+            pl,
+            n,
+            "change",
+            "change",
+            "hash",
+            "",
+            dh_short(o.hash),
+            dh_short(n.hash),
+            asr_none(),
+            asr_none(),
+            "change body (guarantees unchanged)",
+        );
+    }
+}
+
+fn asr_effects_str(d: AsrDef) -> String {
+    match asr_guar_get(d, "effects") {
+        Some(g) => asr_items_str("effects", g.items),
+        None => "pure",
+    }
+}
+
+// asr_waiver_live reports whether the weakening a waiver approved is still
+// present in d.
+fn asr_waiver_live(w: AsrWaiver, d: AsrDef) -> Bool {
+    if w.guarantee == "assumption" {
+        for a in d.assumes {
+            if asr_has(w.items, a.kind) {
+                return true;
+            }
+        }
+        return false;
+    }
+    match asr_guar_get(d, w.guarantee) {
+        Some(g) => if g.kind == "set" {
+            for x in g.items {
+                if asr_has(w.items, x) {
+                    return true;
+                }
+            }
+            false
+        } else {
+            !g.holds
+        },
+        None => w.items.len() == 0,
+    }
+}
+
+fn asr_valid_date(s: String) -> Bool {
+    if s.len() != 10 {
+        return false;
+    }
+    let mut i = 0;
+    while i < 10 {
+        let c = s.char_at(i).unwrap_or(0);
+        if i == 4 || i == 7 {
+            if c != 45 {
+                return false;
+            }
+        } else if c < 48 || c > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    let m = s.slice(5, 7).parse_int().unwrap_or(0);
+    let d = s.slice(8, 10).parse_int().unwrap_or(0);
+    m >= 1 && m <= 12 && d >= 1 && d <= 31
+}
+
+fn asr_violation(
+    pl: AsrPlan,
+    d: AsrDef,
+    line: Int,
+    rule: String,
+    g: String,
+    items: Vec<String>,
+    msg: String,
+) {
+    pl.violations.push(AsrViolation {
+        def: d.name,
+        file: d.file,
+        line: line,
+        rule: rule,
+        guarantee: g,
+        items: items,
+        message: msg,
+    });
+}
+
+// asr_plan computes the plan of the current state against the lock.
+fn asr_plan(
+    path: String,
+    lock: String,
+    lr: AsrLockRead,
+    cur: AsrState,
+    pol: AsrPolicy,
+    today: String,
+) -> AsrPlan {
+    let old = lr.state;
+    let pl = AsrPlan {
+        path: path,
+        lock: lock,
+        lock_found: lr.found,
+        lock_config: old.config,
+        config: pol.hash,
+        today: today,
+        cur: cur,
+        old: old,
+        changes: Vec::new(),
+        violations: Vec::new(),
+        expired: Vec::new(),
+        errors: Vec::new(),
+    };
+    for e in pol.errors {
+        pl.errors.push(e);
+    }
+    if lr.err != "" {
+        pl.errors.push(lr.err);
+    }
+    if lr.found && lr.err == "" && old.config != pol.hash {
+        let d = AsrDef {
+            name: "(policy)",
+            hash: "",
+            file: pol.src,
+            line: 0,
+            entry: "",
+            async: false,
+            guars: Vec::new(),
+            assumes: Vec::new(),
+            waivers: Vec::new(),
+        };
+        asr_change(
+            pl,
+            d,
+            "change",
+            "config",
+            "config",
+            "",
+            old.config,
+            pol.hash,
+            asr_none(),
+            asr_none(),
+            "change policy " + dh_short(old.config) + " -> " + dh_short(pol.hash),
+        );
+    }
+    // the union of both states, by name
+    let names = Vec::new();
+    for d in old.defs {
+        names.push(d.name);
+    }
+    for d in cur.defs {
+        if !old.by_name.contains_key(d.name) {
+            names.push(d.name);
+        }
+    }
+    chk_sort_strings(names);
+    // a definition that disappears while one with the same hash (the hash
+    // does not depend on the name) appears was renamed
+    let renamed_from: HashMap<String, String> = HashMap::new();
+    let renamed_to: HashMap<String, String> = HashMap::new();
+    for n in cur.defs {
+        if old.by_name.contains_key(n.name) {
+            continue;
+        }
+        for o in old.defs {
+            if o.hash == n.hash
+                && !cur.by_name.contains_key(o.name)
+                && !renamed_to.contains_key(o.name) {
+                renamed_from.insert(n.name, o.name);
+                renamed_to.insert(o.name, n.name);
+                break;
+            }
+        }
+    }
+    for name in names {
+        if renamed_to.contains_key(name) {
+            continue;
+        }
+        match renamed_from.get(name) {
+            Some(from) => {
+                match old.by_name.get(from) {
+                    Some(o) => match cur.by_name.get(name) {
+                        Some(n) => {
+                            asr_change(
+                                pl,
+                                n,
+                                "change",
+                                "change",
+                                "name",
+                                "",
+                                from,
+                                name,
+                                asr_none(),
+                                asr_none(),
+                                "rename: " + from + " -> " + name,
+                            );
+                            asr_diff_def(pl, pol, o, n);
+                        }
+                        None => {}
+                    },
+                    None => {}
+                }
+                continue;
+            }
+            None => {}
+        }
+        match old.by_name.get(name) {
+            Some(o) => match cur.by_name.get(name) {
+                Some(n) => asr_diff_def(pl, pol, o, n),
+                None => asr_change(
+                    pl,
+                    o,
+                    "removed",
+                    "removed",
+                    "definition",
+                    "",
+                    "effects: " + asr_effects_str(o),
+                    "",
+                    asr_none(),
+                    asr_none(),
+                    "removed definition",
+                ),
+            },
+            None => match cur.by_name.get(name) {
+                Some(n) => {
+                    asr_change(
+                        pl,
+                        n,
+                        "added",
+                        "added",
+                        "definition",
+                        "",
+                        "",
+                        "effects: " + asr_effects_str(n),
+                        asr_none(),
+                        asr_none(),
+                        "added definition",
+                    );
+                    for a in n.assumes {
+                        asr_change(
+                            pl,
+                            n,
+                            "assumption",
+                            "new_assumption",
+                            "assumption",
+                            "assumption",
+                            "",
+                            asr_assume_str(a),
+                            asr_one(a.kind),
+                            asr_none(),
+                            "new assumption " + asr_assume_str(a),
+                        );
+                    }
+                }
+                None => {}
+            },
+        }
+    }
+    for c in pl.changes {
+        c.review = asr_needs_review(pol, c.file, c.rule);
+        if c.review {
+            c.escalate = asr_escalate(pol, c.rule);
+        }
+    }
+    // policy violations and expired escape hatches
+    for d in cur.defs {
+        let sc = asr_scope(pol, d.file);
+        match asr_guar_get(d, "effects") {
+            Some(g) => {
+                let bad = Vec::new();
+                for c in g.items {
+                    if asr_has(sc.forbid, c) {
+                        bad.push(c);
+                    }
+                }
+                if bad.len() > 0 {
+                    asr_violation(
+                        pl,
+                        d,
+                        d.line,
+                        "forbid",
+                        "effects",
+                        bad,
+                        "forbidden capability " + bad.join(", ") + " in " + d.file,
+                    );
+                }
+            }
+            None => {}
+        }
+        if sc.has_hosts && !asr_has(sc.hosts, "*") {
+            match asr_guar_get(d, "net.hosts") {
+                Some(g) => {
+                    let bad = asr_minus(g.items, sc.hosts);
+                    if bad.len() > 0 {
+                        let shown = Vec::new();
+                        for h in bad {
+                            if h == "*" {
+                                shown.push("* (a URL that is not a literal)");
+                            } else {
+                                shown.push(h);
+                            }
+                        }
+                        asr_violation(
+                            pl,
+                            d,
+                            d.line,
+                            "allowed_hosts",
+                            "net.hosts",
+                            bad,
+                            "host not in allowed_hosts: " + shown.join(", "),
+                        );
+                    }
+                }
+                None => {}
+            }
+        }
+        for a in d.assumes {
+            if a.expires == "" {
+                continue;
+            }
+            if !asr_valid_date(a.expires) {
+                asr_violation(
+                    pl,
+                    d,
+                    a.line,
+                    "expires",
+                    "assumption",
+                    asr_one(a.kind),
+                    "#[" + a.kind + "] expires = \"" + a.expires + "\" is not a date (YYYY-MM-DD)",
+                );
+            } else if today != "" && a.expires < today {
+                pl.expired.push(AsrExpired {
+                    def: d.name,
+                    file: d.file,
+                    line: a.line,
+                    source: "code",
+                    kind: "#[" + a.kind + "]",
+                    expires: a.expires,
+                    reason: a.reason,
+                    owner: a.owner,
+                });
+            }
+        }
+        match old.by_name.get(d.name) {
+            Some(o) => {
+                for w in o.waivers {
+                    if today != "" && w.expires != "" && w.expires < today && asr_waiver_live(w, d) {
+                        pl.expired.push(AsrExpired {
+                            def: d.name,
+                            file: d.file,
+                            line: d.line,
+                            source: "lock",
+                            kind: "waiver " + w.guarantee + " " + asr_plus(w.items, "+"),
+                            expires: w.expires,
+                            reason: w.reason,
+                            owner: w.owner,
+                        });
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    pl
+}
+
+fn asr_review_count(pl: AsrPlan) -> Int {
+    let mut n = 0;
+    for c in pl.changes {
+        if c.review {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+// asr_plan_ok: what `check` requires (the lock is current, nothing is
+// wrong with the program or the policy, nothing has expired).
+fn asr_plan_ok(pl: AsrPlan) -> Bool {
+    pl.lock_found
+        && pl.errors.len() == 0
+        && pl.changes.len() == 0
+        && pl.violations.len() == 0
+        && pl.expired.len() == 0
+}
+
+// ---- JSON ----
+
+fn asr_change_json(c: AsrChange) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "definition", IrjVal::Str(c.def));
+    irjson_set(o, "file", IrjVal::Str(c.file));
+    irjson_set(o, "line", irjson_int(c.line));
+    irjson_set(o, "class", IrjVal::Str(c.class));
+    irjson_set(o, "rule", IrjVal::Str(c.rule));
+    irjson_set(o, "guarantee", IrjVal::Str(c.guarantee));
+    irjson_set(o, "evidence", IrjVal::Str(c.evidence));
+    irjson_set(o, "from", IrjVal::Str(c.from));
+    irjson_set(o, "to", IrjVal::Str(c.to));
+    irjson_set(o, "added", irjson_strs(c.added));
+    irjson_set(o, "removed", irjson_strs(c.removed));
+    irjson_set(o, "message", IrjVal::Str(c.message));
+    irjson_set(o, "review", irjson_bool(c.review));
+    irjson_set(o, "escalate", IrjVal::Str(c.escalate));
+    irjson_val(o)
+}
+
+fn asr_plan_json(pl: AsrPlan) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "version", irjson_int(asr_lock_version()));
+    irjson_set(o, "path", IrjVal::Str(pl.path));
+    irjson_set(o, "lock", IrjVal::Str(pl.lock));
+    irjson_set(o, "lock_found", irjson_bool(pl.lock_found));
+    let cfg = irjson_obj();
+    irjson_set(cfg, "lock", IrjVal::Str(pl.lock_config));
+    irjson_set(cfg, "current", IrjVal::Str(pl.config));
+    irjson_set(o, "config", irjson_val(cfg));
+    irjson_set(o, "today", IrjVal::Str(pl.today));
+    irjson_set(o, "ok", irjson_bool(asr_plan_ok(pl)));
+    let s = irjson_obj();
+    irjson_set(s, "definitions", irjson_int(pl.cur.defs.len()));
+    irjson_set(s, "changes", irjson_int(pl.changes.len()));
+    let nr = asr_review_count(pl);
+    irjson_set(s, "needs_review", irjson_int(nr));
+    irjson_set(s, "auto_approved", irjson_int(pl.changes.len() - nr));
+    irjson_set(s, "violations", irjson_int(pl.violations.len()));
+    irjson_set(s, "expired", irjson_int(pl.expired.len()));
+    irjson_set(s, "config_errors", irjson_int(pl.errors.len()));
+    irjson_set(o, "summary", irjson_val(s));
+    let cs = Vec::new();
+    for c in pl.changes {
+        cs.push(asr_change_json(c));
+    }
+    irjson_set(o, "changes", IrjVal::Arr(cs));
+    let vs = Vec::new();
+    for v in pl.violations {
+        let vo = irjson_obj();
+        irjson_set(vo, "definition", IrjVal::Str(v.def));
+        irjson_set(vo, "file", IrjVal::Str(v.file));
+        irjson_set(vo, "line", irjson_int(v.line));
+        irjson_set(vo, "rule", IrjVal::Str(v.rule));
+        irjson_set(vo, "guarantee", IrjVal::Str(v.guarantee));
+        irjson_set(vo, "items", irjson_strs(v.items));
+        irjson_set(vo, "message", IrjVal::Str(v.message));
+        vs.push(irjson_val(vo));
+    }
+    irjson_set(o, "violations", IrjVal::Arr(vs));
+    let es = Vec::new();
+    for x in pl.expired {
+        let eo = irjson_obj();
+        irjson_set(eo, "definition", IrjVal::Str(x.def));
+        irjson_set(eo, "file", IrjVal::Str(x.file));
+        irjson_set(eo, "line", irjson_int(x.line));
+        irjson_set(eo, "source", IrjVal::Str(x.source));
+        irjson_set(eo, "kind", IrjVal::Str(x.kind));
+        irjson_set(eo, "expires", IrjVal::Str(x.expires));
+        irjson_set(eo, "reason", IrjVal::Str(x.reason));
+        irjson_set(eo, "owner", IrjVal::Str(x.owner));
+        es.push(irjson_val(eo));
+    }
+    irjson_set(o, "expired", IrjVal::Arr(es));
+    irjson_set(o, "config_errors", irjson_strs(pl.errors));
+    irjson_val(o)
+}
+
+// ---- human output (built on the same data) ----
+
+struct AsrGroup {
+    key: String,
+    message: String,
+    file: String,
+    line: Int,
+    escalate: String,
+    defs: Vec<String>,
+}
+
+fn asr_group_add(groups: Vec<AsrGroup>, key: String, c: AsrChange) {
+    for g in groups {
+        if g.key == key {
+            g.defs.push(c.def);
+            return;
+        }
+    }
+    groups.push(AsrGroup {
+        key: key,
+        message: c.message,
+        file: c.file,
+        line: c.line,
+        escalate: c.escalate,
+        defs: asr_one(c.def),
+    });
+}
+
+fn asr_vgroup_add(groups: Vec<AsrGroup>, v: AsrViolation) {
+    let key = v.rule + "|" + v.message;
+    for g in groups {
+        if g.key == key {
+            g.defs.push(v.def);
+            return;
+        }
+    }
+    groups.push(AsrGroup {
+        key: key,
+        message: v.message,
+        file: v.file,
+        line: v.line,
+        escalate: "",
+        defs: asr_one(v.def),
+    });
+}
+
+fn asr_where(file: String, line: Int) -> String {
+    if line > 0 {
+        return file + ":" + line.to_string();
+    }
+    file
+}
+
+fn asr_defs_str(defs: Vec<String>) -> String {
+    let first = defs.get(0).unwrap_or("");
+    if defs.len() == 1 {
+        return first;
+    }
+    let rest = Vec::new();
+    let mut i = 1;
+    while i < defs.len() && i <= 3 {
+        rest.push(defs.get(i).unwrap_or(""));
+        i = i + 1;
+    }
+    let mut more = rest.join(", ");
+    if defs.len() > 4 {
+        more = more + ", ...";
+    }
+    first + " (+" + (defs.len() - 1).to_string() + " more: " + more + ")"
+}
+
+fn asr_rule_label(rule: String) -> String {
+    rule.replace("_", " ")
+}
+
+fn asr_plan_text(pl: AsrPlan, pol: AsrPolicy, verbose: Bool) -> Vec<String> {
+    let lines = Vec::new();
+    if pl.errors.len() > 0 {
+        lines.push("Configuration errors (" + pl.errors.len().to_string() + "):");
+        for e in pl.errors {
+            lines.push("  x " + e);
+        }
+        lines.push("");
+    }
+    if !pl.lock_found {
+        lines.push(
+            "No lock file " + pl.lock + ": every definition is new (kek assure apply creates it).",
+        );
+        lines.push("");
+    }
+    let review = Vec::new();
+    let auto = Vec::new();
+    for c in pl.changes {
+        if c.review {
+            asr_group_add(review, c.rule + "|" + c.message + "|" + c.escalate, c);
+        } else {
+            asr_group_add(auto, c.rule + "|" + c.message, c);
+        }
+    }
+    if review.len() > 0 {
+        lines.push("Needs review (" + review.len().to_string() + "):");
+        for g in review {
+            lines.push("  ! " + g.message + "   " + asr_defs_str(g.defs));
+            let mut tail = "";
+            if g.escalate != "" {
+                let flags = Vec::new();
+                for r in asr_require(pol) {
+                    flags.push("-" + r);
+                }
+                tail = "  escalate: " + g.escalate + " (apply needs " + flags.join(", ") + ")";
+            }
+            lines.push("    -> " + asr_where(g.file, g.line) + tail);
+        }
+        lines.push("");
+    }
+    if auto.len() > 0 {
+        let counts = Vec::new();
+        let mut total = 0;
+        for r in asr_rules() {
+            let mut n = 0;
+            for c in pl.changes {
+                if !c.review && c.rule == r {
+                    n = n + 1;
+                }
+            }
+            if n > 0 {
+                counts.push(asr_rule_label(r) + " " + n.to_string());
+                total = total + n;
+            }
+        }
+        lines.push("Auto-approved (" + total.to_string() + "): " + counts.join(", "));
+        if verbose {
+            for g in auto {
+                lines.push("  + " + g.message + "   " + asr_defs_str(g.defs));
+            }
+        }
+        lines.push("");
+    }
+    if pl.violations.len() > 0 {
+        let vg = Vec::new();
+        for v in pl.violations {
+            asr_vgroup_add(vg, v);
+        }
+        lines.push("Policy violations (" + vg.len().to_string() + "):");
+        for g in vg {
+            lines.push("  x " + g.message + "   " + asr_defs_str(g.defs));
+            lines.push("    -> " + asr_where(g.file, g.line));
+        }
+        lines.push("");
+    }
+    if pl.expired.len() > 0 {
+        lines.push("Expired (" + pl.expired.len().to_string() + "):");
+        for x in pl.expired {
+            let mut s = "  x " + x.kind + " expired " + x.expires + "   " + x.def;
+            if x.owner != "" {
+                s = s + "  owner: " + x.owner;
+            }
+            if x.reason != "" {
+                s = s + "  reason: \"" + x.reason + "\"";
+            }
+            lines.push(s);
+            lines.push("    -> " + asr_where(x.file, x.line));
+        }
+        lines.push("");
+    }
+    if pl.changes.len() == 0 && pl.lock_found {
+        lines.push(
+            "No changes: "
+                + pl.lock
+                + " matches the program ("
+                + pl.cur.defs.len().to_string()
+                + " definitions).",
+        );
+    }
+    while lines.len() > 0 && lines.get(lines.len() - 1).unwrap_or("x") == "" {
+        lines.pop();
+    }
+    lines
+}

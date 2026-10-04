@@ -1,0 +1,85 @@
+# fetch_rate no longer takes &Log
+$ kek assure check app
+Auto-approved (2): strengthen 1, change 1
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 2 change(s), 0 needing review (run kek assure plan, then kek assure apply)
+--- exit 1
+
+$ kek assure plan -v app
+Auto-approved (2): strengthen 1, change 1
+  + change body (guarantees unchanged)   convert
+  + strengthen effects: -Log   fetch_rate
+--- exit 0
+
+$ kek assure plan -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {
+    "definitions": 8,
+    "changes": 2,
+    "needs_review": 0,
+    "auto_approved": 2,
+    "violations": 0,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [
+    {
+      "definition": "convert",
+      "file": "app/rates.kek",
+      "line": 14,
+      "class": "change",
+      "rule": "change",
+      "guarantee": "hash",
+      "evidence": "",
+      "from": "1dbcf432adb9",
+      "to": "d5e91974d8e2",
+      "added": [],
+      "removed": [],
+      "message": "change body (guarantees unchanged)",
+      "review": false,
+      "escalate": ""
+    },
+    {
+      "definition": "fetch_rate",
+      "file": "app/rates.kek",
+      "line": 3,
+      "class": "strengthen",
+      "rule": "strengthen",
+      "guarantee": "effects",
+      "evidence": "type",
+      "from": "Log, Net",
+      "to": "Net",
+      "added": [],
+      "removed": [
+        "Log"
+      ],
+      "message": "strengthen effects: -Log",
+      "review": false,
+      "escalate": ""
+    }
+  ],
+  "violations": [],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 0
+
+$ kek assure apply app
+Auto-approved (2): strengthen 1, change 1
+kekkai.assure.lock updated: 8 definitions, 2 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+

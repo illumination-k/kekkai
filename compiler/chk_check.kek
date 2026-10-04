@@ -159,6 +159,9 @@ struct ChkRet {
 }
 
 struct Chk {
+    // trait method -> the program's implementations, built on first use
+    // (after the declarations)
+    mut impl_idx: Option<HashMap<String, Vec<ChkFunc>>>,
     mut loops: Int,
     info: ChkInfo,
     errs: Vec<AstError>,
@@ -436,6 +439,7 @@ fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs, core);
     let c = Chk {
+        impl_idx: None,
         loops: 0,
         info: info,
         errs: core_errs,
@@ -3337,6 +3341,66 @@ fn chk_try(c: Chk, e: AstTry) -> Ty {
 }
 
 // ---- async analysis ----
+
+// chk_trait_impl_index maps each trait method `Tr::m` to the program's
+// functions implementing it (`<T as Tr>::m`, `<T as Tr<A>>::m`); the core
+// library's are left out (they take no capabilities).
+fn chk_trait_impl_index(c: Chk) -> HashMap<String, Vec<ChkFunc>> {
+    let idx: HashMap<String, Vec<ChkFunc>> = HashMap::new();
+    for fun in c.info.func_list {
+        if !fun.name.starts_with("<") || chk_is_lib(fun) {
+            continue;
+        }
+        let close = match fun.name.index_of(">::") {
+            Some(i) => i,
+            None => {
+                continue;
+            }
+        };
+        let head = fun.name.slice(1, close);
+        let at = match head.index_of(" as ") {
+            Some(i) => i,
+            None => {
+                continue;
+            }
+        };
+        let mut tr = head.slice(at + 4, head.len());
+        match tr.index_of("<") {
+            Some(i) => {
+                tr = tr.slice(0, i);
+            }
+            None => {}
+        }
+        let key = tr + "::" + fun.name.slice(close + 3, fun.name.len());
+        match idx.get(key) {
+            Some(v) => v.push(fun),
+            None => {
+                let v = Vec::new();
+                v.push(fun);
+                idx.insert(key, v);
+            }
+        }
+    }
+    idx
+}
+
+// chk_note_trait_call records a call through trait method tf: any of the
+// program's implementations of it may run, so all are callees (for async,
+// effects, idempotency and `kek caps`).
+fn chk_note_trait_call(c: Chk, tf: ChkFunc, pos: AstPos) {
+    chk_note_call(c, tf, pos);
+    let idx = match c.impl_idx {
+        Some(m) => m,
+        None => {
+            let m = chk_trait_impl_index(c);
+            c.impl_idx = Some(m);
+            m
+        }
+    };
+    for g in idx.get(tf.name).unwrap_or(Vec::new()) {
+        c.cur.calls.insert(g.name, true);
+    }
+}
 
 fn chk_compute_async(c: Chk) {
     let async_ops: HashMap<String, Bool> = HashMap::new();

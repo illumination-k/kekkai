@@ -1155,6 +1155,7 @@ fn chk_trait_call(
     }
     chk_turbofish(c, pos, tf, targs, given);
     chk_fn_bounds(c, tf.tparams, targs);
+    chk_note_trait_call(c, tf, pos);
     let ntrait = match c.info.traits.get(tf.trait_name) {
         Some(tr) => tr.params.len(),
         None => 0,

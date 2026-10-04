@@ -1,0 +1,25 @@
+// An idempotent handler reaches a non-idempotent operation through a
+// trait method: every implementation of the method counts.
+trait Notifier {
+    fn notify(&self, net: &Net, msg: String);
+}
+
+struct Hook {
+    url: String,
+}
+
+impl Notifier for Hook {
+    fn notify(&self, net: &Net, msg: String) {
+        net.post(self.url, msg);
+    }
+}
+
+fn tell<N: Notifier>(n: N, net: &Net) {
+    n.notify(net, "done");
+}
+
+#[handler(idempotent)]
+fn handle(req: Request, net: &Net) -> Response { // ERROR "reaches `net.post`"
+    tell(Hook { url: "https://hooks.example/x" }, net);
+    Response::text(200, "ok")
+}

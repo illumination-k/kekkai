@@ -1,0 +1,42 @@
+// Trait methods that take capabilities (async through &Db): called on a
+// concrete type, from a default method and through a generic bound.
+trait Store {
+    fn load(&self, db: &Db, key: String) -> String;
+
+    fn load_twice(&self, db: &Db, key: String) -> String {
+        self.load(db, key) + self.load(db, key)
+    }
+}
+
+struct Prefixed {
+    prefix: String,
+}
+
+impl Store for Prefixed {
+    fn load(&self, db: &Db, key: String) -> String {
+        match db.get(self.prefix + key) {
+            Ok(Some(v)) => v,
+            _ => "-",
+        }
+    }
+}
+
+fn fetch<S: Store>(s: S, db: &Db) -> String {
+    s.load(db, "k")
+}
+
+#[main]
+fn main(args: Vec<String>, db: &Db, log: &Log) -> Int {
+    let p = Prefixed { prefix: "x:" };
+    log.info(p.load(db, "a"));
+    log.info(p.load_twice(db, "b"));
+    log.info(fetch(p, db));
+    match db.transaction(|tx| {
+        tx.put("x:k", "stored")?;
+        tx.commit()
+    }) {
+        Ok(_) => log.info(fetch(p, db)),
+        Err(_) => log.info("tx failed"),
+    }
+    0
+}

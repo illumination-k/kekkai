@@ -1,0 +1,41 @@
+// Default values, as in Rust's core::default.
+
+trait Default {
+    fn default() -> Self;
+}
+
+impl Default for Int {
+    fn default() -> Int {
+        0
+    }
+}
+
+impl Default for Bool {
+    fn default() -> Bool {
+        false
+    }
+}
+
+impl Default for String {
+    fn default() -> String {
+        ""
+    }
+}
+
+impl Default for () {
+    fn default() -> () {
+        ()
+    }
+}
+
+impl<T> Default for Option<T> {
+    fn default() -> Option<T> {
+        None
+    }
+}
+
+impl<T> Default for Vec<T> {
+    fn default() -> Vec<T> {
+        Vec::new()
+    }
+}

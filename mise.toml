@@ -26,8 +26,8 @@ description = "Check that Kekkai sources are formatted"
 run = "./kek fmt -check compiler lib testdata/e2e testdata/run testdata/test examples tests/difftest"
 
 [tasks.prelude]
-description = "Regenerate compiler/prelude_src.kek from lib/prelude (./kek also does this when it rebuilds the compiler)"
-run = "./kek embed-prelude lib/prelude compiler/prelude_src.kek"
+description = "Regenerate compiler/prelude_src.kek and compiler/core_src.kek from lib/prelude and lib/core (./kek also does this when it rebuilds the compiler)"
+run = ["./kek embed-prelude lib/prelude compiler/prelude_src.kek", "./kek embed-prelude lib/core compiler/core_src.kek -as core"]
 
 [tasks.ci]
 description = "Everything CI runs: tests (incl. bootstrap fixed point), format check, Lean proofs"

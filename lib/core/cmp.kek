@@ -1,0 +1,357 @@
+// Comparison: equality (`==`) and ordering (`<`), as in Rust's core::cmp.
+
+#[derive(PartialEq, Eq)]
+enum Ordering {
+    Less,
+    Equal,
+    Greater,
+}
+
+impl Ordering {
+    fn is_eq(self) -> Bool {
+        match self {
+            Ordering::Equal => true,
+            _ => false,
+        }
+    }
+
+    fn is_lt(self) -> Bool {
+        match self {
+            Ordering::Less => true,
+            _ => false,
+        }
+    }
+
+    fn is_gt(self) -> Bool {
+        match self {
+            Ordering::Greater => true,
+            _ => false,
+        }
+    }
+
+    fn reverse(self) -> Ordering {
+        match self {
+            Ordering::Less => Ordering::Greater,
+            Ordering::Equal => Ordering::Equal,
+            Ordering::Greater => Ordering::Less,
+        }
+    }
+
+    // then is the lexicographic combination: self, or other when equal.
+    fn then(self, other: Ordering) -> Ordering {
+        match self {
+            Ordering::Equal => other,
+            _ => self,
+        }
+    }
+}
+
+trait PartialEq {
+    fn eq(&self, other: &Self) -> Bool;
+
+    fn ne(&self, other: &Self) -> Bool {
+        !self.eq(other)
+    }
+}
+
+trait Eq: PartialEq {}
+
+trait PartialOrd: PartialEq {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering>;
+
+    fn lt(&self, other: &Self) -> Bool {
+        match self.partial_cmp(other) {
+            Some(Ordering::Less) => true,
+            _ => false,
+        }
+    }
+
+    fn le(&self, other: &Self) -> Bool {
+        match self.partial_cmp(other) {
+            Some(Ordering::Less) => true,
+            Some(Ordering::Equal) => true,
+            _ => false,
+        }
+    }
+
+    fn gt(&self, other: &Self) -> Bool {
+        match self.partial_cmp(other) {
+            Some(Ordering::Greater) => true,
+            _ => false,
+        }
+    }
+
+    fn ge(&self, other: &Self) -> Bool {
+        match self.partial_cmp(other) {
+            Some(Ordering::Greater) => true,
+            Some(Ordering::Equal) => true,
+            _ => false,
+        }
+    }
+}
+
+trait Ord: Eq + PartialOrd {
+    fn cmp(&self, other: &Self) -> Ordering;
+
+    fn max(self, other: Self) -> Self {
+        match self.cmp(&other) {
+            Ordering::Greater => self,
+            _ => other,
+        }
+    }
+
+    fn min(self, other: Self) -> Self {
+        match self.cmp(&other) {
+            Ordering::Greater => other,
+            _ => self,
+        }
+    }
+}
+
+// ---- primitive types ----
+
+impl PartialEq for Int {
+    fn eq(&self, other: &Self) -> Bool {
+        self == other
+    }
+}
+
+impl Eq for Int {}
+
+impl PartialOrd for Int {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Int {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self < other {
+            Ordering::Less
+        } else if self > other {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    }
+}
+
+impl PartialEq for Bool {
+    fn eq(&self, other: &Self) -> Bool {
+        self == other
+    }
+}
+
+impl Eq for Bool {}
+
+impl PartialOrd for Bool {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Bool {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // false < true
+        if self == other {
+            Ordering::Equal
+        } else if *other {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    }
+}
+
+impl PartialEq for String {
+    fn eq(&self, other: &Self) -> Bool {
+        self == other
+    }
+}
+
+impl Eq for String {}
+
+impl PartialOrd for String {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+// Strings are ordered by their UTF-16 code units.
+impl Ord for String {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let n = self.len().min(other.len());
+        let mut i = 0;
+        while i < n {
+            let a = self.char_at(i).unwrap_or(0);
+            let b = other.char_at(i).unwrap_or(0);
+            if a != b {
+                return a.cmp(&b);
+            }
+            i = i + 1;
+        }
+        self.len().cmp(&other.len())
+    }
+}
+
+impl PartialEq for () {
+    fn eq(&self, other: &Self) -> Bool {
+        true
+    }
+}
+
+impl Eq for () {}
+
+impl PartialOrd for () {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(Ordering::Equal)
+    }
+}
+
+impl Ord for () {
+    fn cmp(&self, other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+// ---- Option, Result and Vec ----
+
+impl<T: PartialEq> PartialEq for Option<T> {
+    fn eq(&self, other: &Self) -> Bool {
+        match self {
+            Some(a) => match other {
+                Some(b) => a == b,
+                None => false,
+            },
+            None => other.is_none(),
+        }
+    }
+}
+
+impl<T: Eq> Eq for Option<T> {}
+
+impl<T: PartialOrd> PartialOrd for Option<T> {
+    // None < Some(_)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self {
+            Some(a) => match other {
+                Some(b) => a.partial_cmp(b),
+                None => Some(Ordering::Greater),
+            },
+            None => match other {
+                Some(_) => Some(Ordering::Less),
+                None => Some(Ordering::Equal),
+            },
+        }
+    }
+}
+
+impl<T: Ord> Ord for Option<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self {
+            Some(a) => match other {
+                Some(b) => a.cmp(b),
+                None => Ordering::Greater,
+            },
+            None => match other {
+                Some(_) => Ordering::Less,
+                None => Ordering::Equal,
+            },
+        }
+    }
+}
+
+impl<T: PartialEq, E: PartialEq> PartialEq for Result<T, E> {
+    fn eq(&self, other: &Self) -> Bool {
+        match self {
+            Ok(a) => match other {
+                Ok(b) => a == b,
+                Err(_) => false,
+            },
+            Err(a) => match other {
+                Ok(_) => false,
+                Err(b) => a == b,
+            },
+        }
+    }
+}
+
+impl<T: Eq, E: Eq> Eq for Result<T, E> {}
+
+impl<T: PartialEq> PartialEq for Vec<T> {
+    fn eq(&self, other: &Self) -> Bool {
+        let n = self.len();
+        if n != other.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < n {
+            match self.get(i) {
+                Some(a) => match other.get(i) {
+                    Some(b) => {
+                        if a != b {
+                            return false;
+                        }
+                    }
+                    None => {
+                        return false;
+                    }
+                },
+                None => {
+                    return false;
+                }
+            }
+            i = i + 1;
+        }
+        true
+    }
+}
+
+impl<T: Eq> Eq for Vec<T> {}
+
+impl<T: PartialOrd> PartialOrd for Vec<T> {
+    // lexicographic
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let n = self.len().min(other.len());
+        let mut i = 0;
+        while i < n {
+            match self.get(i) {
+                Some(a) => match other.get(i) {
+                    Some(b) => match a.partial_cmp(b) {
+                        Some(Ordering::Equal) => {}
+                        o => {
+                            return o;
+                        }
+                    },
+                    None => {}
+                },
+                None => {}
+            }
+            i = i + 1;
+        }
+        Some(self.len().cmp(&other.len()))
+    }
+}
+
+impl<T: Ord> Ord for Vec<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let n = self.len().min(other.len());
+        let mut i = 0;
+        while i < n {
+            match self.get(i) {
+                Some(a) => match other.get(i) {
+                    Some(b) => match a.cmp(b) {
+                        Ordering::Equal => {}
+                        o => {
+                            return o;
+                        }
+                    },
+                    None => {}
+                },
+                None => {}
+            }
+            i = i + 1;
+        }
+        self.len().cmp(&other.len())
+    }
+}

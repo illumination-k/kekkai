@@ -1,0 +1,745 @@
+// HashMap and HashSet, with Rust's API (std::collections), iterating in
+// insertion order.
+//
+// Entries are kept in insertion order in `entries` (a removed entry stays
+// as a hole, `live` false, until the table is rebuilt). `buckets` holds,
+// per bucket, the first entry of a chain linked by `next`. The hash is
+// fixed (unseeded), so a bucket can be made to collide on purpose: when a
+// chain grows past TREEIFY entries it becomes an AVL tree ordered by the
+// keys (`Ord`), so that every operation stays O(log n) (this is why keys
+// must be Ord as well as Hash + Eq).
+//
+// Iteration is a live view: an iterator sees entries inserted after it was
+// created and skips removed ones. Rebuilding the table compacts the
+// entries; an iterator then finds its place again by the insertion
+// sequence number of the last entry it returned.
+
+struct HashEntry<K, V> {
+    key: K,
+    mut value: V,
+    hash: Int,
+    seq: Int,
+    // chain: the next entry; tree: the left child (-1: none)
+    mut next: Int,
+    mut right: Int,
+    mut height: Int,
+}
+
+struct HashMap<K, V> {
+    mut entries: Vec<HashEntry<K, V>>,
+    mut live: Vec<Bool>,
+    mut buckets: Vec<Int>,
+    mut tree: Vec<Bool>,
+    mut len: Int,
+    mut next_seq: Int,
+    // incremented when the entries are compacted
+    mut epoch: Int,
+}
+
+fn __hashmap_treeify_len() -> Int {
+    8
+}
+
+// __hash_of hashes a value with the default hasher.
+fn __hash_of<T: Hash>(x: &T) -> Int {
+    let h = DefaultHasher::new();
+    x.hash(&mut h);
+    h.finish()
+}
+
+impl<K, V> HashMap<K, V> {
+    fn new() -> HashMap<K, V> {
+        HashMap::with_capacity(0)
+    }
+
+    fn with_capacity(n: Int) -> HashMap<K, V> {
+        let mut size = 8;
+        while size * 3 < n * 4 {
+            size = size * 2;
+        }
+        let m = HashMap {
+            entries: Vec::new(),
+            live: Vec::new(),
+            buckets: Vec::new(),
+            tree: Vec::new(),
+            len: 0,
+            next_seq: 0,
+            epoch: 0,
+        };
+        for i in 0..size {
+            m.buckets.push(-1);
+            m.tree.push(false);
+        }
+        m
+    }
+
+    fn len(&self) -> Int {
+        self.len
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.len == 0
+    }
+
+    fn clear(&mut self) {
+        self.entries = Vec::new();
+        self.live = Vec::new();
+        for i in 0..self.buckets.len() {
+            self.buckets.set(i, -1);
+            self.tree.set(i, false);
+        }
+        self.len = 0;
+        self.epoch = self.epoch + 1;
+    }
+
+    // iter returns the (key, value) pairs in insertion order.
+    fn iter(&self) -> HashMapIter<K, V> {
+        HashMapIter { map: *self, i: 0, epoch: self.epoch, last_seq: -1 }
+    }
+
+    fn keys(&self) -> Keys<K, V> {
+        Keys { it: self.iter() }
+    }
+
+    fn values(&self) -> Values<K, V> {
+        Values { it: self.iter() }
+    }
+
+    fn bucket_of(&self, hash: Int) -> Int {
+        hash.bit_and(self.buckets.len() - 1)
+    }
+
+    fn is_live(&self, i: Int) -> Bool {
+        self.live.get(i).unwrap_or(false)
+    }
+
+    // ---- AVL trees of entry indices (left: next, right: right) ----
+
+    fn height(&self, i: Int) -> Int {
+        if i < 0 {
+            return 0;
+        }
+        match self.entries.get(i) {
+            Some(e) => e.height,
+            None => 0,
+        }
+    }
+
+    fn left(&self, i: Int) -> Int {
+        match self.entries.get(i) {
+            Some(e) => e.next,
+            None => -1,
+        }
+    }
+
+    fn right(&self, i: Int) -> Int {
+        match self.entries.get(i) {
+            Some(e) => e.right,
+            None => -1,
+        }
+    }
+
+    fn set_children(&mut self, i: Int, l: Int, r: Int) {
+        match self.entries.get(i) {
+            Some(e) => {
+                e.next = l;
+                e.right = r;
+                e.height = 1 + self.height(l).max(self.height(r));
+            }
+            None => {}
+        }
+    }
+
+    fn rebalance(&mut self, i: Int) -> Int {
+        let l = self.left(i);
+        let r = self.right(i);
+        let bal = self.height(l) - self.height(r);
+        if bal > 1 {
+            // left heavy
+            let ll = self.left(l);
+            let lr = self.right(l);
+            if self.height(ll) >= self.height(lr) {
+                self.set_children(i, lr, r);
+                self.set_children(l, ll, i);
+                return l;
+            }
+            self.set_children(l, ll, self.left(lr));
+            self.set_children(i, self.right(lr), r);
+            self.set_children(lr, l, i);
+            return lr;
+        }
+        if bal < -1 {
+            let rl = self.left(r);
+            let rr = self.right(r);
+            if self.height(rr) >= self.height(rl) {
+                self.set_children(i, l, rl);
+                self.set_children(r, i, rr);
+                return r;
+            }
+            self.set_children(r, self.right(rl), rr);
+            self.set_children(i, l, self.left(rl));
+            self.set_children(rl, i, r);
+            return rl;
+        }
+        self.set_children(i, l, r);
+        i
+    }
+
+    // tree_min_remove removes the leftmost node of the tree at root,
+    // returning (new root, removed node).
+    fn tree_min_remove(&mut self, root: Int) -> (Int, Int) {
+        let l = self.left(root);
+        if l < 0 {
+            return (self.right(root), root);
+        }
+        let (nl, m) = self.tree_min_remove(l);
+        self.set_children(root, nl, self.right(root));
+        (self.rebalance(root), m)
+    }
+}
+
+impl<K: Hash + Eq + Ord, V> HashMap<K, V> {
+    fn key_at(&self, i: Int, k: &K) -> Bool {
+        match self.entries.get(i) {
+            Some(e) => e.key == *k,
+            None => false,
+        }
+    }
+
+    // find returns the index of the live entry with key k, or -1.
+    fn find(&self, k: &K, hash: Int) -> Int {
+        let b = self.bucket_of(hash);
+        let mut i = self.buckets.get(b).unwrap_or(-1);
+        if self.tree.get(b).unwrap_or(false) {
+            while i >= 0 {
+                match self.entries.get(i) {
+                    Some(e) => match k.cmp(&e.key) {
+                        Ordering::Less => {
+                            i = e.next;
+                        }
+                        Ordering::Greater => {
+                            i = e.right;
+                        }
+                        Ordering::Equal => {
+                            return i;
+                        }
+                    },
+                    None => {
+                        return -1;
+                    }
+                }
+            }
+            return -1;
+        }
+        while i >= 0 {
+            match self.entries.get(i) {
+                Some(e) => {
+                    if e.hash == hash && e.key == *k {
+                        return i;
+                    }
+                    i = e.next;
+                }
+                None => {
+                    return -1;
+                }
+            }
+        }
+        -1
+    }
+
+    fn get(&self, k: &K) -> Option<V> {
+        let i = self.find(k, __hash_of(k));
+        if i < 0 {
+            return None;
+        }
+        match self.entries.get(i) {
+            Some(e) => Some(e.value),
+            None => None,
+        }
+    }
+
+    fn contains_key(&self, k: &K) -> Bool {
+        self.find(k, __hash_of(k)) >= 0
+    }
+
+    // insert sets the value of k, returning its previous value.
+    fn insert(&mut self, k: K, v: V) -> Option<V> {
+        let hash = __hash_of(&k);
+        let i = self.find(&k, hash);
+        if i >= 0 {
+            match self.entries.get(i) {
+                Some(e) => {
+                    let old = e.value;
+                    e.value = v;
+                    return Some(old);
+                }
+                None => {}
+            }
+        }
+        if (self.entries.len() + 1) * 4 > self.buckets.len() * 3 {
+            self.rebuild(self.len + 1);
+        }
+        let e = HashEntry {
+            key: k,
+            value: v,
+            hash: hash,
+            seq: self.next_seq,
+            next: -1,
+            right: -1,
+            height: 1,
+        };
+        self.next_seq = self.next_seq + 1;
+        self.entries.push(e);
+        self.live.push(true);
+        self.len = self.len + 1;
+        self.link(self.entries.len() - 1);
+        None
+    }
+
+    // remove removes k, returning its value.
+    fn remove(&mut self, k: &K) -> Option<V> {
+        let hash = __hash_of(k);
+        let i = self.find(k, hash);
+        if i < 0 {
+            return None;
+        }
+        let b = self.bucket_of(hash);
+        if self.tree.get(b).unwrap_or(false) {
+            let root = self.tree_remove(self.buckets.get(b).unwrap_or(-1), k);
+            self.buckets.set(b, root);
+        } else {
+            let mut prev = -1;
+            let mut j = self.buckets.get(b).unwrap_or(-1);
+            while j >= 0 && j != i {
+                prev = j;
+                j = self.left(j);
+            }
+            let nx = self.left(i);
+            if prev < 0 {
+                self.buckets.set(b, nx);
+            } else {
+                match self.entries.get(prev) {
+                    Some(pe) => {
+                        pe.next = nx;
+                    }
+                    None => {}
+                }
+            }
+        }
+        self.live.set(i, false);
+        self.len = self.len - 1;
+        match self.entries.get(i) {
+            Some(e) => Some(e.value),
+            None => None,
+        }
+    }
+
+    // link adds entry i to its bucket.
+    fn link(&mut self, i: Int) {
+        let hash = match self.entries.get(i) {
+            Some(e) => e.hash,
+            None => 0,
+        };
+        let b = self.bucket_of(hash);
+        let head = self.buckets.get(b).unwrap_or(-1);
+        if self.tree.get(b).unwrap_or(false) {
+            self.buckets.set(b, self.tree_insert(head, i));
+            return;
+        }
+        // append to the chain, counting it
+        match self.entries.get(i) {
+            Some(e) => {
+                e.next = -1;
+                e.right = -1;
+                e.height = 1;
+            }
+            None => {}
+        }
+        if head < 0 {
+            self.buckets.set(b, i);
+            return;
+        }
+        let mut n = 1;
+        let mut j = head;
+        while self.left(j) >= 0 {
+            j = self.left(j);
+            n = n + 1;
+        }
+        match self.entries.get(j) {
+            Some(e) => {
+                e.next = i;
+            }
+            None => {}
+        }
+        if n + 1 > __hashmap_treeify_len() {
+            self.treeify(b);
+        }
+    }
+
+    // treeify turns bucket b's chain into a tree.
+    fn treeify(&mut self, b: Int) {
+        let mut j = self.buckets.get(b).unwrap_or(-1);
+        let mut root = -1;
+        while j >= 0 {
+            let nx = self.left(j);
+            root = self.tree_insert(root, j);
+            j = nx;
+        }
+        self.buckets.set(b, root);
+        self.tree.set(b, true);
+    }
+
+    fn tree_insert(&mut self, root: Int, i: Int) -> Int {
+        if root < 0 {
+            self.set_children(i, -1, -1);
+            return i;
+        }
+        let ki = match self.entries.get(i) {
+            Some(e) => e.key,
+            None => {
+                return root;
+            }
+        };
+        let less = match self.entries.get(root) {
+            Some(r) => ki < r.key,
+            None => false,
+        };
+        if less {
+            let l = self.tree_insert(self.left(root), i);
+            self.set_children(root, l, self.right(root));
+        } else {
+            let r = self.tree_insert(self.right(root), i);
+            self.set_children(root, self.left(root), r);
+        }
+        self.rebalance(root)
+    }
+
+    fn tree_remove(&mut self, root: Int, k: &K) -> Int {
+        if root < 0 {
+            return -1;
+        }
+        let o = match self.entries.get(root) {
+            Some(r) => k.cmp(&r.key),
+            None => Ordering::Equal,
+        };
+        match o {
+            Ordering::Less => {
+                let l = self.tree_remove(self.left(root), k);
+                self.set_children(root, l, self.right(root));
+                self.rebalance(root)
+            }
+            Ordering::Greater => {
+                let r = self.tree_remove(self.right(root), k);
+                self.set_children(root, self.left(root), r);
+                self.rebalance(root)
+            }
+            Ordering::Equal => {
+                let l = self.left(root);
+                let r = self.right(root);
+                if r < 0 {
+                    return l;
+                }
+                let (nr, m) = self.tree_min_remove(r);
+                self.set_children(m, l, nr);
+                self.rebalance(m)
+            }
+        }
+    }
+
+    // rebuild drops removed entries and rehashes into a table with room for
+    // at least want entries.
+    fn rebuild(&mut self, want: Int) {
+        let es = Vec::new();
+        let lv = Vec::new();
+        for i in 0..self.entries.len() {
+            if self.is_live(i) {
+                match self.entries.get(i) {
+                    Some(e) => {
+                        es.push(e);
+                        lv.push(true);
+                    }
+                    None => {}
+                }
+            }
+        }
+        if es.len() != self.entries.len() {
+            self.epoch = self.epoch + 1;
+        }
+        self.entries = es;
+        self.live = lv;
+        let mut size = 8;
+        while size * 3 < (want + 1) * 4 {
+            size = size * 2;
+        }
+        self.buckets = Vec::new();
+        self.tree = Vec::new();
+        for i in 0..size {
+            self.buckets.push(-1);
+            self.tree.push(false);
+        }
+        for i in 0..self.entries.len() {
+            self.link(i);
+        }
+    }
+
+    // get_or returns the value of k, or d.
+    fn get_or(&self, k: &K, d: V) -> V {
+        match self.get(k) {
+            Some(v) => v,
+            None => d,
+        }
+    }
+
+    fn retain(&mut self, f: impl Fn(K, V) -> Bool) {
+        let drop = Vec::new();
+        for (k, v) in self.iter() {
+            if !f(k, v) {
+                drop.push(k);
+            }
+        }
+        for k in drop {
+            self.remove(&k);
+        }
+    }
+
+    fn extend<I: Iterator<Item = (K, V)>>(&mut self, iter: I) {
+        while let Some((k, v)) = iter.next() {
+            self.insert(k, v);
+        }
+    }
+}
+
+// ---- iteration ----
+
+struct HashMapIter<K, V> {
+    map: HashMap<K, V>,
+    mut i: Int,
+    mut epoch: Int,
+    mut last_seq: Int,
+}
+
+impl<K, V> Iterator for HashMapIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<(K, V)> {
+        let m = self.map;
+        if self.epoch != m.epoch {
+            // the entries were compacted (order kept): continue after the
+            // last entry returned, by its sequence number
+            let mut lo = 0;
+            let mut hi = m.entries.len();
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                let s = match m.entries.get(mid) {
+                    Some(e) => e.seq,
+                    None => 0,
+                };
+                if s <= self.last_seq {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            self.i = lo;
+            self.epoch = m.epoch;
+        }
+        while self.i < m.entries.len() {
+            let i = self.i;
+            self.i = i + 1;
+            if m.is_live(i) {
+                match m.entries.get(i) {
+                    Some(e) => {
+                        self.last_seq = e.seq;
+                        return Some((e.key, e.value));
+                    }
+                    None => {}
+                }
+            }
+        }
+        None
+    }
+}
+
+struct Keys<K, V> {
+    it: HashMapIter<K, V>,
+}
+
+impl<K, V> Iterator for Keys<K, V> {
+    type Item = K;
+
+    fn next(&mut self) -> Option<K> {
+        match self.it.next() {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
+    }
+}
+
+struct Values<K, V> {
+    it: HashMapIter<K, V>,
+}
+
+impl<K, V> Iterator for Values<K, V> {
+    type Item = V;
+
+    fn next(&mut self) -> Option<V> {
+        match self.it.next() {
+            Some((_, v)) => Some(v),
+            None => None,
+        }
+    }
+}
+
+impl<K, V> IntoIterator for HashMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = HashMapIter<K, V>;
+
+    fn into_iter(self) -> HashMapIter<K, V> {
+        self.iter()
+    }
+}
+
+impl<K: Hash + Eq + Ord, V> FromIterator<(K, V)> for HashMap<K, V> {
+    fn from_iter<I: Iterator<Item = (K, V)>>(iter: I) -> HashMap<K, V> {
+        let m = HashMap::new();
+        m.extend(iter);
+        m
+    }
+}
+
+impl<K, V> Default for HashMap<K, V> {
+    fn default() -> HashMap<K, V> {
+        HashMap::new()
+    }
+}
+
+// ---- HashSet ----
+
+struct HashSet<T> {
+    map: HashMap<T, ()>,
+}
+
+impl<T> HashSet<T> {
+    fn new() -> HashSet<T> {
+        HashSet { map: HashMap::new() }
+    }
+
+    fn with_capacity(n: Int) -> HashSet<T> {
+        HashSet { map: HashMap::with_capacity(n) }
+    }
+
+    fn len(&self) -> Int {
+        self.map.len()
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.map.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+    }
+
+    // iter returns the elements in insertion order.
+    fn iter(&self) -> Keys<T, ()> {
+        self.map.keys()
+    }
+}
+
+impl<T: Hash + Eq + Ord> HashSet<T> {
+    // insert adds x, reporting whether it was new.
+    fn insert(&mut self, x: T) -> Bool {
+        self.map.insert(x, ()).is_none()
+    }
+
+    fn contains(&self, x: &T) -> Bool {
+        self.map.contains_key(x)
+    }
+
+    // remove removes x, reporting whether it was present.
+    fn remove(&mut self, x: &T) -> Bool {
+        self.map.remove(x).is_some()
+    }
+
+    fn extend<I: Iterator<Item = T>>(&mut self, iter: I) {
+        while let Some(x) = iter.next() {
+            self.insert(x);
+        }
+    }
+
+    fn retain(&mut self, f: impl Fn(T) -> Bool) {
+        let drop = Vec::new();
+        for x in self.iter() {
+            if !f(x) {
+                drop.push(x);
+            }
+        }
+        for x in drop {
+            self.remove(&x);
+        }
+    }
+
+    fn is_subset(&self, other: &HashSet<T>) -> Bool {
+        for x in self.iter() {
+            if !other.contains(&x) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // union, intersection and difference return the resulting elements in
+    // order (self's first).
+    fn union(&self, other: &HashSet<T>) -> Vec<T> {
+        let out: Vec<T> = self.iter().collect();
+        for x in other.iter() {
+            if !self.contains(&x) {
+                out.push(x);
+            }
+        }
+        out
+    }
+
+    fn intersection(&self, other: &HashSet<T>) -> Vec<T> {
+        let out = Vec::new();
+        for x in self.iter() {
+            if other.contains(&x) {
+                out.push(x);
+            }
+        }
+        out
+    }
+
+    fn difference(&self, other: &HashSet<T>) -> Vec<T> {
+        let out = Vec::new();
+        for x in self.iter() {
+            if !other.contains(&x) {
+                out.push(x);
+            }
+        }
+        out
+    }
+}
+
+impl<T> IntoIterator for HashSet<T> {
+    type Item = T;
+    type IntoIter = Keys<T, ()>;
+
+    fn into_iter(self) -> Keys<T, ()> {
+        self.iter()
+    }
+}
+
+impl<T: Hash + Eq + Ord> FromIterator<T> for HashSet<T> {
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> HashSet<T> {
+        let s = HashSet::new();
+        s.extend(iter);
+        s
+    }
+}
+
+impl<T> Default for HashSet<T> {
+    fn default() -> HashSet<T> {
+        HashSet::new()
+    }
+}

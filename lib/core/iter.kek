@@ -1,0 +1,716 @@
+// Iterators, as in Rust's core::iter: the Iterator trait with its adapters
+// and consumers, ranges, and the iterators of Vec.
+//
+// Closures are pure values here: an adapter keeps its closure in a field
+// of type `fn(A) -> B`.
+
+trait Iterator {
+    type Item;
+
+    fn next(&mut self) -> Option<Self::Item>;
+
+    // ---- consumers ----
+
+    fn count(self) -> Int {
+        let mut n = 0;
+        while let Some(_) = self.next() {
+            n = n + 1;
+        }
+        n
+    }
+
+    fn last(self) -> Option<Self::Item> {
+        let mut last = None;
+        while let Some(x) = self.next() {
+            last = Some(x);
+        }
+        last
+    }
+
+    fn nth(&mut self, n: Int) -> Option<Self::Item> {
+        let mut i = 0;
+        while i < n {
+            if self.next().is_none() {
+                return None;
+            }
+            i = i + 1;
+        }
+        self.next()
+    }
+
+    fn fold<B>(self, init: B, f: impl Fn(B, Self::Item) -> B) -> B {
+        let mut acc = init;
+        while let Some(x) = self.next() {
+            acc = f(acc, x);
+        }
+        acc
+    }
+
+    fn for_each(self, f: impl Fn(Self::Item)) {
+        while let Some(x) = self.next() {
+            f(x);
+        }
+    }
+
+    fn any(&mut self, p: impl Fn(Self::Item) -> Bool) -> Bool {
+        while let Some(x) = self.next() {
+            if p(x) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn all(&mut self, p: impl Fn(Self::Item) -> Bool) -> Bool {
+        while let Some(x) = self.next() {
+            if !p(x) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn find(&mut self, p: impl Fn(Self::Item) -> Bool) -> Option<Self::Item> {
+        while let Some(x) = self.next() {
+            if p(x) {
+                return Some(x);
+            }
+        }
+        None
+    }
+
+    fn find_map<B>(&mut self, f: impl Fn(Self::Item) -> Option<B>) -> Option<B> {
+        while let Some(x) = self.next() {
+            match f(x) {
+                Some(y) => {
+                    return Some(y);
+                }
+                None => {}
+            }
+        }
+        None
+    }
+
+    fn position(&mut self, p: impl Fn(Self::Item) -> Bool) -> Option<Int> {
+        let mut i = 0;
+        while let Some(x) = self.next() {
+            if p(x) {
+                return Some(i);
+            }
+            i = i + 1;
+        }
+        None
+    }
+
+    fn collect<B: FromIterator<Self::Item>>(self) -> B {
+        B::from_iter(self)
+    }
+
+    fn sum<S: Sum<Self::Item>>(self) -> S {
+        S::sum(self)
+    }
+
+    fn product<P: Product<Self::Item>>(self) -> P {
+        P::product(self)
+    }
+
+    fn max(self) -> Option<Self::Item>
+    where
+        Self::Item: Ord,
+    {
+        let mut best = None;
+        while let Some(x) = self.next() {
+            best = match best {
+                Some(b) => if x >= b { Some(x) } else { Some(b) },
+                None => Some(x),
+            };
+        }
+        best
+    }
+
+    fn min(self) -> Option<Self::Item>
+    where
+        Self::Item: Ord,
+    {
+        let mut best = None;
+        while let Some(x) = self.next() {
+            best = match best {
+                Some(b) => if x < b { Some(x) } else { Some(b) },
+                None => Some(x),
+            };
+        }
+        best
+    }
+
+    fn max_by_key<B: Ord>(self, f: impl Fn(Self::Item) -> B) -> Option<Self::Item> {
+        let mut best = None;
+        let mut best_k = None;
+        while let Some(x) = self.next() {
+            let k = f(x);
+            let better = match best_k {
+                Some(bk) => k >= bk,
+                None => true,
+            };
+            if better {
+                best = Some(x);
+                best_k = Some(k);
+            }
+        }
+        best
+    }
+
+    fn min_by_key<B: Ord>(self, f: impl Fn(Self::Item) -> B) -> Option<Self::Item> {
+        let mut best = None;
+        let mut best_k = None;
+        while let Some(x) = self.next() {
+            let k = f(x);
+            let better = match best_k {
+                Some(bk) => k < bk,
+                None => true,
+            };
+            if better {
+                best = Some(x);
+                best_k = Some(k);
+            }
+        }
+        best
+    }
+
+    // ---- adapters ----
+
+    fn map<B>(self, f: impl Fn(Self::Item) -> B) -> Map<Self, Self::Item, B> {
+        Map { iter: self, f: f }
+    }
+
+    fn filter(self, p: impl Fn(Self::Item) -> Bool) -> Filter<Self, Self::Item> {
+        Filter { iter: self, p: p }
+    }
+
+    fn filter_map<B>(self, f: impl Fn(Self::Item) -> Option<B>) -> FilterMap<Self, Self::Item, B> {
+        FilterMap { iter: self, f: f }
+    }
+
+    fn enumerate(self) -> Enumerate<Self> {
+        Enumerate { iter: self, i: 0 }
+    }
+
+    fn zip<U: Iterator>(self, other: U) -> Zip<Self, U> {
+        Zip { a: self, b: other }
+    }
+
+    fn chain<U: Iterator<Item = Self::Item>>(self, other: U) -> Chain<Self, U> {
+        Chain { a: self, b: other, first: true }
+    }
+
+    fn take(self, n: Int) -> Take<Self> {
+        Take { iter: self, n: n }
+    }
+
+    fn skip(self, n: Int) -> Skip<Self> {
+        Skip { iter: self, n: n }
+    }
+
+    fn take_while(self, p: impl Fn(Self::Item) -> Bool) -> TakeWhile<Self, Self::Item> {
+        TakeWhile { iter: self, p: p, done: false }
+    }
+
+    fn skip_while(self, p: impl Fn(Self::Item) -> Bool) -> SkipWhile<Self, Self::Item> {
+        SkipWhile { iter: self, p: p, started: false }
+    }
+
+    fn step_by(self, step: Int) -> StepBy<Self> {
+        StepBy { iter: self, step: step, first: true }
+    }
+
+    fn peekable(self) -> Peekable<Self, Self::Item> {
+        Peekable { iter: self, peeked: None, has: false }
+    }
+}
+
+// An iterator that can also produce its elements from the back.
+trait DoubleEndedIterator: Iterator {
+    fn next_back(&mut self) -> Option<Self::Item>;
+
+    fn rev(self) -> Rev<Self> {
+        Rev { iter: self }
+    }
+}
+
+// Conversion into an iterator (what a `for` loop iterates over).
+trait IntoIterator {
+    type Item;
+    type IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter;
+}
+
+// Building a collection from an iterator (`collect`).
+trait FromIterator<A> {
+    fn from_iter<I: Iterator<Item = A>>(iter: I) -> Self;
+}
+
+trait Sum<A> {
+    fn sum<I: Iterator<Item = A>>(iter: I) -> Self;
+}
+
+trait Product<A> {
+    fn product<I: Iterator<Item = A>>(iter: I) -> Self;
+}
+
+// ---- adapters ----
+
+struct Map<I, A, B> {
+    iter: I,
+    f: fn(A) -> B,
+}
+
+impl<I: Iterator<Item = A>, A, B> Iterator for Map<I, A, B> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        match self.iter.next() {
+            Some(x) => Some((self.f)(x)),
+            None => None,
+        }
+    }
+}
+
+struct Filter<I, A> {
+    iter: I,
+    p: fn(A) -> Bool,
+}
+
+impl<I: Iterator<Item = A>, A> Iterator for Filter<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        while let Some(x) = self.iter.next() {
+            if (self.p)(x) {
+                return Some(x);
+            }
+        }
+        None
+    }
+}
+
+struct FilterMap<I, A, B> {
+    iter: I,
+    f: fn(A) -> Option<B>,
+}
+
+impl<I: Iterator<Item = A>, A, B> Iterator for FilterMap<I, A, B> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        while let Some(x) = self.iter.next() {
+            match (self.f)(x) {
+                Some(y) => {
+                    return Some(y);
+                }
+                None => {}
+            }
+        }
+        None
+    }
+}
+
+struct Enumerate<I> {
+    iter: I,
+    mut i: Int,
+}
+
+impl<I: Iterator> Iterator for Enumerate<I> {
+    type Item = (Int, I::Item);
+
+    fn next(&mut self) -> Option<(Int, I::Item)> {
+        match self.iter.next() {
+            Some(x) => {
+                let i = self.i;
+                self.i = i + 1;
+                Some((i, x))
+            }
+            None => None,
+        }
+    }
+}
+
+struct Zip<A, B> {
+    a: A,
+    b: B,
+}
+
+impl<A: Iterator, B: Iterator> Iterator for Zip<A, B> {
+    type Item = (A::Item, B::Item);
+
+    fn next(&mut self) -> Option<(A::Item, B::Item)> {
+        match self.a.next() {
+            Some(x) => match self.b.next() {
+                Some(y) => Some((x, y)),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
+
+struct Chain<A, B> {
+    a: A,
+    b: B,
+    mut first: Bool,
+}
+
+impl<A: Iterator, B: Iterator<Item = A::Item>> Iterator for Chain<A, B> {
+    type Item = A::Item;
+
+    fn next(&mut self) -> Option<A::Item> {
+        if self.first {
+            match self.a.next() {
+                Some(x) => {
+                    return Some(x);
+                }
+                None => {
+                    self.first = false;
+                }
+            }
+        }
+        self.b.next()
+    }
+}
+
+struct Take<I> {
+    iter: I,
+    mut n: Int,
+}
+
+impl<I: Iterator> Iterator for Take<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<I::Item> {
+        if self.n <= 0 {
+            return None;
+        }
+        self.n = self.n - 1;
+        self.iter.next()
+    }
+}
+
+struct Skip<I> {
+    iter: I,
+    mut n: Int,
+}
+
+impl<I: Iterator> Iterator for Skip<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<I::Item> {
+        while self.n > 0 {
+            self.n = self.n - 1;
+            if self.iter.next().is_none() {
+                return None;
+            }
+        }
+        self.iter.next()
+    }
+}
+
+struct TakeWhile<I, A> {
+    iter: I,
+    p: fn(A) -> Bool,
+    mut done: Bool,
+}
+
+impl<I: Iterator<Item = A>, A> Iterator for TakeWhile<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        if self.done {
+            return None;
+        }
+        match self.iter.next() {
+            Some(x) => {
+                if (self.p)(x) {
+                    return Some(x);
+                }
+                self.done = true;
+                None
+            }
+            None => None,
+        }
+    }
+}
+
+struct SkipWhile<I, A> {
+    iter: I,
+    p: fn(A) -> Bool,
+    mut started: Bool,
+}
+
+impl<I: Iterator<Item = A>, A> Iterator for SkipWhile<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        if self.started {
+            return self.iter.next();
+        }
+        while let Some(x) = self.iter.next() {
+            if !(self.p)(x) {
+                self.started = true;
+                return Some(x);
+            }
+        }
+        None
+    }
+}
+
+struct StepBy<I> {
+    iter: I,
+    step: Int,
+    mut first: Bool,
+}
+
+impl<I: Iterator> Iterator for StepBy<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<I::Item> {
+        if self.first {
+            self.first = false;
+            return self.iter.next();
+        }
+        self.iter.nth(self.step - 1)
+    }
+}
+
+struct Peekable<I, A> {
+    iter: I,
+    mut peeked: Option<A>,
+    mut has: Bool,
+}
+
+impl<I: Iterator<Item = A>, A> Peekable<I, A> {
+    // peek returns the next element without consuming it.
+    fn peek(&mut self) -> Option<A> {
+        if !self.has {
+            self.peeked = self.iter.next();
+            self.has = true;
+        }
+        self.peeked
+    }
+}
+
+impl<I: Iterator<Item = A>, A> Iterator for Peekable<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        if self.has {
+            self.has = false;
+            return self.peeked;
+        }
+        self.iter.next()
+    }
+}
+
+struct Rev<I> {
+    iter: I,
+}
+
+impl<I: DoubleEndedIterator> Iterator for Rev<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<I::Item> {
+        self.iter.next_back()
+    }
+}
+
+// ---- ranges ----
+
+// `start..end`: the integers from start up to (excluding) end.
+struct Range {
+    mut start: Int,
+    mut end: Int,
+}
+
+impl Range {
+    fn contains(&self, x: Int) -> Bool {
+        self.start <= x && x < self.end
+    }
+
+    fn len(&self) -> Int {
+        if self.end > self.start {
+            self.end - self.start
+        } else {
+            0
+        }
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.start >= self.end
+    }
+}
+
+impl Iterator for Range {
+    type Item = Int;
+
+    fn next(&mut self) -> Option<Int> {
+        if self.start < self.end {
+            let x = self.start;
+            self.start = x + 1;
+            Some(x)
+        } else {
+            None
+        }
+    }
+}
+
+impl DoubleEndedIterator for Range {
+    fn next_back(&mut self) -> Option<Int> {
+        if self.start < self.end {
+            self.end = self.end - 1;
+            Some(self.end)
+        } else {
+            None
+        }
+    }
+}
+
+// `start..=end`: the integers from start up to (including) end.
+struct RangeInclusive {
+    mut start: Int,
+    mut end: Int,
+}
+
+impl RangeInclusive {
+    fn contains(&self, x: Int) -> Bool {
+        self.start <= x && x <= self.end
+    }
+}
+
+impl Iterator for RangeInclusive {
+    type Item = Int;
+
+    fn next(&mut self) -> Option<Int> {
+        if self.start <= self.end {
+            let x = self.start;
+            if x == self.end {
+                // stop without overflowing at the largest Int
+                self.end = x - 1;
+                self.start = x;
+            } else {
+                self.start = x + 1;
+            }
+            Some(x)
+        } else {
+            None
+        }
+    }
+}
+
+impl DoubleEndedIterator for RangeInclusive {
+    fn next_back(&mut self) -> Option<Int> {
+        if self.start <= self.end {
+            let x = self.end;
+            if x == self.start {
+                self.start = x + 1;
+                self.end = x;
+            } else {
+                self.end = x - 1;
+            }
+            Some(x)
+        } else {
+            None
+        }
+    }
+}
+
+// ---- Vec ----
+
+// Iter iterates over a Vec by index. Like a `for` loop over a Vec, it sees
+// elements pushed while iterating.
+struct Iter<T> {
+    v: Vec<T>,
+    mut i: Int,
+    mut end: Int,
+}
+
+impl<T> Vec<T> {
+    fn iter(&self) -> Iter<T> {
+        Iter { v: *self, i: 0, end: -1 }
+    }
+}
+
+impl<T> Iterator for Iter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        let n = if self.end < 0 { self.v.len() } else { self.end };
+        if self.i < n {
+            let x = self.v.get(self.i);
+            self.i = self.i + 1;
+            x
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> DoubleEndedIterator for Iter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        if self.end < 0 {
+            self.end = self.v.len();
+        }
+        if self.i < self.end {
+            self.end = self.end - 1;
+            self.v.get(self.end)
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> IntoIterator for Vec<T> {
+    type Item = T;
+    type IntoIter = Iter<T>;
+
+    fn into_iter(self) -> Iter<T> {
+        self.iter()
+    }
+}
+
+impl<T> FromIterator<T> for Vec<T> {
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> Vec<T> {
+        let v = Vec::new();
+        while let Some(x) = iter.next() {
+            v.push(x);
+        }
+        v
+    }
+}
+
+impl FromIterator<String> for String {
+    fn from_iter<I: Iterator<Item = String>>(iter: I) -> String {
+        let parts = Vec::new();
+        while let Some(s) = iter.next() {
+            parts.push(s);
+        }
+        parts.join("")
+    }
+}
+
+impl Sum<Int> for Int {
+    fn sum<I: Iterator<Item = Int>>(iter: I) -> Int {
+        let mut s = 0;
+        while let Some(x) = iter.next() {
+            s = s + x;
+        }
+        s
+    }
+}
+
+impl Product<Int> for Int {
+    fn product<I: Iterator<Item = Int>>(iter: I) -> Int {
+        let mut p = 1;
+        while let Some(x) = iter.next() {
+            p = p * x;
+        }
+        p
+    }
+}

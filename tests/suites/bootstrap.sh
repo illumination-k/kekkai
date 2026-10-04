@@ -2,7 +2,8 @@
 # bootstrap: the self-hosting fixed point. `./kek bootstrap-check` builds
 # compiler/ with the committed bootstrap compiler (stage1), rebuilds it
 # with stage1 (stage2) and requires stage1 == stage2 byte for byte.
-# compiler/prelude_src.kek must be generated from lib/prelude.
+# compiler/prelude_src.kek and compiler/core_src.kek must be generated from
+# lib/prelude and lib/core.
 . "$(dirname "$0")/../lib.sh"
 SUITE=bootstrap
 
@@ -15,4 +16,9 @@ if out=$("$KEK" embed-prelude lib/prelude compiler/prelude_src.kek -check 2>&1);
 	case_ok prelude-embedded
 else
 	case_fail prelude-embedded "$out"
+fi
+if out=$("$KEK" embed-prelude lib/core compiler/core_src.kek -as core -check 2>&1); then
+	case_ok core-embedded
+else
+	case_fail core-embedded "$out"
 fi

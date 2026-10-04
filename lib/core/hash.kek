@@ -1,0 +1,110 @@
+// Hashing, as in Rust's core::hash: a type implements Hash by feeding its
+// parts to a Hasher.
+
+trait Hasher {
+    fn finish(&self) -> Int;
+
+    fn write_i64(&mut self, i: Int);
+
+    fn write_str(&mut self, s: String) {
+        let n = s.len();
+        let mut i = 0;
+        while i < n {
+            self.write_i64(s.char_at(i).unwrap_or(0));
+            i = i + 1;
+        }
+        // a terminator, so that ("ab", "c") and ("a", "bc") differ
+        self.write_i64(-1);
+    }
+}
+
+trait Hash {
+    fn hash<H: Hasher>(&self, state: &mut H);
+}
+
+// DefaultHasher is a fixed (unseeded) 64-bit FNV-1a-style hasher, so that
+// hashes are deterministic.
+struct DefaultHasher {
+    mut state: Int,
+}
+
+impl DefaultHasher {
+    fn new() -> DefaultHasher {
+        DefaultHasher { state: -3750763034362895579 }
+    }
+}
+
+impl Hasher for DefaultHasher {
+    fn finish(&self) -> Int {
+        let h = self.state;
+        let h2 = h.bit_xor(h.ushr(33)) * -49064778989728563;
+        h2.bit_xor(h2.ushr(33))
+    }
+
+    fn write_i64(&mut self, i: Int) {
+        self.state = self.state.bit_xor(i) * 1099511628211;
+    }
+
+    // the same steps as Hasher::write_str, done by the runtime
+    fn write_str(&mut self, s: String) {
+        self.state = s.__hash(self.state);
+    }
+}
+
+impl Hash for Int {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_i64(*self);
+    }
+}
+
+impl Hash for Bool {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_i64(if *self { 1 } else { 0 });
+    }
+}
+
+impl Hash for String {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_str(*self);
+    }
+}
+
+impl Hash for () {
+    fn hash<H: Hasher>(&self, state: &mut H) {}
+}
+
+impl<T: Hash> Hash for Option<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            None => state.write_i64(0),
+            Some(x) => {
+                state.write_i64(1);
+                x.hash(state);
+            }
+        }
+    }
+}
+
+impl<T: Hash, E: Hash> Hash for Result<T, E> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Ok(x) => {
+                state.write_i64(0);
+                x.hash(state);
+            }
+            Err(e) => {
+                state.write_i64(1);
+                e.hash(state);
+            }
+        }
+    }
+}
+
+impl<T: Hash> Hash for Vec<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_i64(self.len());
+        for x in *self {
+            x.hash(state);
+        }
+    }
+}

@@ -5,9 +5,10 @@
 # by wasmtime. The compiler that runs is built from the current compiler/
 # sources by the committed bootstrap compiler (bootstrap/kek.wasm) and
 # cached under .kek-cache/stage-<hash>/, keyed by the hash of the
-# bootstrap, the sources, the runtime prelude (lib/prelude) and the
-# wasmtime version. Cache entries are built in a temporary directory and
-# renamed into place, so concurrent launches need no lock.
+# bootstrap, the sources, the runtime prelude (lib/prelude), the core
+# library (lib/core) and the wasmtime version. Cache entries are built in
+# a temporary directory and renamed into place, so concurrent launches
+# need no lock.
 #
 #   kek <command> [args...]         run a compiler command (check, ir, build, ...)
 #   kek run <file|dir> [args...]    build a #[main] program and run it
@@ -61,7 +62,7 @@ sources_hash() {
 	{
 		cat "$root/bootstrap/kek.wasm"
 		"$wasmtime" --version
-		for f in "$root"/compiler/*.kek "$root"/lib/prelude/*.kek; do
+		for f in "$root"/compiler/*.kek "$root"/lib/prelude/*.kek "$root"/lib/core/*.kek; do
 			printf '%s\0' "${f#"$root"/}"
 			cat "$f"
 			printf '\0'
@@ -90,8 +91,10 @@ current_stage() {
 	_dir=$cache/stage-$(sources_hash)
 	if [ ! -f "$_dir/module.cwasm" ]; then
 		mkdir -p "$cache"
-		# the prelude is embedded in the compiler: regenerate it first
+		# the prelude and the core library are embedded in the compiler:
+		# regenerate them first
 		(cd "$root" && wasm "$(bootstrap_module)" embed-prelude lib/prelude compiler/prelude_src.kek) >&2
+		(cd "$root" && wasm "$(bootstrap_module)" embed-prelude lib/core compiler/core_src.kek -as core) >&2
 		_dir=$cache/stage-$(sources_hash)
 		if [ ! -f "$_dir/module.cwasm" ]; then
 			_tmp=$(mktemp -d "$cache/tmp-XXXXXX")
@@ -124,8 +127,14 @@ compiler() {
 	wasm "$(stage_module "$(current_stage)")" "$@"
 }
 
+# bootstrap_check requires stage1 (the current compiler, built by the
+# bootstrap) to rebuild itself identically. With $1 = update, a change of
+# the code the compiler generates for itself (e.g. in the runtime prelude)
+# is allowed: stage2 (built by stage1) must then rebuild itself
+# identically, and $_new is set to the module to install.
 bootstrap_check() {
 	_s1=$(current_stage)
+	_new=$_s1/module.wasm
 	_s2=$(mktemp -d "${TMPDIR:-/tmp}/kek-stage2-XXXXXX")
 	if ! build_compiler "$_s1/module.cwasm" "$_s2"; then
 		rm -rf "$_s2"
@@ -136,6 +145,18 @@ bootstrap_check() {
 		echo "bootstrap-check: fixed point ($(wc -c <"$_s1/module.wasm" | tr -d ' ') bytes)"
 		rm -rf "$_s2"
 		return 0
+	fi
+	if [ "${1:-}" = update ]; then
+		_s3=$(mktemp -d "${TMPDIR:-/tmp}/kek-stage3-XXXXXX")
+		if build_compiler "$_s2/module.cwasm" "$_s3" && cmp -s "$_s2/module.wasm" "$_s3/module.wasm"; then
+			echo "bootstrap-check: fixed point at stage2 ($(wc -c <"$_s2/module.wasm" | tr -d ' ') bytes)"
+			_keep=$(mktemp -d "${TMPDIR:-/tmp}/kek-new-XXXXXX")
+			cp "$_s2/module.wasm" "$_keep/module.wasm"
+			_new=$_keep/module.wasm
+			rm -rf "$_s2" "$_s3"
+			return 0
+		fi
+		rm -rf "$_s3"
 	fi
 	rm -rf "$_s2"
 	echo "bootstrap-check: no fixed point: module.wasm differs between stage1 and stage2" >&2
@@ -163,6 +184,7 @@ Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps
   kek test-build <file|dir> <outdir> [-list | -run name...]
   kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
+  kek embed-prelude lib/core compiler/core_src.kek -as core [-check]
 
 Maintenance:
   kek bootstrap-check             rebuild the compiler with itself; require a fixed point
@@ -397,9 +419,8 @@ bootstrap-check)
 	bootstrap_check
 	;;
 bootstrap-update)
-	bootstrap_check
-	_s1=$(current_stage)
-	cp "$_s1/module.wasm" "$root/bootstrap/kek.wasm"
+	bootstrap_check update
+	cp "$_new" "$root/bootstrap/kek.wasm"
 	echo "bootstrap/ updated"
 	;;
 build) cmd_build "$@" ;;

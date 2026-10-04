@@ -1,0 +1,262 @@
+duplicate (100% similar):
+  basic.kek:16:1  sum_positive (Vec<Int>) -> Int
+  basic.kek:26:1  add_up_positive (Vec<Int>) -> Int
+  hint: identical up to names: keep `sum_positive` and call it from the others
+
+literals (86% similar):
+  basic.kek:37:1  shipping_fee (Int) -> Int
+  basic.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+    literal: 500 at 41:5, 800 at 48:5
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+2 findings (1 duplicate, 1 literals)
+1 allowed by #[allow(similar)]
+--- exit 1
+--- with -threshold 80
+duplicate (100% similar):
+  basic.kek:16:1  sum_positive (Vec<Int>) -> Int
+  basic.kek:26:1  add_up_positive (Vec<Int>) -> Int
+  hint: identical up to names: keep `sum_positive` and call it from the others
+
+literals (86% similar):
+  basic.kek:37:1  shipping_fee (Int) -> Int
+  basic.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+    literal: 500 at 41:5, 800 at 48:5
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+structural (87% similar, distance 5):
+  basic.kek:52:1  describe (Point) -> String
+  basic.kek:61:1  describe_point (Point) -> String
+  hint: similar structure: extract the common part of `describe` and `describe_point` into one parameterized definition
+
+structural (86% similar, distance 4):
+  basic.kek:16:1  sum_positive (Vec<Int>) -> Int
+  basic.kek:102:1  tally_even (Vec<Int>) -> Int
+  hint: similar structure: extract the common part of `sum_positive` and `tally_even` into one parameterized definition
+
+4 findings (1 duplicate, 1 literals, 2 structural)
+1 allowed by #[allow(similar)]
+--- exit 1
+--- max_nodes = 30
+{
+  "path": "basic.kek",
+  "threshold": 80,
+  "min_nodes": 16,
+  "all": false,
+  "findings": [
+    {
+      "kind": "duplicate",
+      "similarity": 100,
+      "members": [
+        {
+          "name": "sum_positive",
+          "file": "basic.kek",
+          "line": 16,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 28,
+          "new": true
+        },
+        {
+          "name": "add_up_positive",
+          "file": "basic.kek",
+          "line": 26,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 28,
+          "new": true
+        }
+      ],
+      "hint": "identical up to names: keep `sum_positive` and call it from the others"
+    },
+    {
+      "kind": "literals",
+      "similarity": 86,
+      "members": [
+        {
+          "name": "shipping_fee",
+          "file": "basic.kek",
+          "line": 37,
+          "col": 1,
+          "sig": "(Int) -> Int",
+          "hash": "H",
+          "nodes": 23,
+          "new": true
+        },
+        {
+          "name": "express_fee",
+          "file": "basic.kek",
+          "line": 44,
+          "col": 1,
+          "sig": "(Int) -> Int",
+          "hash": "H",
+          "nodes": 23,
+          "new": true
+        }
+      ],
+      "literals": [
+        {
+          "values": [
+            "1000",
+            "2000"
+          ],
+          "positions": [
+            {
+              "file": "basic.kek",
+              "line": 38,
+              "col": 17
+            },
+            {
+              "file": "basic.kek",
+              "line": 45,
+              "col": 17
+            }
+          ]
+        },
+        {
+          "values": [
+            "500",
+            "800"
+          ],
+          "positions": [
+            {
+              "file": "basic.kek",
+              "line": 39,
+              "col": 35
+            },
+            {
+              "file": "basic.kek",
+              "line": 46,
+              "col": 35
+            }
+          ]
+        },
+        {
+          "values": [
+            "500",
+            "800"
+          ],
+          "positions": [
+            {
+              "file": "basic.kek",
+              "line": 41,
+              "col": 5
+            },
+            {
+              "file": "basic.kek",
+              "line": 48,
+              "col": 5
+            }
+          ]
+        }
+      ],
+      "hint": "differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800"
+    },
+    {
+      "kind": "structural",
+      "similarity": 87,
+      "members": [
+        {
+          "name": "describe",
+          "file": "basic.kek",
+          "line": 52,
+          "col": 1,
+          "sig": "(Point) -> String",
+          "hash": "H",
+          "nodes": 36,
+          "new": true
+        },
+        {
+          "name": "describe_point",
+          "file": "basic.kek",
+          "line": 61,
+          "col": 1,
+          "sig": "(Point) -> String",
+          "hash": "H",
+          "nodes": 40,
+          "new": true
+        }
+      ],
+      "distance": 5,
+      "approx": true,
+      "hint": "similar structure: extract the common part of `describe` and `describe_point` into one parameterized definition"
+    },
+    {
+      "kind": "structural",
+      "similarity": 86,
+      "members": [
+        {
+          "name": "sum_positive",
+          "file": "basic.kek",
+          "line": 16,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 28,
+          "new": true
+        },
+        {
+          "name": "tally_even",
+          "file": "basic.kek",
+          "line": 102,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 30,
+          "new": true
+        }
+      ],
+      "distance": 4,
+      "approx": false,
+      "hint": "similar structure: extract the common part of `sum_positive` and `tally_even` into one parameterized definition"
+    }
+  ],
+  "allowed": [
+    {
+      "kind": "duplicate",
+      "similarity": 100,
+      "members": [
+        {
+          "name": "count_even",
+          "file": "basic.kek",
+          "line": 92,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 30,
+          "new": true
+        },
+        {
+          "name": "tally_even",
+          "file": "basic.kek",
+          "line": 102,
+          "col": 1,
+          "sig": "(Vec<Int>) -> Int",
+          "hash": "H",
+          "nodes": 30,
+          "new": true
+        }
+      ],
+      "hint": "identical up to names: keep `count_even` and call it from the others",
+      "allowed_by": [
+        {
+          "name": "count_even",
+          "reason": "kept apart on purpose",
+          "owner": "billing",
+          "expires": "2027-01-01"
+        }
+      ]
+    }
+  ]
+}
+--- exit 1
+--- bad kekkai.toml
+--- stderr
+kekkai.toml:1: bad section header
+--- exit 2

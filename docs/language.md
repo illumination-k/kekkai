@@ -10,7 +10,7 @@
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
-- `#[test]` 関数は `kek test` がモック capability を渡して実行する。
+- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`#[test(cases = N)]` でケース数を指定）。
 
 ## 型
 

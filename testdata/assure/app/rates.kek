@@ -1,0 +1,21 @@
+// Exchange rates from an external API.
+
+fn fetch_rate(net: &Net, log: &Log, cur: String) -> Int {
+    match net.get("https://api.rates.example/v1/" + cur) {
+        Ok(body) => body.trim().parse_int().unwrap_or(0),
+        Err(e) => {
+            log.warn(e.message());
+            0
+        }
+    }
+}
+
+#[rare]
+fn convert(net: &Net, log: &Log, amount: Int, cur: String) -> Int {
+    amount * fetch_rate(net, log, cur)
+}
+
+#[allow(similar, reason = "kept apart from price_key", owner = "shogo", expires = "2027-03-31")]
+fn rate_key(cur: String) -> String {
+    "rate:" + cur
+}

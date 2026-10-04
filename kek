@@ -15,7 +15,11 @@
 #   kek test [flags] <file|dir>     run #[test] functions with mock capabilities
 #   kek cover [flags] <file|dir>    coverage of the tests (.kek-cache/cover/)
 #   kek mutate [flags] <file|dir>   mutation testing (.kek-cache/mutate/)
+#   kek similar -diff <rev> ...     similar code, only what changed since a git revision
 #   KEK_STAGE=bootstrap kek ...     use the bootstrap compiler directly
+#
+# Results of `kek test` and the module.wasm of `kek build` / `kek run` are
+# also cached (under test/ and build/), keyed by definition hashes.
 #
 # Maintenance:
 #   kek bootstrap-check   rebuild the compiler with itself; require a fixed point
@@ -124,9 +128,25 @@ stage_module() {
 	fi
 }
 
+# stage_dir sets $_stage_memo to the directory of the current compiler.
+stage_dir() {
+	[ -n "${_stage_memo:-}" ] || _stage_memo=$(current_stage) || exit 1
+}
+
+# stage_key names the current compiler in cache keys.
+stage_key() {
+	stage_dir
+	if [ "$_stage_memo" = "$root/bootstrap" ]; then
+		echo "bootstrap-$(sha <"$root/bootstrap/kek.wasm")"
+	else
+		echo "${_stage_memo##*/}"
+	fi
+}
+
 # compiler <args...>: run the current compiler.
 compiler() {
-	wasm "$(stage_module "$(current_stage)")" "$@"
+	stage_dir
+	wasm "$(stage_module "$_stage_memo")" "$@"
 }
 
 # bootstrap_check requires stage1 (the current compiler, built by the
@@ -175,8 +195,10 @@ Usage:
   kek build [-o dir] [-target d1|do] <file|dir>
                                   compile: a WASI command for #[main], a Worker for #[handler]
   kek run <file|dir> [args...]    compile a #[main] program and run it
-  kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>
+  kek test [-run re] [-seed n] [-cases n] [-j n] [-json] [-no-cache]
+           [-clock ms] [-net f.json] [-db f.json] <file|dir>
                                   run the #[test] functions with mock capabilities
+                                  (property tests, results cached by definition hash)
   kek cover [-json] [-lcov file] [-run re] [-seed n] <file|dir>
                                   line and branch coverage of the tests
   kek mutate [-json] [-run re] [-base <file|dir> | -diff rev] [-timeout 2s] <file|dir>
@@ -185,6 +207,10 @@ Usage:
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
                                   search functions by type
+  kek assure (plan|apply|check) [flags] <file|dir>
+                                  the guarantee ledger kekkai.assure.lock (docs/assure.md)
+  kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>
+                                  duplicate and similar definitions (exit 1 when found)
 
 Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps
@@ -201,6 +227,47 @@ EOF
 }
 
 # ---- kek build ----
+
+# cached_build <path> <outdir> [args...]: `compiler build` through the
+# build cache. module.wasm is stored under $cache/build/<stage>/<key>/,
+# keyed by the program's definition hash (see `kek hash`), its entry kind
+# and its handler parameters, so a program changed only in comments or
+# formatting is not compiled again; the other outputs (worker.js,
+# wrangler.toml, kekkai_meta.js) are always written by the compiler.
+# KEK_BUILD_CACHE=0 disables the cache.
+cached_build() {
+	_bp=$1
+	_bo=$2
+	shift 2
+	if [ "${KEK_BUILD_CACHE:-1}" = 0 ]; then
+		compiler build "$_bp" "$_bo" "$@"
+		return
+	fi
+	stage_dir
+	_bc=$cache/build/$(stage_key)
+	_bres=$(compiler build "$_bp" "$_bo" "$@" -cache "$_bc") || return $?
+	printf '%s\n' "$_bres" | grep -v '^kek-build-cache: ' | grep -v '^$' || true
+	_bline=$(printf '%s\n' "$_bres" | grep '^kek-build-cache: ' | tail -n 1)
+	_bkey=${_bline##* }
+	case $_bline in
+	*" hit "*)
+		cp "$_bc/$_bkey/module.wasm" "$_bo/module.wasm"
+		;;
+	*" miss "*)
+		[ ! -e "$_bc/$_bkey" ] || return 0
+		mkdir -p "$_bc"
+		_bt=$(mktemp -d "$_bc/tmp-XXXXXX")
+		cp "$_bo/module.wasm" "$_bt/module.wasm"
+		: >"$_bt/ok"
+		if [ -e "$_bc/$_bkey" ]; then
+			rm -rf "$_bt" # lost a race: the entry is already there
+		else
+			mv "$_bt" "$_bc/$_bkey"
+			rm -rf "${_bc:?}/$_bkey/$(basename "$_bt")"
+		fi
+		;;
+	esac
+}
 
 cmd_build() {
 	_out=out
@@ -233,7 +300,7 @@ cmd_build() {
 		exit 2
 	fi
 	mkdir -p "$_out"
-	compiler build "$_path" "$_out" -target "$_target" || exit $?
+	cached_build "$_path" "$_out" -target "$_target" || exit $?
 	if [ -f "$_out/kekkai_meta.js" ]; then
 		cp "$root/js/kekkai_runtime.js" "$_out/kekkai_runtime.js"
 	fi
@@ -251,7 +318,7 @@ cmd_run() {
 	shift
 	_out=$(mktemp -d "${TMPDIR:-/tmp}/kek-run-XXXXXX")
 	trap 'rm -rf "$_out"' EXIT
-	compiler build "$_src" "$_out" || exit $?
+	cached_build "$_src" "$_out" || exit $?
 	if [ -f "$_out/kekkai_meta.js" ]; then
 		die "kek run: $_src is a #[handler] program (serve it locally with scripts/dev.sh)"
 	fi
@@ -263,20 +330,36 @@ cmd_run() {
 }
 
 # ---- kek test ----
+#
+# test-build -list discovers the tests with their definition hashes
+# (tests.tsv). A test's result is a function of the compiler stage, its
+# trans hash, the mock options (-seed, -clock, the contents of -net/-db
+# files) and its number of cases, so results are cached under
+# $cache/test/<options key>/<hash>-<cases>-<name>. Only the uncached tests
+# are built (test-build -run) and run, -j at a time; the results are
+# printed in declaration order.
 
 test_usage() {
 	cat >&2 <<'EOF'
 Usage of test:
+  -cases int
+    	cases of a property test (a test with generated parameters) (default 100)
   -clock int
     	fixed time of the mock &Clock (ms since the epoch) (default 1767225600000)
   -db string
     	JSON file with the initial contents of the mock &Db store: {"key": "value"}
+  -j int
+    	run this many tests at a time (default: the number of CPUs)
+  -json
+    	print the results as JSON
   -net string
     	JSON file of canned &Net responses: {"GET url": "body", "POST url": {"error": "msg"}}
+  -no-cache
+    	run every test, ignoring cached results (also KEK_TEST_CACHE=0)
   -run string
     	run only tests whose name matches this extended regular expression
   -seed int
-    	seed of the mock &Random
+    	seed of the mock &Random and of the inputs of property tests
 EOF
 }
 
@@ -297,12 +380,112 @@ is_int64() {
 	esac
 }
 
+ncpu() {
+	getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1
+}
+
+# json_str <s>: a JSON string literal (s has no control characters).
+json_str() {
+	printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
+
+# test_run_one <idx> <name>: runs one test of $_dir/module.cwasm into
+# $_dir/r/<idx>.out and writes its status (ok, failed, trapped or error)
+# to $_dir/r/<idx>.st last.
+test_run_one() {
+	_o=$_dir/r/$1
+	set +e
+	wasm "$_dir/module.cwasm" "$2" >"$_o.out" 2>"$_o.err"
+	_c=$?
+	set -e
+	if [ $_c -eq 0 ]; then
+		_st=ok
+	elif [ $_c -eq 1 ]; then
+		_st=failed
+	else
+		_st=error
+		grep -q 'wasm trap: ' "$_o.err" && _st=trapped
+		{
+			echo "test $2 ... FAILED (trapped)"
+			_trap=$(grep -E 'wasm trap: ' "$_o.err" | sed 's/.*wasm trap: //' | head -n 1)
+			[ -n "$_trap" ] || _trap=$(grep -v '^kek-case: ' "$_o.err" | tail -n 1)
+			echo "    trap: $_trap"
+			# a property test notes each input before running it
+			_in=$(grep '^kek-case: ' "$_o.err" | tail -n 1 | sed 's/^kek-case: //')
+			[ -z "$_in" ] || echo "    last input: $_in"
+		} >>"$_o.out"
+	fi
+	echo "$_st" >"$_o.st.tmp"
+	mv "$_o.st.tmp" "$_o.st"
+}
+
+# test_launch starts the next uncached tests, keeping at most $_jobs
+# running beyond the ones already reported.
+test_launch() {
+	while [ "$_launched" -lt "$_nrun" ] && [ $((_launched - _reported)) -lt "$_jobs" ]; do
+		_launched=$((_launched + 1))
+		eval "_li=\$_run_$_launched"
+		eval "_ln=\$_name_$_li"
+		test_run_one "$_li" "$_ln" &
+		eval "_pid_$_li=\$!"
+	done
+}
+
+# test_json_obj <name> <status> <cached> <caps> <hash> <result file>: one
+# element of the "tests" array of `kek test -json`.
+test_json_obj() {
+	awk -v name="$1" -v status="$2" -v cached="$3" -v caps="$4" -v hash="$5" '
+	function esc(s,   r, i, c) {
+		gsub(/\\/, "\\\\", s)
+		gsub(/"/, "\\\"", s)
+		gsub(/\t/, "\\t", s)
+		gsub(/\r/, "\\r", s)
+		if (s ~ /[\001-\037]/) {
+			r = ""
+			for (i = 1; i <= length(s); i++) {
+				c = substr(s, i, 1)
+				r = r (c ~ /[\001-\037]/ ? sprintf("\\u%04x", ord[c]) : c)
+			}
+			s = r
+		}
+		return "\"" s "\""
+	}
+	BEGIN {
+		for (i = 1; i < 32; i++) ord[sprintf("%c", i)] = i
+		n = 0
+		ce = "null"
+		ms = "null"
+	}
+	NR == 1 {
+		if (match($0, /; [0-9]+\.[0-9]+ms\)$/)) ms = substr($0, RSTART + 2, RLENGTH - 5)
+		next
+	}
+	{
+		line = $0
+		sub(/^    /, "", line)
+		out[n++] = esc(line)
+		if (line ~ /^counterexample: /) ce = esc(substr(line, 17))
+	}
+	END {
+		cs = ""
+		k = split(caps, a, ",")
+		for (i = 1; i <= k; i++) cs = cs (i > 1 ? "," : "") esc(a[i])
+		o = ""
+		for (i = 0; i < n; i++) o = o (i > 0 ? "," : "") out[i]
+		printf "{\"name\":%s,\"status\":\"%s\",\"cached\":%s,\"pure\":%s,\"caps\":[%s],\"hash\":%s,\"ms\":%s,\"output\":[%s],\"counterexample\":%s}", esc(name), status, cached, (k == 0 ? "true" : "false"), cs, esc(hash), ms, o, ce
+	}' "$6"
+}
+
 cmd_test() {
 	_run=
 	_seed=0
 	_clock=1767225600000
 	_net=
 	_db=
+	_cases=100
+	_jobs=
+	_json=0
+	_nocache=0
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--) shift; break ;;
@@ -322,7 +505,23 @@ cmd_test() {
 		esac
 		case $_name in
 		h | help) test_usage; exit 0 ;;
-		run | seed | clock | net | db) ;;
+		json | no-cache)
+			if [ $_has -eq 0 ]; then
+				_val=true
+			fi
+			case $_val in
+			true | 1) _b=1 ;;
+			false | 0) _b=0 ;;
+			*) test_usage_error "invalid boolean value \"$_val\" for -$_name: parse error" ;;
+			esac
+			case $_name in
+			json) _json=$_b ;;
+			no-cache) _nocache=$_b ;;
+			esac
+			shift
+			continue
+			;;
+		run | seed | clock | net | db | cases | j) ;;
 		*) test_usage_error "flag provided but not defined: -$_name" ;;
 		esac
 		if [ $_has -eq 0 ]; then
@@ -334,6 +533,10 @@ cmd_test() {
 		seed | clock)
 			is_int64 "$_val" || test_usage_error "invalid value \"$_val\" for flag -$_name: parse error"
 			;;
+		cases | j)
+			printf '%s' "$_val" | grep -Eq '^[1-9][0-9]{0,8}$' ||
+				test_usage_error "invalid value \"$_val\" for flag -$_name: want a positive integer"
+			;;
 		esac
 		case $_name in
 		run) _run=$_val ;;
@@ -341,6 +544,8 @@ cmd_test() {
 		clock) _clock=$_val ;;
 		net) _net=$_val ;;
 		db) _db=$_val ;;
+		cases) _cases=$_val ;;
+		j) _jobs=$_val ;;
 		esac
 		shift
 	done
@@ -348,16 +553,13 @@ cmd_test() {
 	_file=$1
 	[ -e "$_file" ] || die "stat $_file: no such file or directory"
 	[ "${_clock#+}" = 0 ] && _clock=1767225600000
+	[ "${KEK_TEST_CACHE:-1}" != 0 ] || _nocache=1
+	[ -n "$_jobs" ] || _jobs=$(ncpu)
 
 	_dir=$(mktemp -d "${TMPDIR:-/tmp}/kek-test-XXXXXX")
 	trap 'rm -rf "$_dir"' EXIT
-	_select=0
-	[ -n "$_run" ] && _select=1
-	if [ $_select -eq 1 ]; then
-		compiler test-build "$_file" "$_dir" -list || exit $?
-	else
-		compiler test-build "$_file" "$_dir" || exit $?
-	fi
+	mkdir "$_dir/r"
+	compiler test-build "$_file" "$_dir" -list || exit $?
 	# errors in the options are reported after the program's diagnostics
 	for _f in "$_net" "$_db"; do
 		[ -z "$_f" ] || [ -f "$_f" ] || die "open $_f: no such file or directory"
@@ -373,51 +575,232 @@ cmd_test() {
 	fi
 	_count=$(wc -l <"$_dir/selected.txt" | tr -d ' ')
 	if [ "$_count" -eq 0 ]; then
-		echo "$_file: no tests"
+		if [ $_json -eq 1 ]; then
+			echo "{\"file\":$(json_str "$_file"),\"passed\":0,\"failed\":0,\"cached\":0,\"tests\":[]}"
+		else
+			echo "$_file: no tests"
+		fi
 		exit 0
 	fi
-	if [ $_select -eq 1 ]; then
+
+	# the cache directory of these options
+	_tc=$cache/test/$(
+		{
+			printf 'kek-test-1\n%s\n%s\n%s\n' "$(stage_key)" "$_seed" "$_clock"
+			printf 'net\n'
+			[ -z "$_net" ] || cat "$_net"
+			printf '\ndb\n'
+			[ -z "$_db" ] || cat "$_db"
+		} | sha
+	)
+	# plan: the selected tests in declaration order; uncached ones get a
+	# run number
+	awk -F '\t' 'NR == FNR { want[$1] = 1; next } want[$1]' \
+		"$_dir/selected.txt" "$_dir/tests.tsv" >"$_dir/plan.tsv"
+	_i=0
+	_nrun=0
+	while IFS="$(printf '\t')" read -r _t _h _np _c _caps; do
+		_i=$((_i + 1))
+		[ "$_np" -gt 0 ] || _c=1
+		[ "$_np" -eq 0 ] || [ "$_c" -gt 0 ] || _c=$_cases
+		eval "_name_$_i=\$_t"
+		eval "_hash_$_i=\$_h"
+		eval "_caps_$_i=\$_caps"
+		eval "_key_$_i=\$_h-\$_c-\$_t"
+		eval "_cached_$_i=0"
+		if [ $_nocache -eq 0 ] && [ -f "$_tc/$_h-$_c-$_t" ]; then
+			eval "_cached_$_i=1"
+		else
+			_nrun=$((_nrun + 1))
+			eval "_run_$_nrun=$_i"
+			printf '%s\n' "$_t" >>"$_dir/run.txt"
+		fi
+	done <"$_dir/plan.tsv"
+
+	if [ "$_nrun" -gt 0 ]; then
 		# shellcheck disable=SC2046
-		compiler test-build "$_file" "$_dir" -run $(cat "$_dir/selected.txt") || exit $?
+		compiler test-build "$_file" "$_dir" -run $(cat "$_dir/run.txt") || exit $?
+		precompile "$_dir"
 	fi
-	precompile "$_dir"
-	wasm_extra="--env KEK_TEST=1 --env KEK_TEST_CLOCK=$_clock --env KEK_TEST_SEED=$_seed"
+	wasm_extra="--env KEK_TEST=1 --env KEK_TEST_CLOCK=$_clock --env KEK_TEST_SEED=$_seed --env KEK_TEST_CASES=$_cases"
 	[ -z "$_net" ] || wasm_extra="$wasm_extra --env KEK_TEST_NET=$_net"
 	[ -z "$_db" ] || wasm_extra="$wasm_extra --env KEK_TEST_DB=$_db"
-	if [ -n "$_net$_db" ]; then
+	if [ "$_nrun" -gt 0 ] && [ -n "$_net$_db" ]; then
 		wasm "$_dir/module.cwasm" "" || exit 1
 	fi
-	if [ "$_count" -eq 1 ]; then
-		echo "running 1 test from $_file"
-	else
-		echo "running $_count tests from $_file"
+	if [ $_json -eq 0 ]; then
+		if [ "$_count" -eq 1 ]; then
+			echo "running 1 test from $_file"
+		else
+			echo "running $_count tests from $_file"
+		fi
 	fi
 	_passed=0
 	_failed=0
-	while IFS= read -r _t; do
-		set +e
-		wasm "$_dir/module.cwasm" "$_t" 2>"$_dir/stderr"
-		_code=$?
-		set -e
-		if [ $_code -eq 0 ]; then
+	_ncached=0
+	_launched=0
+	_reported=0
+	test_launch
+	_i=0
+	while [ $_i -lt "$_count" ]; do
+		_i=$((_i + 1))
+		eval "_t=\$_name_$_i"
+		eval "_key=\$_key_$_i"
+		eval "_cached=\$_cached_$_i"
+		_res=$_dir/r/$_i.res
+		if [ "$_cached" -eq 1 ]; then
+			_ncached=$((_ncached + 1))
+			_st=$(head -n 1 "$_tc/$_key")
+			tail -n +2 "$_tc/$_key" >"$_res"
+		else
+			eval "_p=\$_pid_$_i"
+			wait "$_p" || true
+			_reported=$((_reported + 1))
+			test_launch
+			_st=$(cat "$_dir/r/$_i.st" 2>/dev/null || echo error)
+			cp "$_dir/r/$_i.out" "$_res"
+			if [ "$_st" = error ]; then
+				# not a test result (e.g. a crash of wasmtime): not cached
+				_st=trapped
+			elif [ $_nocache -eq 0 ]; then
+				mkdir -p "$_tc"
+				_tmp=$(mktemp "$_tc/tmp-XXXXXX")
+				{
+					echo "$_st"
+					cat "$_res"
+				} >"$_tmp"
+				mv "$_tmp" "$_tc/$_key"
+			fi
+		fi
+		if [ "$_st" = ok ]; then
 			_passed=$((_passed + 1))
-		elif [ $_code -eq 1 ]; then
-			_failed=$((_failed + 1))
 		else
 			_failed=$((_failed + 1))
-			echo "test $_t ... FAILED (trapped)"
-			_trap=$(grep -E 'wasm trap: ' "$_dir/stderr" | sed 's/.*wasm trap: //' | head -n 1)
-			[ -n "$_trap" ] || _trap=$(tail -n 1 "$_dir/stderr")
-			echo "    trap: $_trap"
 		fi
-	done <"$_dir/selected.txt"
-	echo
-	if [ $_failed -eq 0 ]; then
-		echo "test result: ok. $_passed passed; $_failed failed"
+		if [ $_json -eq 1 ]; then
+			_cj=false
+			[ "$_cached" -eq 0 ] || _cj=true
+			eval "_caps=\$_caps_$_i"
+			eval "_h=\$_hash_$_i"
+			test_json_obj "$_t" "$_st" "$_cj" "$_caps" "$_h" "$_res" >"$_dir/r/$_i.json"
+		elif [ "$_cached" -eq 1 ]; then
+			sed -e '1s/$/ (cached)/' "$_res"
+		else
+			cat "$_res"
+		fi
+	done
+	if [ $_json -eq 1 ]; then
+		printf '{"file":%s,"passed":%d,"failed":%d,"cached":%d,"tests":[' \
+			"$(json_str "$_file")" "$_passed" "$_failed" "$_ncached"
+		_i=0
+		while [ $_i -lt "$_count" ]; do
+			_i=$((_i + 1))
+			[ $_i -eq 1 ] || printf ','
+			cat "$_dir/r/$_i.json"
+		done
+		printf ']}\n'
+		[ $_failed -eq 0 ] || exit 1
 		exit 0
 	fi
-	echo "test result: FAILED. $_passed passed; $_failed failed"
+	_note=
+	[ $_ncached -eq 0 ] || _note=" ($_ncached cached)"
+	echo
+	if [ $_failed -eq 0 ]; then
+		echo "test result: ok. $_passed passed; $_failed failed$_note"
+		exit 0
+	fi
+	echo "test result: FAILED. $_passed passed; $_failed failed$_note"
 	exit 1
+}
+
+# ---- kek similar -diff <rev> ----
+
+# cmd_similar runs `similar`. With -diff <rev>, the program as of the git
+# revision rev is extracted into a temporary directory and passed as
+# -base, so that only findings with a new or changed definition are
+# reported (the CI mode for pull requests).
+cmd_similar() {
+	_rev=
+	_has_rev=0
+	_path=
+	_skip=0
+	for _a in "$@"; do
+		if [ $_skip -eq 1 ]; then
+			_rev=$_a
+			_skip=0
+			continue
+		fi
+		case $_a in
+		-diff | --diff) _skip=1; _has_rev=1 ;;
+		-diff=* | --diff=*) _rev=${_a#*=}; _has_rev=1 ;;
+		*) _path=$_a ;;
+		esac
+	done
+	if [ $_has_rev -eq 0 ]; then
+		compiler similar "$@"
+		return
+	fi
+	if [ $_skip -eq 1 ] || [ -z "$_rev" ]; then
+		echo "flag needs an argument: -diff" >&2
+		echo "usage: kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>" >&2
+		exit 2
+	fi
+	# drop -diff <rev> from the arguments
+	_skip=0
+	_n=$#
+	while [ $_n -gt 0 ]; do
+		_a=$1
+		shift
+		_n=$((_n - 1))
+		if [ $_skip -eq 1 ]; then
+			_skip=0
+			continue
+		fi
+		case $_a in
+		-diff | --diff) _skip=1 ;;
+		-diff=* | --diff=*) ;;
+		*) set -- "$@" "$_a" ;;
+		esac
+	done
+	if [ -z "$_path" ] || [ ! -e "$_path" ]; then
+		echo "kek similar -diff: no such file or directory: ${_path:-<file|dir>}" >&2
+		exit 2
+	fi
+	_top=$(git rev-parse --show-toplevel 2>/dev/null) || {
+		echo "kek similar -diff: not in a git repository" >&2
+		exit 2
+	}
+	git rev-parse --verify --quiet "$_rev^{commit}" >/dev/null || {
+		echo "kek similar -diff: unknown revision $_rev" >&2
+		exit 2
+	}
+	if [ -d "$_path" ]; then
+		_abs=$(cd "$_path" && pwd -P)
+	else
+		_abs=$(cd "$(dirname "$_path")" && pwd -P)/$(basename "$_path")
+	fi
+	_top=$(cd "$_top" && pwd -P)
+	case $_abs in
+	"$_top") _rel=. ;;
+	"$_top"/*) _rel=${_abs#"$_top"/} ;;
+	*)
+		echo "kek similar -diff: $_path is outside the repository $_top" >&2
+		exit 2
+		;;
+	esac
+	_base=$(mktemp -d "${TMPDIR:-/tmp}/kek-similar-XXXXXX")
+	trap 'rm -rf "$_base"' EXIT
+	set +e
+	if git -C "$_top" archive --format=tar "$_rev" -- "$_rel" 2>/dev/null | tar -x -C "$_base" 2>/dev/null &&
+		[ -e "$_base/$_rel" ]; then
+		compiler similar -base "$_base/$_rel" -base_name "git:$_rev" "$@"
+	else
+		# the path did not exist at rev: every definition is new
+		compiler similar "$@"
+	fi
+	_code=$?
+	set -e
+	exit $_code
 }
 
 # ---- kek cover / kek mutate ----
@@ -521,10 +904,6 @@ cache_put() {
 	cp "$2" "$_cp_tmp" && mv "$_cp_tmp" "$1"
 }
 
-ncpu() {
-	getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4
-}
-
 cover_usage() {
 	cat >&2 <<'EOF'
 Usage of cover: kek cover [flags] <file|dir>
@@ -585,7 +964,7 @@ cmd_cover() {
 		# a test's coverage is cached by the compiler, the probe table, the
 		# seed and the test's trans hash (everything it can reach)
 		KEK_W_CACHE=$cache/cover/$(basename "$_stage")-$(sha <"$_dir/sites.json")-$flag_seed
-		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=$flag_seed"
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=$flag_seed --env KEK_TEST_CASES=100"
 		export KEK_W_CACHE KEK_W_EXTRA
 		: >"$_dir/torun.txt"
 		test_jobs "$_dir" | while read -r _i _t _tk; do
@@ -800,7 +1179,7 @@ cmd_mutate() {
 	if [ -s "$_dir/selected.txt" ] && [ -s "$_dir/mutants.txt" ]; then
 		KEK_W_STAGE=$_sk
 		KEK_W_CACHE=$cache/mutate/base-$_bk
-		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 -W timeout=60s"
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=60s"
 		export KEK_W_STAGE KEK_W_CACHE KEK_W_EXTRA
 		# baseline: which mutant sites each test reaches
 		: >"$_dir/torun.txt"
@@ -820,7 +1199,7 @@ cmd_mutate() {
 			_max=$(awk -F '\t' 'BEGIN { m = 0 } $3 + 0 > m { m = $3 + 0 } END { print m }' "$_dir/baseline.txt")
 			_tmo=$((1000 + 10 * _max))
 		fi
-		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 -W timeout=${_tmo}ms"
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=${_tmo}ms"
 		export KEK_W_EXTRA
 		# plan: for every mutant, the passing tests that reach it; mutants
 		# whose result is known from the cache are settled here
@@ -886,6 +1265,17 @@ mutate) cmd_mutate "$@" ;;
 __cover-one) cover_one "$@" ;;
 __mutate-base) mutate_base_one "$@" ;;
 __mutate-one) mutate_one "$@" ;;
+assure)
+	# the compiler has no clock: pass today's date (KEK_TODAY overrides it)
+	if [ $# -gt 0 ]; then
+		_sub=$1
+		shift
+		compiler assure "$_sub" -today="${KEK_TODAY:-$(date +%Y-%m-%d)}" "$@"
+	else
+		compiler assure
+	fi
+	;;
+similar) cmd_similar "$@" ;;
 help | -h | --help) usage ;;
 *) compiler "$cmd" "$@" ;;
 esac

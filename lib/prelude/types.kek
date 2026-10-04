@@ -42,19 +42,26 @@ struct __Rt {
     base: Int,
     mut brk: Int,
     mut cwd: String,
-    store: __Store,
+    mut store: __Store,
     // test mode
     mut test_name: String,
     mut clock_ms: Int,
     mut rand: Int,
     net: HashMap<String, String>,
     net_err: HashMap<String, String>,
-    lines: Vec<String>,
-    sent: Vec<String>,
+    mut lines: Vec<String>,
+    mut sent: Vec<String>,
     mut start_ns: Int,
     // `kek cover` / `kek mutate` (lib/prelude/cover.kek): probes hit, the
     // file they are written to at exit, the active mutant
     cov: Vec<Bool>,
     mut cov_out: String,
     mut mutant: Int,
+    // property tests: KEK_TEST_SEED, KEK_TEST_CASES, the &Random state at
+    // the start of the test and the text of KEK_TEST_DB (every case gets
+    // fresh mocks)
+    mut seed: Int,
+    mut cases: Int,
+    mut rand0: Int,
+    mut db_text: String,
 }

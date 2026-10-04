@@ -17,6 +17,12 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "hash" {
         return dh_main(args, fs, log);
     }
+    if cmd == "assure" {
+        return asr_main(args, fs, log);
+    }
+    if cmd == "similar" {
+        return sim_main(args, fs, log);
+    }
     if cmd == "prelude-check"
         || cmd == "lex"
         || cmd == "ast"

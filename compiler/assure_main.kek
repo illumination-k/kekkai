@@ -1,0 +1,278 @@
+// `kek assure plan|apply|check` (prefix asr_): the guarantee ledger. See
+// docs/assure.md and the other assure_*.kek files.
+//
+//   plan  [-json] [-v] [-strict] <file|dir>   the changes against the lock
+//   apply [-yes] [-reason r -owner o -expires d] [-renew] <file|dir>
+//                                              approve them: rewrite the lock
+//   check [-json] <file|dir>                   CI: fail on any drift
+//
+// Common flags: -lock f (default [assure] lock or kekkai.assure.lock),
+// -config f (default ./kekkai.toml), -today YYYY-MM-DD (filled in by the
+// ./kek launcher: the compiler has no clock).
+
+fn asr_usage() -> String {
+    "assure (plan|apply|check) [-json] [-v] [-strict] [-yes] [-reason r] [-owner o] [-expires YYYY-MM-DD] [-renew] [-lock f] [-config f] [-today YYYY-MM-DD] <file|dir>"
+}
+
+struct AsrRun {
+    sub: String,
+    path: String,
+    fl: ToolFlags,
+    pol: AsrPolicy,
+    lock: String,
+    lr: AsrLockRead,
+    plan: AsrPlan,
+}
+
+fn asr_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let sub = args.get(1).unwrap_or("");
+    if sub == "-h" || sub == "-help" || sub == "--help" {
+        log.error("usage: kek " + asr_usage());
+        return 0;
+    }
+    if sub != "plan" && sub != "apply" && sub != "check" {
+        log.error("usage: kek " + asr_usage());
+        return 2;
+    }
+    let fl = tool_flags(
+        args,
+        2,
+        "json v strict yes renew reason= owner= expires= lock= config= today=",
+    );
+    if fl.err != "" {
+        return tool_flag_error(fl, asr_usage(), log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek " + asr_usage());
+        return 2;
+    }
+    let today = tool_flag_str(fl, "today", "");
+    if today != "" && !asr_valid_date(today) {
+        log.error("kek assure: -today " + today + ": expected YYYY-MM-DD");
+        return 2;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let l = match dh_load(path, fs, log) {
+        Some(l) => l,
+        None => {
+            return 1;
+        }
+    };
+    let pol = asr_policy_load(fs, tool_flag_str(fl, "config", ""));
+    let lock = tool_flag_str(fl, "lock", asr_lock_path(pol));
+    let lr = asr_lock_read(fs, lock);
+    let cur = asr_model(l);
+    let pl = asr_plan(path, lock, lr, cur, pol, today);
+    let r = AsrRun { sub: sub, path: path, fl: fl, pol: pol, lock: lock, lr: lr, plan: pl };
+    if sub == "plan" {
+        return asr_cmd_plan(r, log);
+    }
+    if sub == "check" {
+        return asr_cmd_check(r, log);
+    }
+    asr_cmd_apply(r, fs, log)
+}
+
+fn asr_print_plan(r: AsrRun, log: &Log) {
+    if tool_flag_bool(r.fl, "json") {
+        log.info(irjson_encode(asr_plan_json(r.plan), false));
+        return;
+    }
+    frontend_print(log, asr_plan_text(r.plan, r.pol, tool_flag_bool(r.fl, "v")));
+}
+
+fn asr_cmd_plan(r: AsrRun, log: &Log) -> Int {
+    asr_print_plan(r, log);
+    let pl = r.plan;
+    if pl.errors.len() > 0 || pl.violations.len() > 0 {
+        return 1;
+    }
+    if tool_flag_bool(r.fl, "strict") && pl.expired.len() > 0 {
+        return 1;
+    }
+    0
+}
+
+fn asr_cmd_check(r: AsrRun, log: &Log) -> Int {
+    asr_print_plan(r, log);
+    let pl = r.plan;
+    if asr_plan_ok(pl) {
+        return 0;
+    }
+    let why = Vec::new();
+    if !pl.lock_found {
+        why.push("no lock file " + pl.lock + " (run kek assure apply)");
+    }
+    if pl.errors.len() > 0 {
+        why.push(pl.errors.len().to_string() + " configuration error(s)");
+    }
+    if pl.changes.len() > 0 && pl.lock_found {
+        let nr = asr_review_count(pl);
+        why.push(
+            pl.lock
+                + " is out of date: "
+                + pl.changes.len().to_string()
+                + " change(s), "
+                + nr.to_string()
+                + " needing review (run kek assure plan, then kek assure apply)",
+        );
+    }
+    if pl.violations.len() > 0 {
+        why.push(pl.violations.len().to_string() + " policy violation(s)");
+    }
+    if pl.expired.len() > 0 {
+        why.push(pl.expired.len().to_string() + " expired escape hatch(es)");
+    }
+    log.error("kek assure check: " + why.join("; "));
+    1
+}
+
+// asr_meta reads -reason/-owner/-expires and checks the required ones.
+// Returns "" when they are fine, or the error.
+fn asr_meta_error(r: AsrRun, what: String) -> String {
+    let missing = Vec::new();
+    for k in asr_require(r.pol) {
+        if tool_flag_str(r.fl, k, "") == "" {
+            missing.push("-" + k);
+        }
+    }
+    if missing.len() > 0 {
+        return what + " needs " + missing.join(", ") + " (required by [assure] require)";
+    }
+    let exp = tool_flag_str(r.fl, "expires", "");
+    if exp != "" {
+        if !asr_valid_date(exp) {
+            return "-expires " + exp + ": expected YYYY-MM-DD";
+        }
+        if r.plan.today != "" && exp < r.plan.today {
+            return "-expires " + exp + " is already in the past (today is " + r.plan.today + ")";
+        }
+    }
+    ""
+}
+
+fn asr_new_waiver(r: AsrRun, g: String, items: Vec<String>) -> AsrWaiver {
+    AsrWaiver {
+        guarantee: g,
+        items: items,
+        reason: tool_flag_str(r.fl, "reason", ""),
+        owner: tool_flag_str(r.fl, "owner", ""),
+        expires: tool_flag_str(r.fl, "expires", ""),
+        approved: r.plan.today,
+    }
+}
+
+fn asr_cmd_apply(r: AsrRun, fs: &Fs, log: &Log) -> Int {
+    let pl = r.plan;
+    let yes = tool_flag_bool(r.fl, "yes");
+    let renew = tool_flag_bool(r.fl, "renew");
+    asr_print_plan(r, log);
+    if pl.errors.len() > 0 {
+        log.error("kek assure apply: fix the configuration errors first");
+        return 1;
+    }
+    if pl.violations.len() > 0 {
+        log.error(
+            "kek assure apply: refusing: "
+                + pl.violations.len().to_string()
+                + " policy violation(s) (change the code or the policy; they cannot be approved)",
+        );
+        return 1;
+    }
+    let nr = asr_review_count(pl);
+    if nr > 0 && !yes {
+        log.error(
+            "kek assure apply: "
+                + nr.to_string()
+                + " change(s) need review: rerun with -yes to approve them",
+        );
+        return 1;
+    }
+    let escalated = Vec::new();
+    for c in pl.changes {
+        if c.review && c.escalate != "" {
+            escalated.push(c);
+        }
+    }
+    if escalated.len() > 0 {
+        let e = asr_meta_error(
+            r,
+            "approving " + escalated.len().to_string() + " escalated change(s)",
+        );
+        if e != "" {
+            log.error("kek assure apply: refusing: " + e);
+            return 1;
+        }
+    }
+    if renew {
+        let e = asr_meta_error(r, "-renew");
+        if e != "" {
+            log.error("kek assure apply: " + e);
+            return 1;
+        }
+    }
+    // the new lock: the current guarantees, the policy hash, the waivers
+    // that still apply and the new ones
+    let st = pl.cur;
+    st.config = pl.config;
+    let mut renewed = 0;
+    for d in st.defs {
+        let ws = Vec::new();
+        match pl.old.by_name.get(d.name) {
+            Some(o) => {
+                for w in o.waivers {
+                    if !asr_waiver_live(w, d) {
+                        continue;
+                    }
+                    if renew && pl.today != "" && w.expires != "" && w.expires < pl.today {
+                        ws.push(asr_new_waiver(r, w.guarantee, w.items));
+                        renewed = renewed + 1;
+                    } else {
+                        ws.push(w);
+                    }
+                }
+            }
+            None => {}
+        }
+        d.waivers = ws;
+    }
+    for c in escalated {
+        match st.by_name.get(c.def) {
+            Some(d) => d.waivers.push(asr_new_waiver(r, c.guarantee, c.added)),
+            None => {}
+        }
+    }
+    let text = asr_lock_text(st);
+    let old_text = match fs.read(r.lock) {
+        Ok(t) => t,
+        Err(_) => "",
+    };
+    if text == old_text {
+        log.info(r.lock + " is up to date (" + st.defs.len().to_string() + " definitions)");
+        return 0;
+    }
+    if !tool_write(fs, log, r.lock, text) {
+        return 1;
+    }
+    let mut msg = r.lock
+        + " updated: "
+        + st.defs.len().to_string()
+        + " definitions, "
+        + pl.changes.len().to_string()
+        + " change(s) approved";
+    if escalated.len() > 0 {
+        msg = msg + ", " + escalated.len().to_string() + " waiver(s) recorded";
+    }
+    if renewed > 0 {
+        msg = msg + ", " + renewed.to_string() + " waiver(s) renewed";
+    }
+    log.info(msg);
+    if pl.expired.len() > renewed {
+        log.error(
+            "warning: "
+                + (pl.expired.len() - renewed).to_string()
+                + " expired escape hatch(es): kek assure check fails until they are removed or renewed",
+        );
+    }
+    0
+}

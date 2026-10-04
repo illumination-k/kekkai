@@ -1,0 +1,22 @@
+# the only #[test] is removed: parse_price loses its test evidence
+$ kek assure plan app
+Needs review (1):
+  ! weaken tested (no #[test] reaches it any more)   parse_price
+    -> app/shop.kek:8  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): removed 1
+--- exit 0
+
+$ kek assure apply -yes -reason test moves to the next PR -owner shogo -expires 2026-11-01 app
+Needs review (1):
+  ! weaken tested (no #[test] reaches it any more)   parse_price
+    -> app/shop.kek:8  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): removed 1
+kekkai.assure.lock updated: 7 definitions, 2 change(s) approved, 1 waiver(s) recorded
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (7 definitions).
+--- exit 0
+

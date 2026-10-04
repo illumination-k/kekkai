@@ -1,0 +1,32 @@
+// No similar definitions: `kek similar` exits with 0.
+
+fn mean(v: Vec<Int>) -> Int {
+    let mut total = 0;
+    for x in v {
+        total = total + x;
+    }
+    if v.len() == 0 {
+        return 0;
+    }
+    total / v.len()
+}
+
+fn greeting(name: String, excited: Bool) -> String {
+    let mut s = "Hello, " + name;
+    if excited {
+        s = s + "!";
+    } else {
+        s = s + ".";
+    }
+    s.trim()
+}
+
+fn classify(n: Int) -> String {
+    match n {
+        0 => "zero",
+        1 => "one",
+        _ => {
+            if n < 0 { "negative" } else { "many" }
+        }
+    }
+}

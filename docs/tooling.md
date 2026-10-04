@@ -171,3 +171,248 @@ score is below `[mutate] min_score` of `kekkai.toml`.
   mutant's identity (the function's `trans` hash, the mutant's position in
   the function and the mutation) and the test's `trans` hash, under
   `.kek-cache/mutate/`: an unchanged second run starts no test process.
+## `kek assure plan|apply|check [-json] <file|dir>`
+
+The guarantee ledger (design and policy reference: [assure.md](assure.md)).
+For every function it records the guarantees the compiler establishes
+(`effects`, `net.hosts`, `tx.linear`, `tested`) and the assumptions written
+in the code (`#[allow(similar, ...)]`, `#[rare]`) in `kekkai.assure.lock`.
+`plan` diffs the lock against the program and applies the policy in
+`kekkai.toml`; `apply` rewrites the lock (`-yes` approves changes that need
+review, and weakenings also need `-reason`, `-owner`, `-expires`); `check`
+exits 1 when the lock is missing or stale, on policy violations and on
+expired escape hatches. The launcher passes today's date as `-today`
+(override it with `KEK_TODAY`).
+
+`-json` (plan and check) prints:
+
+```json
+{
+  "version": 1, "path": "app", "lock": "kekkai.assure.lock", "lock_found": true,
+  "config": {"lock": "<policy hash in the lock>", "current": "<current policy hash>"},
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {"definitions": 8, "changes": 1, "needs_review": 1, "auto_approved": 0,
+              "violations": 0, "expired": 0, "config_errors": 0},
+  "changes": [
+    {"definition": "rate_key", "file": "app/rates.kek", "line": 19,
+     "class": "weaken", "rule": "weaken", "guarantee": "effects", "evidence": "type",
+     "from": "pure", "to": "Log", "added": ["Log"], "removed": [],
+     "message": "weaken effects: +Log", "review": true, "escalate": "owner"}
+  ],
+  "violations": [
+    {"definition": "fetch_rate", "file": "app/rates.kek", "line": 3, "rule": "allowed_hosts",
+     "guarantee": "net.hosts", "items": ["rates.evil.example"],
+     "message": "host not in allowed_hosts: rates.evil.example"}
+  ],
+  "expired": [
+    {"definition": "rate_key", "file": "app/rates.kek", "line": 18, "source": "code",
+     "kind": "#[allow(similar)]", "expires": "2027-03-31", "reason": "...", "owner": "shogo"}
+  ],
+  "config_errors": []
+}
+```
+
+- `class` is one of `strengthen`, `change`, `weaken`, `assumption`,
+  `added`, `removed`. `rule` is the policy key that decided the change:
+  `strengthen`, `new_contract`, `change`, `allowed_host`, `added`,
+  `removed`, `weaken`, `new_assumption`, `config`.
+- `guarantee` names what changed: a guarantee, or `hash` (body only),
+  `file`, `entry`, `async`, `name` (a rename: same definition hash),
+  `assumption`, `definition` (added/removed) or `config` (the policy).
+- `from`/`to` are display strings; `added`/`removed` are the items of a
+  set guarantee (or the assumption kind).
+- `review` is true when the policy does not auto-approve the change;
+  `escalate` is the role it is escalated to (approval then needs the
+  metadata of `[assure] require`).
+- `violations[].rule` is `forbid`, `allowed_hosts` or `expires`;
+  violations cannot be approved. `expired[].source` is `code` (an
+  attribute) or `lock` (a waiver recorded by `apply`).
+- `ok` is what `check` requires: a lock exists, no changes, no violations,
+  nothing expired, no configuration errors.
+## `kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>`
+
+Reports duplicate and similar definitions, as described under 類似コードの検出
+in `docs/design.md`. Run it after writing a function to check that it does
+not repeat an existing one, and in CI to enforce it. The program must
+type-check. The exit status is 1 when there is at least one finding, 0
+when there is none, and 2 for usage errors and programs that do not
+check.
+
+```
+$ kek similar src
+literals (86% similar):
+  src/fees.kek:37:1  shipping_fee (Int) -> Int
+  src/fees.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+1 finding (1 literals)
+```
+
+There are three kinds of findings. Each is computed on the definition
+hashes of `compiler/defhash.kek` (`kek hash`):
+
+| `kind` | Meaning | How |
+| --- | --- | --- |
+| `duplicate` | The same code up to the names of the function and its locals. | Equal `hash` (alpha-normalized). One finding per group. |
+| `literals` | Only constants differ. | Equal `hash_lits` (literal values abstracted). `literals` lists each differing literal with its value and position in every member. |
+| `structural` | Near-misses. | MinHash (30 bands of 2 rows) over 3-label shingles of the preorder labels (literal values and local numbers abstracted) proposes candidate pairs; they are confirmed by the Zhang–Shasha tree edit distance. `similarity` = 100 × (1 − distance / larger node count). Pairs at or above the threshold are reported. |
+
+`similarity` is an integer percent. For `literals` it counts each
+differing literal as one relabel. A third kind of equivalence, different code with
+the same behaviour (comparing outputs on generated inputs), is future
+work. Its hook is `sim_semantic` in `compiler/similar_main.kek`.
+
+What is compared:
+
+- By default, only definitions with the same signature, which includes
+  the capabilities. `-all` compares across signatures.
+- `#[test]` functions are skipped unless `-tests` is given. Implementations
+  generated by `#[derive]`, the core library and the prelude are always
+  skipped. So are definitions with fewer than `min_nodes` (default 16)
+  syntax tree labels.
+- `structural` compares one representative of each `hash_lits` class.
+  The other members are already reported as `duplicate` or `literals`.
+
+Options:
+
+- `-threshold pct` sets the minimum similarity of `structural` findings
+  (1–100, default 80).
+- `-min_nodes n` overrides `min_nodes`.
+- `-exhaustive` compares every pair instead of the MinHash candidates.
+  It is slower, and useful for checking recall.
+- `-base <file|dir>` loads a base program. A definition whose `hash`
+  appears in the base is old. Only findings with at least one new member
+  are reported. Old members are marked `[base]` in the text output and
+  `"new": false` in JSON.
+- `-diff <rev>` is handled by `./kek`. It extracts the same path at the
+  git revision (`git archive`) into a temporary directory and passes it as
+  `-base`. If the path did not exist at `rev`, every definition is new.
+  The JSON `base` is then `git:<rev>`.
+
+`./kekkai.toml` can set defaults in a `[similar]` section: `threshold`,
+`min_nodes`, and `max_nodes` (default 400). Trees larger than
+`max_nodes` are compared by the edit distance of their label sequences.
+That distance is a lower bound of the tree edit distance, and such
+findings have `"approx": true`. Flags override the file.
+
+A definition with `#[allow(similar, reason = "...", owner = "...",
+expires = "YYYY-MM-DD")]` suppresses the findings that involve it. They
+are listed under `allowed` with `allowed_by`. In a group, the other
+members are still reported when two or more of them remain.
+
+`-json` prints:
+
+```json
+{"path": "src", "base": "git:origin/main", "threshold": 80, "min_nodes": 16, "all": false,
+ "findings": [
+   {"kind": "structural", "similarity": 87,
+    "members": [{"name": "describe", "file": "src/a.kek", "line": 52, "col": 1,
+                 "sig": "(Point) -> String", "hash": "f99d...", "nodes": 36, "new": true},
+                {"name": "describe_point", "...": "..."}],
+    "distance": 5, "approx": false,
+    "hint": "similar structure: extract the common part of `describe` and `describe_point` into one parameterized definition"},
+   {"kind": "literals", "similarity": 86, "members": ["..."],
+    "literals": [{"values": ["1000", "2000"],
+                  "positions": [{"file": "src/a.kek", "line": 38, "col": 17}, {"...": "..."}]}],
+    "hint": "..."}
+ ],
+ "allowed": [
+   {"kind": "duplicate", "...": "...",
+    "allowed_by": [{"name": "count_even", "reason": "kept apart on purpose",
+                    "owner": "billing", "expires": "2027-01-01"}]}
+ ]}
+```
+
+- `base` is present only with `-base` or `-diff`.
+- `distance` and `approx` appear only on `structural` findings.
+- `literals` appears only on `literals` findings, with values in member
+  order. String values are quoted.
+- Findings are sorted by kind (`duplicate`, `literals`, `structural`), then
+  by descending similarity, then by member position. Members are sorted by
+  file, line and column.
+## `kek test -json [flags] <file|dir>`
+
+Runs the `#[test]` functions like `kek test` and prints the results as one
+line of JSON instead of the report. The exit status is unchanged: 0 when
+every test passes, 1 when one fails, 2 for a usage error; diagnostics of
+the program still go to stderr.
+
+```json
+{"file": "props.kek", "passed": 1, "failed": 1, "cached": 1, "tests": [
+  {"name": "reverse_twice_is_identity", "status": "ok", "cached": true,
+   "pure": true, "caps": [], "hash": "8f2e…", "ms": 1.3, "output": [],
+   "counterexample": null},
+  {"name": "small_numbers", "status": "failed", "cached": false,
+   "pure": true, "caps": [], "hash": "41c0…", "ms": 0.7,
+   "output": ["Err: too big: 101", "counterexample: small_numbers(n = 101)",
+              "found: case 33 of 100, shrunk in 60 steps from small_numbers(n = 9223372036854775807)",
+              "reproduce: kek test -seed 0 -run '^small_numbers$'"],
+   "counterexample": "small_numbers(n = 101)"}
+]}
+```
+
+- Tests are listed in declaration order (after `-run` selection).
+- `status` is `ok`, `failed` (returned `false` or `Err`) or `trapped` (the
+  process trapped, e.g. on call stack exhaustion).
+- `cached` is true when the result was replayed from the test result cache
+  (see below); `ms` is then the time of the run that was cached. `ms` is
+  `null` for a trapped test.
+- `pure` means the test takes no capabilities; `caps` lists the mock
+  capabilities it receives, in parameter order.
+- `hash` is the test's `trans` definition hash (`kek hash`): it changes
+  when the test or anything it can reach (functions, methods, type
+  declarations) changes, and not for comments or formatting.
+- `output` holds the report lines below the test's result line (failure
+  reason, counterexample, mock log lines and outbox), without indentation.
+- `counterexample` is the shrunk input of a failed property test, rendered
+  like Rust's `Debug` (`name(param = value, ...)`), else `null`.
+
+Other flags are those of `kek test`: `-run re`, `-seed n`, `-cases n`,
+`-j n`, `-no-cache`, `-clock ms`, `-net f.json`, `-db f.json`.
+
+### Property tests
+
+A test that takes parameters other than capabilities is a property:
+`kek test` generates the arguments. Generatable types are `Int`, `Bool`,
+`String`, `()`, `Vec<T>`, `Option<T>`, `Result<T, E>`, tuples, and the
+program's own structs and enums (generic and recursive ones included)
+whose fields are generatable; functions, `&Tx`, opaque host types and
+library types such as `HashMap` are rejected by the type checker.
+
+- A property runs on 100 cases (`-cases n`; `#[test(cases = N)]` on the
+  test overrides it). Inputs grow with the case number and are biased to
+  edge cases (0, ±1, the extremes of `Int`, empty strings and vectors,
+  non-ASCII text).
+- Inputs come from a PRNG seeded with `-seed` (`KEK_TEST_SEED`) and the
+  test name, so a run is reproducible.
+- A failure is shrunk greedily (integers toward 0, strings and vectors by
+  removing chunks and shrinking elements, `Some` toward `None`, structs and
+  enum fields one at a time, recursive enums toward their sub-values),
+  within a budget of 2000 runs.
+- Every run gets fresh mocks (an empty or `-db`-seeded `&Db`, no log lines,
+  the same `&Random` sequence), so a counterexample reproduces on its own
+  and the reported log lines are those of the counterexample's run.
+- A trap ends the test's process: the report shows the trap and the last
+  input that was about to run (`last input: case 3: deep(n = 1)`); traps
+  are not shrunk.
+
+### Test result cache
+
+Every mock is deterministic, so a test's result is a function of the
+compiler (the launcher's stage hash), the test's `trans` hash, `-seed`,
+`-clock`, the contents of the `-net`/`-db` files and, for a property, its
+number of cases. Results (status and report lines) are stored under
+`.kek-cache/test/<options hash>/<trans>-<cases>-<name>` (written to a
+temporary file and renamed into place). `kek test` lists the tests with
+their hashes (`test-build -list`, which writes `tests.json` and
+`tests.tsv`), and builds and runs only the uncached ones: when nothing
+changed, nothing is compiled, and after an edit exactly the tests that can
+reach the edited definitions run again. A cached result is reported with
+`(cached)` (failures are replayed too). `-no-cache` or `KEK_TEST_CACHE=0`
+runs every test.
+
+Tests run in separate processes, `-j n` at a time (default: the number of
+CPUs); the report keeps declaration order.

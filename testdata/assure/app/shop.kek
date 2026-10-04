@@ -1,0 +1,39 @@
+// A small shop backend: the fixture of tests/suites/assure.sh (the suite
+// copies this directory and edits the copy to produce each change).
+
+fn price_key(item: String) -> String {
+    "price:" + item
+}
+
+fn parse_price(s: Option<String>) -> Int {
+    match s {
+        Some(v) => v.parse_int().unwrap_or(0),
+        None => 0,
+    }
+}
+
+// Buying records the sale and notifies the warehouse after the commit.
+fn buy(db: &Db, log: &Log, item: String) -> Result<Int, TxError> {
+    let r = db.transaction(|tx| {
+        let p = parse_price(tx.get(price_key(item))?);
+        tx.outbox("https://hooks.warehouse.example/sold", item);
+        tx.commit()?;
+        Ok(p)
+    });
+    log.info("sold " + item);
+    r
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, log: &Log) -> Response {
+    let item = req.segment(0).unwrap_or("");
+    match buy(db, log, item) {
+        Ok(p) => Response::text(200, p.to_string()),
+        Err(e) => Response::text(500, e.message()),
+    }
+}
+
+#[test]
+fn price_defaults_to_zero() -> Bool {
+    parse_price(None) == 0 && parse_price(Some("7")) == 7
+}

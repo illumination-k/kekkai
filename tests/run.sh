@@ -15,7 +15,12 @@
 #   cover         kek cover: probes keep behaviour, report, -json, -lcov, min_line
 #   mutate        kek mutate: the schema keeps behaviour, report, -json, cache,
 #                 -base / -diff, min_score
+#   pbt           kek test: property tests (generation, shrinking, -seed, -cases)
+#   test-cache    kek test: result cache, -j, -json; the kek build cache
 #   agent-cmds    check -json, ir -json, caps and search against tests/agent_cmds goldens
+#   assure        kek assure plan/apply/check on testdata/assure against
+#                 tests/assure goldens
+#   similar       kek similar (duplicate / similar code) against tests/similar goldens
 #   fmt           kek fmt goldens, -check / -w, and round trips (idempotent,
 #                 same AST, comments and diagnostics) over the sources and
 #                 random programs
@@ -66,7 +71,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test cover mutate agent-cmds fmt difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache cover mutate agent-cmds assure similar fmt difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

@@ -1,0 +1,323 @@
+// Tree similarity for `kek similar` (prefix sim_ / Sim*): MinHash sketches
+// of label shingles to find candidate pairs, the string edit distance of
+// preorder label sequences as a cheap lower bound, and the Zhang–Shasha
+// tree edit distance to confirm.
+//
+// A definition's tree comes from defhash: its labels in preorder with the
+// depth of each (DhDef.labels / depths). The labels are abstracted first:
+// literal values and the numbers of locals are dropped, so that a
+// constant change or an extra `let` (which renumbers every later local)
+// costs one edit rather than many.
+
+// SimTree is one definition's abstracted tree, with the arrays the edit
+// distances need. Postorder arrays are 1-based (index 0 is unused).
+struct SimTree {
+    n: Int,
+    // preorder label ids (0-based)
+    pre: Vec<Int>,
+    // postorder label ids and leftmost-leaf postorder index
+    lab: Vec<Int>,
+    lml: Vec<Int>,
+    // the keyroots, increasing
+    keyroots: Vec<Int>,
+    // MinHash sketch of the shingles of pre
+    sketch: Vec<Int>,
+}
+
+// SimIntern numbers abstracted labels.
+struct SimIntern {
+    ids: HashMap<String, Int>,
+}
+
+// sim_abstract_label drops literal values and local numbers.
+fn sim_abstract_label(l: String) -> String {
+    if l.starts_with("lit:") {
+        return match l.index_of("=") {
+            Some(i) => l.slice(0, i),
+            None => l,
+        };
+    }
+    if l.starts_with("local#") {
+        return "local";
+    }
+    if l.starts_with("bind#") {
+        return "bind";
+    }
+    l
+}
+
+fn sim_intern(t: SimIntern, l: String) -> Int {
+    match t.ids.get(l) {
+        Some(n) => n,
+        None => {
+            let n = t.ids.len();
+            t.ids.insert(l, n);
+            n
+        }
+    }
+}
+
+// The sketch has SIM_BANDS * SIM_ROWS hashes; two definitions become a
+// candidate pair when all the rows of one band agree.
+fn sim_bands() -> Int {
+    30
+}
+
+fn sim_rows() -> Int {
+    2
+}
+
+// shingle length (consecutive preorder labels)
+fn sim_shingle() -> Int {
+    3
+}
+
+// sim_tree builds the tree of labels / depths.
+fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
+    let n = labels.len();
+    let pre = Vec::new();
+    for l in labels {
+        pre.push(sim_intern(t, sim_abstract_label(l)));
+    }
+    // subtree sizes: a node's subtree ends at the next label that is not
+    // deeper
+    let size = Vec::new();
+    for _ in 0..n {
+        size.push(1);
+    }
+    let stack = Vec::new();
+    for i in 0..n {
+        let d = depths.get(i).unwrap_or(0);
+        while stack.len() > 0
+            && depths.get(stack.get(stack.len() - 1).unwrap_or(0)).unwrap_or(0) >= d {
+            let top = stack.pop().unwrap_or(0);
+            size.set(top, i - top);
+        }
+        stack.push(i);
+    }
+    while stack.len() > 0 {
+        let top = stack.pop().unwrap_or(0);
+        size.set(top, n - top);
+    }
+    // leftmost leaf (preorder): the first child chain
+    let lml_pre = Vec::new();
+    for _ in 0..n {
+        lml_pre.push(0);
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        let d = depths.get(i).unwrap_or(0);
+        if i + 1 < n && depths.get(i + 1).unwrap_or(0) == d + 1 {
+            lml_pre.set(i, lml_pre.get(i + 1).unwrap_or(i));
+        } else {
+            lml_pre.set(i, i);
+        }
+        i = i - 1;
+    }
+    // postorder index of preorder i: the nodes before it that are not its
+    // ancestors, plus its descendants
+    let post = Vec::new();
+    for i in 0..n {
+        post.push(i - depths.get(i).unwrap_or(0) + size.get(i).unwrap_or(1) - 1 + 1);
+    }
+    let lab = Vec::new();
+    let lml = Vec::new();
+    for _ in 0..n + 1 {
+        lab.push(0);
+        lml.push(0);
+    }
+    for i in 0..n {
+        let k = post.get(i).unwrap_or(0);
+        lab.set(k, pre.get(i).unwrap_or(0));
+        lml.set(k, post.get(lml_pre.get(i).unwrap_or(i)).unwrap_or(0));
+    }
+    // keyroots: the highest node of each leftmost leaf
+    let seen: HashMap<Int, Bool> = HashMap::new();
+    let rev = Vec::new();
+    let mut k = n;
+    while k >= 1 {
+        let l = lml.get(k).unwrap_or(0);
+        if !seen.contains_key(l) {
+            seen.insert(l, true);
+            rev.push(k);
+        }
+        k = k - 1;
+    }
+    let keyroots = Vec::new();
+    let mut j = rev.len() - 1;
+    while j >= 0 {
+        keyroots.push(rev.get(j).unwrap_or(0));
+        j = j - 1;
+    }
+    SimTree { n: n, pre: pre, lab: lab, lml: lml, keyroots: keyroots, sketch: sim_sketch(pre) }
+}
+
+// sim_sketch is the MinHash sketch of the label shingles.
+fn sim_sketch(pre: Vec<Int>) -> Vec<Int> {
+    let k = sim_shingle();
+    let shingles = Vec::new();
+    let mut i = 0;
+    while i + k <= pre.len() || (i == 0 && pre.len() > 0) {
+        let mut h = 1469598103934665603;
+        let mut j = i;
+        while j < i + k && j < pre.len() {
+            h = h.bit_xor(pre.get(j).unwrap_or(0) + 1) * 1099511628211;
+            j = j + 1;
+        }
+        shingles.push(dh_mix(h));
+        i = i + 1;
+    }
+    let m = sim_bands() * sim_rows();
+    let out = Vec::new();
+    for s in 0..m {
+        let seed = dh_mix((s + 1) * -7046029254386353131);
+        let mut best = 9223372036854775807;
+        for h in shingles {
+            // one multiply-xorshift round per hash function (the shingle
+            // hashes are already mixed)
+            let y = h.bit_xor(seed) * -4265267296055464877;
+            let x = y.bit_xor(y.ushr(31));
+            if x < best {
+                best = x;
+            }
+        }
+        out.push(best);
+    }
+    out
+}
+
+// sim_band_key is the bucket of band b of a sketch.
+fn sim_band_key(t: SimTree, b: Int) -> String {
+    let parts = Vec::new();
+    parts.push(b.to_string());
+    for r in 0..sim_rows() {
+        parts.push(t.sketch.get(b * sim_rows() + r).unwrap_or(0).to_string());
+    }
+    parts.join(",")
+}
+
+// sim_seq_dist is the edit distance of the preorder label sequences when
+// it is at most bound, and bound + 1 otherwise (banded). It is a lower
+// bound of the tree edit distance.
+fn sim_seq_dist(a: SimTree, b: SimTree, bound: Int) -> Int {
+    let n = a.n;
+    let m = b.n;
+    if (n - m).abs() > bound {
+        return bound + 1;
+    }
+    let inf = bound + 1;
+    let mut prev = Vec::new();
+    let mut cur = Vec::new();
+    for j in 0..m + 1 {
+        prev.push(if j <= bound { j } else { inf });
+        cur.push(inf);
+    }
+    for i in 1..n + 1 {
+        let lo = (i - bound).max(1);
+        let hi = (i + bound).min(m);
+        let mut row_min = inf;
+        if i <= bound {
+            cur.set(0, i);
+            row_min = i;
+        } else {
+            cur.set(0, inf);
+        }
+        if lo > 1 {
+            cur.set(lo - 1, inf);
+        }
+        let x = a.pre.get(i - 1).unwrap_or(-1);
+        let mut j = lo;
+        while j <= hi {
+            let mut c = prev.get(j - 1).unwrap_or(inf);
+            if x != b.pre.get(j - 1).unwrap_or(-2) {
+                c = c + 1;
+            }
+            c = c.min(prev.get(j).unwrap_or(inf) + 1).min(cur.get(j - 1).unwrap_or(inf) + 1);
+            if c > inf {
+                c = inf;
+            }
+            cur.set(j, c);
+            if c < row_min {
+                row_min = c;
+            }
+            j = j + 1;
+        }
+        if hi + 1 <= m {
+            cur.set(hi + 1, inf);
+        }
+        if row_min > bound {
+            return inf;
+        }
+        // only the band and the cells next to it are read from the row
+        let t = prev;
+        prev = cur;
+        cur = t;
+    }
+    prev.get(m).unwrap_or(inf).min(inf)
+}
+
+// sim_tree_dist is the Zhang–Shasha tree edit distance (unit costs for
+// insert, delete and relabel).
+fn sim_tree_dist(a: SimTree, b: SimTree) -> Int {
+    let n = a.n;
+    let m = b.n;
+    let w = m + 1;
+    let td = Vec::new();
+    let fd = Vec::new();
+    for _ in 0..(n + 1) * w {
+        td.push(0);
+        fd.push(0);
+    }
+    for i in a.keyroots {
+        for j in b.keyroots {
+            sim_forest_dist(a, b, i, j, td, fd);
+        }
+    }
+    td.get(n * w + m).unwrap_or(0)
+}
+
+// sim_forest_dist fills the tree distances of the subtrees of keyroots i
+// and j. fd is a scratch matrix indexed from (li - 1, lj - 1).
+fn sim_forest_dist(a: SimTree, b: SimTree, i: Int, j: Int, td: Vec<Int>, fd: Vec<Int>) {
+    let w = b.n + 1;
+    let li = a.lml.get(i).unwrap_or(1);
+    let lj = b.lml.get(j).unwrap_or(1);
+    // fd[(x - li + 1) * fw + (y - lj + 1)]
+    let fw = j - lj + 2;
+    fd.set(0, 0);
+    for x in li..i + 1 {
+        let r = (x - li + 1) * fw;
+        fd.set(r, fd.get(r - fw).unwrap_or(0) + 1);
+    }
+    for y in lj..j + 1 {
+        let c = y - lj + 1;
+        fd.set(c, fd.get(c - 1).unwrap_or(0) + 1);
+    }
+    for x in li..i + 1 {
+        let r = (x - li + 1) * fw;
+        let lx = a.lml.get(x).unwrap_or(0);
+        let labx = a.lab.get(x).unwrap_or(-1);
+        for y in lj..j + 1 {
+            let c = y - lj + 1;
+            let del = fd.get(r - fw + c).unwrap_or(0) + 1;
+            let ins = fd.get(r + c - 1).unwrap_or(0) + 1;
+            let ly = b.lml.get(y).unwrap_or(0);
+            if lx == li && ly == lj {
+                let mut rel = fd.get(r - fw + c - 1).unwrap_or(0);
+                if labx != b.lab.get(y).unwrap_or(-2) {
+                    rel = rel + 1;
+                }
+                let v = del.min(ins).min(rel);
+                fd.set(r + c, v);
+                td.set(x * w + y, v);
+            } else {
+                let rx = (lx - li) * fw;
+                let cy = ly - lj;
+                let v = del.min(ins).min(
+                    fd.get(rx + cy).unwrap_or(0) + td.get(x * w + y).unwrap_or(0),
+                );
+                fd.set(r + c, v);
+            }
+        }
+    }
+}

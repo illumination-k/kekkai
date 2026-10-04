@@ -1,0 +1,66 @@
+literals (86% similar):
+  src/app.kek:37:1  shipping_fee (Int) -> Int  [base]
+  src/app.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+    literal: 500 at 41:5, 800 at 48:5
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+structural (86% similar, distance 4):
+  src/app.kek:16:1  sum_positive (Vec<Int>) -> Int  [base]
+  src/app.kek:102:1  tally_even (Vec<Int>) -> Int
+  hint: similar structure: extract the common part of `sum_positive` and `tally_even` into one parameterized definition
+
+2 findings (1 literals, 1 structural)
+1 allowed by #[allow(similar)]
+--- exit 1
+--- -diff=HEAD (from a subdirectory)
+{
+  "path": "app.kek",
+  "base": "git:HEAD",
+  "threshold": 80,
+  "min_nodes": 16,
+  "all": false,
+  "findings": [],
+  "allowed": []
+}
+--- exit 0
+--- without -diff
+duplicate (100% similar):
+  src/app.kek:16:1  sum_positive (Vec<Int>) -> Int
+  src/app.kek:26:1  add_up_positive (Vec<Int>) -> Int
+  hint: identical up to names: keep `sum_positive` and call it from the others
+
+literals (86% similar):
+  src/app.kek:37:1  shipping_fee (Int) -> Int
+  src/app.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+    literal: 500 at 41:5, 800 at 48:5
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+structural (87% similar, distance 5):
+  src/app.kek:52:1  describe (Point) -> String
+  src/app.kek:61:1  describe_point (Point) -> String
+  hint: similar structure: extract the common part of `describe` and `describe_point` into one parameterized definition
+
+structural (86% similar, distance 4):
+  src/app.kek:16:1  sum_positive (Vec<Int>) -> Int
+  src/app.kek:102:1  tally_even (Vec<Int>) -> Int
+  hint: similar structure: extract the common part of `sum_positive` and `tally_even` into one parameterized definition
+
+4 findings (1 duplicate, 1 literals, 2 structural)
+1 allowed by #[allow(similar)]
+--- exit 1
+--- a path that is new since the revision
+no similar definitions
+--- exit 0
+--- unknown revision
+--- stderr
+kek similar -diff: unknown revision nosuchrev
+--- exit 2
+--- missing revision
+--- stderr
+flag needs an argument: -diff
+usage: kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>
+--- exit 2

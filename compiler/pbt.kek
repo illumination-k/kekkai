@@ -1,0 +1,540 @@
+// Property-based tests (prefix pbt_ / Pbt*): which types `kek test` can
+// generate, and the per-type functions of the synthesized harness.
+//
+// A #[test] may take, besides capabilities, parameters of generatable
+// types: Int, Bool, String, (), Vec<T>, Option<T>, Result<T, E>, tuples
+// and the program's own structs and enums whose fields are generatable.
+// For every such type the harness gets (N numbers the type):
+//
+//   __kg_N(g, depth) -> T   generator (lib/prelude/prop.kek has the parts)
+//   __ks_N(x) -> Vec<T>     shrink candidates, most aggressive first
+//   __kw_N(x) -> String     Debug-style rendering (`Point { x: 0, y: 1 }`)
+//   __kc_N(x) -> T          deep copy (the property may mutate its input)
+//   __kz_N() -> T           a minimal value
+//
+// A recursive enum is generated within a node budget: once it is spent,
+// only variants that do not contain the enum itself are taken.
+
+// pbt_why returns "" when values of t can be generated, else the reason.
+fn pbt_why(info: ChkInfo, t: Ty) -> String {
+    let why = pbt_why_in(info, t, HashMap::new());
+    if why == "" {
+        return "";
+    }
+    why
+        + " (a test takes capabilities and generatable values: Int, Bool, String, (), Vec, Option, Result, tuples, and structs and enums of these)"
+}
+
+fn pbt_why_in(info: ChkInfo, t0: Ty, seen: HashMap<String, Bool>) -> String {
+    let t = ty_resolve(t0);
+    match t {
+        Ty::Prim(n) => if n == "Int" || n == "Bool" || n == "String" || n == "()" {
+            ""
+        } else {
+            "`" + n + "` values cannot be generated"
+        },
+        Ty::Vec(e) => pbt_why_in(info, e, seen),
+        Ty::Option(e) => pbt_why_in(info, e, seen),
+        Ty::Result(a, b) => {
+            let w = pbt_why_in(info, a, seen);
+            if w != "" {
+                return w;
+            }
+            pbt_why_in(info, b, seen)
+        }
+        Ty::Tuple(ts) => pbt_why_all(info, ts, seen),
+        Ty::Struct(st, args) => {
+            if info.lib_types.contains_key(st.name) {
+                return "`" + st.name + "` is a library type";
+            }
+            let k = ty_key(t);
+            if seen.contains_key(k) {
+                return "";
+            }
+            seen.insert(k, true);
+            let fs = ty_struct_fields(st, args);
+            let w = pbt_why_all(info, fs, seen);
+            if w != "" {
+                return w;
+            }
+            if pbt_reaches_any(fs, k, HashMap::new()) {
+                return "the recursive struct `" + st.name + "` has no finite values";
+            }
+            ""
+        }
+        Ty::Enum(en, args) => {
+            if info.lib_types.contains_key(en.name) {
+                return "`" + en.name + "` is a library type";
+            }
+            let k = ty_key(t);
+            if seen.contains_key(k) {
+                return "";
+            }
+            seen.insert(k, true);
+            for v in en.variants {
+                let w = pbt_why_all(info, ty_variant_fields(en, args, v), seen);
+                if w != "" {
+                    return w;
+                }
+            }
+            if pbt_base_mask(en, args) == 0 {
+                return "every variant of the recursive enum `"
+                    + en.name
+                    + "` contains `"
+                    + en.name
+                    + "` itself";
+            }
+            ""
+        }
+        Ty::Fn(_, _) => "functions cannot be generated",
+        Ty::Cap(_, _) => "capabilities are passed as mocks, not generated",
+        Ty::Opaque(n) => "`" + n + "` values cannot be generated",
+        _ => "`" + ty_str(t) + "` values cannot be generated",
+    }
+}
+
+fn pbt_why_all(info: ChkInfo, ts: Vec<Ty>, seen: HashMap<String, Bool>) -> String {
+    for x in ts {
+        let w = pbt_why_in(info, x, seen);
+        if w != "" {
+            return w;
+        }
+    }
+    ""
+}
+
+// pbt_reaches reports whether every value of t contains a value of the
+// type whose key is target (Vec and Option can be empty; a Result needs
+// only one of its sides).
+fn pbt_reaches(t0: Ty, target: String, seen: HashMap<String, Bool>) -> Bool {
+    let t = ty_resolve(t0);
+    match t {
+        Ty::Result(a, b) => pbt_reaches(a, target, seen) && pbt_reaches(b, target, seen),
+        Ty::Tuple(ts) => pbt_reaches_any(ts, target, seen),
+        Ty::Struct(st, args) => {
+            let k = ty_key(t);
+            if k == target {
+                return true;
+            }
+            if seen.contains_key(k) {
+                return false;
+            }
+            seen.insert(k, true);
+            pbt_reaches_any(ty_struct_fields(st, args), target, seen)
+        }
+        Ty::Enum(en, args) => {
+            let k = ty_key(t);
+            if k == target {
+                return true;
+            }
+            if seen.contains_key(k) {
+                return false;
+            }
+            seen.insert(k, true);
+            for v in en.variants {
+                if !pbt_reaches_any(ty_variant_fields(en, args, v), target, seen) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn pbt_reaches_any(ts: Vec<Ty>, target: String, seen: HashMap<String, Bool>) -> Bool {
+    for x in ts {
+        if pbt_reaches(x, target, seen) {
+            return true;
+        }
+    }
+    false
+}
+
+// pbt_base_mask has bit i set when variant i of the enum does not contain
+// the enum itself (its first 62 variants).
+fn pbt_base_mask(en: TyEnum, args: Vec<Ty>) -> Int {
+    let k = ty_key(Ty::Enum(en, args));
+    let mut mask = 0;
+    let mut i = 0;
+    let one = 1;
+    for v in en.variants {
+        if i < 62 && !pbt_reaches_any(ty_variant_fields(en, args, v), k, HashMap::new()) {
+            mask = mask.bit_or(one.shl(i));
+        }
+        i = i + 1;
+    }
+    mask
+}
+
+// ---- harness code ----
+
+struct PbtGen {
+    ids: HashMap<String, Int>,
+    out: Vec<String>,
+    mut n: Int,
+}
+
+fn pbt_new() -> PbtGen {
+    PbtGen { ids: HashMap::new(), out: Vec::new(), n: 0 }
+}
+
+// pbt_ty returns the number of type t, emitting its functions the first
+// time.
+fn pbt_ty(g: PbtGen, t0: Ty) -> String {
+    let t = ty_resolve(t0);
+    let k = ty_key(t);
+    match g.ids.get(k) {
+        Some(id) => {
+            return id.to_string();
+        }
+        None => {}
+    }
+    let id = g.n;
+    g.n = g.n + 1;
+    g.ids.insert(k, id);
+    pbt_emit(g, id.to_string(), t);
+    id.to_string()
+}
+
+fn pbt_fn(g: PbtGen, head: String, body: String) {
+    g.out.push("fn " + head + " {\n" + body + "}\n");
+}
+
+fn pbt_emit(g: PbtGen, n: String, t: Ty) {
+    let ts = ty_str(t);
+    let mut gen = "";
+    let mut shr = "";
+    let mut show = "";
+    let mut copy = "";
+    let mut zero = "";
+    match t {
+        Ty::Prim(p) => {
+            if p == "Int" {
+                gen = "__gen_int(__g)";
+                shr = "__shrink_int(__x)";
+                show = "__x.to_string()";
+                copy = "__x";
+                zero = "0";
+            } else if p == "Bool" {
+                gen = "__gen_bool(__g)";
+                shr = "__shrink_bool(__x)";
+                show = "__show_bool(__x)";
+                copy = "__x";
+                zero = "false";
+            } else if p == "String" {
+                gen = "__gen_string(__g)";
+                shr = "__shrink_string(__x)";
+                show = "__show_string(__x)";
+                copy = "__x";
+                zero = "\"\"";
+            } else {
+                gen = "()";
+                shr = "__shrink_unit(__x)";
+                show = "\"()\"";
+                copy = "__x";
+                zero = "()";
+            }
+        }
+        Ty::Vec(e) => {
+            let a = pbt_ty(g, e);
+            gen = "__gen_vec(__g, __d, __kg_" + a + ")";
+            shr = "__shrink_vec(__x, __ks_" + a + ")";
+            show = "__show_vec(__x, __kw_" + a + ")";
+            copy = "__copy_vec(__x, __kc_" + a + ")";
+            zero = "Vec::new()";
+        }
+        Ty::Option(e) => {
+            let a = pbt_ty(g, e);
+            gen = "__gen_option(__g, __d, __kg_" + a + ")";
+            shr = "__shrink_option(__x, __ks_" + a + ")";
+            show = "__show_option(__x, __kw_" + a + ")";
+            copy = "__copy_option(__x, __kc_" + a + ")";
+            zero = "None";
+        }
+        Ty::Result(o, e) => {
+            let a = pbt_ty(g, o);
+            let b = pbt_ty(g, e);
+            gen = "__gen_result(__g, __d, __kg_" + a + ", __kg_" + b + ")";
+            shr = "__shrink_result(__x, __ks_" + a + ", __ks_" + b + ")";
+            show = "__show_result(__x, __kw_" + a + ", __kw_" + b + ")";
+            copy = "__copy_result(__x, __kc_" + a + ", __kc_" + b + ")";
+            zero = "Ok(__kz_" + a + "())";
+        }
+        Ty::Tuple(ts0) => {
+            let ids = Vec::new();
+            for x in ts0 {
+                ids.push(pbt_ty(g, x));
+            }
+            let gs = Vec::new();
+            let ws = Vec::new();
+            let cs = Vec::new();
+            let zs = Vec::new();
+            let mut i = 0;
+            let mut s = "    let __out: Vec<" + ts + "> = Vec::new();\n";
+            for a in ids {
+                let f = "__x." + i.to_string();
+                gs.push("__kg_" + a + "(__g, __d + 1)");
+                ws.push("__kw_" + a + "(" + f + ")");
+                cs.push("__kc_" + a + "(" + f + ")");
+                zs.push("__kz_" + a + "()");
+                let parts = Vec::new();
+                for j in 0..ids.len() {
+                    parts.push(if j == i {
+                        "__c"
+                    } else {
+                        "__x." + j.to_string()
+                    });
+                }
+                s = s
+                    + "    for __c in __ks_"
+                    + a
+                    + "("
+                    + f
+                    + ") {\n        __out.push("
+                    + pbt_tuple(parts)
+                    + ");\n    }\n";
+                i = i + 1;
+            }
+            gen = pbt_tuple(gs);
+            shr = s + "    __out";
+            copy = pbt_tuple(cs);
+            zero = pbt_tuple(zs);
+            show = if ws.len() == 1 {
+                "\"(\" + " + ws.join("") + " + \",)\""
+            } else {
+                "\"(\" + " + ws.join(" + \", \" + ") + " + \")\""
+            };
+        }
+        Ty::Struct(st, args) => {
+            let fts = ty_struct_fields(st, args);
+            let ids = Vec::new();
+            for x in fts {
+                ids.push(pbt_ty(g, x));
+            }
+            let names = Vec::new();
+            for f in st.fields {
+                names.push(f.name);
+            }
+            let gs = Vec::new();
+            let ws = Vec::new();
+            let cs = Vec::new();
+            let zs = Vec::new();
+            let mut s = "    let __out: Vec<" + ts + "> = Vec::new();\n";
+            let mut i = 0;
+            for a in ids {
+                let fname = names.get(i).unwrap_or("");
+                let f = "__x." + fname;
+                gs.push("__kg_" + a + "(__g, __d + 1)");
+                ws.push(fname + ": \" + __kw_" + a + "(" + f + ")");
+                cs.push("__kc_" + a + "(" + f + ")");
+                zs.push("__kz_" + a + "()");
+                let parts = Vec::new();
+                for j in 0..names.len() {
+                    parts.push(if j == i {
+                        "__c"
+                    } else {
+                        "__x." + names.get(j).unwrap_or("")
+                    });
+                }
+                s = s
+                    + "    for __c in __ks_"
+                    + a
+                    + "("
+                    + f
+                    + ") {\n        __out.push("
+                    + pbt_struct(st.name, names, parts)
+                    + ");\n    }\n";
+                i = i + 1;
+            }
+            gen = "    __gen_tick(__g);\n    " + pbt_struct(st.name, names, gs);
+            shr = s + "    __out";
+            copy = pbt_struct(st.name, names, cs);
+            zero = pbt_struct(st.name, names, zs);
+            show = if ws.len() == 0 {
+                json_quote(st.name)
+            } else {
+                json_quote(st.name + " { ") + " + " + pbt_join_shows(ws) + " + \" }\""
+            };
+        }
+        Ty::Enum(en, args) => {
+            let self_key = ty_key(t);
+            let mask = pbt_base_mask(en, args);
+            let nv = en.variants.len();
+            let mut gs = "    let __k = __gen_variant(__g, __d, "
+                + nv.to_string()
+                + ", "
+                + mask.to_string()
+                + ");\n";
+            let mut ss = "    let __out: Vec<" + ts + "> = Vec::new();\n    match __x {\n";
+            let mut ws = "    match __x {\n";
+            let mut cs = "    match __x {\n";
+            // minimal values of the variants without recursion
+            let zeros = Vec::new();
+            let mut vi = 0;
+            for v in en.variants {
+                let fts = ty_variant_fields(en, args, v);
+                let ids = Vec::new();
+                for x in fts {
+                    ids.push(pbt_ty(g, x));
+                }
+                let ctor = en.name + "::" + v.name;
+                let binds = Vec::new();
+                let gargs = Vec::new();
+                let cargs = Vec::new();
+                let wargs = Vec::new();
+                let zargs = Vec::new();
+                let mut i = 0;
+                for a in ids {
+                    let f = "__f" + i.to_string();
+                    binds.push(f);
+                    gargs.push("__kg_" + a + "(__g, __d + 1)");
+                    cargs.push("__kc_" + a + "(" + f + ")");
+                    wargs.push("__kw_" + a + "(" + f + ")");
+                    zargs.push("__kz_" + a + "()");
+                    i = i + 1;
+                }
+                let pat = pbt_call(ctor, binds);
+                let base = mask.shr(vi).bit_and(1) == 1;
+                if vi + 1 < nv {
+                    gs = gs
+                        + "    if __k == "
+                        + vi.to_string()
+                        + " {\n        return "
+                        + pbt_call(ctor, gargs)
+                        + ";\n    }\n";
+                } else {
+                    gs = gs + "    " + pbt_call(ctor, gargs) + "\n";
+                }
+                cs = cs + "        " + pat + " => " + pbt_call(ctor, cargs) + ",\n";
+                if wargs.len() == 0 {
+                    ws = ws + "        " + pat + " => " + json_quote(v.name) + ",\n";
+                } else {
+                    ws = ws
+                        + "        "
+                        + pat
+                        + " => "
+                        + json_quote(v.name + "(")
+                        + " + "
+                        + wargs.join(" + \", \" + ")
+                        + " + \")\",\n";
+                }
+                // shrink: a sub-value of the same type, a smaller variant
+                // without recursion, then field by field
+                let mut body = "";
+                let mut j = 0;
+                for x in fts {
+                    let f = "__f" + j.to_string();
+                    if ty_key(x) == self_key {
+                        body = body + "            __out.push(" + f + ");\n";
+                    }
+                    match ty_resolve(x) {
+                        Ty::Vec(e) => {
+                            if ty_key(e) == self_key {
+                                body = body
+                                    + "            for __e in "
+                                    + f
+                                    + " {\n                __out.push(__e);\n            }\n";
+                            }
+                        }
+                        _ => {}
+                    }
+                    j = j + 1;
+                }
+                for z in zeros {
+                    body = body + "            __out.push(" + z + ");\n";
+                }
+                let mut fi = 0;
+                for a in ids {
+                    let parts = Vec::new();
+                    for q in 0..ids.len() {
+                        parts.push(if q == fi {
+                            "__c"
+                        } else {
+                            "__f" + q.to_string()
+                        });
+                    }
+                    body = body
+                        + "            for __c in __ks_"
+                        + a
+                        + "(__f"
+                        + fi.to_string()
+                        + ") {\n                __out.push("
+                        + pbt_call(ctor, parts)
+                        + ");\n            }\n";
+                    fi = fi + 1;
+                }
+                ss = ss + "        " + pat + " => {\n" + body + "        }\n";
+                if base {
+                    let z = pbt_call(ctor, zargs);
+                    if zeros.len() == 0 {
+                        zero = z;
+                    }
+                    zeros.push(z);
+                }
+                vi = vi + 1;
+            }
+            gen = gs;
+            shr = ss + "    }\n    __out";
+            show = ws + "    }";
+            copy = cs + "    }";
+        }
+        _ => {}
+    }
+    pbt_fn(g, "__kg_" + n + "(__g: __Gen, __d: Int) -> " + ts, pbt_body(gen));
+    pbt_fn(g, "__ks_" + n + "(__x: " + ts + ") -> Vec<" + ts + ">", pbt_body(shr));
+    pbt_fn(g, "__kw_" + n + "(__x: " + ts + ") -> String", pbt_body(show));
+    pbt_fn(g, "__kc_" + n + "(__x: " + ts + ") -> " + ts, pbt_body(copy));
+    pbt_fn(g, "__kz_" + n + "() -> " + ts, pbt_body(zero));
+}
+
+// pbt_body indents a single expression; multi-line bodies are already
+// indented.
+fn pbt_body(s: String) -> String {
+    if s.starts_with("    ") {
+        return s + "\n";
+    }
+    "    " + s + "\n"
+}
+
+fn pbt_tuple(parts: Vec<String>) -> String {
+    if parts.len() == 1 {
+        return "(" + parts.join("") + ",)";
+    }
+    "(" + parts.join(", ") + ")"
+}
+
+fn pbt_struct(name: String, fields: Vec<String>, vals: Vec<String>) -> String {
+    if fields.len() == 0 {
+        return name + " {}";
+    }
+    let parts = Vec::new();
+    let mut i = 0;
+    for f in fields {
+        parts.push(f + ": " + vals.get(i).unwrap_or(""));
+        i = i + 1;
+    }
+    name + " { " + parts.join(", ") + " }"
+}
+
+fn pbt_call(ctor: String, args: Vec<String>) -> String {
+    if args.len() == 0 {
+        return ctor;
+    }
+    ctor + "(" + args.join(", ") + ")"
+}
+
+// pbt_join_shows joins `name: " + shown` parts of a struct rendering.
+fn pbt_join_shows(ws: Vec<String>) -> String {
+    let parts = Vec::new();
+    let mut i = 0;
+    for w in ws {
+        if i == 0 {
+            parts.push("\"" + w);
+        } else {
+            parts.push("\", " + w);
+        }
+        i = i + 1;
+    }
+    parts.join(" + ")
+}

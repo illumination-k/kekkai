@@ -1,0 +1,14 @@
+# Policy of the assure fixture (docs/assure.md).
+
+[net]
+allowed_hosts = ["api.rates.example", "hooks.warehouse.example"]
+
+[auto_approve]
+strengthen = true
+new_contract = true
+
+[escalate]
+weaken = "owner"
+
+[module."app/shop.kek"]
+forbid = ["Random"]

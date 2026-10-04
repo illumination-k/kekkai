@@ -150,27 +150,40 @@ fn lower_lower(info: ChkInfo) -> IrProgram {
     match info.handler {
         Some(h) => {
             prog.handler = h.name;
-            prog.entry = "handler";
-            if h.main {
-                prog.entry = "main";
-            }
-            for p in h.params {
-                let mut kind = "request";
-                match p.ty {
-                    Ty::Cap(k, _) => {
-                        kind = k;
-                    }
-                    Ty::Vec(_) => {
-                        kind = "args";
-                    }
-                    _ => {}
-                }
-                prog.handler_params.push(IrHandlerParam { kind: kind, name: p.name });
+            prog.entry = lower_entry_kind(info);
+            for p in lower_handler_params(h) {
+                prog.handler_params.push(p);
             }
         }
         None => {}
     }
     prog
+}
+
+// lower_entry_kind is "handler", "main" or "" (no entry point).
+fn lower_entry_kind(info: ChkInfo) -> String {
+    match info.handler {
+        Some(h) => if h.main { "main" } else { "handler" },
+        None => "",
+    }
+}
+
+fn lower_handler_params(h: ChkFunc) -> Vec<IrHandlerParam> {
+    let out = Vec::new();
+    for p in h.params {
+        let mut kind = "request";
+        match p.ty {
+            Ty::Cap(k, _) => {
+                kind = k;
+            }
+            Ty::Vec(_) => {
+                kind = "args";
+            }
+            _ => {}
+        }
+        out.push(IrHandlerParam { kind: kind, name: p.name });
+    }
+    out
 }
 
 // ---- types ----

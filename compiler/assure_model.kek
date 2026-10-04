@@ -1,0 +1,479 @@
+// The guarantee ledger (prefix asr_ / Asr*), part 1: the data model and
+// what the compiler establishes about every user function today. See
+// docs/assure.md; `kek assure plan|apply|check` is in assure_main.kek.
+//
+// A definition (keyed by its name, carrying its definition hash) has a set
+// of guarantees. Each guarantee is one of two kinds:
+//
+//   "set"   an upper bound: the value lists what the definition may do
+//           (capabilities, network hosts). More items is weaker.
+//   "bool"  a property that holds or not (covered by a test, linear
+//           transactions). Losing it is weaker.
+//
+// and the evidence it rests on ("type": the type checker, "test": a #[test]
+// reaches it through the call graph). Future evidence kinds (SMT proofs)
+// and guarantees (pii.*) slot into the same shape.
+
+struct AsrGuar {
+    name: String,
+    kind: String,
+    items: Vec<String>,
+    holds: Bool,
+    evidence: String,
+}
+
+// An assumption written in the code: `#[allow(similar, ...)]` or `#[rare]`.
+struct AsrAssume {
+    kind: String,
+    reason: String,
+    owner: String,
+    expires: String,
+    line: Int,
+}
+
+// A recorded approval of a weakening (`kek assure apply -reason -owner
+// -expires`), stored in the lock. It stays while the weakening it approved
+// (items of the guarantee) is still present.
+struct AsrWaiver {
+    guarantee: String,
+    items: Vec<String>,
+    reason: String,
+    owner: String,
+    expires: String,
+    approved: String,
+}
+
+struct AsrDef {
+    name: String,
+    hash: String,
+    file: String,
+    // 0 when read from the lock
+    line: Int,
+    // "handler", "main", "test" or ""
+    entry: String,
+    async: Bool,
+    guars: Vec<AsrGuar>,
+    assumes: Vec<AsrAssume>,
+    mut waivers: Vec<AsrWaiver>,
+}
+
+// The ledger of a whole program (or of a lock file).
+struct AsrState {
+    // sorted by name
+    defs: Vec<AsrDef>,
+    by_name: HashMap<String, AsrDef>,
+    // the hash of the policy the state was approved under ("" = none)
+    mut config: String,
+}
+
+fn asr_state_new() -> AsrState {
+    AsrState { defs: Vec::new(), by_name: HashMap::new(), config: "" }
+}
+
+// asr_state_add inserts a definition (keeping defs sorted by name).
+fn asr_state_add(s: AsrState, d: AsrDef) {
+    s.by_name.insert(d.name, d);
+    s.defs.push(d);
+    let mut i = s.defs.len() - 1;
+    while i > 0 {
+        let prev = s.defs.get(i - 1).unwrap_or(d);
+        if prev.name <= d.name {
+            break;
+        }
+        s.defs.set(i, prev);
+        s.defs.set(i - 1, d);
+        i = i - 1;
+    }
+}
+
+fn asr_guar_get(d: AsrDef, name: String) -> Option<AsrGuar> {
+    for g in d.guars {
+        if g.name == name {
+            return Some(g);
+        }
+    }
+    None
+}
+
+// ---- small helpers ----
+
+fn asr_has(xs: Vec<String>, x: String) -> Bool {
+    for y in xs {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+// asr_sorted_set sorts and removes duplicates.
+fn asr_sorted_set(xs: Vec<String>) -> Vec<String> {
+    let m: HashMap<String, Bool> = HashMap::new();
+    for x in xs {
+        m.insert(x, true);
+    }
+    let out: Vec<String> = m.keys().collect();
+    chk_sort_strings(out);
+    out
+}
+
+// asr_minus is xs without the items of ys (order kept).
+fn asr_minus(xs: Vec<String>, ys: Vec<String>) -> Vec<String> {
+    let out = Vec::new();
+    for x in xs {
+        if !asr_has(ys, x) {
+            out.push(x);
+        }
+    }
+    out
+}
+
+fn asr_clean_file(f: String) -> String {
+    let mut s = f;
+    while s.starts_with("./") {
+        s = s.slice(2, s.len());
+    }
+    s
+}
+
+// ---- network hosts ----
+
+// asr_url_host extracts the host of a URL argument: a string literal, or
+// a `+` chain whose leftmost literal already contains the end of the host
+// ("https://api.x.com/v1/" + id). Anything else is "*" (unknown).
+fn asr_url_host(e: AstExpr) -> String {
+    match e {
+        AstExpr::StrLit(s) => asr_host_of(s.value, true),
+        AstExpr::Binary(b) => if b.op == "+" {
+            match asr_lit_prefix(b.x) {
+                Some(p) => asr_host_of(p, false),
+                None => "*",
+            }
+        } else {
+            "*"
+        },
+        _ => "*",
+    }
+}
+
+// asr_lit_prefix is a literal that the string value of e starts with.
+fn asr_lit_prefix(e: AstExpr) -> Option<String> {
+    match e {
+        AstExpr::StrLit(s) => Some(s.value),
+        AstExpr::Binary(b) => if b.op == "+" {
+            asr_lit_prefix(b.x)
+        } else {
+            None
+        },
+        _ => None,
+    }
+}
+
+// asr_host_of reads the host of url; complete says url is the whole
+// string (otherwise the host must end inside it).
+fn asr_host_of(url: String, complete: Bool) -> String {
+    let sep = match url.index_of("://") {
+        Some(i) => i,
+        None => {
+            return "*";
+        }
+    };
+    let rest = url.slice(sep + 3, url.len());
+    let mut end = -1;
+    let mut i = 0;
+    while i < rest.len() {
+        let c = rest.char_at(i).unwrap_or(0);
+        // / ? #
+        if c == 47 || c == 63 || c == 35 {
+            end = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if end < 0 {
+        if !complete {
+            return "*";
+        }
+        end = rest.len();
+    }
+    let mut host = rest.slice(0, end);
+    // userinfo@host:port
+    let mut at = -1;
+    let mut j = 0;
+    while j < host.len() {
+        if host.char_at(j).unwrap_or(0) == 64 {
+            at = j;
+        }
+        j = j + 1;
+    }
+    if at >= 0 {
+        host = host.slice(at + 1, host.len());
+    }
+    match host.index_of(":") {
+        Some(k) => {
+            host = host.slice(0, k);
+        }
+        None => {}
+    }
+    host = host.to_lower();
+    if host == "" {
+        return "*";
+    }
+    host
+}
+
+// AsrWalk collects the hosts that one function contacts directly.
+struct AsrWalk {
+    info: ChkInfo,
+    hosts: HashMap<String, Bool>,
+}
+
+fn asr_w_block(w: AsrWalk, b: AstBlock) {
+    for s in b.stmts {
+        asr_w_stmt(w, s);
+    }
+    match b.tail {
+        Some(e) => asr_w_expr(w, e),
+        None => {}
+    }
+}
+
+fn asr_w_stmt(w: AsrWalk, s: AstStmt) {
+    match s {
+        AstStmt::Let(l) => asr_w_expr(w, l.init),
+        AstStmt::Assign(a) => asr_w_expr(w, a.value),
+        AstStmt::FieldAssign(a) => {
+            asr_w_expr(w, a.target.x);
+            asr_w_expr(w, a.value);
+        }
+        AstStmt::Break(_) => {}
+        AstStmt::Continue(_) => {}
+        AstStmt::While(s) => {
+            asr_w_expr(w, s.cond);
+            asr_w_block(w, s.body);
+        }
+        AstStmt::For(s) => {
+            asr_w_expr(w, s.iter);
+            match s.end {
+                Some(e) => asr_w_expr(w, e),
+                None => {}
+            }
+            asr_w_block(w, s.body);
+        }
+        AstStmt::Return(r) => match r.value {
+            Some(e) => asr_w_expr(w, e),
+            None => {}
+        },
+        AstStmt::Expr(e) => asr_w_expr(w, e.x),
+    }
+}
+
+fn asr_w_exprs(w: AsrWalk, es: Vec<AstExpr>) {
+    for e in es {
+        asr_w_expr(w, e);
+    }
+}
+
+fn asr_w_expr(w: AsrWalk, e: AstExpr) {
+    match e {
+        AstExpr::IntLit(_) => {}
+        AstExpr::BoolLit(_) => {}
+        AstExpr::StrLit(_) => {}
+        AstExpr::UnitLit(_) => {}
+        AstExpr::Ident(_) => {}
+        AstExpr::Path(_) => {}
+        AstExpr::Binary(x) => {
+            asr_w_expr(w, x.x);
+            asr_w_expr(w, x.y);
+        }
+        AstExpr::Unary(x) => asr_w_expr(w, x.x),
+        AstExpr::Call(x) => {
+            asr_w_expr(w, x.func);
+            asr_w_exprs(w, x.args);
+        }
+        AstExpr::Method(x) => {
+            match w.info.methods.get(x.id) {
+                Some(m) => match m.builtin {
+                    Some(b) => {
+                        if b.op == "net.get" || b.op == "net.post" || b.op == "tx.outbox" {
+                            match x.args.get(0) {
+                                Some(a) => {
+                                    w.hosts.insert(asr_url_host(a), true);
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    None => {}
+                },
+                None => {}
+            }
+            asr_w_expr(w, x.recv);
+            asr_w_exprs(w, x.args);
+        }
+        AstExpr::Field(x) => asr_w_expr(w, x.x),
+        AstExpr::StructLit(x) => {
+            for f in x.fields {
+                asr_w_expr(w, f.value);
+            }
+        }
+        AstExpr::If(x) => {
+            asr_w_expr(w, x.cond);
+            asr_w_block(w, x.then);
+            match x.els {
+                Some(e) => asr_w_expr(w, e),
+                None => {}
+            }
+        }
+        AstExpr::Match(x) => {
+            asr_w_expr(w, x.x);
+            for arm in x.arms {
+                asr_w_expr(w, arm.body);
+            }
+        }
+        AstExpr::Block(b) => asr_w_block(w, b),
+        AstExpr::Try(x) => asr_w_expr(w, x.x),
+        AstExpr::Closure(x) => asr_w_expr(w, x.body),
+        AstExpr::Tuple(x) => asr_w_exprs(w, x.elems),
+        AstExpr::Range(x) => {
+            asr_w_expr(w, x.start);
+            asr_w_expr(w, x.end);
+        }
+    }
+}
+
+// asr_direct_hosts is the set of hosts a function contacts in its body.
+fn asr_direct_hosts(info: ChkInfo, fun: ChkFunc) -> Vec<String> {
+    let w = AsrWalk { info: info, hosts: HashMap::new() };
+    if fun.decl.has_body {
+        asr_w_block(w, fun.decl.body);
+    }
+    let out: Vec<String> = w.hosts.keys().collect();
+    out
+}
+
+// asr_reach is the set of user definitions reachable from name (itself
+// included) through dh deps.
+fn asr_reach(p: DhProgram, name: String) -> Vec<String> {
+    let seen: HashMap<String, Bool> = HashMap::new();
+    let work = Vec::new();
+    work.push(name);
+    seen.insert(name, true);
+    let mut i = 0;
+    while i < work.len() {
+        match p.by_name.get(work.get(i).unwrap_or("")) {
+            Some(x) => {
+                for dep in x.deps {
+                    if !seen.contains_key(dep) {
+                        seen.insert(dep, true);
+                        work.push(dep);
+                    }
+                }
+            }
+            None => {}
+        }
+        i = i + 1;
+    }
+    work
+}
+
+// ---- assumptions ----
+
+fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
+    let out = Vec::new();
+    for a in fun.decl.attrs {
+        if a.name == "allow" && ast_attr_has(a, "similar") {
+            out.push(AsrAssume {
+                kind: "allow(similar)",
+                reason: ast_attr_value(a, "reason").unwrap_or(""),
+                owner: ast_attr_value(a, "owner").unwrap_or(""),
+                expires: ast_attr_value(a, "expires").unwrap_or(""),
+                line: a.pos.line,
+            });
+        }
+        if a.name == "rare" {
+            out.push(AsrAssume {
+                kind: "rare",
+                reason: "",
+                owner: "",
+                expires: "",
+                line: a.pos.line,
+            });
+        }
+    }
+    out
+}
+
+// ---- the model of a program ----
+
+fn asr_set_guar(name: String, items: Vec<String>, evidence: String) -> AsrGuar {
+    AsrGuar { name: name, kind: "set", items: items, holds: false, evidence: evidence }
+}
+
+fn asr_bool_guar(name: String, holds: Bool, evidence: String) -> AsrGuar {
+    AsrGuar { name: name, kind: "bool", items: Vec::new(), holds: holds, evidence: evidence }
+}
+
+// asr_model computes the guarantees of every user function of a checked
+// program.
+fn asr_model(l: DhLoaded) -> AsrState {
+    let p = l.prog;
+    let info = l.res.info;
+    // hosts contacted directly
+    let direct: HashMap<String, Vec<String>> = HashMap::new();
+    for d in p.defs {
+        direct.insert(d.name, asr_direct_hosts(info, d.fun));
+    }
+    // definitions reached by some #[test]
+    let tested: HashMap<String, Bool> = HashMap::new();
+    for d in p.defs {
+        if d.fun.test {
+            for n in asr_reach(p, d.name) {
+                if n != d.name {
+                    tested.insert(n, true);
+                }
+            }
+        }
+    }
+    let st = asr_state_new();
+    for d in p.defs {
+        let fun = d.fun;
+        let guars = Vec::new();
+        guars.push(asr_set_guar("effects", asr_sorted_set(d.caps), "type"));
+        let hosts = Vec::new();
+        for n in asr_reach(p, d.name) {
+            for h in direct.get(n).unwrap_or(Vec::new()) {
+                hosts.push(h);
+            }
+        }
+        if hosts.len() > 0 {
+            guars.push(asr_set_guar("net.hosts", asr_sorted_set(hosts), "type"));
+        }
+        if fun.effects.contains_key("db.transaction") {
+            guars.push(asr_bool_guar("tx.linear", true, "type"));
+        }
+        if !fun.test {
+            guars.push(asr_bool_guar("tested", tested.contains_key(d.name), "test"));
+        }
+        let mut entry = "";
+        if fun.handler {
+            entry = "handler";
+        } else if fun.main {
+            entry = "main";
+        } else if fun.test {
+            entry = "test";
+        }
+        asr_state_add(st, AsrDef {
+            name: d.name,
+            hash: d.hash,
+            file: asr_clean_file(d.pos.file),
+            line: d.pos.line,
+            entry: entry,
+            async: fun.async,
+            guars: guars,
+            assumes: asr_assumptions(fun),
+            waivers: Vec::new(),
+        });
+    }
+    st
+}

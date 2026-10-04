@@ -1,0 +1,36 @@
+$ kek assure plan app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+$ kek assure check -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2026-10-04",
+  "ok": true,
+  "summary": {
+    "definitions": 8,
+    "changes": 0,
+    "needs_review": 0,
+    "auto_approved": 0,
+    "violations": 0,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [],
+  "violations": [],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 0
+

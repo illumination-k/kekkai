@@ -1,0 +1,16 @@
+literals (86% similar):
+  testdata/similar/basic.kek:37:1  shipping_fee (Int) -> Int  [base]
+  testdata/similar/basic.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+    literal: 500 at 41:5, 800 at 48:5
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+structural (86% similar, distance 4):
+  testdata/similar/basic.kek:16:1  sum_positive (Vec<Int>) -> Int  [base]
+  testdata/similar/basic.kek:102:1  tally_even (Vec<Int>) -> Int
+  hint: similar structure: extract the common part of `sum_positive` and `tally_even` into one parameterized definition
+
+2 findings (1 literals, 1 structural)
+1 allowed by #[allow(similar)]
+--- exit 1

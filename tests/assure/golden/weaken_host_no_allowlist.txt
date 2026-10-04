@@ -1,0 +1,61 @@
+# without [net] allowed_hosts a new host is a weakening that needs review
+$ kek assure apply -yes -config open.toml app
+No lock file open.lock: every definition is new (kek assure apply creates it).
+
+Needs review (2):
+  ! new assumption #[rare]   convert
+    -> app/rates.kek:14
+  ! new assumption #[allow(similar)] (reason: "kept apart from price_key", owner: shogo, expires: 2027-03-31)   rate_key
+    -> app/rates.kek:19
+
+Auto-approved (8): added 8
+open.lock updated: 8 definitions, 10 change(s) approved
+--- exit 0
+
+$ kek assure plan -config open.toml app
+Needs review (1):
+  ! weaken net.hosts: +rates.other.example -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: security (apply needs -reason, -owner)
+--- exit 0
+
+$ kek assure apply -yes -config open.toml app
+Needs review (1):
+  ! weaken net.hosts: +rates.other.example -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: security (apply needs -reason, -owner)
+--- stderr
+kek assure apply: refusing: approving 2 escalated change(s) needs -reason, -owner (required by [assure] require)
+--- exit 1
+
+$ kek assure apply -yes -config open.toml -reason new provider -owner shogo app
+Needs review (1):
+  ! weaken net.hosts: +rates.other.example -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: security (apply needs -reason, -owner)
+open.lock updated: 8 definitions, 2 change(s) approved, 2 waiver(s) recorded
+--- exit 0
+
+$ kek assure check -config open.toml app
+No changes: open.lock matches the program (8 definitions).
+--- exit 0
+
+# the waiver in open.lock (no expiry required by this policy):
+      "waivers": [
+        {
+          "guarantee": "net.hosts",
+          "items": [
+            "rates.other.example"
+          ],
+          "reason": "new provider",
+          "owner": "shogo",
+          "expires": "",
+          "approved": "2026-10-04"
+--
+      "waivers": [
+        {
+          "guarantee": "net.hosts",
+          "items": [
+            "rates.other.example"
+          ],
+          "reason": "new provider",
+          "owner": "shogo",
+          "expires": "",
+          "approved": "2026-10-04"

@@ -223,6 +223,11 @@ def evalHost (name : String) (args : Array Val) : HM Val := do
     | #[.str s, .str a, .str b] => pure (.str (jsReplaceAll s a b)) | _ => bad
   | "string.split" => match args with
     | #[.str s, .str sep] => newVec ((jsSplit s sep).toArray.map Val.str) | _ => bad
+  | "string.__hash" => match args with
+    | #[.str s, .int h0] =>
+      let step (h c : Int) : Int := i64Mul (i64Xor h c) 1099511628211
+      pure (.int (step ((utf16Units s).foldl (fun h (c : Nat) => step h c) h0) (-1)))
+    | _ => bad
   | "string.to_bytes" => match args with
     | #[.str s] => newVec ((utf8Encode s).toArray.map fun (b : Nat) => .int (b : Int)) | _ => bad
   | "string.from_char" => match args with

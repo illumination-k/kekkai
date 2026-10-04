@@ -22,10 +22,9 @@ structure TypeDef where
   isVariant : Bool
   fields : Array Ty := #[]
   variants : Array (Array Ty) := #[]
-  /-- `"vec"` (element type `elem`), `"map"` (`key`, `elem`) or `""` -/
+  /-- `"vec"` (element type `elem`) or `""` -/
   coll : String := ""
   elem : Option Ty := none
-  key : Option Ty := none
   deriving Repr, Inhabited
 
 inductive Const where
@@ -52,7 +51,7 @@ inductive Instr where
   | unop (dst : Local) (op : UnOp) (x : Local)
   | binop (dst : Local) (op : BinOp) (x y : Local)
   | call (dst : Local) (fn : String) (args : Array Local)
-  /-- `ty` is the collection aggregate for `vec.*` / `map.*` operations -/
+  /-- `ty` is the collection aggregate for `vec.*` operations -/
   | host (dst : Local) (name : String) (ty : Nat) (args : Array Local)
   | await (dst : Local) (name : String) (args : Array Local)
   | struct (dst : Local) (ty : Nat) (args : Array Local)

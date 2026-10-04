@@ -105,7 +105,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 | ファイル | 内容 |
 | --- | --- |
 | `Kekkai/IR/Arith.lean` | 64 ビット 2 の補数算術（`wrap`、全域な `div`/`rem`、ビット演算）と、その性質の証明（`wrap_inRange`, `wrap_wrap`, `wrap_add_wrap`, `i64Div_min_neg_one` など） |
-| `Kekkai/IR/Syntax.lean`, `Value.lean` | IR の構文、実行時の値とヒープ（struct・`Vec`・`Map` は参照） |
+| `Kekkai/IR/Syntax.lean`, `Value.lean` | IR の構文、実行時の値とヒープ（struct・`Vec` は参照） |
 | `Kekkai/IR/Json.lean` | `kek ir -json` の出力（省略されたゼロ値のフィールド、空のリストの `null`）のデコード |
 | `Kekkai/IR/Host.lean` | 純粋な host 操作（`int.*`, `bool.to_string`, `string.*`, `log.*`, `clock.now_ms`）。UTF-16 の添字、`split`、WHATWG の UTF-8 デコーダ |
 | `Kekkai/IR/Interp.lean` | 明示的なコールスタックを持つスモールステップ機械（fuel について構造的再帰なので全域）と、バックエンドが実装するコレクション操作 `vec.*`, `map.*` |
@@ -132,14 +132,14 @@ $ kekkai-ref basic.json sum_to 1000000
 {"error":"timeout"}
 ```
 
-値の表現: 整数は JSON の数（i64 を正確に）、unit は `null`、variant は `{"tag":k,"fields":[...]}`（その tag のフィールドだけ）、struct は `{"fields":[...]}`、`Vec` は `{"vec":[...]}`、`Map` は挿入順に `{"map":[[k,v],...]}`（いずれも参照をたどって表示し、循環は `{"cycle":true}`）、host の不透明値は `{"ext":"Log"}`、初期化されていない参照型ローカルは `{"null":true}`。エラーは `timeout`（fuel 1,000,000 ステップ。命令と終端命令が 1 ステップずつ）、`unreachable`、`null dereference`、`trap`（範囲外の `vec.at`）、`stack overflow`（呼び出しの深さ 10000）、`unsupported host op <名前>`、`unsupported await <名前>`（非同期操作は v1 の対象外）。使い方や IR の誤りは標準エラーに出力し、終了コード 1（使い方の誤りは 2）。
+値の表現: 整数は JSON の数（i64 を正確に）、unit は `null`、variant は `{"tag":k,"fields":[...]}`（その tag のフィールドだけ）、struct は `{"fields":[...]}`、`Vec` は `{"vec":[...]}`（いずれも参照をたどって表示し、循環は `{"cycle":true}`）、host の不透明値は `{"ext":"Log"}`、初期化されていない参照型ローカルは `{"null":true}`。エラーは `timeout`（fuel 1,000,000 ステップ。命令と終端命令が 1 ステップずつ）、`unreachable`、`null dereference`、`trap`（範囲外の `vec.at`）、`stack overflow`（呼び出しの深さ 10000）、`unsupported host op <名前>`、`unsupported await <名前>`（非同期操作は v1 の対象外）。使い方や IR の誤りは標準エラーに出力し、終了コード 1（使い方の誤りは 2）。
 
 意味論の要点（WasmGC と一致させている点）:
 
 - 算術は毎回 `[-2^63, 2^63)` に wrap。`x / 0 = 0`、`x / -1 = 0 - x`（したがって `MIN / -1 = MIN`）、それ以外は 0 方向への切り捨て。`x % 0 = x`、それ以外は被除数の符号を持つ剰余（`Int.tmod`）
 - ローカルは型の既定値（`0`, `false`, `ref.null`）で初期化される。`br` は真なら第 1 ターゲット、`switch` は整数の値 `k` と `0, 1, ...` を比べ、どれでもなければ最後のターゲット
 - `vfield` で値と異なる tag のスロットを読むと、そのスロットの型の既定値になる（wasm は全 tag のスロットを持ち、使わないスロットを既定値で埋めるため）
-- struct・`Vec`・`Map` はヒープ上の可変オブジェクトで、別名を通した変更が互いに見える（wasm の GC struct/array と同じ）。variant は不変な値
-- `vec.get`/`vec.set` は負の添字や範囲外で `None`/`false`。`Map` は挿入順で、既存のキーへの `insert` は位置を保ち、`remove` の後の `insert` は末尾に付く。キーは値で比較（Int/String/Bool）
+- struct・`Vec` はヒープ上の可変オブジェクトで、別名を通した変更が互いに見える（wasm の GC struct/array と同じ）。variant は不変な値。`HashMap` は core ライブラリの普通のコードとして IR に含まれる
+- `vec.get`/`vec.set` は負の添字や範囲外で `None`/`false`
 - `string.char_at`/`slice`/`index_of` は UTF-16 のコード単位で数え、`slice` は添字を `[0, len]` に切り詰める。`split("")` はコードポイントごとに分ける。`from_char` は `c mod 2^16`、`from_bytes` は各要素 `mod 256` を WHATWG の規則でデコードする（不正な列は U+FFFD、先頭の BOM は除く）。孤立サロゲート（wasm の文字列は持てるが Lean の文字列は持てない）は U+FFFD になる。この場合だけ wasm と異なりうる
 - host の `Option` の結果は `None = 0 | Some = 1` の variant に持ち上げる。`string.len` は UTF-16 のコード単位で数え、`string.trim` は Unicode の空白と改行を除く。`to_upper`/`to_lower` は ASCII のみ。`clock.now_ms` は固定値 `1700000000000`

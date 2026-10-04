@@ -3,7 +3,7 @@ import Kekkai.IR.Syntax
 /-!
 # Runtime values and the heap
 
-Structs, `Vec`s and `Map`s are mutable objects with reference semantics
+Structs and `Vec`s are mutable objects with reference semantics
 (wasm GC structs and arrays), so they live in a heap and values
 refer to them by address. Variants are immutable in wasm, so they are
 represented directly (their fields may hold references).
@@ -17,7 +17,7 @@ inductive Val where
   /-- always within the signed 64-bit range -/
   | int (i : Int)
   | str (s : String)
-  /-- reference to a heap object (struct, Vec or Map) -/
+  /-- reference to a heap object (struct or Vec) -/
   | ref (addr : Nat)
   /-- a variant value carries only the fields of its own tag -/
   | variant (tag : Nat) (fields : Array Val)
@@ -30,8 +30,6 @@ inductive Val where
 inductive HeapObj where
   | struct (fields : Array Val)
   | vec (elems : Array Val)
-  /-- insertion-ordered -/
-  | map (entries : Array (Val × Val))
   deriving Repr, Inhabited
 
 /-- Log entries `(level, message)` emitted by `log.info/warn/error`. -/

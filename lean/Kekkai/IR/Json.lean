@@ -79,8 +79,7 @@ def decodeTypeDef (j : Json) : P TypeDef := do
     fields := ← decodeTys (← arrD j "fields")
     variants
     coll := ← strD j "coll"
-    elem := ← (field? j "elem").mapM decodeTy
-    key := ← (field? j "key").mapM decodeTy }
+    elem := ← (field? j "elem").mapM decodeTy }
 
 def decodeConst (j : Json) : P Const := do
   match ← decodeTyKind (← strD j "kind") with

@@ -9,7 +9,7 @@ import Kekkai.IR.Interp
 
 Each argument is a JSON value (`42`, `-7`, `true`, `"abc"`, `null` for
 unit, `{"fields":[...]}` / `{"tag":k,"fields":[...]}` for aggregates,
-`{"vec":[...]}`, `{"map":[[k,v],...]}`).
+`{"vec":[...]}`).
 Parameters of type `ext` (capabilities) receive an opaque value and do not
 consume an argument.
 
@@ -39,8 +39,6 @@ partial def renderVal (heap : Array HeapObj) (path : List Nat := []) : Val → S
     match heap[a]? with
     | some (.struct fs) => "{\"fields\":[" ++ ",".intercalate (fs.toList.map r) ++ "]}"
     | some (.vec xs) => "{\"vec\":[" ++ ",".intercalate (xs.toList.map r) ++ "]}"
-    | some (.map es) =>
-      "{\"map\":[" ++ ",".intercalate (es.toList.map fun (k, v) => "[" ++ r k ++ "," ++ r v ++ "]") ++ "]}"
     | none => "{\"dangling\":true}"
 
 def renderLog (log : Array LogEntry) : String :=
@@ -54,8 +52,7 @@ def renderError (e : String) : String :=
   "{\"error\":" ++ (Json.str e).compress ++ "}"
 
 /-- Convert a JSON argument to a value of IR type `t`, allocating heap
-objects for structs (`{"fields":[...]}`), Vecs (`{"vec":[...]}`) and Maps
-(`{"map":[[k,v],...]}`). -/
+objects for structs (`{"fields":[...]}`) and Vecs (`{"vec":[...]}`). -/
 partial def argVal (p : Program) (t : Ty) (j : Json) : HM Val := do
   let lift {α} (x : Except String α) : HM α := liftM (m := Except String) x
   match t.kind, j with
@@ -68,21 +65,11 @@ partial def argVal (p : Program) (t : Ty) (j : Json) : HM Val := do
   | .ext, _ => pure (.opaque t.ext)
   | .agg, _ =>
     let some td := p.types[t.agg]? | throw s!"unknown aggregate {t.agg}"
-    match td.coll, td.elem, td.key with
-    | "vec", some et, _ =>
+    match td.coll, td.elem with
+    | "vec", some et =>
       let xs ← lift (j.getObjValAs? (Array Json) "vec")
       alloc (.vec (← xs.mapM (argVal p et)))
-    | "map", some vt, some kt =>
-      let es ← lift (j.getObjValAs? (Array (Json × Json)) "map")
-      let mut out : Array (Val × Val) := #[]
-      for (kj, vj) in es do
-        let k ← argVal p kt kj
-        let v ← argVal p vt vj
-        out := match out.findIdx? (keyEq k ·.1) with
-          | some i => out.set! i (k, v)
-          | none => out.push (k, v)
-      alloc (.map out)
-    | _, _, _ =>
+    | _, _ =>
       let fs ← lift (j.getObjValAs? (Array Json) "fields")
       if td.isVariant then
         let tag ← lift (j.getObjValAs? Nat "tag")

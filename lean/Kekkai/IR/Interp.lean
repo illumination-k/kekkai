@@ -14,7 +14,7 @@ The semantics follows the WasmGC backend (`compiler/wasm_codegen.kek`,
 
 * every instruction writes its destination local; locals start at their
   type's default value (`0`, `false`, `ref.null`);
-* structs, `Vec`s and `Map`s are heap objects with reference semantics
+* structs and `Vec`s are heap objects with reference semantics
   (mutation through one alias is visible through all of them); variants
   are immutable values;
 * `br` takes the first target when the condition is true;
@@ -107,22 +107,8 @@ def typeDef (p : Program) (ty : Nat) : M TypeDef :=
 
 /-! ## Collections -/
 
-/-- Key equality of a `Map`: Int, String and Bool keys by value. -/
-def keyEq : Val → Val → Bool
-  | .int a, .int b => a == b
-  | .str a, .str b => a == b
-  | .bool a, .bool b => a == b
-  | .unit, .unit => true
-  | .ref a, .ref b => a == b
-  | .null, .null => true
-  | _, _ => false
-
-def mapEntries (v : Val) : HM (Array (Val × Val)) := do
-  match ← deref v with
-  | .map es => pure es
-  | o => throw s!"type error: expected a Map, got {repr o}"
-
-/-- Collection operations (`vec.*`, `map.*`), implemented by the backend. -/
+/-- Collection operations (`vec.*`), implemented by the backend. (HashMap
+is ordinary code of the core library.) -/
 def evalColl (name : String) (args : Array Val) : HM Val := do
   let bad : HM Val := throw s!"{name}: bad arguments"
   match name, args with
@@ -153,29 +139,10 @@ def evalColl (name : String) (args : Array Val) : HM Val := do
       | .str s => pure s
       | _ => throw "vec.join: non-string element"
     pure (.str (sep.intercalate ss))
-  | "map.new", #[] => alloc (.map #[])
-  | "map.len", #[m] => return .int (← mapEntries m).size
-  | "map.insert", #[m, k, x] => do
-    let es ← mapEntries m
-    let es := match es.findIdx? (keyEq k ·.1) with
-      | some i => es.set! i (k, x)
-      | none => es.push (k, x)
-    store m (.map es); pure .unit
-  | "map.get", #[m, k] => do
-    let es ← mapEntries m
-    -- the host returns `null` for an absent key; a stored null reads as None too
-    match es.find? (keyEq k ·.1) with
-    | some (_, .null) | none => pure (optionVal none)
-    | some (_, x) => pure (optionVal (some x))
-  | "map.contains", #[m, k] => return .bool ((← mapEntries m).any (keyEq k ·.1))
-  | "map.remove", #[m, k] => do
-    let es ← mapEntries m
-    store m (.map (es.filter fun e => !keyEq k e.1)); pure .unit
-  | "map.keys", #[m] => do newVec ((← mapEntries m).map (·.1))
   | _, _ => bad
 
 def isCollOp (name : String) : Bool :=
-  name.startsWith "vec." || name.startsWith "map."
+  name.startsWith "vec."
 
 /-! ## The machine -/
 

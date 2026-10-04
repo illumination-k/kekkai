@@ -18,6 +18,10 @@ fn __rt_new() -> __Rt {
         lines: Vec::new(),
         sent: Vec::new(),
         start_ns: 0,
+        seed: 0,
+        cases: 0,
+        rand0: 0,
+        db_text: "",
     };
     let env = __env_all(rt);
     rt.cwd = __env_lookup(env, "PWD");

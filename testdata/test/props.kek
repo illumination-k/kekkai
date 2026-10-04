@@ -1,0 +1,142 @@
+// Property-based tests. Run with: kek test testdata/test/props.kek
+//
+// A #[test] that takes values (besides capabilities) is a property: `kek
+// test` generates its arguments, runs it on 100 cases (`-cases n`,
+// `#[test(cases = n)]`) and shrinks a failing input to a small
+// counterexample. Every run gets fresh mocks.
+
+fn reverse(xs: Vec<Int>) -> Vec<Int> {
+    let out = Vec::new();
+    let mut i = xs.len() - 1;
+    while i >= 0 {
+        out.push(xs.get(i).unwrap_or(0));
+        i = i - 1;
+    }
+    out
+}
+
+fn same(a: Vec<Int>, b: Vec<Int>) -> Bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a.get(i) != b.get(i) {
+            return false;
+        }
+    }
+    true
+}
+
+// A buggy sort: it drops duplicates.
+fn sort_dedup(xs: Vec<Int>) -> Vec<Int> {
+    let mut out: Vec<Int> = Vec::new();
+    for x in xs {
+        let next = Vec::new();
+        let mut placed = false;
+        for y in out {
+            if !placed && x <= y {
+                if x != y {
+                    next.push(x);
+                }
+                placed = true;
+            }
+            next.push(y);
+        }
+        if !placed {
+            next.push(x);
+        }
+        out = next;
+    }
+    out
+}
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Dot(Point),
+    Circle(Point, Int),
+    Group(Vec<Shape>),
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Dot(_) => 0,
+        Shape::Circle(_, r) => 3 * r * r,
+        Shape::Group(items) => {
+            let mut total = 0;
+            for it in items {
+                total = total + area(it);
+            }
+            total
+        }
+    }
+}
+
+// ---- passing properties ----
+
+#[test]
+fn reverse_twice_is_identity(xs: Vec<Int>) -> Bool {
+    same(reverse(reverse(xs)), xs)
+}
+
+#[test]
+fn concat_length(a: String, b: String) -> Bool {
+    (a + b).len() == a.len() + b.len()
+}
+
+#[test(cases = 20)]
+fn option_default(o: Option<Int>, d: Int) -> Result<(), String> {
+    let v = o.unwrap_or(d);
+    match o {
+        Some(x) => if v == x { Ok(()) } else { Err("Some lost") },
+        None => if v == d { Ok(()) } else { Err("default lost") },
+    }
+}
+
+// Properties may take capabilities too: every case gets a fresh &Db.
+#[test]
+fn db_roundtrip(db: &Db, key: String, value: String) -> Result<(), String> {
+    let r = db.transaction(|tx| {
+        tx.put(key, value)?;
+        tx.commit()
+    });
+    match r {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(e.message());
+        }
+    }
+    match db.get(key) {
+        Ok(Some(v)) => if v == value { Ok(()) } else { Err("read " + v) },
+        Ok(None) => Err("missing"),
+        Err(e) => Err(e.message()),
+    }
+}
+
+// ---- failing properties (shrunk to a minimal counterexample) ----
+
+#[test]
+fn sort_keeps_length(xs: Vec<Int>) -> Bool {
+    sort_dedup(xs).len() == xs.len()
+}
+
+#[test]
+fn small_numbers(n: Int) -> Result<(), String> {
+    if n > 100 {
+        return Err("too big: " + n.to_string());
+    }
+    Ok(())
+}
+
+#[test]
+fn far_points(p: Point) -> Bool {
+    p.x + p.y < 10
+}
+
+#[test]
+fn shapes_are_small(s: Shape) -> Bool {
+    area(s) < 12
+}

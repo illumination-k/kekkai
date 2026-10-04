@@ -29,9 +29,11 @@ t_discover() {
 	d=$(tmpdir)
 	r=
 	"$KEK" test-build testdata/test/counter.kek "$d" -list >"$d/log" 2>&1 || r="exit $?"
-	want='[{"name":"key_format","caps":[],"result":"bool","pure":true},{"name":"parse_count_defaults_to_zero","caps":[],"result":"result","pure":true},{"name":"visits_are_counted","caps":["Db","Log"],"result":"result","pure":false},{"name":"greeting_falls_back_offline","caps":["Net"],"result":"bool","pure":false},{"name":"clock_is_fixed","caps":["Clock"],"result":"bool","pure":false},{"name":"random_in_range","caps":["Random"],"result":"bool","pure":false}]'
-	[ "$(cat "$d/tests.json" 2>/dev/null)" = "$want" ] || r="$r
-tests.json: $(cat "$d/tests.json" 2>/dev/null)
+	want='[{"name":"key_format","caps":[],"result":"bool","pure":true,"params":[],"cases":null,"hash":"H"},{"name":"parse_count_defaults_to_zero","caps":[],"result":"result","pure":true,"params":[],"cases":null,"hash":"H"},{"name":"visits_are_counted","caps":["Db","Log"],"result":"result","pure":false,"params":[],"cases":null,"hash":"H"},{"name":"greeting_falls_back_offline","caps":["Net"],"result":"bool","pure":false,"params":[],"cases":null,"hash":"H"},{"name":"clock_is_fixed","caps":["Clock"],"result":"bool","pure":false,"params":[],"cases":null,"hash":"H"},{"name":"random_in_range","caps":["Random"],"result":"bool","pure":false,"params":[],"cases":null,"hash":"H"}]'
+	# hashes are 32 hex digits (their values are checked by the cache tests)
+	got=$(sed 's/"hash":"[0-9a-f]\{32\}"/"hash":"H"/g' "$d/tests.json" 2>/dev/null)
+	[ "$got" = "$want" ] || r="$r
+tests.json: $got
 want:       $want"
 	[ ! -f "$d/module.wasm" ] || r="$r
 -list must not build"

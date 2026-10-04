@@ -5,13 +5,17 @@
 // configured through the environment:
 //   KEK_TEST=1            enable the mocks
 //   KEK_TEST_CLOCK=ms     fixed time of &Clock
-//   KEK_TEST_SEED=n       seed of &Random (mixed with the test name)
+//   KEK_TEST_SEED=n       seed of &Random and of the inputs of property
+//                         tests (mixed with the test name)
+//   KEK_TEST_CASES=n      cases of a property test (default 100)
 //   KEK_TEST_NET=file     canned &Net responses: {"GET url": "body", "POST url": {"error": "msg"}}
 //   KEK_TEST_DB=file      initial contents of &Db: {"key": "value"}
 
 fn __test_setup(rt: __Rt, env: Vec<String>) {
     rt.clock_ms = __env_lookup(env, "KEK_TEST_CLOCK").parse_int().unwrap_or(0);
-    rt.rand = __env_lookup(env, "KEK_TEST_SEED").parse_int().unwrap_or(0);
+    rt.seed = __env_lookup(env, "KEK_TEST_SEED").parse_int().unwrap_or(0);
+    rt.rand = rt.seed;
+    rt.cases = __env_lookup(env, "KEK_TEST_CASES").parse_int().unwrap_or(100);
 }
 
 // FNV-1a over the UTF-8 bytes
@@ -55,6 +59,7 @@ fn __test_begin(name: String) -> Bool {
                     __eprint(dbf + ": " + p.err);
                     return false;
                 }
+                rt.db_text = text;
             }
             Err(e) => {
                 __eprint("open " + dbf + ": no such file or directory");
@@ -62,8 +67,24 @@ fn __test_begin(name: String) -> Bool {
             }
         }
     }
+    rt.rand0 = rt.rand;
     rt.start_ns = __now_ns(1);
     true
+}
+
+// __test_case_reset gives the next run of a property test fresh mocks:
+// the &Db store of KEK_TEST_DB, no log lines or outbox, and the &Random
+// sequence of the test's first run. Runs are independent, so a
+// counterexample reproduces on its own.
+fn __test_case_reset() {
+    let rt = __Rt::get();
+    rt.rand = rt.rand0;
+    rt.lines = Vec::new();
+    rt.sent = Vec::new();
+    rt.store = __store_new();
+    if rt.db_text != "" {
+        __json_object(__json_new(rt.db_text), rt, "", true);
+    }
 }
 
 fn __test_elapsed() -> String {
@@ -78,9 +99,13 @@ fn __test_ok(name: String, kind: String) -> Int {
 }
 
 fn __test_failed(name: String, kind: String, why: String) -> Int {
-    let rt = __Rt::get();
     __print("test " + name + " ... FAILED (" + kind + "; " + __test_elapsed() + ")");
     __print("    " + why);
+    __test_mock_lines()
+}
+
+fn __test_mock_lines() -> Int {
+    let rt = __Rt::get();
     for l in rt.lines {
         __print("    " + l);
     }

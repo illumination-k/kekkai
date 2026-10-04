@@ -35,16 +35,16 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek check <file>` | 型検査（capability、エフェクト、トランザクション） |
 | `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧 |
 | `kek ir [-json] <file>` | 中間表現を表示（`-json` は Lean 参照インタプリタの入力形式） |
-| `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力 |
+| `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力。`module.wasm` はプログラムの定義ハッシュをキーにキャッシュする（コメントや整形だけの変更では再コンパイルしない） |
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
-| `kek test [-run re] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス） |
+| `kek test [-run re] [-j n] [-json] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス、並列）。引数を取るテストはプロパティベーステスト。結果は定義ハッシュでキャッシュし、変更の影響を受けたテストだけを実行する |
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)） |
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 
 ### テスト（`kek test`）
 
-テストは `#[test]` を付けた普通の関数です。戻り値は `()`・`Bool`・`Result<(), String>` のいずれかで、`false` か `Err(msg)` を返すと失敗です。引数には capability だけを取れ、ランナーがテストごとに新しい**モック**を渡します。
+テストは `#[test]` を付けた普通の関数です。戻り値は `()`・`Bool`・`Result<(), String>` のいずれかで、`false` か `Err(msg)` を返すと失敗です。引数には capability と生成できる値を取れます。capability にはランナーがテストごとに新しい**モック**を渡します。
 
 | capability | モック |
 | --- | --- |
@@ -69,9 +69,45 @@ fn visits_are_counted(db: &Db, log: &Log) -> Result<(), String> {
 }
 ```
 
-capability を受け取らないテストは純粋なので hermetic で、出力に `pure: hermetic, cacheable` と表示されます（定義ハッシュをキーにしたキャッシュは今後の課題）。
+capability を受け取らないテストは純粋なので hermetic で、出力に `pure: hermetic, cacheable` と表示されます。
 
-オプションは `./kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>`（`-run` は拡張正規表現）。コンパイラの `test-build`（`compiler/testrun.kek`）がテストを発見し、テスト名で 1 つを実行する `#[main]` を合成してビルドします。モックは prelude（`lib/prelude/test.kek`）にあり、`./kek` がテストごとに wasmtime のプロセスを起動します。トラップ（スタックの使い切りなど）はそのテストだけの失敗になります。
+#### プロパティベーステスト
+
+capability 以外の引数を取るテストはプロパティです。ランナーが引数を生成して 100 ケース（`-cases n`、テストごとには `#[test(cases = N)]`）実行し、失敗した入力を最小の反例まで縮めて報告します。
+
+```kek
+#[test]
+fn reverse_twice_is_identity(xs: Vec<Int>) -> Bool {
+    same(reverse(reverse(xs)), xs)
+}
+
+#[test]
+fn shapes_are_small(s: Shape) -> Bool {   // Shape は自前の enum
+    area(s) < 12
+}
+```
+
+```
+test shapes_are_small ... FAILED (pure: hermetic, cacheable; 0.4ms)
+    returned false
+    counterexample: shapes_are_small(s = Circle(Point { x: 0, y: 0 }, 2))
+    found: case 14 of 100, shrunk in 3 steps from shapes_are_small(s = Circle(Point { x: 0, y: -11 }, 6))
+    reproduce: kek test -seed 0 -run '^shapes_are_small$'
+```
+
+- 生成できる型は `Int`・`Bool`・`String`・`()`・`Vec<T>`・`Option<T>`・`Result<T, E>`・タプルと、フィールドがそれらからなる自前の struct・enum（generic・再帰的なものも可）。関数・`&Tx`・`Request` などのホストの型・`HashMap` などのライブラリの型は型検査で拒否します。
+- 入力は `-seed` とテスト名から作る擬似乱数で決まり、同じシードなら同じケースを再現します。ケースが進むほど大きくなり、0・±1・`Int` の最大最小・空文字列・空の `Vec`・非 ASCII 文字に偏らせています。
+- 縮小は貪欲法です（整数は 0 へ、文字列と `Vec` は区間の削除と要素の縮小、`Some` は `None` へ、struct と enum はフィールドごと、再帰的な enum は部分値へ）。実行回数の上限は 2000 回です。
+- ケースごとにモックを新しくします（`&Db` は空か `-db` の内容、ログは空、`&Random` は同じ系列）。反例はそれだけで再現し、失敗時に表示するログは反例の実行のものです。
+- トラップはプロセスを終わらせるので縮小しません。代わりに直前に実行しようとした入力を `last input:` として表示します。
+
+#### キャッシュと並列実行
+
+モックはすべて決定的なので、テストの結果は「コンパイラ・テストの定義ハッシュ（`kek hash` の trans。到達できる定義と型宣言を含む）・`-seed`・`-clock`・`-net`/`-db` のファイルの内容・ケース数」で決まります。`kek test` は結果を `.kek-cache/test/` に保存し（一時ファイルに書いてからリネーム）、キャッシュにないテストだけをビルドして実行します。何も変えていなければコンパイルせずに結果を `(cached)` 付きで再表示し（失敗の出力も再生）、定義を変えるとそれに依存するテストだけが再実行されます。コメントや整形だけの変更ではハッシュは変わりません。`-no-cache` か `KEK_TEST_CACHE=0` で無効にできます。
+
+テストは `-j n`（既定は CPU 数）個ずつ並列に実行し、結果は宣言順に表示します。`-json` は結果を JSON で出力します（形式は [docs/tooling.md](docs/tooling.md)）。
+
+オプションは `./kek test [-run re] [-seed n] [-cases n] [-j n] [-json] [-no-cache] [-clock ms] [-net f.json] [-db f.json] <file|dir>`（`-run` は拡張正規表現）。コンパイラの `test-build`（`compiler/testrun.kek`）がテストを発見し、テスト名で 1 つを実行する `#[main]` を合成してビルドします。プロパティの生成・縮小・表示の関数も型ごとに合成します（`compiler/pbt.kek`）。モックは prelude（`lib/prelude/test.kek`・`lib/prelude/prop.kek`）にあり、`./kek` がテストごとに wasmtime のプロセスを起動します。トラップ（スタックの使い切りなど）はそのテストだけの失敗になります。
 
 ### 保証の台帳（`kek assure`）
 

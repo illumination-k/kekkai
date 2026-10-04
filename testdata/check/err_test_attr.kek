@@ -1,4 +1,5 @@
-// #[test] functions: capabilities only, result (), Bool or Result<(), String>.
+// #[test] functions: capabilities and generatable values (property tests),
+// result (), Bool or Result<(), String>.
 #[test]
 fn ok_unit() {
 }
@@ -15,8 +16,37 @@ fn ok_result(log: &Log, db: &Db) -> Result<(), String> {
 }
 
 #[test]
-fn bad_param(x: Int) -> Bool { // ERROR "test parameters must be capabilities"
-    x == 1
+fn ok_property(x: Int, v: Vec<(String, Option<Bool>)>, log: &Log) -> Bool {
+    x == x
+}
+
+struct Loop {
+    next: Loop,
+}
+
+enum Endless {
+    More(Endless),
+}
+
+#[test]
+fn bad_param(f: fn(Int) -> Int) -> Bool { // ERROR "cannot generate inputs of type `fn(Int) -> Int` for a property test: functions cannot be generated"
+    f(1) == 1
+}
+
+#[test]
+fn bad_lib_type(m: HashMap<Int, Int>) { // ERROR "`HashMap` is a library type"
+}
+
+#[test]
+fn bad_opaque(r: Request) { // ERROR "`Request` values cannot be generated"
+}
+
+#[test]
+fn bad_loop(l: Option<Loop>) { // ERROR "the recursive struct `Loop` has no finite values"
+}
+
+#[test]
+fn bad_endless(e: Endless) { // ERROR "every variant of the recursive enum `Endless` contains `Endless` itself"
 }
 
 #[test]
@@ -30,7 +60,7 @@ fn bad_err() -> Result<(), Int> { // ERROR "found `Result<(), Int>`"
 }
 
 #[test]
-fn bad_tx(tx: &Tx) { // ERROR "test parameters must be capabilities"
+fn bad_tx(tx: &Tx) { // ERROR "test parameters must be capabilities (&Log, &Net, &Db, &Clock, &Random) or generatable values, found `&Tx`"
 }
 
 #[bench] // ERROR "unknown attribute `#[bench]`"

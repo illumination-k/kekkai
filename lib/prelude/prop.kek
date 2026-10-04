@@ -1,0 +1,508 @@
+// `kek test`: property-based tests.
+//
+// A #[test] with parameters other than capabilities is a property: the
+// harness synthesized by `kek test` (compiler/testrun.kek) generates its
+// arguments, runs it for KEK_TEST_CASES cases (or #[test(cases = N)]) and
+// shrinks a failing input. Per type it emits a generator, a shrinker, a
+// Debug-style printer, a deep copy and a minimal value; the functions here
+// are the building blocks they share.
+//
+// Inputs come from a SplitMix64 stream seeded with KEK_TEST_SEED and the
+// test name, so a run is reproducible from its seed. The size of the
+// inputs grows over the cases (0 to 99), and generation is biased toward
+// edge cases (0, ±1, the extremes of Int, "", [], non-ASCII text).
+
+struct __Gen {
+    mut s: Int,
+    // the case's size: bound of |Int|, of string and Vec lengths
+    mut size: Int,
+    // node budget of the case: when it runs out, Vec and Option values
+    // are empty and recursive enums take a variant without recursion
+    mut fuel: Int,
+}
+
+fn __gen_new(name: String) -> __Gen {
+    let rt = __Rt::get();
+    __Gen { s: __fnv64("prop:" + name).bit_xor(rt.seed * -7046029254386353131), size: 0, fuel: 0 }
+}
+
+// __test_cases is the number of cases of a property test: n from
+// #[test(cases = n)], else KEK_TEST_CASES.
+fn __test_cases(n: Int) -> Int {
+    let c = if n > 0 { n } else { __Rt::get().cases };
+    if c < 1 { 1 } else { c }
+}
+
+// __gen_case starts case i of n.
+fn __gen_case(g: __Gen, i: Int, n: Int) {
+    g.size = i * 100 / n;
+    g.fuel = g.size * 2 + 10;
+}
+
+fn __gen_next(g: __Gen) -> Int {
+    g.s = g.s + -7046029254386353131;
+    let mut z = g.s;
+    z = z.bit_xor(z.ushr(30)) * -4658895280553007687;
+    z = z.bit_xor(z.ushr(27)) * -7723592293110705685;
+    z.bit_xor(z.ushr(31))
+}
+
+// __gen_below is uniform in [0, n) (0 when n <= 0).
+fn __gen_below(g: __Gen, n: Int) -> Int {
+    if n <= 0 {
+        return 0;
+    }
+    __Int::rem_u(__gen_next(g), n)
+}
+
+fn __gen_stop(g: __Gen, d: Int) -> Bool {
+    g.fuel <= 0 || d > 12
+}
+
+fn __gen_tick(g: __Gen) {
+    g.fuel = g.fuel - 1;
+}
+
+fn __gen_int(g: __Gen) -> Int {
+    let r = __gen_below(g, 20);
+    if r < 3 {
+        let k = __gen_below(g, 9);
+        if k == 0 {
+            return 0;
+        }
+        if k == 1 {
+            return 1;
+        }
+        if k == 2 {
+            return -1;
+        }
+        if k == 3 {
+            return 9223372036854775807;
+        }
+        if k == 4 {
+            return -9223372036854775807 - 1;
+        }
+        if k == 5 {
+            return 2;
+        }
+        if k == 6 {
+            return -2;
+        }
+        if k == 7 {
+            return g.size;
+        }
+        return 0 - g.size;
+    }
+    if r == 3 {
+        return __gen_next(g);
+    }
+    __gen_below(g, g.size * 2 + 1) - g.size
+}
+
+fn __gen_bool(g: __Gen) -> Bool {
+    __gen_below(g, 2) == 1
+}
+
+fn __gen_char(g: __Gen, b: __Sb) {
+    let r = __gen_below(g, 20);
+    if r < 12 {
+        __sb_char(b, 97 + __gen_below(g, 26));
+        return;
+    }
+    if r < 16 {
+        __sb_char(b, 32 + __gen_below(g, 95));
+        return;
+    }
+    let k = __gen_below(g, 9);
+    if k == 0 {
+        __sb_char(b, 233); // é
+    } else if k == 1 {
+        __sb_char(b, 26085); // 日
+    } else if k == 2 {
+        // U+1F600 (a surrogate pair)
+        __sb_char(b, 55357);
+        __sb_char(b, 56832);
+    } else if k == 3 {
+        __sb_char(b, 10);
+    } else if k == 4 {
+        __sb_char(b, 9);
+    } else if k == 5 {
+        __sb_char(b, 0);
+    } else if k == 6 {
+        __sb_char(b, 34);
+    } else if k == 7 {
+        __sb_char(b, 92);
+    } else {
+        __sb_char(b, 12354); // あ
+    }
+}
+
+fn __gen_string(g: __Gen) -> String {
+    if __gen_below(g, 8) == 0 {
+        return "";
+    }
+    let n = __gen_below(g, g.size + 1);
+    let b = __sb_new(n);
+    for i in 0..n {
+        __gen_char(g, b);
+    }
+    __sb_finish(b)
+}
+
+fn __gen_vec<T>(g: __Gen, d: Int, f: fn(__Gen, Int) -> T) -> Vec<T> {
+    let v: Vec<T> = Vec::new();
+    if __gen_stop(g, d) || __gen_below(g, 8) == 0 {
+        return v;
+    }
+    let m = if g.fuel < g.size { g.fuel } else { g.size };
+    let n = __gen_below(g, m + 1);
+    g.fuel = g.fuel - n;
+    for i in 0..n {
+        v.push(f(g, d + 1));
+    }
+    v
+}
+
+fn __gen_option<T>(g: __Gen, d: Int, f: fn(__Gen, Int) -> T) -> Option<T> {
+    if __gen_stop(g, d) || __gen_below(g, 4) == 0 {
+        return None;
+    }
+    Some(f(g, d + 1))
+}
+
+fn __gen_result<T, E>(
+    g: __Gen,
+    d: Int,
+    f: fn(__Gen, Int) -> T,
+    e: fn(__Gen, Int) -> E,
+) -> Result<T, E> {
+    if __gen_below(g, 2) == 0 {
+        Ok(f(g, d + 1))
+    } else {
+        Err(e(g, d + 1))
+    }
+}
+
+// __gen_variant picks the variant of an enum with n variants; base has
+// bit i set when variant i does not contain the enum itself (one of these
+// is taken once the budget is spent).
+fn __gen_variant(g: __Gen, d: Int, n: Int, base: Int) -> Int {
+    __gen_tick(g);
+    if !__gen_stop(g, d) || base == 0 {
+        return __gen_below(g, n);
+    }
+    let mut k = 0;
+    for i in 0..n {
+        if base.shr(i).bit_and(1) == 1 {
+            k = k + 1;
+        }
+    }
+    let mut j = __gen_below(g, k);
+    for i in 0..n {
+        if base.shr(i).bit_and(1) == 1 {
+            if j == 0 {
+                return i;
+            }
+            j = j - 1;
+        }
+    }
+    0
+}
+
+// ---- shrinking: candidates, most aggressive first ----
+
+fn __shrink_int(x: Int) -> Vec<Int> {
+    let out = Vec::new();
+    if x == 0 {
+        return out;
+    }
+    out.push(0);
+    if x < 0 && 0 - x > 0 {
+        out.push(0 - x);
+    }
+    let mut d = x / 2;
+    while d != 0 {
+        let c = x - d;
+        if c != 0 {
+            out.push(c);
+        }
+        d = d / 2;
+    }
+    out
+}
+
+fn __shrink_bool(x: Bool) -> Vec<Bool> {
+    let out = Vec::new();
+    if x {
+        out.push(false);
+    }
+    out
+}
+
+fn __shrink_unit(x: ()) -> Vec<()> {
+    Vec::new()
+}
+
+fn __shrink_char(c: String) -> Vec<String> {
+    let out = Vec::new();
+    if c != "a" {
+        out.push("a");
+    }
+    out
+}
+
+// __shrink_vec removes chunks (all, halves, quarters, ... single
+// elements), then shrinks one element at a time. At most 500 candidates.
+fn __shrink_vec<T>(v: Vec<T>, f: fn(T) -> Vec<T>) -> Vec<Vec<T>> {
+    let out: Vec<Vec<T>> = Vec::new();
+    let n = v.len();
+    if n == 0 {
+        return out;
+    }
+    out.push(Vec::new());
+    let mut k = n / 2;
+    while k > 0 {
+        let mut st = 0;
+        while st < n {
+            let w: Vec<T> = Vec::new();
+            for i in 0..n {
+                if i < st || i >= st + k {
+                    match v.get(i) {
+                        Some(x) => w.push(x),
+                        None => {}
+                    }
+                }
+            }
+            out.push(w);
+            if out.len() >= 500 {
+                return out;
+            }
+            st = st + k;
+        }
+        k = k / 2;
+    }
+    for i in 0..n {
+        match v.get(i) {
+            Some(x) => {
+                for c in f(x) {
+                    let w: Vec<T> = Vec::new();
+                    for j in 0..n {
+                        if j == i {
+                            w.push(c);
+                        } else {
+                            match v.get(j) {
+                                Some(y) => w.push(y),
+                                None => {}
+                            }
+                        }
+                    }
+                    out.push(w);
+                    if out.len() >= 500 {
+                        return out;
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+// Strings shrink like a Vec of their code points (each toward "a").
+fn __shrink_string(s: String) -> Vec<String> {
+    let out = Vec::new();
+    for v in __shrink_vec(s.split(""), __shrink_char) {
+        out.push(v.join(""));
+    }
+    out
+}
+
+fn __shrink_option<T>(o: Option<T>, f: fn(T) -> Vec<T>) -> Vec<Option<T>> {
+    let out: Vec<Option<T>> = Vec::new();
+    match o {
+        Some(x) => {
+            out.push(None);
+            for c in f(x) {
+                out.push(Some(c));
+            }
+        }
+        None => {}
+    }
+    out
+}
+
+fn __shrink_result<T, E>(
+    r: Result<T, E>,
+    f: fn(T) -> Vec<T>,
+    e: fn(E) -> Vec<E>,
+) -> Vec<Result<T, E>> {
+    let out: Vec<Result<T, E>> = Vec::new();
+    match r {
+        Ok(x) => {
+            for c in f(x) {
+                out.push(Ok(c));
+            }
+        }
+        Err(x) => {
+            for c in e(x) {
+                out.push(Err(c));
+            }
+        }
+    }
+    out
+}
+
+// ---- printing (like Rust's Debug) ----
+
+fn __show_string(s: String) -> String {
+    let b = __sb_new(__string_len(s) + 2);
+    __sb_char(b, 34);
+    let x = __Chars::of(s);
+    let n = x.len();
+    let mut i = 0;
+    while i < n {
+        let c = x.get(i);
+        if c == 34 {
+            __sb_str(b, "\\\"");
+        } else if c == 92 {
+            __sb_str(b, "\\\\");
+        } else if c == 10 {
+            __sb_str(b, "\\n");
+        } else if c == 13 {
+            __sb_str(b, "\\r");
+        } else if c == 9 {
+            __sb_str(b, "\\t");
+        } else if c == 0 {
+            __sb_str(b, "\\0");
+        } else if c < 32 || c == 127 {
+            __sb_str(b, "\\u{" + __show_hex(c) + "}");
+        } else {
+            __sb_char(b, c);
+        }
+        i = i + 1;
+    }
+    __sb_char(b, 34);
+    __sb_finish(b)
+}
+
+fn __show_hex(c: Int) -> String {
+    let digits = "0123456789abcdef";
+    if c < 16 {
+        return digits.slice(c, c + 1);
+    }
+    __show_hex(c / 16) + digits.slice(c % 16, c % 16 + 1)
+}
+
+fn __show_bool(x: Bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+fn __show_vec<T>(v: Vec<T>, f: fn(T) -> String) -> String {
+    let parts = Vec::new();
+    for x in v {
+        parts.push(f(x));
+    }
+    "[" + parts.join(", ") + "]"
+}
+
+fn __show_option<T>(o: Option<T>, f: fn(T) -> String) -> String {
+    match o {
+        Some(x) => "Some(" + f(x) + ")",
+        None => "None",
+    }
+}
+
+fn __show_result<T, E>(r: Result<T, E>, f: fn(T) -> String, e: fn(E) -> String) -> String {
+    match r {
+        Ok(x) => "Ok(" + f(x) + ")",
+        Err(x) => "Err(" + e(x) + ")",
+    }
+}
+
+// ---- copies (a property may mutate its input) ----
+
+fn __copy_vec<T>(v: Vec<T>, f: fn(T) -> T) -> Vec<T> {
+    let w: Vec<T> = Vec::new();
+    for x in v {
+        w.push(f(x));
+    }
+    w
+}
+
+fn __copy_option<T>(o: Option<T>, f: fn(T) -> T) -> Option<T> {
+    match o {
+        Some(x) => Some(f(x)),
+        None => None,
+    }
+}
+
+fn __copy_result<T, E>(r: Result<T, E>, f: fn(T) -> T, e: fn(E) -> E) -> Result<T, E> {
+    match r {
+        Ok(x) => Ok(f(x)),
+        Err(x) => Err(e(x)),
+    }
+}
+
+// ---- running and reporting ----
+
+// __test_note records the input about to run on stderr: if the property
+// traps, `kek test` reports the last one.
+fn __test_note(s: String) {
+    __eprint("kek-case: " + s);
+}
+
+struct __Shrink {
+    mut why: String,
+    mut steps: Int,
+    mut budget: Int,
+    label: String,
+}
+
+fn __shrink_new(why: String, label: String) -> __Shrink {
+    __Shrink { why: why, steps: 0, budget: 2000, label: label }
+}
+
+// __shrink_try spends one run of the budget on the candidate input.
+fn __shrink_try(s: __Shrink, input: String) -> Bool {
+    if s.budget <= 0 {
+        return false;
+    }
+    s.budget = s.budget - 1;
+    __test_note("shrinking " + s.label + ": " + input);
+    true
+}
+
+fn __shrink_ok(s: __Shrink, why: String) {
+    s.why = why;
+    s.steps = s.steps + 1;
+}
+
+fn __test_prop_ok(name: String, kind: String, n: Int) -> Int {
+    let unit = if n == 1 { " case" } else { " cases" };
+    __test_ok(name, kind + "; " + n.to_string() + unit)
+}
+
+// __test_prop_failed reports the shrunk counterexample (the mocks hold
+// the state of its run).
+fn __test_prop_failed(
+    name: String,
+    kind: String,
+    s: __Shrink,
+    minimal: String,
+    orig: String,
+    i: Int,
+    n: Int,
+) -> Int {
+    let rt = __Rt::get();
+    __print("test " + name + " ... FAILED (" + kind + "; " + __test_elapsed() + ")");
+    __print("    " + s.why);
+    __print("    counterexample: " + minimal);
+    let mut how = "case " + (i + 1).to_string() + " of " + n.to_string();
+    if s.steps > 0 {
+        let unit = if s.steps == 1 { " step" } else { " steps" };
+        how = how + ", shrunk in " + s.steps.to_string() + unit + " from " + orig;
+    }
+    __print("    found: " + how);
+    __print("    reproduce: kek test -seed " + rt.seed.to_string() + " -run '^" + name + "$'");
+    __test_mock_lines()
+}

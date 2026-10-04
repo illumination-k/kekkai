@@ -2,7 +2,7 @@
 
 この文書は、コンパイル済みの `#[handler]` プログラムがCloudflare Workersでどう動くか、特にトランザクションを実際のストレージへ対応づける**ストアアダプタの契約**を説明する。言語側の設計は [design.md](design.md)、`#[main]` のプログラム（WASIのコマンド）は [language.md](language.md#実行モデル) を参照。
 
-- ランタイム本体：`js/kekkai_runtime.js`（`kek build` が `kekkai_runtime.js` として出力する）。WasmGCのモジュールは文字列や `Map` などを自前で持ち（`lib/prelude`）、JSから受け取るのはcapabilityの操作だけである。文字列は線形メモリを通してUTF-16で受け渡す
+- ランタイム本体：`js/kekkai_runtime.js`（`kek build` が `kekkai_runtime.js` として出力する）。WasmGCのモジュールは文字列や `HashMap` などを自前で持ち（`lib/prelude`・`lib/core`）、JSから受け取るのはcapabilityの操作だけである。文字列は線形メモリを通してUTF-16で受け渡す
 - Workersのエントリポイント：`compiler/glue_worker.kek`（`kek build`）が `worker.js` と `wrangler.toml` を生成する
 - 例：`examples/`（todo、冪等な決済、Webhookのファンアウト）
 

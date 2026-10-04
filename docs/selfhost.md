@@ -11,13 +11,15 @@ Kekkai のコンパイラは Kekkai で書かれている（`compiler/`）。コ
   - 一時ディレクトリに書いてから名前を変えて置くため、ロックは要らない。
   - キャッシュがないときは、ビルドの前に `compiler/prelude_src.kek` を `lib/prelude` から作り直す。
 - `./kek bootstrap-check`：stage1 で自分自身をもう一度ビルドし（stage2）、stage1 == stage2（不動点）を確認する。CI でも実行する。
-- `./kek bootstrap-update`：不動点を確認したうえで `bootstrap/kek.wasm` を更新する。
+- `./kek bootstrap-update`：不動点を確認したうえで `bootstrap/kek.wasm` を更新する。コンパイラが自分自身に生成するコードが変わったとき（prelude・core・コード生成の変更）は stage1 と stage2 が一致しないので、stage2 が自分自身を同じに再生成すること（stage2 == stage3）を確かめて stage2 を入れる。
 
 コンパイラ自身に新しい言語機能を使わせるときは、先にその機能を実装し、`bootstrap-update` してから使う。
 
 ## ランタイムの prelude
 
-生成されるモジュールは自己完結している。組み込み操作（`String`、`Map`、`Response`、`TxError` など）は Kekkai で書いた prelude（`lib/prelude/*.kek`）として実装され、`build` のときにプログラムと一緒に型検査・コンパイルされる。
+生成されるモジュールは自己完結している。組み込み操作（`String`、`Response`、`TxError` など）は Kekkai で書いた prelude（`lib/prelude/*.kek`）として実装され、`build` のときにプログラムと一緒に型検査・コンパイルされる。
+
+`HashMap`・`HashSet`・イテレータ・`PartialEq` などの trait は core ライブラリ（`lib/core/*.kek`）にある。core は prelude と違って intrinsic に頼らない普通の Kekkai のコードで、`check`・`ir` を含むすべてのコマンドでプログラムに加わる（`ir -json` にも使われた関数が入り、Lean 参照インタプリタがそのまま実行する）。コンパイラには `compiler/core_src.kek` として埋め込まれる（`./kek embed-prelude lib/core compiler/core_src.kek -as core`）。
 
 - 組み込み操作 `recv.name`（例：`string.split`）は prelude の関数 `__recv_name` が実装する。引数はレシーバと元の引数。
 - prelude は `__` で始まる intrinsic（コード生成がインラインで出す）の上に書かれている。
@@ -41,7 +43,7 @@ Kekkai のコンパイラは Kekkai で書かれている（`compiler/`）。コ
 | WASI（`#[main]`、`kek test`） | `_start`。引数を `Vec<String>` で渡し、戻り値で終了する | WASI preview 1。ファイルシステムのルートを `/` として開き、相対パスは `$PWD` から解決する。`&Net` は使えない（`NetError` を返す）。`&Db` はインメモリのストア |
 | Workers（`#[handler]`） | `handler_new` / `handler_step` / `handler_result` | capability の操作だけを `js/kekkai_runtime.js` から import する。文字列は線形メモリを通して UTF-16 で受け渡す。`Response` はエクスポートされた `resp_*` 関数で読む |
 
-文字列は WasmGC の `(array (mut i16))`。リテラルは受動データセグメントに置き、最初に使うときに作ってキャッシュする。`Map` は prelude の `__Map`（挿入順を保つハッシュ表）で、値は anyref に箱詰めする。
+文字列は WasmGC の `(array (mut i16))`。リテラルは受動データセグメントに置き、最初に使うときに作ってキャッシュする。
 
 ## 規約
 
@@ -53,7 +55,7 @@ Kekkai のコンパイラは Kekkai で書かれている（`compiler/`）。コ
   - バックエンド：`Wasm*`, `wasm_*`, `cg_*`
   - JSON：`Json*`, `json_*`
   - ツール：`fmt_*`, `caps_*`, `search_*`, `diag_*`, `irjson_*`, `glue_*`, `testrun_*`, `prelude_*`
-- AST のノードは識別用に `id: Int` を持つ。Map のキーは Int か String に限られ、ポインタの同一性もないためである。
+- AST のノードは識別用に `id: Int` を持つ。ポインタの同一性がないので、型検査の結果などはノードの id をキーにした `HashMap` に置く。
 - 出力は決定的にする。型・import・関数・ローカル・文字列リテラル表の順序は固定で、不動点の検査がこれに依存する。
 
 ## サブコマンド

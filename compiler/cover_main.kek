@@ -1,0 +1,952 @@
+// `kek cover` (prefix cov_): the compiler side. The launcher (`kek
+// cover`) runs
+//
+//   cover-build <file|dir> <outdir>
+//       check the program, instrument it (cover_walk.kek) and build it with
+//       the `kek test` harness: <outdir>/module.wasm, tests.txt (one test
+//       per line), testkeys.txt ("name<TAB>trans hash" per test) and
+//       sites.json (the probe table: id, function, file, line, col, kind,
+//       branch group, lines covered)
+//   cover-report <outdir> [-json] [-lcov file]
+//       aggregate <outdir>/hits.txt ("test<TAB>status<TAB>probe ids" per
+//       test run) into the report; exit 1 when the line coverage is below
+//       [cover] min_line of kekkai.toml
+//
+// Coverage is computed per line: a line is covered when a probe covering
+// it ran. Branches are the arms of every `if` (including an implicit
+// `else`) and `match`. Functions marked #[rare] are reported separately and
+// do not count; #[test] functions are not instrumented.
+
+// CovProg is a checked user program.
+struct CovProg {
+    srcs: Vec<FeSource>,
+    file: AstFile,
+    info: ChkInfo,
+    dh: DhProgram,
+    tests: Vec<TestrunTest>,
+    // by function declaration id
+    names: HashMap<Int, String>,
+    rare: HashMap<Int, Bool>,
+    istest: HashMap<Int, Bool>,
+    trans: HashMap<Int, String>,
+    hashes: HashMap<Int, String>,
+    // keep the program's own entry point instead of the test harness
+    // (`-main`: used by the test suites to compare outputs)
+    mut main: Bool,
+}
+
+fn cov_load_srcs(srcs: Vec<FeSource>, log: &Log) -> Option<CovProg> {
+    let prog = frontend_parse_all(srcs);
+    if prog.errs.len() > 0 {
+        frontend_print_errors(log, prog.errs);
+        return None;
+    }
+    let res = chk_check(prog.file);
+    if res.errs.len() > 0 {
+        frontend_print_errors(log, res.errs);
+        return None;
+    }
+    let dh = dh_program(prog.file, res.info);
+    let p = CovProg {
+        srcs: srcs,
+        file: prog.file,
+        info: res.info,
+        dh: dh,
+        tests: testrun_discover(res.info),
+        names: HashMap::new(),
+        rare: HashMap::new(),
+        istest: HashMap::new(),
+        trans: HashMap::new(),
+        hashes: HashMap::new(),
+        main: false,
+    };
+    for fun in res.info.func_list {
+        if chk_is_lib(fun) || p.names.contains_key(fun.decl.id) {
+            continue;
+        }
+        p.names.insert(fun.decl.id, fun.name);
+        p.rare.insert(fun.decl.id, ast_has_attr(fun.decl, "rare"));
+        p.istest.insert(fun.decl.id, fun.test);
+    }
+    for d in dh.defs {
+        if !p.trans.contains_key(d.fun.decl.id) {
+            p.trans.insert(d.fun.decl.id, d.trans);
+            p.hashes.insert(d.fun.decl.id, d.hash);
+        }
+    }
+    Some(p)
+}
+
+fn cov_load(path: String, fs: &Fs, log: &Log) -> Option<CovProg> {
+    match frontend_read_sources(path, fs, log) {
+        Some(srcs) => cov_load_srcs(srcs, log),
+        None => None,
+    }
+}
+
+// cov_is_user reports whether a declaration is a user function with a
+// body.
+fn cov_is_user(fd: AstFuncDecl) -> Bool {
+    fd.has_body && !fd.pos.file.starts_with("<")
+}
+
+// cov_rewrite_file rewrites the selected functions of f with walker w
+// (collect mode leaves f unchanged).
+fn cov_rewrite_file(w: CovW, f: AstFile, p: CovProg, sel: HashMap<Int, Bool>) {
+    let n = f.funcs.len();
+    for i in 0..n {
+        match f.funcs.get(i) {
+            Some(fd) => {
+                if cov_is_user(fd) && sel.contains_key(fd.id) {
+                    let nf = cov_walk_one(w, fd, p);
+                    if w.mode != "collect" {
+                        f.funcs.set(i, nf);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    for im in f.impls {
+        cov_rewrite_funcs(w, im.funcs, p, sel);
+    }
+    for tr in f.traits {
+        cov_rewrite_funcs(w, tr.funcs, p, sel);
+    }
+}
+
+fn cov_rewrite_funcs(w: CovW, fs: Vec<AstFuncDecl>, p: CovProg, sel: HashMap<Int, Bool>) {
+    let n = fs.len();
+    for i in 0..n {
+        match fs.get(i) {
+            Some(fd) => {
+                if cov_is_user(fd) && sel.contains_key(fd.id) {
+                    let nf = cov_walk_one(w, fd, p);
+                    if w.mode != "collect" {
+                        fs.set(i, nf);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+fn cov_walk_one(w: CovW, fd: AstFuncDecl, p: CovProg) -> AstFuncDecl {
+    w.func = p.names.get(fd.id).unwrap_or(fd.name);
+    w.rare = p.rare.get(fd.id).unwrap_or(false);
+    w.fkey = p.trans.get(fd.id).unwrap_or("");
+    cov_walk_func(w, fd)
+}
+
+// cov_all_funcs lists the user function declarations of a file in source
+// order (functions, then impl methods, then trait default methods).
+fn cov_all_funcs(f: AstFile) -> Vec<AstFuncDecl> {
+    let out = Vec::new();
+    for fd in f.funcs {
+        if cov_is_user(fd) {
+            out.push(fd);
+        }
+    }
+    for im in f.impls {
+        for fd in im.funcs {
+            if cov_is_user(fd) {
+                out.push(fd);
+            }
+        }
+    }
+    for tr in f.traits {
+        for fd in tr.funcs {
+            if cov_is_user(fd) {
+                out.push(fd);
+            }
+        }
+    }
+    out
+}
+
+// cov_with_harness returns the sources plus the `kek test` harness and the
+// runtime prelude, parsed.
+fn cov_with_harness(p: CovProg) -> FeProgram {
+    let all = Vec::new();
+    for s in p.srcs {
+        all.push(s);
+    }
+    if !p.main {
+        all.push(FeSource { name: "<prelude>/kek_test_main.kek", text: testrun_harness(p.tests) });
+    }
+    for s in prelude_sources() {
+        all.push(s);
+    }
+    frontend_parse_all(all)
+}
+
+// cov_demote demotes the program's own entry points (the harness is the
+// entry).
+fn cov_demote(f: AstFile) {
+    for fd in f.funcs {
+        if fd.name == testrun_main_name() {
+            continue;
+        }
+        let attrs = Vec::new();
+        for a in fd.attrs {
+            if a.name != "handler" && a.name != "main" {
+                attrs.push(a);
+            }
+        }
+        fd.attrs = attrs;
+    }
+}
+
+// cov_compile checks the instrumented program with the prelude and writes
+// <out>/module.wasm.
+fn cov_compile(f: AstFile, main: Bool, out_dir: String, what: String, fs: &Fs, log: &Log) -> Int {
+    if !main {
+        cov_demote(f);
+    }
+    let res = chk_check_prelude(f);
+    if res.errs.len() > 0 {
+        log.error("kek " + what + ": internal error: the instrumented program does not check:");
+        frontend_print_errors(log, res.errs);
+        return 1;
+    }
+    cov_emit(res.info, out_dir, fs, log)
+}
+
+fn cov_emit(info: ChkInfo, out_dir: String, fs: &Fs, log: &Log) -> Int {
+    let ir = lower_lower(info);
+    let out = wasm_compile(ir);
+    if out.err != "" {
+        log.error(out.err);
+        return 1;
+    }
+    let wasm_path = out_dir + "/module.wasm";
+    match fs.write_bytes(wasm_path, out.wasm) {
+        Ok(_) => 0,
+        Err(e) => {
+            log.error(wasm_path + ": " + e.message());
+            1
+        }
+    }
+}
+
+// cov_write_tests writes tests.txt and testkeys.txt.
+fn cov_write_tests(p: CovProg, out_dir: String, fs: &Fs, log: &Log) -> Bool {
+    let names = Vec::new();
+    let keys = Vec::new();
+    for t in p.tests {
+        names.push(t.name + "\n");
+        let tr = match p.dh.by_name.get(t.name) {
+            Some(d) => d.trans,
+            None => "",
+        };
+        keys.push(t.name + "\t" + tr + "\n");
+    }
+    tool_write(fs, log, out_dir + "/tests.txt", names.join(""))
+        && tool_write(fs, log, out_dir + "/testkeys.txt", keys.join(""))
+}
+
+// `cover-build <file|dir> <outdir>`
+fn cov_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    if args.len() != 3 && !(args.len() == 4 && args.get(3).unwrap_or("") == "-main") {
+        log.error("usage: kek cover-build <file|dir> <outdir> [-main]");
+        return 2;
+    }
+    let path = args.get(1).unwrap_or("");
+    let out_dir = frontend_clean_dir(args.get(2).unwrap_or(""));
+    let p = match cov_load(path, fs, log) {
+        Some(p) => p,
+        None => {
+            return 1;
+        }
+    };
+    p.main = args.len() == 4;
+    let prog = cov_with_harness(p);
+    if prog.errs.len() > 0 {
+        frontend_print_errors(log, prog.errs);
+        return 1;
+    }
+    let sel: HashMap<Int, Bool> = HashMap::new();
+    for fd in cov_all_funcs(prog.file) {
+        if !p.istest.get(fd.id).unwrap_or(false) {
+            sel.insert(fd.id, true);
+        }
+    }
+    let w = cov_new_walk("cover");
+    cov_rewrite_file(w, prog.file, p, sel);
+    if !cov_write_tests(p, out_dir, fs, log) {
+        return 1;
+    }
+    // the function table: every instrumented function and its entry probe
+    let funcs = Vec::new();
+    for fd in cov_all_funcs(p.file) {
+        if !sel.contains_key(fd.id) {
+            continue;
+        }
+        let o = irjson_obj();
+        irjson_set(o, "name", IrjVal::Str(p.names.get(fd.id).unwrap_or(fd.name)));
+        irjson_set(o, "file", IrjVal::Str(fd.pos.file));
+        irjson_set(o, "line", irjson_int(fd.pos.line));
+        irjson_set(o, "rare", irjson_bool(p.rare.get(fd.id).unwrap_or(false)));
+        funcs.push(irjson_val(o));
+    }
+    let sites = Vec::new();
+    for s in w.sites {
+        sites.push(cov_site_json(s));
+    }
+    let o = irjson_obj();
+    irjson_set(o, "path", IrjVal::Str(path));
+    irjson_set(o, "functions", IrjVal::Arr(funcs));
+    irjson_set(o, "sites", IrjVal::Arr(sites));
+    let text = irjson_encode(irjson_val(o), false) + "\n";
+    if !tool_write(fs, log, out_dir + "/sites.json", text) {
+        return 1;
+    }
+    cov_compile(prog.file, p.main, out_dir, "cover", fs, log)
+}
+
+fn cov_site_json(s: CovSite) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "id", irjson_int(s.id));
+    irjson_set(o, "func", IrjVal::Str(s.func));
+    irjson_set(o, "file", IrjVal::Str(s.file));
+    irjson_set(o, "line", irjson_int(s.line));
+    irjson_set(o, "col", irjson_int(s.col));
+    irjson_set(o, "kind", IrjVal::Str(s.kind));
+    irjson_set(o, "group", irjson_int(s.group));
+    irjson_set(o, "arm", irjson_int(s.arm));
+    irjson_set(o, "dline", irjson_int(s.dline));
+    irjson_set(o, "rare", irjson_bool(s.rare));
+    irjson_set(o, "lines", irjson_ints(cov_uniq_ints(s.lines)));
+    irjson_val(o)
+}
+
+// ---- small helpers ----
+
+// cov_sort_ints sorts in place (insertion sort; the lists are short).
+fn cov_sort_ints(v: Vec<Int>) {
+    let n = v.len();
+    for i in 1..n {
+        let mut j = i;
+        while j > 0 && v.get(j).unwrap_or(0) < v.get(j - 1).unwrap_or(0) {
+            let a = v.get(j).unwrap_or(0);
+            v.set(j, v.get(j - 1).unwrap_or(0));
+            v.set(j - 1, a);
+            j = j - 1;
+        }
+    }
+}
+
+fn cov_uniq_ints(v: Vec<Int>) -> Vec<Int> {
+    let seen: HashSet<Int> = HashSet::new();
+    let out = Vec::new();
+    for x in v {
+        if seen.insert(x) {
+            out.push(x);
+        }
+    }
+    cov_sort_ints(out);
+    out
+}
+
+// cov_pct renders n/d as a percentage with one decimal ("-" when d is 0).
+fn cov_pct(n: Int, d: Int) -> String {
+    if d == 0 {
+        return "-";
+    }
+    let t = (n * 1000 + d / 2) / d;
+    (t / 10).to_string() + "." + (t % 10).to_string() + "%"
+}
+
+// cov_pct_num is the percentage as a JSON number (one decimal).
+fn cov_pct_num(n: Int, d: Int) -> IrjVal {
+    if d == 0 {
+        return IrjVal::Null;
+    }
+    let t = (n * 1000 + d / 2) / d;
+    IrjVal::Raw((t / 10).to_string() + "." + (t % 10).to_string())
+}
+
+// cov_pad pads s with spaces to width n (left-aligned, or right when
+// right is set).
+fn cov_pad(s: String, n: Int, right: Bool) -> String {
+    let mut out = s;
+    let mut k = s.len();
+    while k < n {
+        out = if right { " " + out } else { out + " " };
+        k = k + 1;
+    }
+    out
+}
+
+// cov_ranges renders sorted line numbers as "3, 5-7".
+fn cov_ranges(v: Vec<Int>) -> String {
+    let parts = Vec::new();
+    let mut i = 0;
+    let n = v.len();
+    while i < n {
+        let a = v.get(i).unwrap_or(0);
+        let mut b = a;
+        while i + 1 < n && v.get(i + 1).unwrap_or(0) == b + 1 {
+            i = i + 1;
+            b = b + 1;
+        }
+        parts.push(if a == b {
+            a.to_string()
+        } else {
+            a.to_string() + "-" + b.to_string()
+        });
+        i = i + 1;
+    }
+    parts.join(", ")
+}
+
+fn cov_base(file: String) -> String {
+    match file.split("/").iter().last() {
+        Some(b) => b,
+        None => file,
+    }
+}
+
+// cov_read_lines reads a text file into lines (no trailing empty line).
+fn cov_read_lines(fs: &Fs, p: String) -> Vec<String> {
+    let out = Vec::new();
+    match fs.read(p) {
+        Ok(text) => {
+            for l in text.split("\n") {
+                if l != "" {
+                    out.push(l);
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    out
+}
+
+// ---- report ----
+
+struct CovFn {
+    name: String,
+    file: String,
+    line: Int,
+    rare: Bool,
+    lines: HashMap<Int, Int>,
+    mut hit: Int,
+    mut br_total: Int,
+    mut br_hit: Int,
+}
+
+struct CovFileAgg {
+    file: String,
+    lines: HashMap<Int, Int>,
+    funcs: Vec<CovFn>,
+    mut br_total: Int,
+    mut br_hit: Int,
+}
+
+fn cov_count_lines(m: HashMap<Int, Int>) -> Int {
+    let mut n = 0;
+    for kv in m.iter() {
+        if kv.1 > 0 {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+fn cov_uncovered(m: HashMap<Int, Int>) -> Vec<Int> {
+    let out = Vec::new();
+    for kv in m.iter() {
+        if kv.1 == 0 {
+            out.push(kv.0);
+        }
+    }
+    cov_sort_ints(out);
+    out
+}
+
+// cov_merge_line records that line l is instrumented and was hit by n
+// tests (the maximum over the probes covering it).
+fn cov_merge_line(m: HashMap<Int, Int>, l: Int, n: Int) {
+    let old = m.get(&l).unwrap_or(0);
+    if !m.contains_key(&l) || n > old {
+        m.insert(l, n);
+    }
+}
+
+// `cover-report <outdir> [-json] [-lcov file]`
+fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let usage = "cover-report [-json] [-lcov file] <outdir>";
+    let fl = tool_flags(args, 1, "json lcov=");
+    if fl.err != "" {
+        return tool_flag_error(fl, usage, log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek " + usage);
+        return 2;
+    }
+    let dir = frontend_clean_dir(fl.rest.get(0).unwrap_or(""));
+    let table = match fs.read(dir + "/sites.json") {
+        Ok(t) => match tool_json_parse(t) {
+            Ok(v) => v,
+            Err(e) => {
+                log.error(dir + "/sites.json: " + e);
+                return 1;
+            }
+        },
+        Err(e) => {
+            log.error(dir + "/sites.json: " + e.message());
+            return 1;
+        }
+    };
+    let cfg = match tool_config(fs, log) {
+        Some(c) => c,
+        None => {
+            return 1;
+        }
+    };
+    let min_line = tool_json_int(tool_config_get(cfg, "cover", "min_line"), -1);
+    // per test runs: name, status, probe ids
+    let test_names = Vec::new();
+    let test_status = Vec::new();
+    let hits_by_site: HashMap<Int, Vec<String>> = HashMap::new();
+    for l in cov_read_lines(fs, dir + "/hits.txt") {
+        let parts = l.split("\t");
+        let name = parts.get(0).unwrap_or("");
+        test_names.push(name);
+        test_status.push(parts.get(1).unwrap_or(""));
+        for s in parts.get(2).unwrap_or("").split(" ") {
+            match s.parse_int() {
+                Some(k) => {
+                    match hits_by_site.get(&k) {
+                        Some(v) => v.push(name),
+                        None => {
+                            let v = Vec::new();
+                            v.push(name);
+                            hits_by_site.insert(k, v);
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    // functions and files
+    let files = Vec::new();
+    let file_by: HashMap<String, CovFileAgg> = HashMap::new();
+    let fn_by: HashMap<String, CovFn> = HashMap::new();
+    for f in tool_json_arr(tool_json_get(table, "functions")) {
+        let file = tool_json_str(tool_json_get(f, "file"), "");
+        let cf = CovFn {
+            name: tool_json_str(tool_json_get(f, "name"), ""),
+            file: file,
+            line: tool_json_int(tool_json_get(f, "line"), 0),
+            rare: tool_json_bool(tool_json_get(f, "rare"), false),
+            lines: HashMap::new(),
+            hit: 0,
+            br_total: 0,
+            br_hit: 0,
+        };
+        fn_by.insert(cf.name, cf);
+        let fa = match file_by.get(file) {
+            Some(x) => x,
+            None => {
+                let x = CovFileAgg {
+                    file: file,
+                    lines: HashMap::new(),
+                    funcs: Vec::new(),
+                    br_total: 0,
+                    br_hit: 0,
+                };
+                file_by.insert(file, x);
+                files.push(x);
+                x
+            }
+        };
+        fa.funcs.push(cf);
+    }
+    let site_objs = Vec::new();
+    // branch groups: group id -> any site of it hit
+    let group_seen: HashMap<Int, Bool> = HashMap::new();
+    let sites = tool_json_arr(tool_json_get(table, "sites"));
+    for s in sites {
+        let id = tool_json_int(tool_json_get(s, "id"), 0);
+        let tests = hits_by_site.get(&id).unwrap_or(Vec::new());
+        let n = tests.len();
+        let g = tool_json_int(tool_json_get(s, "group"), 0);
+        if g > 0 && n > 0 {
+            group_seen.insert(g, true);
+        }
+        let cf = match fn_by.get(tool_json_str(tool_json_get(s, "func"), "")) {
+            Some(x) => x,
+            None => {
+                continue;
+            }
+        };
+        for lv in tool_json_arr(tool_json_get(s, "lines")) {
+            cov_merge_line(cf.lines, tool_json_int(lv, 0), n);
+        }
+        let kind = tool_json_str(tool_json_get(s, "kind"), "");
+        if kind == "fn" && n > cf.hit {
+            cf.hit = n;
+        }
+        if g > 0 {
+            cf.br_total = cf.br_total + 1;
+            if n > 0 {
+                cf.br_hit = cf.br_hit + 1;
+            }
+        }
+        let o = irjson_obj();
+        irjson_set(o, "id", irjson_int(id));
+        irjson_set(o, "func", IrjVal::Str(cf.name));
+        irjson_set(o, "file", IrjVal::Str(tool_json_str(tool_json_get(s, "file"), "")));
+        irjson_set(o, "line", irjson_int(tool_json_int(tool_json_get(s, "line"), 0)));
+        irjson_set(o, "col", irjson_int(tool_json_int(tool_json_get(s, "col"), 0)));
+        irjson_set(o, "kind", IrjVal::Str(kind));
+        if g > 0 {
+            irjson_set(o, "branch", irjson_int(tool_json_int(tool_json_get(s, "arm"), 0)));
+            irjson_set(o, "decision_line", irjson_int(tool_json_int(tool_json_get(s, "dline"), 0)));
+        }
+        let ls = Vec::new();
+        for lv in tool_json_arr(tool_json_get(s, "lines")) {
+            ls.push(tool_json_int(lv, 0));
+        }
+        irjson_set(o, "lines", irjson_ints(ls));
+        irjson_set(o, "tests", irjson_strs(tests));
+        site_objs.push(irjson_val(o));
+    }
+    // totals (rare functions excluded)
+    let mut lt = 0;
+    let mut lh = 0;
+    let mut bt = 0;
+    let mut bh = 0;
+    let mut ft = 0;
+    let mut fh = 0;
+    for fa in files {
+        for cf in fa.funcs {
+            if cf.rare {
+                continue;
+            }
+            for kv in cf.lines.iter() {
+                cov_merge_line(fa.lines, kv.0, kv.1);
+            }
+            fa.br_total = fa.br_total + cf.br_total;
+            fa.br_hit = fa.br_hit + cf.br_hit;
+            ft = ft + 1;
+            if cf.hit > 0 {
+                fh = fh + 1;
+            }
+        }
+        lt = lt + fa.lines.len();
+        lh = lh + cov_count_lines(fa.lines);
+        bt = bt + fa.br_total;
+        bh = bh + fa.br_hit;
+    }
+    let mut passed = 0;
+    for st in test_status {
+        if st == "ok" {
+            passed = passed + 1;
+        }
+    }
+    let below = min_line >= 0 && lt > 0 && lh * 100 < min_line * lt;
+    let lcov = tool_flag_str(fl, "lcov", "");
+    if lcov != "" {
+        if !tool_write(fs, log, lcov, cov_lcov(files, sites, hits_by_site, fn_by)) {
+            return 1;
+        }
+    }
+    let path = tool_json_str(tool_json_get(table, "path"), "");
+    if tool_flag_bool(fl, "json") {
+        let o = irjson_obj();
+        irjson_set(o, "path", IrjVal::Str(path));
+        let tests = Vec::new();
+        let mut i = 0;
+        for name in test_names {
+            let t = irjson_obj();
+            irjson_set(t, "name", IrjVal::Str(name));
+            irjson_set(t, "status", IrjVal::Str(test_status.get(i).unwrap_or("")));
+            tests.push(irjson_val(t));
+            i = i + 1;
+        }
+        irjson_set(o, "tests", IrjVal::Arr(tests));
+        let sum = irjson_obj();
+        irjson_set(sum, "lines", cov_count_json(lh, lt));
+        irjson_set(sum, "branches", cov_count_json(bh, bt));
+        irjson_set(sum, "functions", cov_count_json(fh, ft));
+        irjson_set(o, "summary", irjson_val(sum));
+        irjson_set(o, "min_line", if min_line >= 0 {
+            irjson_int(min_line)
+        } else {
+            IrjVal::Null
+        });
+        irjson_set(o, "ok", irjson_bool(!below && passed == test_names.len()));
+        let fos = Vec::new();
+        for fa in files {
+            let fo = irjson_obj();
+            irjson_set(fo, "file", IrjVal::Str(fa.file));
+            irjson_set(fo, "lines", cov_count_json(cov_count_lines(fa.lines), fa.lines.len()));
+            irjson_set(fo, "branches", cov_count_json(fa.br_hit, fa.br_total));
+            irjson_set(fo, "uncovered", irjson_ints(cov_uncovered(fa.lines)));
+            fos.push(irjson_val(fo));
+        }
+        irjson_set(o, "files", IrjVal::Arr(fos));
+        let fns = Vec::new();
+        for fa in files {
+            for cf in fa.funcs {
+                let fo = irjson_obj();
+                irjson_set(fo, "name", IrjVal::Str(cf.name));
+                irjson_set(fo, "file", IrjVal::Str(cf.file));
+                irjson_set(fo, "line", irjson_int(cf.line));
+                irjson_set(fo, "rare", irjson_bool(cf.rare));
+                irjson_set(fo, "hits", irjson_int(cf.hit));
+                irjson_set(fo, "lines", cov_count_json(cov_count_lines(cf.lines), cf.lines.len()));
+                irjson_set(fo, "branches", cov_count_json(cf.br_hit, cf.br_total));
+                irjson_set(fo, "uncovered", irjson_ints(cov_uncovered(cf.lines)));
+                fns.push(irjson_val(fo));
+            }
+        }
+        irjson_set(o, "functions", IrjVal::Arr(fns));
+        irjson_set(o, "sites", IrjVal::Arr(site_objs));
+        log.info(irjson_encode(irjson_val(o), false));
+        return if below || passed < test_names.len() {
+            1
+        } else {
+            0
+        };
+    }
+    let out = Vec::new();
+    out.push(
+        "coverage of "
+            + path
+            + " ("
+            + mut_plural(test_names.len(), "test")
+            + ", "
+            + passed.to_string()
+            + " passed)",
+    );
+    if passed < test_names.len() {
+        let failed = Vec::new();
+        let mut i = 0;
+        for name in test_names {
+            if test_status.get(i).unwrap_or("") != "ok" {
+                failed.push(name);
+            }
+            i = i + 1;
+        }
+        out.push("failing tests (their coverage still counts): " + failed.join(", "));
+    }
+    out.push("");
+    out.push("  lines           branches        function");
+    let rare = Vec::new();
+    for fa in files {
+        for cf in fa.funcs {
+            let row = cov_fn_row(cf);
+            if cf.rare {
+                rare.push(row);
+            } else {
+                out.push(row);
+            }
+        }
+    }
+    if rare.len() > 0 {
+        out.push("#[rare] (not counted):");
+        for r in rare {
+            out.push(r);
+        }
+    }
+    out.push("");
+    for fa in files {
+        let n = cov_count_lines(fa.lines);
+        out.push(
+            cov_pad(fa.file, 24, false)
+                + " lines "
+                + cov_pad(cov_pct(n, fa.lines.len()), 6, true)
+                + " ("
+                + n.to_string()
+                + "/"
+                + fa.lines.len().to_string()
+                + "), branches "
+                + cov_pct(fa.br_hit, fa.br_total)
+                + " ("
+                + fa.br_hit.to_string()
+                + "/"
+                + fa.br_total.to_string()
+                + ")",
+        );
+        let un = cov_uncovered(fa.lines);
+        if un.len() > 0 {
+            out.push("  uncovered lines: " + cov_ranges(un));
+        }
+    }
+    out.push("");
+    out.push(
+        "total: lines "
+            + cov_pct(lh, lt)
+            + " ("
+            + lh.to_string()
+            + "/"
+            + lt.to_string()
+            + "), branches "
+            + cov_pct(bh, bt)
+            + " ("
+            + bh.to_string()
+            + "/"
+            + bt.to_string()
+            + "), functions "
+            + cov_pct(fh, ft)
+            + " ("
+            + fh.to_string()
+            + "/"
+            + ft.to_string()
+            + ")",
+    );
+    if lcov != "" {
+        out.push("lcov: " + lcov);
+    }
+    frontend_print(log, out);
+    if below {
+        log.error(
+            "kek cover: line coverage "
+                + cov_pct(lh, lt)
+                + " is below [cover] min_line = "
+                + min_line.to_string()
+                + "%",
+        );
+        return 1;
+    }
+    if passed < test_names.len() {
+        return 1;
+    }
+    0
+}
+
+fn cov_count_json(hit: Int, total: Int) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "hit", irjson_int(hit));
+    irjson_set(o, "total", irjson_int(total));
+    irjson_set(o, "percent", cov_pct_num(hit, total));
+    irjson_val(o)
+}
+
+fn cov_fn_row(cf: CovFn) -> String {
+    let n = cov_count_lines(cf.lines);
+    let lines = cov_pad(cov_pct(n, cf.lines.len()), 6, true)
+        + " "
+        + cov_pad(n.to_string() + "/" + cf.lines.len().to_string(), 8, false);
+    let br = if cf.br_total == 0 {
+        cov_pad("", 15, false)
+    } else {
+        cov_pad(cov_pct(cf.br_hit, cf.br_total), 6, true)
+            + " "
+            + cov_pad(cf.br_hit.to_string() + "/" + cf.br_total.to_string(), 8, false)
+    };
+    let mut row = "  "
+        + lines
+        + " "
+        + br
+        + " "
+        + cf.name
+        + " ("
+        + cov_base(cf.file)
+        + ":"
+        + cf.line.to_string()
+        + ")";
+    if cf.hit == 0 {
+        row = row + "  never called";
+    }
+    row
+}
+
+// cov_lcov renders an lcov tracefile (counts are numbers of tests).
+fn cov_lcov(
+    files: Vec<CovFileAgg>,
+    sites: Vec<ToolJson>,
+    hits: HashMap<Int, Vec<String>>,
+    fn_by: HashMap<String, CovFn>,
+) -> String {
+    let out = Vec::new();
+    for fa in files {
+        out.push("TN:");
+        out.push("SF:" + fa.file);
+        let mut fnf = 0;
+        let mut fnh = 0;
+        for cf in fa.funcs {
+            if cf.rare {
+                continue;
+            }
+            out.push("FN:" + cf.line.to_string() + "," + cf.name);
+        }
+        for cf in fa.funcs {
+            if cf.rare {
+                continue;
+            }
+            out.push("FNDA:" + cf.hit.to_string() + "," + cf.name);
+            fnf = fnf + 1;
+            if cf.hit > 0 {
+                fnh = fnh + 1;
+            }
+        }
+        out.push("FNF:" + fnf.to_string());
+        out.push("FNH:" + fnh.to_string());
+        // branches: one block per decision; "-" when the decision never ran
+        let ran: HashMap<Int, Bool> = HashMap::new();
+        for s in sites {
+            let g = tool_json_int(tool_json_get(s, "group"), 0);
+            let id = tool_json_int(tool_json_get(s, "id"), 0);
+            if g > 0 && hits.get(&id).unwrap_or(Vec::new()).len() > 0 {
+                ran.insert(g, true);
+            }
+        }
+        let mut brf = 0;
+        let mut brh = 0;
+        for s in sites {
+            let g = tool_json_int(tool_json_get(s, "group"), 0);
+            if g == 0 || tool_json_str(tool_json_get(s, "file"), "") != fa.file {
+                continue;
+            }
+            let rare = match fn_by.get(tool_json_str(tool_json_get(s, "func"), "")) {
+                Some(cf) => cf.rare,
+                None => true,
+            };
+            if rare {
+                continue;
+            }
+            let id = tool_json_int(tool_json_get(s, "id"), 0);
+            let n = hits.get(&id).unwrap_or(Vec::new()).len();
+            let taken = if ran.get(&g).unwrap_or(false) {
+                n.to_string()
+            } else {
+                "-"
+            };
+            out.push(
+                "BRDA:"
+                    + tool_json_int(tool_json_get(s, "dline"), 0).to_string()
+                    + ","
+                    + g.to_string()
+                    + ","
+                    + tool_json_int(tool_json_get(s, "arm"), 0).to_string()
+                    + ","
+                    + taken,
+            );
+            brf = brf + 1;
+            if n > 0 {
+                brh = brh + 1;
+            }
+        }
+        out.push("BRF:" + brf.to_string());
+        out.push("BRH:" + brh.to_string());
+        let ls = Vec::new();
+        for kv in fa.lines.iter() {
+            ls.push(kv.0);
+        }
+        cov_sort_ints(ls);
+        for l in ls {
+            out.push("DA:" + l.to_string() + "," + fa.lines.get(&l).unwrap_or(0).to_string());
+        }
+        out.push("LF:" + fa.lines.len().to_string());
+        out.push("LH:" + cov_count_lines(fa.lines).to_string());
+        out.push("end_of_record");
+    }
+    out.join("\n") + "\n"
+}

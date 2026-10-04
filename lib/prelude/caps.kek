@@ -18,9 +18,14 @@ fn __rt_new() -> __Rt {
         lines: Vec::new(),
         sent: Vec::new(),
         start_ns: 0,
+        cov: Vec::new(),
+        cov_out: "",
+        mutant: 0,
     };
     let env = __env_all(rt);
     rt.cwd = __env_lookup(env, "PWD");
+    rt.cov_out = __env_lookup(env, "KEK_COVER_OUT");
+    rt.mutant = __env_lookup(env, "KEK_MUTANT").parse_int().unwrap_or(0);
     if __env_lookup(env, "KEK_TEST") == "1" {
         rt.test = true;
         __test_setup(rt, env);

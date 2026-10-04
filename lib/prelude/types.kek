@@ -52,4 +52,9 @@ struct __Rt {
     lines: Vec<String>,
     sent: Vec<String>,
     mut start_ns: Int,
+    // `kek cover` / `kek mutate` (lib/prelude/cover.kek): probes hit, the
+    // file they are written to at exit, the active mutant
+    cov: Vec<Bool>,
+    mut cov_out: String,
+    mut mutant: Int,
 }

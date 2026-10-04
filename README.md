@@ -39,6 +39,8 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
 | `kek test [-run re] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス） |
+| `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
+| `kek mutate [-json] [-base p] [-diff rev] <file>` | ミューテーションテスト（型の付く変異体だけ。型で検出された変異体を別に数える。結果はキャッシュ） |
 
 ### テスト（`kek test`）
 
@@ -70,6 +72,40 @@ fn visits_are_counted(db: &Db, log: &Log) -> Result<(), String> {
 capability を受け取らないテストは純粋なので hermetic で、出力に `pure: hermetic, cacheable` と表示されます（定義ハッシュをキーにしたキャッシュは今後の課題）。
 
 オプションは `./kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>`（`-run` は拡張正規表現）。コンパイラの `test-build`（`compiler/testrun.kek`）がテストを発見し、テスト名で 1 つを実行する `#[main]` を合成してビルドします。モックは prelude（`lib/prelude/test.kek`）にあり、`./kek` がテストごとに wasmtime のプロセスを起動します。トラップ（スタックの使い切りなど）はそのテストだけの失敗になります。
+
+### カバレッジ（`kek cover`）
+
+```sh
+./kek cover testdata/cover/shapes.kek
+./kek cover -lcov coverage.lcov -json testdata/cover/shapes.kek
+```
+
+コンパイラの `cover-build`（`compiler/cover_walk.kek`）が型検査の前に AST へ計測（`__cov_hit(k);`）を埋め込みます。計測点は関数の入口、`if` の両方の枝（`else` がなくても）、`match` の各アーム、ループとクロージャの本体、そして `return`・`?`・`break`・`continue` で抜けうる文の直後です。計測は prelude の純粋な関数を呼ぶだけなので、型・capability・`Tx` の線形性・非同期化は変わりません（`tests/suites/cover.sh` は計測したプログラムの出力が変わらないことを確かめます）。
+
+テストは `kek test` と同じハーネスで 1 つずつ別プロセスで実行し、通った計測点を `KEK_COVER_OUT` のファイルに書き出します。結果は関数・ファイルごとの行と分岐のカバレッジ、未カバーの行、`-json`（計測点ごとに通ったテスト）、`-lcov`（エディタや CI 向け）です。`#[test]` 関数は計測せず、`#[rare]` の関数は別に表示して集計から除きます。テストごとの結果はコンパイラ・計測点の表・テストの `trans` ハッシュをキーに `.kek-cache/cover/` にキャッシュします。`kekkai.toml` の `[cover] min_line = 80` を下回るか、失敗したテストがあると終了コード 1 です。
+
+### ミューテーションテスト（`kek mutate`）
+
+```sh
+./kek mutate testdata/mutate/calc.kek
+./kek mutate -diff HEAD~1 -json src/       # 変更された定義だけ
+```
+
+型検査済みの AST から、型の付く変異体だけを作ります（`compiler/mutate_gen.kek`）。
+
+| 種類 | 変異 |
+| --- | --- |
+| 算術 | `Int` の `+`↔`-`、`*`↔`/`、`%`→`*` |
+| 比較 | 境界（`<`↔`<=`、`>`↔`>=`）と否定（`<`→`>=`、`==`↔`!=`） |
+| 論理 | `&&`↔`\|\|`、`if`・`while` の条件の否定、`!x`・`-x` → `x` |
+| リテラル | 整数 n → n+1・0、真偽値の反転、文字列 → `""` |
+| 文・結果 | 呼び出しや代入の文の削除、関数の結果を `0`・`""`・`None`・`Vec::new()` に（`Bool` は否定） |
+
+文の削除や結果の置き換えは 1 つずつ型検査し、通らないものを**型で検出**（killed by types）として別に数えます。たとえば `tx.commit()?;` の削除は `Tx` の線形性検査で弾かれます。型で検出された割合は、型システムがどれだけバグを防いでいるかの指標です。
+
+残りの変異体は**ミュータントスキーマ**として 1 つのモジュールにまとめます。各箇所は `__mut_iop(k, x, y, op, alt)` や `if __mut_on(k) { 変異 } else { 元 }` のような prelude の呼び出しになり、実行時に環境変数 `KEK_MUTANT=k` で 1 つを選びます。まず変異なしで各テストを実行して、どのテストがどの変異箇所に到達するかを記録し、変異体ごとに到達するテストだけを、どれかが失敗するまで実行します（wasmtime のプロセスを並列に起動）。結果は検出（killed）、生存（survived）、時間切れ（timeout、既定は 1 秒 + 最も遅いテストの 10 倍、`-timeout 2s`）、未到達（no coverage）です。スコアは (killed + timeout) / (killed + timeout + survived + no coverage) で、`kekkai.toml` の `[mutate] min_score = 80` を下回ると終了コード 1 です。
+
+`-base <file|dir>` か `-diff <git-rev>` を付けると、定義ハッシュ（`hash`）が変わった定義と新しい定義だけを変異させます。ビルドはソースの内容で、変異体ごとの結果は「変異体（関数の `trans` ハッシュ + 関数内の位置 + 変異）× テストの `trans` ハッシュ」で `.kek-cache/mutate/` にキャッシュするので、変更のない 2 回目の実行はテストを 1 つも動かしません。
 
 ## 開発
 

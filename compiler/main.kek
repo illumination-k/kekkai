@@ -28,6 +28,18 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "test-build" {
         return testrun_main(args, fs, log);
     }
+    if cmd == "cover-build" {
+        return cov_build_main(args, fs, log);
+    }
+    if cmd == "cover-report" {
+        return cov_report_main(args, fs, log);
+    }
+    if cmd == "mutate-build" {
+        return mut_build_main(args, fs, log);
+    }
+    if cmd == "mutate-report" {
+        return mut_report_main(args, fs, log);
+    }
     if cmd == "fmt" {
         return fmt_main(args, fs, log);
     }

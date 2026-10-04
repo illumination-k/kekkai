@@ -1,0 +1,1361 @@
+// Traits: declarations, implementations, bounds, associated types and
+// obligations.
+//
+// A trait's methods are functions named `Trait::m` whose generic params
+// are the trait's `Self`, then the trait's own params, then the method's;
+// a call through the trait is resolved to an implementation when the
+// program is lowered (static dispatch). The methods of
+// `impl Trait<A> for T` are functions named `<T as Trait<A>>::m` whose
+// params are the impl's, then the method's.
+
+struct ChkTrait {
+    name: String,
+    decl: AstTraitDecl,
+    self_param: TyParam,
+    params: Vec<TyParam>,
+    supers: Vec<String>,
+    assoc: Vec<String>,
+    methods: Vec<String>,
+}
+
+struct ChkImpl {
+    trait_name: String,
+    pos: AstPos,
+    decl: AstImplDecl,
+    tparams: Vec<TyParam>,
+    target: Ty,
+    // the trait's type arguments (in terms of tparams)
+    trait_args: Vec<Ty>,
+    tname: String,
+    wheres: Vec<ChkWhere>,
+    assoc_names: Vec<String>,
+    assoc_tys: Vec<Ty>,
+    methods: HashMap<String, ChkFunc>,
+}
+
+// ChkWhere is a `where` bound on a type that is not a generic param.
+struct ChkWhere {
+    ty: Ty,
+    bound: TyBound,
+}
+
+// chk_resolve_wheres resolves `where` clauses (in c.tscope): a bound on a
+// param is added to the param; the others are returned.
+fn chk_resolve_wheres(c: Chk, ws: Vec<AstWhere>) -> Vec<ChkWhere> {
+    let out = Vec::new();
+    for w in ws {
+        let t = chk_resolve_type(c, w.ty, false);
+        for b in w.bounds {
+            match chk_resolve_bound(c, b) {
+                Some(tb) => match ty_prune(t) {
+                    Ty::Param(p) => p.bounds.push(tb),
+                    _ => out.push(ChkWhere { ty: t, bound: tb }),
+                },
+                None => {}
+            }
+        }
+    }
+    out
+}
+
+// chk_oblige_wheres adds the obligations of `where` bounds instantiated
+// with targs.
+fn chk_oblige_wheres(c: Chk, pos: AstPos, ws: Vec<ChkWhere>, ps: Vec<TyParam>, targs: Vec<Ty>) {
+    for w in ws {
+        let t = ty_subst(w.ty, ps, targs);
+        if w.bound.trait_name != "Fn" {
+            chk_oblige_args(
+                c,
+                pos,
+                w.bound.trait_name,
+                ty_subst_all(w.bound.args, ps, targs),
+                t,
+                "",
+            );
+        }
+    }
+}
+
+// chk_bounds_of lists the bounds known for t: a param's, or the `where`
+// bounds of the function being checked.
+fn chk_bounds_of(info: ChkInfo, t: Ty) -> Vec<TyBound> {
+    match ty_prune(t) {
+        Ty::Param(p) => p.bounds,
+        _ => {
+            let out = Vec::new();
+            for w in info.wheres {
+                if ty_identical(w.ty, t) {
+                    out.push(w.bound);
+                }
+            }
+            out
+        }
+    }
+}
+
+// ChkImplMatch is an implementation that applies to a type, with the
+// impl's type arguments. chk_dispatch also uses it for the function it
+// selects (fun) and that function's type arguments (targs).
+struct ChkImplMatch {
+    im: ChkImpl,
+    targs: Vec<Ty>,
+    fun: Option<ChkFunc>,
+}
+
+// ChkObl is an obligation `ty: Trait<args>`, checked at the end of the
+// function (when inference has finished). msg replaces the default
+// message. With assoc set, it is instead `<ty as Trait>::assoc == want`.
+struct ChkObl {
+    pos: AstPos,
+    trait_name: String,
+    args: Vec<Ty>,
+    ty: Ty,
+    msg: String,
+    assoc: String,
+    want: Ty,
+}
+
+// ---- declarations ----
+
+fn chk_declare_traits(c: Chk, f: AstFile) {
+    for td in f.traits {
+        if chk_reserved(td.name)
+            || c.info.structs.contains_key(td.name)
+            || c.info.enums.contains_key(td.name)
+            || c.info.traits.contains_key(td.name) {
+            chk_errorf(c, td.pos, "the name `" + td.name + "` is defined multiple times");
+            continue;
+        }
+        c.next_id = c.next_id + 1;
+        let sp = TyParam { id: c.next_id, name: "Self", bounds: Vec::new() };
+        let ps = chk_tparams(c, td.generics, false);
+        let b = chk_bound(td.name);
+        for p in ps {
+            b.args.push(Ty::Param(p));
+        }
+        sp.bounds.push(b);
+        let tr = ChkTrait {
+            name: td.name,
+            decl: td,
+            self_param: sp,
+            params: ps,
+            supers: Vec::new(),
+            assoc: Vec::new(),
+            methods: Vec::new(),
+        };
+        for a in td.assoc {
+            if a.ty.is_some() {
+                chk_errorf(c, a.pos, "associated type defaults are not supported");
+            }
+            tr.assoc.push(a.name);
+        }
+        c.info.traits.insert(td.name, tr);
+    }
+    for td in f.traits {
+        match c.info.traits.get(td.name) {
+            Some(tr) => {
+                if tr.decl.id != td.id {
+                    continue;
+                }
+                for s in td.supers {
+                    match chk_resolve_bound(c, s) {
+                        Some(b) => {
+                            if b.trait_name == td.name {
+                                chk_errorf(
+                                    c,
+                                    ast_type_pos(s),
+                                    "a trait cannot be its own supertrait",
+                                );
+                            } else if b.args.len() > 0 {
+                                chk_errorf(
+                                    c,
+                                    ast_type_pos(s),
+                                    "a supertrait cannot have generic arguments",
+                                );
+                            } else {
+                                tr.supers.push(b.trait_name);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+fn chk_bound(name: String) -> TyBound {
+    TyBound { trait_name: name, args: Vec::new(), assoc_names: Vec::new(), assoc_tys: Vec::new() }
+}
+
+// chk_resolve_bound resolves `Trait<Args>` or `Trait<Args, Name = T>` (in
+// c.tscope).
+fn chk_resolve_bound(c: Chk, te0: AstType) -> Option<TyBound> {
+    match te0 {
+        AstType::Fn(ft) => {
+            if ft.kind == "fn" {
+                chk_errorf(
+                    c,
+                    ft.pos,
+                    "expected a trait, found the function pointer type `fn(..)`: write `Fn(..)`",
+                );
+                return None;
+            }
+            // `Fn(A) -> R`: the signature is kept as the bound's only
+            // associated type
+            let b = chk_bound("Fn");
+            b.assoc_names.push("sig");
+            b.assoc_tys.push(chk_resolve_type(c, te0, false));
+            Some(b)
+        }
+        AstType::Named(te) => {
+            match c.info.traits.get(te.name) {
+                Some(tr) => {
+                    let b = chk_bound(tr.name);
+                    for a in te.args {
+                        match a {
+                            AstType::Named(an) => {
+                                if an.name.starts_with("=") {
+                                    let n = an.name.slice(1, an.name.len());
+                                    if !chk_trait_has_assoc(c.info, tr.name, n) {
+                                        chk_errorf(
+                                            c,
+                                            an.pos,
+                                            "associated type `"
+                                                + n
+                                                + "` not found for `"
+                                                + tr.name
+                                                + "`",
+                                        );
+                                    }
+                                    b.assoc_names.push(n);
+                                    b.assoc_tys.push(
+                                        chk_resolve_type(c, an.args.get(0).unwrap_or(a), false),
+                                    );
+                                    continue;
+                                }
+                            }
+                            _ => {}
+                        }
+                        b.args.push(chk_resolve_type(c, a, false));
+                    }
+                    if b.args.len() != tr.params.len() {
+                        chk_errorf(
+                            c,
+                            te.pos,
+                            "trait `"
+                                + tr.name
+                                + "` takes "
+                                + tr.params.len().to_string()
+                                + " generic argument(s) but "
+                                + b.args.len().to_string()
+                                + " were supplied",
+                        );
+                        return None;
+                    }
+                    Some(b)
+                }
+                None => {
+                    chk_errorf(c, te.pos, "cannot find trait `" + te.name + "`");
+                    None
+                }
+            }
+        }
+        _ => {
+            chk_errorf(c, ast_type_pos(te0), "expected a trait");
+            None
+        }
+    }
+}
+
+// chk_resolve_bounds fills in the bounds of params ps (declared by gs), with
+// the params in scope.
+fn chk_resolve_bounds(c: Chk, gs: Vec<AstGeneric>, ps: Vec<TyParam>) {
+    let mut i = 0;
+    for g in gs {
+        match ps.get(i) {
+            Some(p) => {
+                for b in g.bounds {
+                    match chk_resolve_bound(c, b) {
+                        Some(tb) => p.bounds.push(tb),
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+        i = i + 1;
+    }
+}
+
+fn chk_trait_has_assoc(info: ChkInfo, tr: String, n: String) -> Bool {
+    for t in chk_trait_closure(info, tr) {
+        match info.traits.get(t) {
+            Some(x) => {
+                for a in x.assoc {
+                    if a == n {
+                        return true;
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    false
+}
+
+// chk_trait_closure lists tr and its supertraits (transitively).
+fn chk_trait_closure(info: ChkInfo, tr: String) -> Vec<String> {
+    let out = Vec::new();
+    let seen: HashMap<String, Bool> = HashMap::new();
+    chk_add_closure(info, tr, out, seen);
+    out
+}
+
+fn chk_add_closure(info: ChkInfo, tr: String, out: Vec<String>, seen: HashMap<String, Bool>) {
+    if seen.contains_key(tr) {
+        return;
+    }
+    seen.insert(tr, true);
+    out.push(tr);
+    match info.traits.get(tr) {
+        Some(t) => {
+            for s in t.supers {
+                chk_add_closure(info, s, out, seen);
+            }
+        }
+        None => {}
+    }
+}
+
+// chk_param_traits lists the traits a type param implements by its bounds.
+fn chk_param_traits(info: ChkInfo, p: TyParam) -> Vec<String> {
+    let out = Vec::new();
+    let seen: HashMap<String, Bool> = HashMap::new();
+    for b in p.bounds {
+        chk_add_closure(info, b.trait_name, out, seen);
+    }
+    out
+}
+
+// chk_param_has reports whether type param p has the bound tr<args> (args
+// unify with the bound's; supertraits have no args).
+fn chk_param_has(info: ChkInfo, p: TyParam, tr: String, args: Vec<Ty>) -> Bool {
+    chk_bounds_have(info, p.bounds, tr, args)
+}
+
+fn chk_bounds_have(info: ChkInfo, bounds: Vec<TyBound>, tr: String, args: Vec<Ty>) -> Bool {
+    for b in bounds {
+        if b.trait_name == tr {
+            if args.len() == 0 || ty_unify_all(b.args, args) {
+                return true;
+            }
+        } else if args.len() == 0 && chk_has_name(chk_trait_closure(info, b.trait_name), tr) {
+            return true;
+        }
+    }
+    false
+}
+
+// chk_declare_trait_methods declares the method signatures (and default
+// bodies) of every trait.
+fn chk_declare_trait_methods(c: Chk) {
+    for name in c.info.traits.keys() {
+        match c.info.traits.get(name) {
+            Some(tr) => {
+                let seen: HashMap<String, Bool> = HashMap::new();
+                for fd in tr.decl.funcs {
+                    if seen.contains_key(fd.name) {
+                        chk_errorf(c, fd.pos, "duplicate definitions with name `" + fd.name + "`");
+                        continue;
+                    }
+                    seen.insert(fd.name, true);
+                    let sc = chk_param_scope(tr.params);
+                    sc.insert("Self", Ty::Param(tr.self_param));
+                    let outer = Vec::new();
+                    outer.push(tr.self_param);
+                    for p in tr.params {
+                        outer.push(p);
+                    }
+                    match chk_declare_func(c, fd, tr.name + "::" + fd.name, outer, sc) {
+                        Some(fun) => {
+                            fun.trait_name = tr.name;
+                            tr.methods.push(fd.name);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+// chk_declare_trait_impl registers `impl Trait for Target` (its methods
+// are declared by chk_declare_impl_methods once every impl is known).
+fn chk_declare_trait_impl(c: Chk, im: AstImplDecl, tt: AstType) {
+    let ips = chk_tparams(c, im.generics, true);
+    c.tscope = chk_param_scope(ips);
+    chk_resolve_bounds(c, im.generics, ips);
+    let target = chk_resolve_type(c, im.target, false);
+    let tb = chk_resolve_bound(c, tt);
+    c.tscope.insert("Self", target);
+    let iwheres = chk_resolve_wheres(c, im.wheres);
+    c.tscope = HashMap::new();
+    let b = match tb {
+        Some(b) => b,
+        None => {
+            return;
+        }
+    };
+    if b.trait_name == "Fn" {
+        chk_errorf(c, ast_type_pos(tt), "`Fn` cannot be implemented");
+        return;
+    }
+    if b.assoc_names.len() > 0 {
+        chk_errorf(c, ast_type_pos(tt), "associated type bindings are not allowed here");
+    }
+    let tname = chk_impl_type_name(c, target, true);
+    if tname == "" {
+        if !ty_is_prim(ty_prune(target), "<invalid>") {
+            chk_errorf(
+                c,
+                ast_type_pos(im.target),
+                "cannot implement a trait for `" + ty_str(target) + "`",
+            );
+        }
+        return;
+    }
+    if !(c.prelude || chk_is_core(im.pos)) && chk_impl_type_name(c, target, false) == "" {
+        // like Rust's orphan rule: builtin types get their implementations
+        // of the core library's traits from the core library
+        match c.info.traits.get(b.trait_name) {
+            Some(tr) => {
+                if chk_is_core(tr.decl.pos) {
+                    chk_errorf(
+                        c,
+                        ast_type_pos(im.target),
+                        "only traits defined in this program can be implemented for `"
+                            + ty_str(target)
+                            + "`",
+                    );
+                    return;
+                }
+            }
+            None => {}
+        }
+    }
+    let used = chk_ty_params_in(target);
+    for a in b.args {
+        chk_collect_params(a, used);
+    }
+    for p in ips {
+        if !used.contains_key(p.id) {
+            chk_errorf(
+                c,
+                im.pos,
+                "the type parameter `" + p.name + "` is not constrained by the impl trait or target",
+            );
+        }
+    }
+    let tstr = b.trait_name + ty_args_str(b.args);
+    let ci = ChkImpl {
+        trait_name: b.trait_name,
+        pos: im.pos,
+        decl: im,
+        tparams: ips,
+        target: target,
+        trait_args: b.args,
+        tname: "<" + ty_str(target) + " as " + tstr + ">",
+        wheres: iwheres,
+        assoc_names: Vec::new(),
+        assoc_tys: Vec::new(),
+        methods: HashMap::new(),
+    };
+    // conflicting implementations
+    for other in chk_impls_of(c.info, b.trait_name) {
+        if chk_impls_overlap(c, other, ci) {
+            chk_errorf(
+                c,
+                im.pos,
+                "conflicting implementations of trait `"
+                    + tstr
+                    + "` for type `"
+                    + ty_str(target)
+                    + "`",
+            );
+            return;
+        }
+    }
+    c.tscope = chk_param_scope(ips);
+    c.tscope.insert("Self", target);
+    let tr = c.info.traits.get(b.trait_name);
+    for a in im.assoc {
+        let ok = match tr {
+            Some(t) => chk_has_name(t.assoc, a.name),
+            None => false,
+        };
+        if !ok {
+            chk_errorf(
+                c,
+                a.pos,
+                "type `" + a.name + "` is not a member of trait `" + b.trait_name + "`",
+            );
+            continue;
+        }
+        if chk_has_name(ci.assoc_names, a.name) {
+            chk_errorf(c, a.pos, "duplicate definitions with name `" + a.name + "`");
+            continue;
+        }
+        match a.ty {
+            Some(t) => {
+                ci.assoc_names.push(a.name);
+                ci.assoc_tys.push(chk_resolve_type(c, t, false));
+            }
+            None => chk_errorf(
+                c,
+                a.pos,
+                "associated type in `impl` without body: write `type " + a.name + " = ...;`",
+            ),
+        }
+    }
+    c.tscope = HashMap::new();
+    match tr {
+        Some(t) => {
+            for n in t.assoc {
+                if !chk_has_name(ci.assoc_names, n) {
+                    chk_errorf(c, im.pos, "not all trait items implemented, missing: `" + n + "`");
+                }
+            }
+        }
+        None => {}
+    }
+    match c.info.impls.get(b.trait_name) {
+        Some(v) => v.push(ci),
+        None => {
+            let v = Vec::new();
+            v.push(ci);
+            c.info.impls.insert(b.trait_name, v);
+        }
+    }
+}
+
+fn chk_has_name(v: Vec<String>, n: String) -> Bool {
+    for x in v {
+        if x == n {
+            return true;
+        }
+    }
+    false
+}
+
+fn chk_impls_of(info: ChkInfo, tr: String) -> Vec<ChkImpl> {
+    info.impls.get(tr).unwrap_or(Vec::new())
+}
+
+// chk_impls_overlap reports whether some type matches both impls.
+fn chk_impls_overlap(c: Chk, a: ChkImpl, b: ChkImpl) -> Bool {
+    let va = chk_instantiate(c, a.tparams);
+    let vb = chk_instantiate(c, b.tparams);
+    let ta = ty_subst(a.target, a.tparams, va);
+    let tb = ty_subst(b.target, b.tparams, vb);
+    chk_could_unify(ta, tb)
+        && chk_could_unify_all(
+            ty_subst_all(a.trait_args, a.tparams, va),
+            ty_subst_all(b.trait_args, b.tparams, vb),
+        )
+}
+
+// chk_could_unify reports whether a and b (fresh variables only) unify,
+// without binding anything.
+fn chk_could_unify(a0: Ty, b0: Ty) -> Bool {
+    let a = ty_prune(a0);
+    let b = ty_prune(b0);
+    if ty_is_var(a) || ty_is_var(b) {
+        return true;
+    }
+    match a {
+        Ty::Result(x1, x2) => match b {
+            Ty::Result(y1, y2) => chk_could_unify(x1, y1) && chk_could_unify(x2, y2),
+            _ => false,
+        },
+        Ty::Option(x) => match b {
+            Ty::Option(y) => chk_could_unify(x, y),
+            _ => false,
+        },
+        Ty::Vec(x) => match b {
+            Ty::Vec(y) => chk_could_unify(x, y),
+            _ => false,
+        },
+        Ty::Tuple(xs) => match b {
+            Ty::Tuple(ys) => chk_could_unify_all(xs, ys),
+            _ => false,
+        },
+        Ty::Struct(x, xs) => match b {
+            Ty::Struct(y, ys) => x.name == y.name && chk_could_unify_all(xs, ys),
+            _ => false,
+        },
+        Ty::Enum(x, xs) => match b {
+            Ty::Enum(y, ys) => x.name == y.name && chk_could_unify_all(xs, ys),
+            _ => false,
+        },
+        Ty::Fn(xs, xr) => match b {
+            Ty::Fn(ys, yr) => chk_could_unify_all(xs, ys) && chk_could_unify(xr, yr),
+            _ => false,
+        },
+        _ => ty_same(a, b),
+    }
+}
+
+fn chk_could_unify_all(xs: Vec<Ty>, ys: Vec<Ty>) -> Bool {
+    if xs.len() != ys.len() {
+        return false;
+    }
+    for i in 0..xs.len() {
+        if !chk_could_unify(xs.get(i).unwrap_or(ty_unit()), ys.get(i).unwrap_or(ty_unit())) {
+            return false;
+        }
+    }
+    true
+}
+
+// chk_declare_impl_methods declares the methods of every trait impl and
+// checks them against the trait.
+fn chk_declare_impl_methods(c: Chk) {
+    for trn in c.info.impls.keys() {
+        let tr = match c.info.traits.get(trn) {
+            Some(t) => t,
+            None => {
+                continue;
+            }
+        };
+        for ci in chk_impls_of(c.info, trn) {
+            for fd in ci.decl.funcs {
+                if !chk_has_name(tr.methods, fd.name) {
+                    chk_errorf(
+                        c,
+                        fd.pos,
+                        "method `" + fd.name + "` is not a member of trait `" + trn + "`",
+                    );
+                    continue;
+                }
+                if ci.methods.contains_key(fd.name) {
+                    chk_errorf(c, fd.pos, "duplicate definitions with name `" + fd.name + "`");
+                    continue;
+                }
+                let sc = chk_param_scope(ci.tparams);
+                sc.insert("Self", ci.target);
+                match chk_declare_func(c, fd, ci.tname + "::" + fd.name, ci.tparams, sc) {
+                    Some(fun) => {
+                        ci.methods.insert(fd.name, fun);
+                        match c.info.funcs.get(trn + "::" + fd.name) {
+                            Some(tf) => chk_compare_sig(c, ci, fun, tf),
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+            }
+            for m in tr.methods {
+                if ci.methods.contains_key(m) {
+                    continue;
+                }
+                match c.info.funcs.get(trn + "::" + m) {
+                    Some(tf) => {
+                        if !tf.decl.has_body {
+                            chk_errorf(
+                                c,
+                                ci.pos,
+                                "not all trait items implemented, missing: `" + m + "`",
+                            );
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+}
+
+// chk_compare_sig checks an impl method against the trait's signature
+// (with `Self` and the trait's params replaced by the impl's).
+fn chk_compare_sig(c: Chk, ci: ChkImpl, fun: ChkFunc, tf: ChkFunc) {
+    let what = "method `" + tf.decl.name + "`";
+    if (fun.decl.self_kind == "") != (tf.decl.self_kind == "") {
+        let want = if tf.decl.self_kind == "" {
+            "no receiver"
+        } else {
+            "a `self` receiver"
+        };
+        chk_errorf(
+            c,
+            fun.decl.pos,
+            what + " has an incompatible signature for trait: expected " + want,
+        );
+        return;
+    }
+    let own_t = tf.decl.generics.len();
+    let own_f = fun.decl.generics.len();
+    if own_t != own_f {
+        chk_errorf(
+            c,
+            fun.decl.pos,
+            what
+                + " has "
+                + own_f.to_string()
+                + " type parameter(s) but its trait declaration has "
+                + own_t.to_string(),
+        );
+        return;
+    }
+    // the trait's params: Self, the trait's, then the method's own; the
+    // impl's: the impl's, then its own (mapped to the trait's)
+    let targs = Vec::new();
+    targs.push(ci.target);
+    for a in ci.trait_args {
+        targs.push(a);
+    }
+    let off = fun.tparams.len() - own_f;
+    for i in 0..own_f {
+        match fun.tparams.get(off + i) {
+            Some(p) => targs.push(Ty::Param(p)),
+            None => {}
+        }
+    }
+    if fun.params.len() != tf.params.len() {
+        chk_errorf(
+            c,
+            fun.decl.pos,
+            what
+                + " has "
+                + fun.params.len().to_string()
+                + " parameter(s) but the declaration in trait `"
+                + tf.trait_name
+                + "` has "
+                + tf.params.len().to_string(),
+        );
+        return;
+    }
+    for i in 0..fun.params.len() {
+        let pi = fun.params.get(i).unwrap_or(chk_new_binding(c, "", ty_unit(), fun.decl.pos));
+        let want = chk_norm(c.info, ty_subst(tf.params.get(i).unwrap_or(pi).ty, tf.tparams, targs));
+        if !ty_identical(chk_norm(c.info, pi.ty), want) {
+            chk_errorf(
+                c,
+                pi.pos,
+                what
+                    + " has an incompatible type for trait: expected `"
+                    + ty_str(want)
+                    + "`, found `"
+                    + ty_str(pi.ty)
+                    + "`",
+            );
+        }
+    }
+    let want_r = chk_norm(c.info, ty_subst(tf.result, tf.tparams, targs));
+    if !ty_identical(chk_norm(c.info, fun.result), want_r) {
+        chk_errorf(
+            c,
+            fun.decl.pos,
+            what
+                + " has an incompatible return type for trait: expected `"
+                + ty_str(want_r)
+                + "`, found `"
+                + ty_str(fun.result)
+                + "`",
+        );
+    }
+}
+
+// chk_check_supertraits requires the supertraits of each implemented trait
+// to be implemented too.
+fn chk_check_supertraits(c: Chk) {
+    for trn in c.info.impls.keys() {
+        let tr = match c.info.traits.get(trn) {
+            Some(t) => t,
+            None => {
+                continue;
+            }
+        };
+        for ci in chk_impls_of(c.info, trn) {
+            for s in tr.supers {
+                if !chk_implements(c.info, ci.target, s, Vec::new(), 0) {
+                    chk_errorf(
+                        c,
+                        ci.pos,
+                        "the trait bound `"
+                            + ty_str(ci.target)
+                            + ": "
+                            + s
+                            + "` is not satisfied (required by the supertrait of `"
+                            + trn
+                            + "`)",
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ---- resolution ----
+
+// chk_find_impl finds the implementation of trait tr<args> for type t. An
+// arg that is still an inference variable matches anything (as does an
+// empty args).
+fn chk_find_impl(
+    info: ChkInfo,
+    tr: String,
+    t0: Ty,
+    args: Vec<Ty>,
+    depth: Int,
+) -> Option<ChkImplMatch> {
+    let t = ty_prune(t0);
+    if depth > 32 {
+        return None;
+    }
+    for im in chk_impls_of(info, tr) {
+        let binds = Vec::new();
+        let bound = Vec::new();
+        for p in im.tparams {
+            binds.push(ty_unit());
+            bound.push(false);
+        }
+        if !chk_match_ty(im.target, t, im.tparams, binds, bound) {
+            continue;
+        }
+        let mut ok = true;
+        for i in 0..args.len() {
+            let q = ty_prune(args.get(i).unwrap_or(ty_unit()));
+            if ty_is_var(q) {
+                continue;
+            }
+            if !chk_match_ty(im.trait_args.get(i).unwrap_or(ty_unit()), q, im.tparams, binds, bound) {
+                ok = false;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        for i in 0..im.tparams.len() {
+            let p = im.tparams.get(i).unwrap_or(TyParam { id: 0, name: "", bounds: Vec::new() });
+            let a = binds.get(i).unwrap_or(ty_unit());
+            for b in p.bounds {
+                if !chk_implements(
+                    info,
+                    a,
+                    b.trait_name,
+                    ty_subst_all(b.args, im.tparams, binds),
+                    depth + 1,
+                ) {
+                    ok = false;
+                }
+            }
+        }
+        for w in im.wheres {
+            let wt = chk_norm(info, ty_subst(w.ty, im.tparams, binds));
+            if !chk_implements(
+                info,
+                wt,
+                w.bound.trait_name,
+                ty_subst_all(w.bound.args, im.tparams, binds),
+                depth + 1,
+            ) {
+                ok = false;
+            }
+        }
+        if ok {
+            return Some(ChkImplMatch { im: im, targs: binds, fun: None });
+        }
+    }
+    None
+}
+
+// chk_match_ty matches pattern pat (mentioning params ps) against t,
+// binding the params.
+fn chk_match_ty(pat0: Ty, t0: Ty, ps: Vec<TyParam>, binds: Vec<Ty>, bound: Vec<Bool>) -> Bool {
+    let pat = ty_prune(pat0);
+    let t = ty_prune(t0);
+    match pat {
+        Ty::Param(p) => {
+            for i in 0..ps.len() {
+                match ps.get(i) {
+                    Some(q) => {
+                        if q.id == p.id {
+                            if bound.get(i).unwrap_or(false) {
+                                return ty_identical(binds.get(i).unwrap_or(ty_unit()), t);
+                            }
+                            binds.set(i, t);
+                            bound.set(i, true);
+                            return true;
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    if ty_is_var(t) {
+        return false;
+    }
+    match pat {
+        Ty::Result(x1, x2) => match t {
+            Ty::Result(y1, y2) => chk_match_ty(x1, y1, ps, binds, bound)
+                && chk_match_ty(x2, y2, ps, binds, bound),
+            _ => false,
+        },
+        Ty::Option(x) => match t {
+            Ty::Option(y) => chk_match_ty(x, y, ps, binds, bound),
+            _ => false,
+        },
+        Ty::Vec(x) => match t {
+            Ty::Vec(y) => chk_match_ty(x, y, ps, binds, bound),
+            _ => false,
+        },
+        Ty::Tuple(xs) => match t {
+            Ty::Tuple(ys) => chk_match_all(xs, ys, ps, binds, bound),
+            _ => false,
+        },
+        Ty::Struct(x, xs) => match t {
+            Ty::Struct(y, ys) => x.name == y.name && chk_match_all(xs, ys, ps, binds, bound),
+            Ty::Opaque(n) => x.name == n && xs.len() == 0,
+            _ => false,
+        },
+        Ty::Enum(x, xs) => match t {
+            Ty::Enum(y, ys) => x.name == y.name && chk_match_all(xs, ys, ps, binds, bound),
+            _ => false,
+        },
+        Ty::Fn(xs, xr) => match t {
+            Ty::Fn(ys, yr) => chk_match_all(xs, ys, ps, binds, bound)
+                && chk_match_ty(xr, yr, ps, binds, bound),
+            _ => false,
+        },
+        _ => ty_identical(pat, t),
+    }
+}
+
+fn chk_match_all(
+    xs: Vec<Ty>,
+    ys: Vec<Ty>,
+    ps: Vec<TyParam>,
+    binds: Vec<Ty>,
+    bound: Vec<Bool>,
+) -> Bool {
+    if xs.len() != ys.len() {
+        return false;
+    }
+    for i in 0..xs.len() {
+        if !chk_match_ty(
+            xs.get(i).unwrap_or(ty_unit()),
+            ys.get(i).unwrap_or(ty_unit()),
+            ps,
+            binds,
+            bound,
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+// chk_implements reports whether t implements tr<args>. An unresolved
+// inference variable is assumed to (the obligation is checked again
+// later).
+fn chk_implements(info: ChkInfo, t0: Ty, tr: String, args: Vec<Ty>, depth: Int) -> Bool {
+    let t = ty_prune(t0);
+    if tr == "Fn" {
+        return chk_fn_sig(t).is_some() || ty_is_var(t);
+    }
+    match t {
+        Ty::Var(_) => true,
+        Ty::Prim(n) => {
+            if n == "<invalid>" || n == "!" {
+                return true;
+            }
+            chk_find_impl(info, tr, t, args, depth).is_some()
+        }
+        Ty::Param(p) => chk_param_has(info, p, tr, args),
+        Ty::Assoc(_, _, _) => {
+            let nt = chk_norm(info, t);
+            match nt {
+                Ty::Assoc(_, _, _) => chk_bounds_have(info, chk_bounds_of(info, nt), tr, args),
+                _ => chk_implements(info, nt, tr, args, depth + 1),
+            }
+        }
+        _ => chk_find_impl(info, tr, t, args, depth).is_some(),
+    }
+}
+
+// ---- associated types ----
+
+// chk_norm replaces the associated types in t that can be resolved: those
+// of a type param with a bound `Trait<Name = T>` and those of a type with
+// an implementation.
+fn chk_norm(info: ChkInfo, t0: Ty) -> Ty {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Assoc(s0, tr, n) => {
+            let s = chk_norm(info, s0);
+            match ty_prune(s) {
+                Ty::Param(p) => {
+                    for b in p.bounds {
+                        for i in 0..b.assoc_names.len() {
+                            if b.assoc_names.get(i).unwrap_or("") == n {
+                                match b.assoc_tys.get(i) {
+                                    Some(x) => {
+                                        return chk_norm(info, x);
+                                    }
+                                    None => {}
+                                }
+                            }
+                        }
+                    }
+                    Ty::Assoc(s, tr, n)
+                }
+                Ty::Var(_) => Ty::Assoc(s, tr, n),
+                _ => {
+                    // the trait declaring Name may be a supertrait of tr
+                    for t2 in chk_trait_closure(info, tr) {
+                        match chk_find_impl(info, t2, s, Vec::new(), 0) {
+                            Some(m) => {
+                                for i in 0..m.im.assoc_names.len() {
+                                    if m.im.assoc_names.get(i).unwrap_or("") == n {
+                                        let a = m.im.assoc_tys.get(i).unwrap_or(ty_unit());
+                                        return chk_norm(info, ty_subst(a, m.im.tparams, m.targs));
+                                    }
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    Ty::Assoc(s, tr, n)
+                }
+            }
+        }
+        Ty::Result(a, b) => {
+            let na = chk_norm(info, a);
+            Ty::Result(na, chk_norm(info, b))
+        }
+        Ty::Option(a) => Ty::Option(chk_norm(info, a)),
+        Ty::Vec(a) => Ty::Vec(chk_norm(info, a)),
+        Ty::Tuple(ts) => Ty::Tuple(chk_norm_all(info, ts)),
+        Ty::Struct(st, ts) => Ty::Struct(st, chk_norm_all(info, ts)),
+        Ty::Enum(en, ts) => Ty::Enum(en, chk_norm_all(info, ts)),
+        Ty::Fn(ps, r) => {
+            let nps = chk_norm_all(info, ps);
+            Ty::Fn(nps, chk_norm(info, r))
+        }
+        _ => t,
+    }
+}
+
+fn chk_norm_all(info: ChkInfo, ts: Vec<Ty>) -> Vec<Ty> {
+    let out = Vec::new();
+    for t in ts {
+        out.push(chk_norm(info, t));
+    }
+    out
+}
+
+// chk_assoc_type resolves `Base::Name` in a type (base is a param or `Self`).
+fn chk_assoc_type(c: Chk, te: AstNamedType) -> Ty {
+    let i = te.name.index_of("::").unwrap_or(0);
+    let base_name = te.name.slice(0, i);
+    let n = te.name.slice(i + 2, te.name.len());
+    let base = match c.tscope.get(base_name) {
+        Some(t) => t,
+        None => {
+            chk_errorf(c, te.pos, "cannot find type `" + base_name + "` in this scope");
+            return ty_invalid();
+        }
+    };
+    let traits = match ty_prune(base) {
+        Ty::Param(p) => chk_param_traits(c.info, p),
+        _ => {
+            // a concrete `Self`: the traits it implements
+            let out = Vec::new();
+            for tn in c.info.traits.keys() {
+                if chk_find_impl(c.info, tn, base, Vec::new(), 0).is_some() {
+                    out.push(tn);
+                }
+            }
+            out
+        }
+    };
+    let found = Vec::new();
+    for tn in traits {
+        match c.info.traits.get(tn) {
+            Some(tr) => {
+                if chk_has_name(tr.assoc, n) {
+                    found.push(tn);
+                }
+            }
+            None => {}
+        }
+    }
+    if found.len() == 0 {
+        chk_errorf(c, te.pos, "associated type `" + n + "` not found for `" + ty_str(base) + "`");
+        return ty_invalid();
+    }
+    if found.len() > 1 {
+        chk_errorf(c, te.pos, "ambiguous associated type `" + n + "` for `" + ty_str(base) + "`");
+    }
+    chk_norm(c.info, Ty::Assoc(base, found.get(0).unwrap_or(""), n))
+}
+
+// ---- method calls through traits ----
+
+// chk_traits_with_method lists the traits declaring method m that t
+// implements (all such traits when t is still unknown).
+fn chk_traits_with_method(c: Chk, t: Ty, m: String) -> Vec<String> {
+    let out = Vec::new();
+    let cands = match ty_prune(t) {
+        Ty::Param(p) => chk_param_traits(c.info, p),
+        Ty::Assoc(_, _, _) => {
+            let out = Vec::new();
+            let seen: HashMap<String, Bool> = HashMap::new();
+            for b in chk_bounds_of(c.info, t) {
+                chk_add_closure(c.info, b.trait_name, out, seen);
+            }
+            out
+        }
+        _ => c.info.traits.keys().collect::<Vec<_>>(),
+    };
+    for tn in cands {
+        match c.info.traits.get(tn) {
+            Some(tr) => {
+                if chk_has_name(tr.methods, m) && chk_implements(c.info, t, tn, Vec::new(), 0) {
+                    out.push(tn);
+                }
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+// chk_trait_call checks a call of trait method `Trait::m` with Self = self_t.
+// args excludes the receiver when recv is set (a method call). It returns
+// the call's ChkMethodInfo (kind "trait"), whose recv_ty holds the result
+// type.
+fn chk_trait_call(
+    c: Chk,
+    pos: AstPos,
+    tf: ChkFunc,
+    self_t: Ty,
+    recv: Bool,
+    args: Vec<AstExpr>,
+    given: Vec<AstType>,
+) -> ChkMethodInfo {
+    let targs = Vec::new();
+    targs.push(self_t);
+    for i in 1..tf.tparams.len() {
+        targs.push(chk_new_var(c));
+    }
+    chk_turbofish(c, pos, tf, targs, given);
+    chk_fn_bounds(c, tf.tparams, targs);
+    let ntrait = match c.info.traits.get(tf.trait_name) {
+        Some(tr) => tr.params.len(),
+        None => 0,
+    };
+    let ps = Vec::new();
+    for t in chk_param_types(tf, targs) {
+        ps.push(chk_norm(c.info, t));
+    }
+    let rest = Vec::new();
+    let start = if recv { 1 } else { 0 };
+    for i in start..ps.len() {
+        rest.push(ps.get(i).unwrap_or(ty_unit()));
+    }
+    chk_args(c, pos, "`" + tf.name + "`", args, rest);
+    // obligations: Self implements the trait (with its arguments), and the
+    // bounds of the method's own params
+    let trait_args = Vec::new();
+    for i in 0..ntrait {
+        trait_args.push(targs.get(1 + i).unwrap_or(ty_unit()));
+    }
+    chk_oblige_args(c, pos, tf.trait_name, trait_args, self_t, "");
+    chk_oblige_wheres(c, pos, tf.wheres, tf.tparams, targs);
+    for i in 1 + ntrait..tf.tparams.len() {
+        match tf.tparams.get(i) {
+            Some(p) => {
+                for b in p.bounds {
+                    if b.trait_name != "Fn" {
+                        chk_oblige_args(
+                            c,
+                            pos,
+                            b.trait_name,
+                            ty_subst_all(b.args, tf.tparams, targs),
+                            targs.get(i).unwrap_or(ty_unit()),
+                            "",
+                        );
+                    }
+                    for j in 0..b.assoc_names.len() {
+                        let want = ty_subst(
+                            b.assoc_tys.get(j).unwrap_or(ty_unit()),
+                            tf.tparams,
+                            targs,
+                        );
+                        if b.trait_name != "Fn" {
+                            chk_assoc_eq(
+                                c,
+                                pos,
+                                targs.get(i).unwrap_or(ty_unit()),
+                                b.trait_name,
+                                b.assoc_names.get(j).unwrap_or(""),
+                                want,
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    ChkMethodInfo {
+        kind: "trait",
+        builtin: None,
+        op: tf.trait_name,
+        recv_ty: chk_norm(c.info, ty_subst(tf.result, tf.tparams, targs)),
+        closure: None,
+        func: Some(tf),
+        targs: targs,
+    }
+}
+
+// ---- obligations ----
+
+fn chk_oblige(c: Chk, pos: AstPos, tr: String, t: Ty, msg: String) {
+    chk_oblige_args(c, pos, tr, Vec::new(), t, msg);
+}
+
+fn chk_oblige_args(c: Chk, pos: AstPos, tr: String, args: Vec<Ty>, t: Ty, msg: String) {
+    c.obls.push(ChkObl {
+        pos: pos,
+        trait_name: tr,
+        args: args,
+        ty: t,
+        msg: msg,
+        assoc: "",
+        want: ty_unit(),
+    });
+}
+
+// chk_assoc_eq requires `<t as tr>::n == want`: now when the associated
+// type can be resolved, otherwise (if defer) at the end of the function.
+fn chk_assoc_eq(c: Chk, pos: AstPos, t: Ty, tr: String, n: String, want0: Ty, defer: Bool) {
+    let got = chk_norm(c.info, Ty::Assoc(t, tr, n));
+    let want = chk_norm(c.info, want0);
+    match got {
+        Ty::Assoc(s, _, _) => {
+            if defer && ty_is_var(ty_prune(s)) {
+                c.obls.push(ChkObl {
+                    pos: pos,
+                    trait_name: tr,
+                    args: Vec::new(),
+                    ty: t,
+                    msg: "",
+                    assoc: n,
+                    want: want,
+                });
+                return;
+            }
+        }
+        _ => {}
+    }
+    if !ty_unify(got, want) {
+        chk_errorf(
+            c,
+            pos,
+            "type mismatch resolving `<"
+                + ty_str(ty_resolve(t))
+                + " as "
+                + tr
+                + ">::"
+                + n
+                + " == "
+                + ty_str(ty_resolve(want))
+                + "`: found `"
+                + ty_str(ty_resolve(got))
+                + "`",
+        );
+    }
+}
+
+// chk_check_obls checks the pending obligations (at the end of a function).
+fn chk_check_obls(c: Chk) {
+    for o in c.obls {
+        if o.assoc != "" {
+            chk_assoc_eq(c, o.pos, o.ty, o.trait_name, o.assoc, o.want, false);
+            continue;
+        }
+        let t = chk_norm(c.info, ty_resolve(o.ty));
+        let args = Vec::new();
+        for a in o.args {
+            args.push(chk_norm(c.info, ty_resolve(a)));
+        }
+        if !chk_implements(c.info, t, o.trait_name, args, 0) {
+            if o.msg != "" {
+                chk_errorf(c, o.pos, o.msg + " cannot be applied to type `" + ty_str(t) + "`");
+            } else {
+                chk_errorf(
+                    c,
+                    o.pos,
+                    "the trait bound `"
+                        + ty_str(t)
+                        + ": "
+                        + o.trait_name
+                        + ty_args_str(args)
+                        + "` is not satisfied",
+                );
+            }
+        }
+    }
+    c.obls = Vec::new();
+}
+
+// chk_dispatch resolves a call of trait method m (of trait tr) with the
+// concrete type arguments targs (Self, the trait's, then the method's own)
+// to the function implementing it, with that function's type arguments.
+fn chk_dispatch(info: ChkInfo, tr: String, m: String, targs: Vec<Ty>) -> Option<ChkImplMatch> {
+    let ntrait = match info.traits.get(tr) {
+        Some(t) => t.params.len(),
+        None => 0,
+    };
+    let self_t = targs.get(0).unwrap_or(ty_unit());
+    let trait_args = Vec::new();
+    for i in 0..ntrait {
+        trait_args.push(targs.get(1 + i).unwrap_or(ty_unit()));
+    }
+    let own = Vec::new();
+    for i in 1 + ntrait..targs.len() {
+        own.push(targs.get(i).unwrap_or(ty_unit()));
+    }
+    match chk_find_impl(info, tr, self_t, trait_args, 0) {
+        Some(found) => {
+            match found.im.methods.get(m) {
+                Some(f) => {
+                    let fargs = Vec::new();
+                    for t in found.targs {
+                        fargs.push(t);
+                    }
+                    for t in own {
+                        fargs.push(t);
+                    }
+                    Some(ChkImplMatch { im: found.im, targs: fargs, fun: Some(f) })
+                }
+                None => {
+                    // the trait's default method, with the same type
+                    // arguments as the call
+                    match info.funcs.get(tr + "::" + m) {
+                        Some(f) => Some(ChkImplMatch { im: found.im, targs: targs, fun: Some(f) }),
+                        None => None,
+                    }
+                }
+            }
+        }
+        None => None,
+    }
+}

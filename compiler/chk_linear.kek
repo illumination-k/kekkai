@@ -3,19 +3,19 @@
 // consumed; None means the current point is unreachable.
 
 struct LinState {
-    m: Map<Int, Bool>,
-    names: Map<Int, String>,
+    m: HashMap<Int, Bool>,
+    names: HashMap<Int, String>,
 }
 
 struct LinChecker {
     info: ChkInfo,
     errs: Vec<AstError>,
     // states at the entry of enclosing loops
-    loops: Vec<LinState>,
+    mut loops: Vec<LinState>,
 }
 
 fn lin_new_state() -> LinState {
-    LinState { m: Map::new(), names: Map::new() }
+    LinState { m: HashMap::new(), names: HashMap::new() }
 }
 
 fn lin_clone(s: Option<LinState>) -> Option<LinState> {
@@ -78,7 +78,9 @@ fn lin_merge(
                             }
                             out.m.insert(k, va || vb);
                         }
-                        None => out.m.insert(k, va),
+                        None => {
+                            out.m.insert(k, va);
+                        }
                     }
                     out.names.insert(k, lin_name(sa, k));
                 }
@@ -401,6 +403,11 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
         // The error path leaves the enclosing transaction body (or
         // function); an unconsumed Tx is rolled back automatically there.
         AstExpr::Try(e) => lin_expr(lc, e.x, s),
+        AstExpr::Tuple(e) => lin_exprs(lc, e.elems, s),
+        AstExpr::Range(e) => {
+            let s1 = lin_expr(lc, e.start, s);
+            lin_expr(lc, e.end, s1)
+        }
         _ => s,
     }
 }

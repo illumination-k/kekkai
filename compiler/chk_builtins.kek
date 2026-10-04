@@ -11,8 +11,8 @@ struct ChkBuiltin {
 }
 
 struct ChkBuiltins {
-    methods: Map<String, ChkBuiltin>,
-    statics: Map<String, ChkBuiltin>,
+    methods: HashMap<String, ChkBuiltin>,
+    statics: HashMap<String, ChkBuiltin>,
     // every builtin, in definition order
     all: Vec<ChkBuiltin>,
 }
@@ -85,7 +85,7 @@ fn chk_res(ok: Ty, err: Ty) -> Ty {
 }
 
 fn chk_new_builtins() -> ChkBuiltins {
-    let bs = ChkBuiltins { methods: Map::new(), statics: Map::new(), all: Vec::new() };
+    let bs = ChkBuiltins { methods: HashMap::new(), statics: HashMap::new(), all: Vec::new() };
     let s = ty_string();
     let i = ty_int();
     let u = ty_unit();
@@ -143,6 +143,9 @@ fn chk_new_builtins() -> ChkBuiltins {
     chk_m(bs, "String", "replace", chk_tys2(s, s), s);
     chk_m(bs, "String", "split", chk_tys1(s), Ty::Vec(s));
     chk_m(bs, "String", "to_bytes", chk_tys0(), Ty::Vec(i));
+    // the core library's string hashing (DefaultHasher::write_str): FNV-1a
+    // steps over the UTF-16 code units from state, then a -1 terminator
+    chk_m(bs, "String", "__hash", chk_tys1(i), i);
     chk_s(bs, "String", "from_char", chk_tys1(i), s);
     chk_s(bs, "String", "from_bytes", chk_tys1(Ty::Vec(i)), s);
     chk_m(bs, "IoError", "message", chk_tys0(), s);
@@ -250,8 +253,8 @@ fn chk_add_intrinsics(c: Chk) {
         if st.starts_with("__") || chk_prelude_type(st) {
             match c.info.structs.get(st) {
                 Some(t) => {
-                    chk_s(bs, st, "from_any", chk_tys1(any), Ty::Struct(t));
-                    chk_s(bs, st, "to_any", chk_tys1(Ty::Struct(t)), any);
+                    chk_s(bs, st, "from_any", chk_tys1(any), Ty::Struct(t, Vec::new()));
+                    chk_s(bs, st, "to_any", chk_tys1(Ty::Struct(t, Vec::new())), any);
                 }
                 None => {}
             }
@@ -260,7 +263,7 @@ fn chk_add_intrinsics(c: Chk) {
     // the runtime state: one instance per program, created on first use
     // by the prelude function `__rt_new`
     match c.info.structs.get("__Rt") {
-        Some(t) => chk_s(bs, "__Rt", "get", chk_tys0(), Ty::Struct(t)),
+        Some(t) => chk_s(bs, "__Rt", "get", chk_tys0(), Ty::Struct(t, Vec::new())),
         None => {}
     }
 }

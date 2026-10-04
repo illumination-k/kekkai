@@ -44,7 +44,11 @@ fn search_term_string(t: SearchTerm) -> String {
         if s.starts_with("_") {
             return "_";
         }
-        return s;
+        // a generic param is `name#id`
+        return match s.index_of("#") {
+            Some(i) => s.slice(0, i),
+            None => s,
+        };
     }
     if t.args.len() == 0 {
         return t.con;
@@ -64,8 +68,20 @@ fn search_term_of(t0: Ty) -> SearchTerm {
         Ty::Option(e) => search_con("Option", search_list1(search_term_of(e))),
         Ty::Cap(k, _) => search_con0("&" + k),
         Ty::Var(v) => search_tvar("c:_" + v.id.to_string()),
+        Ty::Param(p) => search_tvar("c:" + p.name + "#" + p.id.to_string()),
+        Ty::Vec(e) => search_con("Vec", search_list1(search_term_of(e))),
+        Ty::Struct(st, args) => search_con(st.name, search_terms_of(args)),
+        Ty::Enum(en, args) => search_con(en.name, search_terms_of(args)),
         _ => search_con0(ty_str(t)),
     }
+}
+
+fn search_terms_of(ts: Vec<Ty>) -> Vec<SearchTerm> {
+    let out = Vec::new();
+    for t in ts {
+        out.push(search_term_of(t));
+    }
+    out
 }
 
 // search_is_cap_name is tooling.IsCapName (Fs is not included).
@@ -83,14 +99,14 @@ fn search_is_cap_name(name: String) -> Bool {
 struct SearchQuery {
     params: Vec<SearchTerm>,
     result: SearchTerm,
-    result_only: Bool,
+    mut result_only: Bool,
 }
 
 struct SearchParser {
     toks: Vec<Tok>,
-    i: Int,
-    anon: Int,
-    err: String,
+    mut i: Int,
+    mut anon: Int,
+    mut err: String,
 }
 
 fn search_query_string(q: SearchQuery) -> String {
@@ -296,7 +312,7 @@ fn search_typ(p: SearchParser) -> SearchTerm {
 
 // ---- unification (substitutions map variable names to terms) ----
 
-fn search_walk(s: Map<String, SearchTerm>, t0: SearchTerm) -> SearchTerm {
+fn search_walk(s: HashMap<String, SearchTerm>, t0: SearchTerm) -> SearchTerm {
     let mut t = t0;
     while t.v != "" {
         match s.get(t.v) {
@@ -311,7 +327,7 @@ fn search_walk(s: Map<String, SearchTerm>, t0: SearchTerm) -> SearchTerm {
     t
 }
 
-fn search_occurs(s: Map<String, SearchTerm>, v: String, t0: SearchTerm) -> Bool {
+fn search_occurs(s: HashMap<String, SearchTerm>, v: String, t0: SearchTerm) -> Bool {
     let t = search_walk(s, t0);
     if t.v != "" {
         return t.v == v;
@@ -324,7 +340,7 @@ fn search_occurs(s: Map<String, SearchTerm>, v: String, t0: SearchTerm) -> Bool 
     false
 }
 
-fn search_unify(s: Map<String, SearchTerm>, a0: SearchTerm, b0: SearchTerm) -> Bool {
+fn search_unify(s: HashMap<String, SearchTerm>, a0: SearchTerm, b0: SearchTerm) -> Bool {
     let a = search_walk(s, a0);
     let b = search_walk(s, b0);
     if a.v != "" && b.v != "" && a.v == b.v {
@@ -359,8 +375,8 @@ fn search_at(ts: Vec<SearchTerm>, i: Int) -> SearchTerm {
     ts.get(i).unwrap_or(search_con0("()"))
 }
 
-fn search_clone(s: Map<String, SearchTerm>) -> Map<String, SearchTerm> {
-    let c: Map<String, SearchTerm> = Map::new();
+fn search_clone(s: HashMap<String, SearchTerm>) -> HashMap<String, SearchTerm> {
+    let c: HashMap<String, SearchTerm> = HashMap::new();
     for k in s.keys() {
         match s.get(k) {
             Some(v) => {
@@ -372,22 +388,22 @@ fn search_clone(s: Map<String, SearchTerm>) -> Map<String, SearchTerm> {
     c
 }
 
-fn search_subst() -> Map<String, SearchTerm> {
-    Map::new()
+fn search_subst() -> HashMap<String, SearchTerm> {
+    HashMap::new()
 }
 
 // ---- candidates ----
 
 struct SearchCand {
-    name: String,
-    kind: String, // "function", "method", "static", "constructor"
+    mut name: String,
+    mut kind: String, // "function", "method", "static", "constructor"
     signature: String,
     params: Vec<SearchTerm>,
     result: SearchTerm,
-    pure: Bool,
+    mut pure: Bool,
     caps: Vec<String>,
-    line: Int,
-    col: Int,
+    mut line: Int,
+    mut col: Int,
 }
 
 fn search_cand(
@@ -411,7 +427,7 @@ fn search_cand(
 }
 
 fn search_is_static(bs: ChkBuiltins, b: ChkBuiltin) -> Bool {
-    bs.statics.contains(b.recv + "::" + b.name)
+    bs.statics.contains_key(b.recv + "::" + b.name)
 }
 
 // search_builtin_signature renders a builtin (tooling.BuiltinSignature).
@@ -581,9 +597,9 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
         out.push(c);
     }
     // variant positions of the first declaration of each enum
-    let vpos: Map<String, Vec<AstPos>> = Map::new();
+    let vpos: HashMap<String, Vec<AstPos>> = HashMap::new();
     for ed in a.file.enums {
-        if a.info.enums.contains(ed.name) && !vpos.contains(ed.name) {
+        if a.info.enums.contains_key(ed.name) && !vpos.contains_key(ed.name) {
             let ps = Vec::new();
             for v in ed.variants {
                 ps.push(v.pos);
@@ -591,7 +607,7 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
             vpos.insert(ed.name, ps);
         }
     }
-    let names = a.info.enums.keys();
+    let names: Vec<String> = a.info.enums.keys().collect();
     chk_sort_strings(names);
     for n in names {
         let en = match a.info.enums.get(n) {
@@ -631,9 +647,9 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
 
 struct SearchMatch {
     cand: SearchCand,
-    kind: String, // "exact", "reordered", "unifies", "result"
-    score: Int,
-    builtin: Bool,
+    mut kind: String, // "exact", "reordered", "unifies", "result"
+    mut score: Int,
+    mut builtin: Bool,
 }
 
 // search_exactly reports structural identity without instantiation.
@@ -685,7 +701,7 @@ fn search_generality(c: SearchCand) -> Int {
 }
 
 fn search_perm(
-    s: Map<String, SearchTerm>,
+    s: HashMap<String, SearchTerm>,
     qs: Vec<SearchTerm>,
     cs: Vec<SearchTerm>,
     used: Vec<Bool>,

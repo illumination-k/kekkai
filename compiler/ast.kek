@@ -17,6 +17,8 @@ struct AstFile {
     structs: Vec<AstStructDecl>,
     enums: Vec<AstEnumDecl>,
     funcs: Vec<AstFuncDecl>,
+    impls: Vec<AstImplDecl>,
+    traits: Vec<AstTraitDecl>,
 }
 
 // ---- types ----
@@ -25,18 +27,26 @@ enum AstType {
     Named(AstNamedType),
     Ref(AstRefType),
     Unit(AstUnitType),
+    Tuple(AstTupleType),
+    Fn(AstFnType),
 }
 
+// A named type `Name<Args>`. name may be a path to an associated type
+// (`Self::Item`, `T::Item`). In the arguments of a trait bound, an
+// associated type binding `Item = T` has name "=Item" and args [T].
 struct AstNamedType {
     id: Int,
     pos: AstPos,
-    name: String,
-    args: Vec<AstType>,
+    mut name: String,
+    mut args: Vec<AstType>,
 }
 
+// `&T` or `&mut T`: a borrowed capability, or (for any other type) the
+// type itself.
 struct AstRefType {
     id: Int,
     pos: AstPos,
+    mutable: Bool,
     elem: AstType,
 }
 
@@ -45,24 +55,57 @@ struct AstUnitType {
     pos: AstPos,
 }
 
+// A function type: `fn(A) -> R`, or the trait bound `Fn(A) -> R` (also
+// FnMut, FnOnce), possibly written `impl Fn(A) -> R` or `dyn Fn(A) -> R`.
+// kind is the spelling before the parameters ("fn", "Fn", "impl FnMut",
+// ...).
+struct AstFnType {
+    id: Int,
+    pos: AstPos,
+    kind: String,
+    params: Vec<AstType>,
+    mut result: Option<AstType>,
+}
+
+// `(A, B, ...)`: at least one element (`(A,)` has one).
+struct AstTupleType {
+    id: Int,
+    pos: AstPos,
+    elems: Vec<AstType>,
+}
+
 // ---- declarations ----
 
+// `#[name]` or `#[name(arg, ...)]` (e.g. `#[derive(PartialEq, Hash)]`).
 struct AstAttr {
     pos: AstPos,
     name: String,
+    args: Vec<String>,
 }
 
+// A struct field; `mut name: T` can be assigned after construction.
 struct AstField {
     id: Int,
     pos: AstPos,
+    mutable: Bool,
     name: String,
     ty: AstType,
+}
+
+// A generic parameter `T` or `T: Bound + Bound`.
+struct AstGeneric {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    bounds: Vec<AstType>,
 }
 
 struct AstStructDecl {
     id: Int,
     pos: AstPos,
+    mut attrs: Vec<AstAttr>,
     name: String,
+    generics: Vec<AstGeneric>,
     fields: Vec<AstField>,
 }
 
@@ -76,7 +119,9 @@ struct AstVariant {
 struct AstEnumDecl {
     id: Int,
     pos: AstPos,
+    mut attrs: Vec<AstAttr>,
     name: String,
+    generics: Vec<AstGeneric>,
     variants: Vec<AstVariant>,
 }
 
@@ -88,14 +133,64 @@ struct AstParam {
     ty: Option<AstType>,
 }
 
+// A function, or a method in an `impl` block. A method's receiver is
+// params[0], named `self` without a type; self_kind is its spelling
+// ("self", "&self" or "&mut self", all the same since structs are
+// references) and "" for functions without a receiver.
 struct AstFuncDecl {
     id: Int,
     pos: AstPos,
-    attrs: Vec<AstAttr>,
+    mut attrs: Vec<AstAttr>,
     name: String,
+    generics: Vec<AstGeneric>,
+    self_kind: String,
     params: Vec<AstParam>,
     result: Option<AstType>,
+    wheres: Vec<AstWhere>,
+    // false for a required trait method `fn f(&self);` (body is empty)
+    has_body: Bool,
     body: AstBlock,
+}
+
+// A `where` clause item `T: Bound + Bound` (T may be any type, e.g.
+// `Self::Item`).
+struct AstWhere {
+    id: Int,
+    pos: AstPos,
+    ty: AstType,
+    bounds: Vec<AstType>,
+}
+
+// `type Name;` in a trait (ty is None) or `type Name = T;` in an impl.
+struct AstAssocType {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    mut ty: Option<AstType>,
+}
+
+// `trait Name: Super + Super { type A; fn f(&self) -> T; fn g(&self) { } }`.
+struct AstTraitDecl {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    generics: Vec<AstGeneric>,
+    supers: Vec<AstType>,
+    assoc: Vec<AstAssocType>,
+    funcs: Vec<AstFuncDecl>,
+}
+
+// `impl<T> Target<T> { fn ... }`, or `impl<T> Trait for Target<T> { ... }`
+// when trait_ty is set.
+struct AstImplDecl {
+    id: Int,
+    pos: AstPos,
+    generics: Vec<AstGeneric>,
+    mut trait_ty: Option<AstType>,
+    mut target: AstType,
+    mut wheres: Vec<AstWhere>,
+    assoc: Vec<AstAssocType>,
+    funcs: Vec<AstFuncDecl>,
 }
 
 // ---- statements ----
@@ -112,11 +207,13 @@ enum AstStmt {
     Expr(AstExprStmt),
 }
 
+// `let x = e;` or, with pat set, `let (a, b) = e;` (name is then "_").
 struct AstLetStmt {
     id: Int,
     pos: AstPos,
     mutable: Bool,
     name: String,
+    pat: Option<AstPattern>,
     ty: Option<AstType>,
     init: AstExpr,
 }
@@ -145,18 +242,22 @@ struct AstContinueStmt {
     pos: AstPos,
 }
 
+// `while cond { }`, or `while let pat = cond { }` when pat is set.
 struct AstWhileStmt {
     id: Int,
     pos: AstPos,
+    pat: Option<AstPattern>,
     cond: AstExpr,
     body: AstBlock,
 }
 
-// `for x in start..end { }` (end is Some) or `for x in vec { }`.
+// `for x in start..end { }` (end is Some) or `for x in vec { }`. With pat
+// set, the loop variable is a pattern (`for (k, v) in ...`; var is "_").
 struct AstForStmt {
     id: Int,
     pos: AstPos,
     var: String,
+    pat: Option<AstPattern>,
     iter: AstExpr,
     end: Option<AstExpr>,
     body: AstBlock,
@@ -195,6 +296,17 @@ enum AstExpr {
     Block(AstBlock),
     Try(AstTry),
     Closure(AstClosure),
+    Tuple(AstTupleLit),
+    Range(AstRange),
+}
+
+// `start..end` or `start..=end` (inclusive).
+struct AstRange {
+    id: Int,
+    pos: AstPos,
+    start: AstExpr,
+    end: AstExpr,
+    inclusive: Bool,
 }
 
 struct AstIntLit {
@@ -220,10 +332,19 @@ struct AstUnitLit {
     pos: AstPos,
 }
 
+// `(a, b, ...)`: at least one element (`(a,)` has one).
+struct AstTupleLit {
+    id: Int,
+    pos: AstPos,
+    elems: Vec<AstExpr>,
+}
+
+// `name` or, with explicit type arguments, `name::<T>`.
 struct AstIdent {
     id: Int,
     pos: AstPos,
     name: String,
+    targs: Vec<AstType>,
 }
 
 // op is a token kind ("+", "==", "&&", ...).
@@ -235,7 +356,8 @@ struct AstBinary {
     y: AstExpr,
 }
 
-// op is "-" or "!".
+// op is "-", "!", or one of "&", "&mut ", "*" (no-ops kept for Rust's
+// spelling: values of structs and collections are references already).
 struct AstUnary {
     id: Int,
     pos: AstPos,
@@ -255,9 +377,11 @@ struct AstMethodCall {
     pos: AstPos,
     recv: AstExpr,
     name: String,
+    targs: Vec<AstType>,
     args: Vec<AstExpr>,
 }
 
+// `x.name`, or `x.0` for a tuple element (name is the index).
 struct AstFieldExpr {
     id: Int,
     pos: AstPos,
@@ -265,11 +389,15 @@ struct AstFieldExpr {
     name: String,
 }
 
+// `Type::name`; ty_args are the type's arguments (`Vec::<Int>::new`) and
+// targs the function's (`Type::name::<T>`).
 struct AstPathExpr {
     id: Int,
     pos: AstPos,
     ty: String,
+    ty_args: Vec<AstType>,
     name: String,
+    targs: Vec<AstType>,
 }
 
 struct AstFieldInit {
@@ -286,26 +414,31 @@ struct AstStructLit {
     fields: Vec<AstFieldInit>,
 }
 
+// `if cond { }`, or `if let pat = cond { }` when pat is set.
 struct AstIf {
     id: Int,
     pos: AstPos,
+    pat: Option<AstPattern>,
     cond: AstExpr,
     then: AstBlock,
-    els: Option<AstExpr>,
+    mut els: Option<AstExpr>,
 }
 
-// Pattern in a match arm. Patterns nest: `Ok(Some(n))`.
+// Pattern in a match arm. Patterns nest: `Ok(Some(n))`. A tuple pattern
+// `(p, q)` has tuple set and its elements in args (`()` has none).
 struct AstPattern {
     id: Int,
     pos: AstPos,
-    wildcard: Bool,
-    bind: String,
-    ty: String,
-    ctor: String,
+    mut wildcard: Bool,
+    mut tuple: Bool,
+    mut mutable: Bool,
+    mut bind: String,
+    mut ty: String,
+    mut ctor: String,
     args: Vec<AstPattern>,
-    int_value: Option<Int>,
-    bool_lit: Option<Bool>,
-    str_value: Option<String>,
+    mut int_value: Option<Int>,
+    mut bool_lit: Option<Bool>,
+    mut str_value: Option<String>,
 }
 
 struct AstMatchArm {
@@ -326,8 +459,8 @@ struct AstBlock {
     id: Int,
     pos: AstPos,
     stmts: Vec<AstStmt>,
-    tail: Option<AstExpr>,
-    end: AstPos,
+    mut tail: Option<AstExpr>,
+    mut end: AstPos,
 }
 
 struct AstTry {
@@ -336,10 +469,13 @@ struct AstTry {
     x: AstExpr,
 }
 
+// `|x, y| body`, `|x: T| -> R { ... }`, `move |x| ...`.
 struct AstClosure {
     id: Int,
     pos: AstPos,
+    is_move: Bool,
     params: Vec<AstParam>,
+    result: Option<AstType>,
     body: AstExpr,
 }
 
@@ -361,6 +497,8 @@ fn ast_type_pos(t: AstType) -> AstPos {
         AstType::Named(n) => n.pos,
         AstType::Ref(r) => r.pos,
         AstType::Unit(u) => u.pos,
+        AstType::Tuple(t) => t.pos,
+        AstType::Fn(t) => t.pos,
     }
 }
 
@@ -383,6 +521,8 @@ fn ast_expr_pos(e: AstExpr) -> AstPos {
         AstExpr::Block(x) => x.pos,
         AstExpr::Try(x) => x.pos,
         AstExpr::Closure(x) => x.pos,
+        AstExpr::Tuple(x) => x.pos,
+        AstExpr::Range(x) => x.pos,
     }
 }
 
@@ -405,6 +545,8 @@ fn ast_expr_id(e: AstExpr) -> Int {
         AstExpr::Block(x) => x.id,
         AstExpr::Try(x) => x.id,
         AstExpr::Closure(x) => x.id,
+        AstExpr::Tuple(x) => x.id,
+        AstExpr::Range(x) => x.id,
     }
 }
 

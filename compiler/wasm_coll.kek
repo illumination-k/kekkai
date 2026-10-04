@@ -1,38 +1,15 @@
 // Collections.
 //
 // Vec<T> is a struct { len: i32, data: (ref null (array (mut T))) } with
-// amortised doubling, implemented entirely in wasm. Map<K, V> is the
-// prelude's __Map (lib/prelude/map.kek); values are boxed into anyref.
+// amortised doubling, implemented entirely in wasm. (HashMap is written in
+// Kekkai, in the core library.)
 
 fn wasm_is_collection_op(name: String) -> Bool {
-    name.starts_with("vec.") || name.starts_with("map.")
+    name.starts_with("vec.")
 }
 
 fn wasm_is_vec(m: WasmMod, t: IrTy) -> Bool {
     t.kind == "agg" && wasm_td(m, t.agg).coll == "vec"
-}
-
-// wasm_box converts the value on the stack into an anyref for storage in
-// a map; wasm_unbox is its inverse.
-fn wasm_box(m: WasmMod, c: Vec<Int>, t: IrTy) {
-    if t.kind == "int" {
-        cg_struct_new(c, m.box_t);
-    } else if t.kind == "bool" || t.kind == "unit" {
-        cg_op(c, 173); // i64.extend_i32_u
-        cg_struct_new(c, m.box_t);
-    }
-}
-
-fn wasm_unbox(m: WasmMod, c: Vec<Int>, t: IrTy) {
-    if t.kind == "int" || t.kind == "bool" || t.kind == "unit" {
-        cg_cast_null(c, m.box_t);
-        cg_struct_get(c, m.box_t, 0);
-        if t.kind != "int" {
-            cg_op(c, 167); // i32.wrap_i64
-        }
-    } else if t.kind != "ext" || t.ext == "__Chars" {
-        cg_cast_null(c, wasm_val(m, t));
-    }
 }
 
 // wasm_helper_begin reserves a helper function and returns its body
@@ -185,47 +162,6 @@ fn cg_coll_op(g: CgGen, ins: IrInstr) {
     let td = wasm_td(m, ins.ty);
     let dst_ty = cg_ty(g, ins.dst);
     let name = ins.name;
-    if td.coll == "map" {
-        let sfx = if td.key.kind == "string" {
-            "_str"
-        } else {
-            "_int"
-        };
-        if name == "map.new" {
-            cg_i32(c, if td.key.kind == "string" { 1 } else { 0 });
-            cg_call(c, wasm_prelude_func(m, "__map_new"));
-        } else if name == "map.insert" {
-            cg_arg(g, ins, 0);
-            cg_arg(g, ins, 1);
-            cg_arg(g, ins, 2);
-            wasm_box(m, c, td.elem);
-            cg_call(c, wasm_prelude_func(m, "__map_insert" + sfx));
-        } else if name == "map.get" {
-            let fname = wasm_map_get_func(m, ins.ty, dst_ty.agg);
-            cg_arg(g, ins, 0);
-            cg_arg(g, ins, 1);
-            cg_call(c, fname);
-        } else if name == "map.contains" {
-            cg_arg(g, ins, 0);
-            cg_arg(g, ins, 1);
-            cg_call(c, wasm_prelude_func(m, "__map_find" + sfx));
-            cg_i64(c, 0);
-            cg_op(c, 89); // i64.ge_s
-        } else if name == "map.remove" {
-            cg_arg(g, ins, 0);
-            cg_arg(g, ins, 1);
-            cg_call(c, wasm_prelude_func(m, "__map_remove" + sfx));
-        } else if name == "map.len" {
-            cg_arg(g, ins, 0);
-            cg_call(c, wasm_prelude_func(m, "__map_len"));
-        } else if name == "map.keys" {
-            cg_arg(g, ins, 0);
-            cg_call(c, wasm_prelude_func(m, "__map_keys" + sfx));
-        } else {
-            wasm_fail(m, "codegen: unknown map op " + name);
-        }
-        return;
-    }
     let vt = wasm_at(m.agg_type, ins.ty);
     let at = wasm_at(m.vec_arr, ins.ty);
     if name == "vec.new" {
@@ -269,50 +205,6 @@ fn cg_coll_op(g: CgGen, ins: IrInstr) {
     } else {
         wasm_fail(m, "codegen: unknown vec op " + name);
     }
-}
-
-// params: 0 map, 1 key; locals: 2 entry index
-fn wasm_map_get_func(m: WasmMod, agg: Int, opt: Int) -> Int {
-    let name = "$map_get" + agg.to_string() + "_" + opt.to_string();
-    match m.func_idx.get(name) {
-        Some(i) => {
-            return i;
-        }
-        None => {}
-    }
-    let td = wasm_td(m, agg);
-    let sfx = if td.key.kind == "string" {
-        "_str"
-    } else {
-        "_int"
-    };
-    let rt = wasm_at(m.agg_type, opt);
-    let d = wasm_helper_begin(
-        m,
-        name,
-        wasm_sig(wasm_v2(m.map_t, wasm_val(m, td.key)), wasm_v1(rt)),
-        wasm_v1(wasm_i64_t()),
-    );
-    let h = d.body;
-    cg_get(h, 0);
-    cg_get(h, 1);
-    cg_call(h, wasm_prelude_func(m, "__map_find" + sfx));
-    cg_set(h, 2);
-    cg_get(h, 2);
-    cg_i64(h, 0);
-    cg_op(h, 83); // i64.lt_s
-    cg_op(h, 4); // if
-    wasm_valtype(h, rt);
-    wasm_none(m, h, opt);
-    cg_op(h, 5); // else
-    cg_i32(h, 1);
-    cg_get(h, 0);
-    cg_get(h, 2);
-    cg_call(h, wasm_prelude_func(m, "__map_val"));
-    wasm_unbox(m, h, td.elem);
-    wasm_some_end(m, h, opt);
-    cg_end(h);
-    wasm_helper_end(m, d)
 }
 
 // params: 0 vec, 1 x; locals: 2 data, 3 len, 4 new data

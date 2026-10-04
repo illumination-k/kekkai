@@ -9,17 +9,17 @@
 struct Tok {
     kind: String,
     text: String,
-    pos: AstPos,
+    mut pos: AstPos,
 }
 
 struct LexState {
     src: String,
     bytes: Vec<Int>,
     n: Int,
-    off: Int,
-    uoff: Int,
-    line: Int,
-    col: Int,
+    mut off: Int,
+    mut uoff: Int,
+    mut line: Int,
+    mut col: Int,
     file: String,
     toks: Vec<Tok>,
     errs: Vec<AstError>,
@@ -81,6 +81,10 @@ fn lex_is_keyword(w: String) -> Bool {
         || w == "in"
         || w == "break"
         || w == "continue"
+        || w == "impl"
+        || w == "trait"
+        || w == "where"
+        || w == "type"
 }
 
 fn lex_peek(lx: LexState, n: Int) -> Int {
@@ -316,7 +320,10 @@ fn lex_run(lx: LexState) {
                 lex_advance(lx);
             }
             let word = lx.src.slice(start, lx.uoff);
-            if word.starts_with("__") && lx.file != "" && !lx.file.starts_with("<prelude>") {
+            if word.starts_with("__")
+                && lx.file != ""
+                && !lx.file.starts_with("<prelude>")
+                && !lx.file.starts_with("<core>") {
                 lex_error(lx, pos, "identifiers starting with `__` are reserved for the runtime");
             }
             if lex_is_keyword(word) {
@@ -336,7 +343,13 @@ fn lex_run(lx: LexState) {
             let mut done = false;
             if lx.off + 1 < lx.n {
                 let k2 = lex_two_char(c, lex_peek(lx, 1));
-                if k2 != "" {
+                if k2 == ".." && lx.off + 2 < lx.n && lex_peek(lx, 2) == 61 {
+                    lex_advance(lx);
+                    lex_advance(lx);
+                    lex_advance(lx);
+                    lex_emit(lx, "..=", "", pos);
+                    done = true;
+                } else if k2 != "" {
                     lex_advance(lx);
                     lex_advance(lx);
                     lex_emit(lx, k2, "", pos);

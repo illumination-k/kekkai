@@ -5,16 +5,16 @@
 // quickly) and further errors are suppressed.
 
 struct AstIds {
-    next: Int,
+    mut next: Int,
 }
 
 struct ParseState {
     toks: Vec<Tok>,
-    pos: Int,
+    mut pos: Int,
     eof: Tok,
     errs: Vec<AstError>,
-    no_struct: Bool,
-    failed: Bool,
+    mut no_struct: Bool,
+    mut failed: Bool,
     ids: AstIds,
 }
 
@@ -40,6 +40,17 @@ fn parse_tok(p: ParseState) -> Tok {
 
 fn parse_at(p: ParseState, k: String) -> Bool {
     parse_tok(p).kind == k
+}
+
+// parse_peek_at reports whether the token after the current one is k.
+fn parse_peek_at(p: ParseState, k: String) -> Bool {
+    if p.failed {
+        return false;
+    }
+    match p.toks.get(p.pos + 1) {
+        Some(t) => t.kind == k,
+        None => false,
+    }
 }
 
 fn parse_next(p: ParseState) -> Tok {
@@ -89,7 +100,21 @@ fn parse_describe(t: Tok) -> String {
 // parse_file parses one source file: lexer errors plus at
 // most one syntax error, sorted by position.
 fn parse_file(name: String, src: String, ids: AstIds) -> ParseResult {
+    parse_file_at(name, src, ids, None)
+}
+
+// parse_file_at is parse_file with every position replaced by at (when
+// set): for generated code.
+fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> ParseResult {
     let lr = lex_file(name, src);
+    match at {
+        Some(pos) => {
+            for t in lr.toks {
+                t.pos = pos;
+            }
+        }
+        None => {}
+    }
     let eof = match lr.toks.get(lr.toks.len() - 1) {
         Some(t) => t,
         None => Tok { kind: "EOF", text: "", pos: AstPos { file: name, line: 1, col: 1 } },
@@ -108,55 +133,227 @@ fn parse_file(name: String, src: String, ids: AstIds) -> ParseResult {
 }
 
 fn parse_items(p: ParseState) -> AstFile {
-    let f = AstFile { structs: Vec::new(), enums: Vec::new(), funcs: Vec::new() };
+    let f = AstFile {
+        structs: Vec::new(),
+        enums: Vec::new(),
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+    };
     while !parse_at(p, "EOF") {
         let attrs = Vec::new();
         while parse_at(p, "#") {
             let pos = parse_next(p).pos;
             parse_expect(p, "[");
             let name = parse_expect(p, "IDENT");
+            let a = AstAttr { pos: pos, name: name.text, args: Vec::new() };
+            if parse_accept(p, "(") {
+                while !parse_at(p, ")") {
+                    a.args.push(parse_expect(p, "IDENT").text);
+                    if !parse_accept(p, ",") {
+                        break;
+                    }
+                }
+                parse_expect(p, ")");
+            }
             parse_expect(p, "]");
-            attrs.push(AstAttr { pos: pos, name: name.text });
+            attrs.push(a);
         }
         let k = parse_tok(p).kind;
         if k == "fn" {
-            let fd = parse_func(p);
+            let fd = parse_func(p, false);
             fd.attrs = attrs;
             if !p.failed {
                 f.funcs.push(fd);
             }
         } else if k == "struct" {
             let sd = parse_struct(p);
+            sd.attrs = attrs;
             if !p.failed {
                 f.structs.push(sd);
             }
         } else if k == "enum" {
             let ed = parse_enum(p);
+            ed.attrs = attrs;
             if !p.failed {
                 f.enums.push(ed);
+            }
+        } else if k == "impl" {
+            let id = parse_impl(p);
+            if !p.failed {
+                f.impls.push(id);
+            }
+        } else if k == "trait" {
+            let td = parse_trait(p);
+            if !p.failed {
+                f.traits.push(td);
             }
         } else {
             parse_fail(
                 p,
                 parse_tok(p).pos,
-                "expected item (`fn`, `struct` or `enum`), found " + parse_describe(parse_tok(p)),
+                "expected item (`fn`, `struct`, `enum`, `trait` or `impl`), found "
+                    + parse_describe(parse_tok(p)),
             );
+        }
+        if attrs.len() > 0 && (k == "impl" || k == "trait") {
+            match attrs.get(0) {
+                Some(a) => parse_fail(p, a.pos, "attributes are not allowed on `" + k + "` items"),
+                None => {}
+            }
         }
     }
     f
 }
 
+// parse_assoc_type parses `type Name;` or `type Name = T;`.
+fn parse_assoc_type(p: ParseState) -> AstAssocType {
+    let pos = parse_expect(p, "type").pos;
+    let name = parse_expect(p, "IDENT").text;
+    let a = AstAssocType { id: parse_id(p), pos: pos, name: name, ty: None };
+    if parse_accept(p, "=") {
+        a.ty = Some(parse_type(p));
+    }
+    parse_expect(p, ";");
+    a
+}
+
+// parse_trait parses `trait Name: Super + Super { type A; fn f(&self); ... }`.
+fn parse_trait(p: ParseState) -> AstTraitDecl {
+    let pos = parse_expect(p, "trait").pos;
+    let name = parse_expect(p, "IDENT").text;
+    let generics = parse_generics(p);
+    let d = AstTraitDecl {
+        id: parse_id(p),
+        pos: pos,
+        name: name,
+        generics: generics,
+        supers: Vec::new(),
+        assoc: Vec::new(),
+        funcs: Vec::new(),
+    };
+    if parse_accept(p, ":") {
+        d.supers.push(parse_type(p));
+        while parse_accept(p, "+") {
+            d.supers.push(parse_type(p));
+        }
+    }
+    parse_expect(p, "{");
+    while !parse_at(p, "}") && !parse_at(p, "EOF") {
+        if parse_at(p, "type") {
+            d.assoc.push(parse_assoc_type(p));
+        } else {
+            d.funcs.push(parse_func(p, true));
+        }
+    }
+    parse_expect(p, "}");
+    d
+}
+
+// parse_generics parses `<T, U: Bound + Bound>` (nothing when absent).
+fn parse_generics(p: ParseState) -> Vec<AstGeneric> {
+    let gs = Vec::new();
+    if !parse_accept(p, "<") {
+        return gs;
+    }
+    while !parse_at(p, ">") {
+        let t = parse_expect(p, "IDENT");
+        let g = AstGeneric { id: parse_id(p), pos: t.pos, name: t.text, bounds: Vec::new() };
+        if parse_accept(p, ":") {
+            g.bounds.push(parse_type(p));
+            while parse_accept(p, "+") {
+                g.bounds.push(parse_type(p));
+            }
+        }
+        gs.push(g);
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, ">");
+    gs
+}
+
+// parse_wheres parses `where T: A + B, U: C` (nothing when absent).
+fn parse_wheres(p: ParseState) -> Vec<AstWhere> {
+    let ws = Vec::new();
+    if !parse_accept(p, "where") {
+        return ws;
+    }
+    while !parse_at(p, "{") && !parse_at(p, ";") && !parse_at(p, "EOF") {
+        let pos = parse_tok(p).pos;
+        let ty = parse_type(p);
+        parse_expect(p, ":");
+        let w = AstWhere { id: parse_id(p), pos: pos, ty: ty, bounds: Vec::new() };
+        w.bounds.push(parse_type(p));
+        while parse_accept(p, "+") {
+            w.bounds.push(parse_type(p));
+        }
+        ws.push(w);
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    ws
+}
+
+// parse_impl parses `impl<T> Target<T> { fn ... }` and
+// `impl<T> Trait for Target<T> { ... }`.
+fn parse_impl(p: ParseState) -> AstImplDecl {
+    let pos = parse_expect(p, "impl").pos;
+    let generics = parse_generics(p);
+    let first = parse_type(p);
+    let d = AstImplDecl {
+        id: parse_id(p),
+        pos: pos,
+        generics: generics,
+        trait_ty: None,
+        target: first,
+        wheres: Vec::new(),
+        assoc: Vec::new(),
+        funcs: Vec::new(),
+    };
+    if parse_at(p, "for") {
+        parse_next(p);
+        d.trait_ty = Some(first);
+        d.target = parse_type(p);
+    }
+    d.wheres = parse_wheres(p);
+    parse_expect(p, "{");
+    while !parse_at(p, "}") && !parse_at(p, "EOF") {
+        if parse_at(p, "#") {
+            parse_fail(p, parse_tok(p).pos, "attributes are not allowed on methods");
+        }
+        if parse_at(p, "type") {
+            d.assoc.push(parse_assoc_type(p));
+        } else {
+            d.funcs.push(parse_func(p, false));
+        }
+    }
+    parse_expect(p, "}");
+    d
+}
+
 fn parse_struct(p: ParseState) -> AstStructDecl {
     let pos = parse_expect(p, "struct").pos;
     let name = parse_expect(p, "IDENT").text;
-    let d = AstStructDecl { id: parse_id(p), pos: pos, name: name, fields: Vec::new() };
+    let generics = parse_generics(p);
+    let d = AstStructDecl {
+        id: parse_id(p),
+        pos: pos,
+        attrs: Vec::new(),
+        name: name,
+        generics: generics,
+        fields: Vec::new(),
+    };
     parse_expect(p, "{");
     while !parse_at(p, "}") {
         let fp = parse_tok(p).pos;
+        let mutable = parse_accept(p, "mut");
         let fname = parse_expect(p, "IDENT").text;
         parse_expect(p, ":");
         let ty = parse_type(p);
-        d.fields.push(AstField { id: parse_id(p), pos: fp, name: fname, ty: ty });
+        d.fields.push(AstField { id: parse_id(p), pos: fp, mutable: mutable, name: fname, ty: ty });
         if !parse_accept(p, ",") {
             break;
         }
@@ -168,7 +365,15 @@ fn parse_struct(p: ParseState) -> AstStructDecl {
 fn parse_enum(p: ParseState) -> AstEnumDecl {
     let pos = parse_expect(p, "enum").pos;
     let name = parse_expect(p, "IDENT").text;
-    let d = AstEnumDecl { id: parse_id(p), pos: pos, name: name, variants: Vec::new() };
+    let generics = parse_generics(p);
+    let d = AstEnumDecl {
+        id: parse_id(p),
+        pos: pos,
+        attrs: Vec::new(),
+        name: name,
+        generics: generics,
+        variants: Vec::new(),
+    };
     parse_expect(p, "{");
     while !parse_at(p, "}") {
         let vp = parse_tok(p).pos;
@@ -192,12 +397,43 @@ fn parse_enum(p: ParseState) -> AstEnumDecl {
     d
 }
 
-fn parse_func(p: ParseState) -> AstFuncDecl {
+// parse_func parses a function; in a trait (in_trait) the body may be
+// replaced by `;`.
+fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
     let pos = parse_expect(p, "fn").pos;
     let name = parse_expect(p, "IDENT").text;
     let id = parse_id(p);
+    let generics = parse_generics(p);
     let params = Vec::new();
+    let mut self_kind = "";
     parse_expect(p, "(");
+    // receiver: `self`, `&self` or `&mut self`
+    let sp = parse_tok(p).pos;
+    if parse_at(p, "IDENT") && parse_tok(p).text == "self" {
+        parse_next(p);
+        self_kind = "self";
+    } else if parse_at(p, "&") {
+        parse_next(p);
+        self_kind = if parse_accept(p, "mut") {
+            "&mut self"
+        } else {
+            "&self"
+        };
+        let t = parse_expect(p, "IDENT");
+        if t.text != "self" {
+            parse_fail(p, t.pos, "expected `self`, found " + parse_describe(t));
+        }
+    }
+    if self_kind != "" {
+        params.push(AstParam { id: parse_id(p), pos: sp, name: "self", ty: None });
+        if !parse_accept(p, ",") && !parse_at(p, ")") {
+            parse_fail(
+                p,
+                parse_tok(p).pos,
+                "expected `,` or `)`, found " + parse_describe(parse_tok(p)),
+            );
+        }
+    }
     while !parse_at(p, ")") {
         let pp = parse_tok(p).pos;
         let mut pname = "_";
@@ -218,14 +454,26 @@ fn parse_func(p: ParseState) -> AstFuncDecl {
     if parse_accept(p, "->") {
         result = Some(parse_type(p));
     }
-    let body = parse_block(p);
+    let wheres = parse_wheres(p);
+    let mut has_body = true;
+    let mut body = AstBlock { id: parse_id(p), pos: pos, stmts: Vec::new(), tail: None, end: pos };
+    if in_trait && parse_at(p, ";") {
+        parse_next(p);
+        has_body = false;
+    } else {
+        body = parse_block(p);
+    }
     AstFuncDecl {
         id: id,
         pos: pos,
         attrs: Vec::new(),
         name: name,
+        generics: generics,
+        self_kind: self_kind,
         params: params,
         result: result,
+        wheres: wheres,
+        has_body: has_body,
         body: body,
     }
 }
@@ -239,30 +487,135 @@ fn parse_type(p: ParseState) -> AstType {
     if t.kind == "&" {
         parse_next(p);
         let id = parse_id(p);
+        let mutable = parse_accept(p, "mut");
         let elem = parse_type(p);
-        return AstType::Ref(AstRefType { id: id, pos: t.pos, elem: elem });
+        return AstType::Ref(AstRefType { id: id, pos: t.pos, mutable: mutable, elem: elem });
     }
     if t.kind == "(" {
         parse_next(p);
+        if parse_accept(p, ")") {
+            return AstType::Unit(AstUnitType { id: parse_id(p), pos: t.pos });
+        }
+        let elems = Vec::new();
+        let mut trailing = false;
+        while !parse_at(p, ")") {
+            elems.push(parse_type(p));
+            trailing = parse_accept(p, ",");
+            if !trailing {
+                break;
+            }
+        }
         parse_expect(p, ")");
-        return AstType::Unit(AstUnitType { id: parse_id(p), pos: t.pos });
+        if elems.len() == 1 && !trailing {
+            return elems.get(0).unwrap_or(AstType::Unit(AstUnitType { id: 0, pos: t.pos }));
+        }
+        return AstType::Tuple(AstTupleType { id: parse_id(p), pos: t.pos, elems: elems });
+    }
+    if t.kind == "fn" || t.kind == "impl" || (t.kind == "IDENT" && t.text == "dyn") {
+        return parse_fn_type(p);
+    }
+    if t.kind == "IDENT"
+        && (t.text == "Fn" || t.text == "FnMut" || t.text == "FnOnce")
+        && parse_peek_at(p, "(") {
+        return parse_fn_type(p);
     }
     if t.kind == "IDENT" {
         parse_next(p);
         let nt = AstNamedType { id: parse_id(p), pos: t.pos, name: t.text, args: Vec::new() };
-        if parse_accept(p, "<") {
-            while true {
-                nt.args.push(parse_type(p));
-                if !parse_accept(p, ",") {
-                    break;
-                }
-            }
-            parse_expect(p, ">");
+        if parse_at(p, "::") && parse_peek_at(p, "IDENT") {
+            // an associated type `T::Item`
+            parse_next(p);
+            nt.name = t.text + "::" + parse_expect(p, "IDENT").text;
+            return AstType::Named(nt);
+        }
+        if parse_at(p, "<") {
+            nt.args = parse_type_args(p);
         }
         return AstType::Named(nt);
     }
+    if t.kind == "_" {
+        // a type left to inference
+        parse_next(p);
+        return AstType::Named(AstNamedType {
+            id: parse_id(p),
+            pos: t.pos,
+            name: "_",
+            args: Vec::new(),
+        });
+    }
     parse_fail(p, t.pos, "expected type, found " + parse_describe(t));
     AstType::Unit(AstUnitType { id: parse_id(p), pos: t.pos })
+}
+
+// parse_fn_type parses `fn(A) -> R`, `Fn(A) -> R` (FnMut, FnOnce) and
+// `impl Fn(A) -> R` / `dyn Fn(A) -> R`.
+fn parse_fn_type(p: ParseState) -> AstType {
+    let t = parse_next(p);
+    let mut kind = t.text;
+    if t.kind == "fn" {
+        kind = "fn";
+    } else if t.kind == "impl" || t.text == "dyn" {
+        let prefix = if t.kind == "impl" { "impl " } else { "dyn " };
+        let n = parse_expect(p, "IDENT");
+        if n.text != "Fn" && n.text != "FnMut" && n.text != "FnOnce" {
+            parse_fail(
+                p,
+                n.pos,
+                "only `" + prefix + "Fn(...)` is supported, found `" + prefix + n.text + "`",
+            );
+        }
+        kind = prefix + n.text;
+    }
+    let ft = AstFnType { id: parse_id(p), pos: t.pos, kind: kind, params: Vec::new(), result: None };
+    parse_expect(p, "(");
+    while !parse_at(p, ")") {
+        ft.params.push(parse_type(p));
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, ")");
+    if parse_accept(p, "->") {
+        ft.result = Some(parse_type(p));
+    }
+    AstType::Fn(ft)
+}
+
+// parse_type_args parses `<A, B>`.
+fn parse_type_args(p: ParseState) -> Vec<AstType> {
+    let args = Vec::new();
+    parse_expect(p, "<");
+    while !parse_at(p, ">") {
+        if parse_at(p, "IDENT") && parse_peek_at(p, "=") {
+            // an associated type binding `Item = T` (in a trait bound)
+            let t = parse_next(p);
+            parse_next(p);
+            let b = AstNamedType {
+                id: parse_id(p),
+                pos: t.pos,
+                name: "=" + t.text,
+                args: Vec::new(),
+            };
+            b.args.push(parse_type(p));
+            args.push(AstType::Named(b));
+        } else {
+            args.push(parse_type(p));
+        }
+        if !parse_accept(p, ",") {
+            break;
+        }
+    }
+    parse_expect(p, ">");
+    args
+}
+
+// parse_turbofish parses `::<A, B>` when present.
+fn parse_turbofish(p: ParseState) -> Vec<AstType> {
+    if parse_at(p, "::") && parse_peek_at(p, "<") {
+        parse_next(p);
+        return parse_type_args(p);
+    }
+    Vec::new()
 }
 
 fn parse_block(p: ParseState) -> AstBlock {
@@ -279,12 +632,19 @@ fn parse_block(p: ParseState) -> AstBlock {
         }
         if k == "let" {
             parse_next(p);
-            let mutable = parse_accept(p, "mut");
+            let mut mutable = false;
             let mut name = "_";
-            if parse_at(p, "_") {
-                parse_next(p);
+            let mut pat = None;
+            if parse_at(p, "(")
+                || (parse_at(p, "IDENT") && (parse_peek_at(p, "(") || parse_peek_at(p, "::"))) {
+                pat = Some(parse_pattern(p));
             } else {
-                name = parse_expect(p, "IDENT").text;
+                mutable = parse_accept(p, "mut");
+                if parse_at(p, "_") {
+                    parse_next(p);
+                } else {
+                    name = parse_expect(p, "IDENT").text;
+                }
             }
             let mut ty = None;
             if parse_accept(p, ":") {
@@ -299,6 +659,7 @@ fn parse_block(p: ParseState) -> AstBlock {
                     pos: sp,
                     mutable: mutable,
                     name: name,
+                    pat: pat,
                     ty: ty,
                     init: init,
                 }),
@@ -307,27 +668,47 @@ fn parse_block(p: ParseState) -> AstBlock {
         }
         if k == "while" {
             parse_next(p);
+            let mut pat = None;
+            if parse_accept(p, "let") {
+                pat = Some(parse_pattern(p));
+                parse_expect(p, "=");
+            }
             p.no_struct = true;
             let cond = parse_expr(p);
             p.no_struct = false;
             let body = parse_block(p);
             b.stmts.push(
-                AstStmt::While(AstWhileStmt { id: parse_id(p), pos: sp, cond: cond, body: body }),
+                AstStmt::While(AstWhileStmt {
+                    id: parse_id(p),
+                    pos: sp,
+                    pat: pat,
+                    cond: cond,
+                    body: body,
+                }),
             );
             continue;
         }
         if k == "for" {
             parse_next(p);
             let mut var = "_";
-            if !parse_accept(p, "_") {
+            let mut pat = None;
+            if parse_at(p, "(") {
+                pat = Some(parse_pattern(p));
+            } else if !parse_accept(p, "_") {
                 var = parse_expect(p, "IDENT").text;
             }
             parse_expect(p, "in");
             p.no_struct = true;
-            let iter = parse_expr(p);
+            let mut iter = parse_expr(p);
             let mut end = None;
-            if parse_accept(p, "..") {
-                end = Some(parse_expr(p));
+            match iter {
+                AstExpr::Range(r) => {
+                    if !r.inclusive {
+                        iter = r.start;
+                        end = Some(r.end);
+                    }
+                }
+                _ => {}
             }
             p.no_struct = false;
             let body = parse_block(p);
@@ -336,6 +717,7 @@ fn parse_block(p: ParseState) -> AstBlock {
                     id: parse_id(p),
                     pos: sp,
                     var: var,
+                    pat: pat,
                     iter: iter,
                     end: end,
                     body: body,
@@ -443,7 +825,19 @@ fn parse_block_like(e: AstExpr) -> Bool {
 }
 
 fn parse_expr(p: ParseState) -> AstExpr {
-    parse_binary(p, 0)
+    let x = parse_binary(p, 0);
+    if parse_at(p, "..") || parse_at(p, "..=") {
+        let t = parse_next(p);
+        let y = parse_binary(p, 0);
+        return AstExpr::Range(AstRange {
+            id: parse_id(p),
+            pos: t.pos,
+            start: x,
+            end: y,
+            inclusive: t.kind == "..=",
+        });
+    }
+    x
 }
 
 fn parse_prec(k: String) -> Int {
@@ -491,10 +885,14 @@ fn parse_binary_rest(p: ParseState, x0: AstExpr, min_prec: Int) -> AstExpr {
 
 fn parse_unary(p: ParseState) -> AstExpr {
     let t = parse_tok(p);
-    if t.kind == "-" || t.kind == "!" {
+    if t.kind == "-" || t.kind == "!" || t.kind == "*" || t.kind == "&" {
         parse_next(p);
+        let mut op = t.kind;
+        if op == "&" && parse_accept(p, "mut") {
+            op = "&mut ";
+        }
         let x = parse_unary(p);
-        return AstExpr::Unary(AstUnary { id: parse_id(p), pos: t.pos, op: t.kind, x: x });
+        return AstExpr::Unary(AstUnary { id: parse_id(p), pos: t.pos, op: op, x: x });
     }
     let e = parse_primary(p);
     parse_postfix(p, e)
@@ -527,14 +925,27 @@ fn parse_postfix(p: ParseState, x0: AstExpr) -> AstExpr {
             );
         } else if t.kind == "." {
             parse_next(p);
+            if parse_at(p, "INT") {
+                // tuple element `x.0`
+                let it = parse_next(p);
+                x = AstExpr::Field(AstFieldExpr {
+                    id: parse_id(p),
+                    pos: it.pos,
+                    x: x,
+                    name: it.text,
+                });
+                continue;
+            }
             let name = parse_expect(p, "IDENT");
-            if parse_at(p, "(") {
+            let targs = parse_turbofish(p);
+            if parse_at(p, "(") || targs.len() > 0 {
                 let args = parse_args(p);
                 x = AstExpr::Method(AstMethodCall {
                     id: parse_id(p),
                     pos: name.pos,
                     recv: x,
                     name: name.text,
+                    targs: targs,
                     args: args,
                 });
             } else {
@@ -614,6 +1025,20 @@ fn parse_primary(p: ParseState) -> AstExpr {
         let saved = p.no_struct;
         p.no_struct = false;
         let e = parse_expr(p);
+        if parse_at(p, ",") {
+            // tuple `(a, b)` or `(a,)`
+            let elems = Vec::new();
+            elems.push(e);
+            while parse_accept(p, ",") {
+                if parse_at(p, ")") {
+                    break;
+                }
+                elems.push(parse_expr(p));
+            }
+            p.no_struct = saved;
+            parse_expect(p, ")");
+            return AstExpr::Tuple(AstTupleLit { id: parse_id(p), pos: t.pos, elems: elems });
+        }
         p.no_struct = saved;
         parse_expect(p, ")");
         return e;
@@ -627,25 +1052,33 @@ fn parse_primary(p: ParseState) -> AstExpr {
     if k == "match" {
         return parse_match(p);
     }
-    if k == "|" || k == "||" {
+    if k == "|"
+        || k == "||"
+        || (k == "IDENT" && t.text == "move" && (parse_peek_at(p, "|") || parse_peek_at(p, "||"))) {
         return parse_closure(p);
     }
     if k == "IDENT" {
         parse_next(p);
+        let ty_args = parse_turbofish(p);
         if parse_at(p, "::") {
             parse_next(p);
             let name = parse_expect(p, "IDENT");
+            let targs = parse_turbofish(p);
             return AstExpr::Path(AstPathExpr {
                 id: parse_id(p),
                 pos: t.pos,
                 ty: t.text,
+                ty_args: ty_args,
                 name: name.text,
+                targs: targs,
             });
         }
-        if parse_at(p, "{") && !p.no_struct && parse_is_upper(t.text) {
+        if ty_args.len() == 0 && parse_at(p, "{") && !p.no_struct && parse_is_upper(t.text) {
             return parse_struct_lit(p, t);
         }
-        return AstExpr::Ident(AstIdent { id: parse_id(p), pos: t.pos, name: t.text });
+        return AstExpr::Ident(
+            AstIdent { id: parse_id(p), pos: t.pos, name: t.text, targs: ty_args },
+        );
     }
     parse_fail(p, t.pos, "expected expression, found " + parse_describe(t));
     AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: t.pos })
@@ -661,7 +1094,12 @@ fn parse_struct_lit(p: ParseState, name: Tok) -> AstExpr {
             value = parse_expr(p);
         } else {
             // shorthand `Point { x, y }`
-            value = AstExpr::Ident(AstIdent { id: parse_id(p), pos: ft.pos, name: ft.text });
+            value = AstExpr::Ident(AstIdent {
+                id: parse_id(p),
+                pos: ft.pos,
+                name: ft.text,
+                targs: Vec::new(),
+            });
         }
         lit.fields.push(AstFieldInit { id: parse_id(p), pos: ft.pos, name: ft.text, value: value });
         if !parse_accept(p, ",") {
@@ -674,6 +1112,10 @@ fn parse_struct_lit(p: ParseState, name: Tok) -> AstExpr {
 
 fn parse_closure(p: ParseState) -> AstExpr {
     let pos = parse_tok(p).pos;
+    let is_move = parse_at(p, "IDENT");
+    if is_move {
+        parse_next(p);
+    }
     let id = parse_id(p);
     let params = Vec::new();
     if !parse_accept(p, "||") {
@@ -692,18 +1134,44 @@ fn parse_closure(p: ParseState) -> AstExpr {
         }
         parse_expect(p, "|");
     }
+    let mut result = None;
+    if parse_accept(p, "->") {
+        // with a return type, the body must be a block
+        result = Some(parse_type(p));
+        let b = parse_block(p);
+        return AstExpr::Closure(AstClosure {
+            id: id,
+            pos: pos,
+            is_move: is_move,
+            params: params,
+            result: result,
+            body: AstExpr::Block(b),
+        });
+    }
     let body = parse_expr(p);
-    AstExpr::Closure(AstClosure { id: id, pos: pos, params: params, body: body })
+    AstExpr::Closure(AstClosure {
+        id: id,
+        pos: pos,
+        is_move: is_move,
+        params: params,
+        result: result,
+        body: body,
+    })
 }
 
 fn parse_if(p: ParseState) -> AstIf {
     let pos = parse_expect(p, "if").pos;
+    let mut pat = None;
+    if parse_accept(p, "let") {
+        pat = Some(parse_pattern(p));
+        parse_expect(p, "=");
+    }
     let saved = p.no_struct;
     p.no_struct = true;
     let cond = parse_expr(p);
     p.no_struct = saved;
     let then = parse_block(p);
-    let e = AstIf { id: parse_id(p), pos: pos, cond: cond, then: then, els: None };
+    let e = AstIf { id: parse_id(p), pos: pos, pat: pat, cond: cond, then: then, els: None };
     if parse_accept(p, "else") {
         if parse_at(p, "if") {
             e.els = Some(AstExpr::If(parse_if(p)));
@@ -745,6 +1213,8 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         id: parse_id(p),
         pos: t.pos,
         wildcard: false,
+        tuple: false,
+        mutable: false,
         bind: "",
         ty: "",
         ctor: "",
@@ -757,6 +1227,31 @@ fn parse_pattern(p: ParseState) -> AstPattern {
     if k == "_" {
         parse_next(p);
         pat.wildcard = true;
+        return pat;
+    }
+    if k == "(" {
+        parse_next(p);
+        let mut trailing = false;
+        while !parse_at(p, ")") {
+            pat.args.push(parse_pattern(p));
+            trailing = parse_accept(p, ",");
+            if !trailing {
+                break;
+            }
+        }
+        parse_expect(p, ")");
+        if pat.args.len() == 1 && !trailing {
+            // parenthesized pattern
+            return pat.args.get(0).unwrap_or(pat);
+        }
+        pat.tuple = true;
+        return pat;
+    }
+    if k == "mut" {
+        parse_next(p);
+        let it = parse_expect(p, "IDENT");
+        pat.bind = it.text;
+        pat.mutable = true;
         return pat;
     }
     if k == "INT" || k == "-" {

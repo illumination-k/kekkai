@@ -1,18 +1,40 @@
 // Types and unification. Primitive, opaque, struct and enum types are
-// unique per name, so they compare by name.
+// unique per name, so they compare by name (and type arguments).
 
 struct TyVar {
     id: Int,
-    r: Option<Ty>,
+    mut r: Option<Ty>,
+}
+
+// TyParam is a generic parameter: a rigid type inside the generic item,
+// replaced by a type argument at each use (ids are unique per program).
+// bounds are the traits it implements (filled in after creation).
+struct TyParam {
+    id: Int,
+    name: String,
+    bounds: Vec<TyBound>,
+}
+
+// TyBound is a trait bound `Trait<Args>` or `Trait<Args, Name = T, ...>`.
+struct TyBound {
+    trait_name: String,
+    args: Vec<Ty>,
+    assoc_names: Vec<String>,
+    assoc_tys: Vec<Ty>,
 }
 
 struct TyField {
     name: String,
     ty: Ty,
+    // declared `mut` (assignable)
+    mutable: Bool,
 }
 
+// Field types of a generic struct mention its params; Ty::Struct carries
+// the arguments (ty_struct_field substitutes them).
 struct TyStruct {
     name: String,
+    params: Vec<TyParam>,
     fields: Vec<TyField>,
 }
 
@@ -23,6 +45,7 @@ struct TyVariant {
 
 struct TyEnum {
     name: String,
+    params: Vec<TyParam>,
     variants: Vec<TyVariant>,
 }
 
@@ -31,12 +54,19 @@ enum Ty {
     Prim(String),
     // Request, Response, TxError, NetError, IoError
     Opaque(String),
-    Struct(TyStruct),
-    Enum(TyEnum),
+    // a struct or enum with its type arguments (one per param)
+    Struct(TyStruct, Vec<Ty>),
+    Enum(TyEnum, Vec<Ty>),
+    Param(TyParam),
+    // the associated type `<T as Trait>::Name`, before normalization
+    Assoc(Ty, String, String),
+    // a closure or function value `fn(A, B) -> R`
+    Fn(Vec<Ty>, Ty),
     Result(Ty, Ty),
     Option(Ty),
     Vec(Ty),
-    Map(Ty, Ty),
+    // `(A, B, ...)` with at least one element
+    Tuple(Vec<Ty>),
     // capability kind name, borrowed
     Cap(String, Bool),
     Var(TyVar),
@@ -86,7 +116,7 @@ fn ty_is_opaque(t: Ty, name: String) -> Bool {
 fn ty_is_named(t: Ty, name: String) -> Bool {
     match ty_prune(t) {
         Ty::Opaque(n) => n == name,
-        Ty::Struct(s) => s.name == name,
+        Ty::Struct(s, _) => s.name == name,
         _ => false,
     }
 }
@@ -116,18 +146,53 @@ fn ty_str(t: Ty) -> String {
     match t {
         Ty::Prim(n) => n,
         Ty::Opaque(n) => n,
-        Ty::Struct(s) => s.name,
-        Ty::Enum(e) => e.name,
+        Ty::Struct(s, args) => s.name + ty_args_str(args),
+        Ty::Enum(e, args) => e.name + ty_args_str(args),
+        Ty::Param(p) => p.name,
+        Ty::Assoc(s, tr, n) => "<" + ty_str(s) + " as " + tr + ">::" + n,
+        Ty::Fn(ps, r) => {
+            let parts = Vec::new();
+            for p in ps {
+                parts.push(ty_str(p));
+            }
+            let mut s = "fn(" + parts.join(", ") + ")";
+            if !ty_is_prim(ty_prune(r), "()") {
+                s = s + " -> " + ty_str(r);
+            }
+            s
+        }
         Ty::Result(a, b) => "Result<" + ty_str(a) + ", " + ty_str(b) + ">",
         Ty::Option(a) => "Option<" + ty_str(a) + ">",
         Ty::Vec(a) => "Vec<" + ty_str(a) + ">",
-        Ty::Map(a, b) => "Map<" + ty_str(a) + ", " + ty_str(b) + ">",
+        Ty::Tuple(ts) => ty_tuple_str(ts),
         Ty::Cap(k, borrowed) => if borrowed { "&" + k } else { k },
         Ty::Var(v) => match v.r {
             Some(r) => ty_str(r),
             None => "?" + v.id.to_string(),
         },
     }
+}
+
+fn ty_args_str(args: Vec<Ty>) -> String {
+    if args.len() == 0 {
+        return "";
+    }
+    let parts = Vec::new();
+    for t in args {
+        parts.push(ty_str(t));
+    }
+    "<" + parts.join(", ") + ">"
+}
+
+fn ty_tuple_str(ts: Vec<Ty>) -> String {
+    let parts = Vec::new();
+    for t in ts {
+        parts.push(ty_str(t));
+    }
+    if parts.len() == 1 {
+        return "(" + parts.join("") + ",)";
+    }
+    "(" + parts.join(", ") + ")"
 }
 
 // ty_prune follows bound inference variables.
@@ -155,12 +220,85 @@ fn ty_resolve(t0: Ty) -> Ty {
         }
         Ty::Option(a) => Ty::Option(ty_resolve(a)),
         Ty::Vec(a) => Ty::Vec(ty_resolve(a)),
-        Ty::Map(a, b) => {
-            let ra = ty_resolve(a);
-            Ty::Map(ra, ty_resolve(b))
+        Ty::Tuple(ts) => Ty::Tuple(ty_resolve_all(ts)),
+        Ty::Struct(st, args) => Ty::Struct(st, ty_resolve_all(args)),
+        Ty::Enum(en, args) => Ty::Enum(en, ty_resolve_all(args)),
+        Ty::Assoc(s, tr, n) => Ty::Assoc(ty_resolve(s), tr, n),
+        Ty::Fn(ps, r) => {
+            let rps = ty_resolve_all(ps);
+            Ty::Fn(rps, ty_resolve(r))
         }
         _ => t,
     }
+}
+
+fn ty_resolve_all(ts: Vec<Ty>) -> Vec<Ty> {
+    let out = Vec::new();
+    for e in ts {
+        out.push(ty_resolve(e));
+    }
+    out
+}
+
+// ty_subst replaces the params ps by args in t.
+fn ty_subst(t0: Ty, ps: Vec<TyParam>, args: Vec<Ty>) -> Ty {
+    if ps.len() == 0 {
+        return t0;
+    }
+    let t = ty_prune(t0);
+    match t {
+        Ty::Param(p) => {
+            for i in 0..ps.len() {
+                match ps.get(i) {
+                    Some(q) => {
+                        if q.id == p.id {
+                            return args.get(i).unwrap_or(t);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            t
+        }
+        Ty::Result(a, b) => {
+            let ra = ty_subst(a, ps, args);
+            Ty::Result(ra, ty_subst(b, ps, args))
+        }
+        Ty::Option(a) => Ty::Option(ty_subst(a, ps, args)),
+        Ty::Vec(a) => Ty::Vec(ty_subst(a, ps, args)),
+        Ty::Tuple(ts) => Ty::Tuple(ty_subst_all(ts, ps, args)),
+        Ty::Struct(st, xs) => Ty::Struct(st, ty_subst_all(xs, ps, args)),
+        Ty::Enum(en, xs) => Ty::Enum(en, ty_subst_all(xs, ps, args)),
+        Ty::Assoc(s, tr, n) => Ty::Assoc(ty_subst(s, ps, args), tr, n),
+        Ty::Fn(xs, r) => {
+            let sxs = ty_subst_all(xs, ps, args);
+            Ty::Fn(sxs, ty_subst(r, ps, args))
+        }
+        _ => t,
+    }
+}
+
+fn ty_subst_all(ts: Vec<Ty>, ps: Vec<TyParam>, args: Vec<Ty>) -> Vec<Ty> {
+    let out = Vec::new();
+    for e in ts {
+        out.push(ty_subst(e, ps, args));
+    }
+    out
+}
+
+// ty_struct_fields returns the field types of a struct instance.
+fn ty_struct_fields(st: TyStruct, args: Vec<Ty>) -> Vec<Ty> {
+    let out = Vec::new();
+    for f in st.fields {
+        out.push(ty_subst(f.ty, st.params, args));
+    }
+    out
+}
+
+// ty_variant_fields returns the field types of a variant of an enum
+// instance.
+fn ty_variant_fields(en: TyEnum, args: Vec<Ty>, v: TyVariant) -> Vec<Ty> {
+    ty_subst_all(v.fields, en.params, args)
 }
 
 fn ty_is_cap(t: Ty) -> Bool {
@@ -180,16 +318,15 @@ fn ty_same(a: Ty, b: Ty) -> Bool {
         },
         Ty::Opaque(x) => match b {
             Ty::Opaque(y) => x == y,
-            Ty::Struct(y) => x == y.name,
+            Ty::Struct(y, _) => x == y.name,
             _ => false,
         },
-        Ty::Struct(x) => match b {
-            Ty::Struct(y) => x.name == y.name,
+        Ty::Struct(x, _) => match b {
             Ty::Opaque(y) => x.name == y,
             _ => false,
         },
-        Ty::Enum(x) => match b {
-            Ty::Enum(y) => x.name == y.name,
+        Ty::Param(x) => match b {
+            Ty::Param(y) => x.id == y.id,
             _ => false,
         },
         Ty::Var(x) => match b {
@@ -216,8 +353,24 @@ fn ty_identical(a0: Ty, b0: Ty) -> Bool {
             Ty::Vec(be) => ty_identical(ae, be),
             _ => false,
         },
-        Ty::Map(ak, av) => match b {
-            Ty::Map(bk, bv) => ty_identical(ak, bk) && ty_identical(av, bv),
+        Ty::Tuple(xs) => match b {
+            Ty::Tuple(ys) => ty_identical_all(xs, ys),
+            _ => false,
+        },
+        Ty::Struct(x, xs) => match b {
+            Ty::Struct(y, ys) => x.name == y.name && ty_identical_all(xs, ys),
+            _ => ty_same(a, b),
+        },
+        Ty::Enum(x, xs) => match b {
+            Ty::Enum(y, ys) => x.name == y.name && ty_identical_all(xs, ys),
+            _ => false,
+        },
+        Ty::Assoc(xs, xt, xn) => match b {
+            Ty::Assoc(ys, yt, yn) => xt == yt && xn == yn && ty_identical(xs, ys),
+            _ => false,
+        },
+        Ty::Fn(xs, xr) => match b {
+            Ty::Fn(ys, yr) => ty_identical_all(xs, ys) && ty_identical(xr, yr),
             _ => false,
         },
         Ty::Cap(ak, ab) => match b {
@@ -226,6 +379,18 @@ fn ty_identical(a0: Ty, b0: Ty) -> Bool {
         },
         _ => ty_same(a, b),
     }
+}
+
+fn ty_identical_all(xs: Vec<Ty>, ys: Vec<Ty>) -> Bool {
+    if xs.len() != ys.len() {
+        return false;
+    }
+    for i in 0..xs.len() {
+        if !ty_identical(xs.get(i).unwrap_or(ty_unit()), ys.get(i).unwrap_or(ty_unit())) {
+            return false;
+        }
+    }
+    true
 }
 
 // ty_key is the canonical string of a resolved type (used for layouts).
@@ -254,14 +419,45 @@ fn ty_write_key(b: Vec<String>, t: Ty) {
             ty_write_key(b, e);
             b.push(">");
         }
-        Ty::Map(k, v) => {
-            b.push("Map<");
-            ty_write_key(b, k);
-            b.push(",");
-            ty_write_key(b, v);
-            b.push(">");
+        Ty::Tuple(ts) => {
+            b.push("(");
+            ty_write_keys(b, ts);
+            b.push(")");
+        }
+        Ty::Struct(st, args) => {
+            b.push(st.name);
+            if args.len() > 0 {
+                b.push("<");
+                ty_write_keys(b, args);
+                b.push(">");
+            }
+        }
+        Ty::Enum(en, args) => {
+            b.push(en.name);
+            if args.len() > 0 {
+                b.push("<");
+                ty_write_keys(b, args);
+                b.push(">");
+            }
+        }
+        Ty::Fn(ps, r) => {
+            b.push("fn(");
+            ty_write_keys(b, ps);
+            b.push(")->");
+            ty_write_key(b, r);
         }
         _ => b.push(ty_str(t)),
+    }
+}
+
+fn ty_write_keys(b: Vec<String>, ts: Vec<Ty>) {
+    let mut i = 0;
+    for e in ts {
+        if i > 0 {
+            b.push(",");
+        }
+        ty_write_key(b, e);
+        i = i + 1;
     }
 }
 
@@ -274,9 +470,35 @@ fn ty_occurs(v: TyVar, t0: Ty) -> Bool {
         Ty::Result(a, b) => ty_occurs(v, a) || ty_occurs(v, b),
         Ty::Option(a) => ty_occurs(v, a),
         Ty::Vec(a) => ty_occurs(v, a),
-        Ty::Map(a, b) => ty_occurs(v, a) || ty_occurs(v, b),
+        Ty::Tuple(ts) => ty_occurs_any(v, ts),
+        Ty::Struct(_, ts) => ty_occurs_any(v, ts),
+        Ty::Enum(_, ts) => ty_occurs_any(v, ts),
+        Ty::Assoc(s, _, _) => ty_occurs(v, s),
+        Ty::Fn(ps, r) => ty_occurs_any(v, ps) || ty_occurs(v, r),
         _ => false,
     }
+}
+
+fn ty_occurs_any(v: TyVar, ts: Vec<Ty>) -> Bool {
+    for e in ts {
+        if ty_occurs(v, e) {
+            return true;
+        }
+    }
+    false
+}
+
+fn ty_unify_all(xs: Vec<Ty>, ys: Vec<Ty>) -> Bool {
+    if xs.len() != ys.len() {
+        return false;
+    }
+    let mut ok = true;
+    for i in 0..xs.len() {
+        if !ty_unify(xs.get(i).unwrap_or(ty_unit()), ys.get(i).unwrap_or(ty_unit())) {
+            ok = false;
+        }
+    }
+    ok
 }
 
 fn ty_unify(a0: Ty, b0: Ty) -> Bool {
@@ -322,8 +544,27 @@ fn ty_unify(a0: Ty, b0: Ty) -> Bool {
             Ty::Vec(be) => ty_unify(ae, be),
             _ => false,
         },
-        Ty::Map(ak, av) => match b {
-            Ty::Map(bk, bv) => ty_unify(ak, bk) && ty_unify(av, bv),
+        Ty::Tuple(xs) => match b {
+            Ty::Tuple(ys) => ty_unify_all(xs, ys),
+            _ => false,
+        },
+        Ty::Struct(x, xs) => match b {
+            Ty::Struct(y, ys) => x.name == y.name && ty_unify_all(xs, ys),
+            _ => ty_same(a, b),
+        },
+        Ty::Enum(x, xs) => match b {
+            Ty::Enum(y, ys) => x.name == y.name && ty_unify_all(xs, ys),
+            _ => false,
+        },
+        Ty::Assoc(xs, xt, xn) => match b {
+            Ty::Assoc(ys, yt, yn) => xt == yt && xn == yn && ty_unify(xs, ys),
+            _ => false,
+        },
+        Ty::Fn(xs, xr) => match b {
+            Ty::Fn(ys, yr) => {
+                let ok = ty_unify_all(xs, ys);
+                ty_unify(xr, yr) && ok
+            }
             _ => false,
         },
         Ty::Cap(ak, ab) => match b {

@@ -35,13 +35,18 @@ fn ast_dump_file(f: AstFile) -> Vec<String> {
     let d = AstDumper { lines: Vec::new() };
     for s in f.structs {
         ast_line(d, 0, "struct " + s.name + " @" + ast_dump_pos(s.pos));
+        ast_dump_attrs(d, 1, s.attrs);
+        ast_dump_generics(d, 1, s.generics);
         for fl in s.fields {
-            ast_line(d, 1, "field " + fl.name + " @" + ast_dump_pos(fl.pos));
+            let m = if fl.mutable { " mut" } else { "" };
+            ast_line(d, 1, "field " + fl.name + m + " @" + ast_dump_pos(fl.pos));
             ast_dump_type(d, 2, fl.ty);
         }
     }
     for e in f.enums {
         ast_line(d, 0, "enum " + e.name + " @" + ast_dump_pos(e.pos));
+        ast_dump_attrs(d, 1, e.attrs);
+        ast_dump_generics(d, 1, e.generics);
         for v in e.variants {
             ast_line(d, 1, "variant " + v.name + " @" + ast_dump_pos(v.pos));
             for t in v.fields {
@@ -50,23 +55,114 @@ fn ast_dump_file(f: AstFile) -> Vec<String> {
         }
     }
     for fd in f.funcs {
-        ast_line(d, 0, "fn " + fd.name + " @" + ast_dump_pos(fd.pos));
-        for a in fd.attrs {
-            ast_line(d, 1, "attr " + a.name + " @" + ast_dump_pos(a.pos));
-        }
-        for p in fd.params {
-            ast_dump_param(d, 1, p);
-        }
-        match fd.result {
+        ast_dump_func(d, 0, fd);
+    }
+    for im in f.impls {
+        ast_line(d, 0, "impl @" + ast_dump_pos(im.pos));
+        ast_dump_generics(d, 1, im.generics);
+        match im.trait_ty {
             Some(t) => {
-                ast_line(d, 1, "result");
+                ast_line(d, 1, "trait");
                 ast_dump_type(d, 2, t);
             }
             None => {}
         }
-        ast_dump_block(d, 1, fd.body);
+        ast_line(d, 1, "target");
+        ast_dump_type(d, 2, im.target);
+        ast_dump_wheres(d, 1, im.wheres);
+        for a in im.assoc {
+            ast_dump_assoc(d, 1, a);
+        }
+        for fd in im.funcs {
+            ast_dump_func(d, 1, fd);
+        }
+    }
+    for t in f.traits {
+        ast_line(d, 0, "trait " + t.name + " @" + ast_dump_pos(t.pos));
+        ast_dump_generics(d, 1, t.generics);
+        for s in t.supers {
+            ast_dump_type(d, 1, s);
+        }
+        for a in t.assoc {
+            ast_dump_assoc(d, 1, a);
+        }
+        for fd in t.funcs {
+            ast_dump_func(d, 1, fd);
+        }
     }
     d.lines
+}
+
+fn ast_dump_assoc(d: AstDumper, depth: Int, a: AstAssocType) {
+    ast_line(d, depth, "assoc-type " + a.name + " @" + ast_dump_pos(a.pos));
+    match a.ty {
+        Some(t) => ast_dump_type(d, depth + 1, t),
+        None => {}
+    }
+}
+
+fn ast_dump_attrs(d: AstDumper, depth: Int, attrs: Vec<AstAttr>) {
+    for a in attrs {
+        let mut s = "attr " + a.name;
+        if a.args.len() > 0 {
+            s = s + "(" + a.args.join(",") + ")";
+        }
+        ast_line(d, depth, s + " @" + ast_dump_pos(a.pos));
+    }
+}
+
+fn ast_dump_func(d: AstDumper, depth: Int, fd: AstFuncDecl) {
+    let mut h = "fn " + fd.name;
+    if fd.self_kind != "" {
+        h = h + " recv=" + fd.self_kind.replace(" ", "_");
+    }
+    if !fd.has_body {
+        h = h + " no-body";
+    }
+    ast_line(d, depth, h + " @" + ast_dump_pos(fd.pos));
+    ast_dump_attrs(d, depth + 1, fd.attrs);
+    ast_dump_generics(d, depth + 1, fd.generics);
+    ast_dump_wheres(d, depth + 1, fd.wheres);
+    for p in fd.params {
+        ast_dump_param(d, depth + 1, p);
+    }
+    match fd.result {
+        Some(t) => {
+            ast_line(d, depth + 1, "result");
+            ast_dump_type(d, depth + 2, t);
+        }
+        None => {}
+    }
+    ast_dump_block(d, depth + 1, fd.body);
+}
+
+fn ast_dump_wheres(d: AstDumper, depth: Int, ws: Vec<AstWhere>) {
+    for w in ws {
+        ast_line(d, depth, "where @" + ast_dump_pos(w.pos));
+        ast_dump_type(d, depth + 1, w.ty);
+        for b in w.bounds {
+            ast_dump_type(d, depth + 2, b);
+        }
+    }
+}
+
+fn ast_dump_generics(d: AstDumper, depth: Int, gs: Vec<AstGeneric>) {
+    for g in gs {
+        ast_line(d, depth, "generic " + g.name + " @" + ast_dump_pos(g.pos));
+        for b in g.bounds {
+            ast_dump_type(d, depth + 1, b);
+        }
+    }
+}
+
+fn ast_dump_targs(d: AstDumper, depth: Int, what: String, ts: Vec<AstType>) {
+    if ts.len() == 0 {
+        return;
+    }
+    ast_line(d, depth, what);
+    for t in ts {
+        ast_dump_type(d, depth + 1, t);
+    }
 }
 
 fn ast_dump_type(d: AstDumper, depth: Int, t: AstType) {
@@ -78,10 +174,29 @@ fn ast_dump_type(d: AstDumper, depth: Int, t: AstType) {
             }
         }
         AstType::Ref(r) => {
-            ast_line(d, depth, "ref @" + ast_dump_pos(r.pos));
+            ast_line(d, depth, if r.mutable { "ref-mut @" } else { "ref @" } + ast_dump_pos(r.pos));
             ast_dump_type(d, depth + 1, r.elem);
         }
         AstType::Unit(u) => ast_line(d, depth, "unit-type @" + ast_dump_pos(u.pos)),
+        AstType::Fn(ft) => {
+            ast_line(d, depth, "fn-type " + ft.kind.replace(" ", "_") + " @" + ast_dump_pos(ft.pos));
+            for a in ft.params {
+                ast_dump_type(d, depth + 1, a);
+            }
+            match ft.result {
+                Some(r) => {
+                    ast_line(d, depth + 1, "result");
+                    ast_dump_type(d, depth + 2, r);
+                }
+                None => {}
+            }
+        }
+        AstType::Tuple(tt) => {
+            ast_line(d, depth, "tuple-type @" + ast_dump_pos(tt.pos));
+            for a in tt.elems {
+                ast_dump_type(d, depth + 1, a);
+            }
+        }
     }
 }
 
@@ -115,6 +230,10 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
                 depth,
                 "let " + l.name + " mut=" + l.mutable.to_string() + " @" + ast_dump_pos(l.pos),
             );
+            match l.pat {
+                Some(pt) => ast_dump_pattern(d, depth + 1, pt),
+                None => {}
+            }
             match l.ty {
                 Some(t) => ast_dump_type(d, depth + 1, t),
                 None => {}
@@ -134,11 +253,19 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
         AstStmt::Continue(c) => ast_line(d, depth, "continue @" + ast_dump_pos(c.pos)),
         AstStmt::While(w) => {
             ast_line(d, depth, "while @" + ast_dump_pos(w.pos));
+            match w.pat {
+                Some(pt) => ast_dump_pattern(d, depth + 1, pt),
+                None => {}
+            }
             ast_dump_expr(d, depth + 1, w.cond);
             ast_dump_block(d, depth + 1, w.body);
         }
         AstStmt::For(f) => {
             ast_line(d, depth, "for " + f.var + " @" + ast_dump_pos(f.pos));
+            match f.pat {
+                Some(pt) => ast_dump_pattern(d, depth + 1, pt),
+                None => {}
+            }
             ast_dump_expr(d, depth + 1, f.iter);
             match f.end {
                 Some(e) => {
@@ -181,7 +308,10 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             "string " + ast_quote(x.value) + " @" + ast_dump_pos(x.pos),
         ),
         AstExpr::UnitLit(x) => ast_line(d, depth, "unit @" + ast_dump_pos(x.pos)),
-        AstExpr::Ident(x) => ast_line(d, depth, "ident " + x.name + " @" + ast_dump_pos(x.pos)),
+        AstExpr::Ident(x) => {
+            ast_line(d, depth, "ident " + x.name + " @" + ast_dump_pos(x.pos));
+            ast_dump_targs(d, depth + 1, "targs", x.targs);
+        }
         AstExpr::Binary(x) => {
             ast_line(d, depth, "binary " + x.op + " @" + ast_dump_pos(x.pos));
             ast_dump_expr(d, depth + 1, x.x);
@@ -200,6 +330,7 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
         }
         AstExpr::Method(x) => {
             ast_line(d, depth, "method " + x.name + " @" + ast_dump_pos(x.pos));
+            ast_dump_targs(d, depth + 1, "targs", x.targs);
             ast_dump_expr(d, depth + 1, x.recv);
             for a in x.args {
                 ast_dump_expr(d, depth + 1, a);
@@ -209,11 +340,11 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             ast_line(d, depth, "field " + x.name + " @" + ast_dump_pos(x.pos));
             ast_dump_expr(d, depth + 1, x.x);
         }
-        AstExpr::Path(x) => ast_line(
-            d,
-            depth,
-            "path " + x.ty + "::" + x.name + " @" + ast_dump_pos(x.pos),
-        ),
+        AstExpr::Path(x) => {
+            ast_line(d, depth, "path " + x.ty + "::" + x.name + " @" + ast_dump_pos(x.pos));
+            ast_dump_targs(d, depth + 1, "ty-args", x.ty_args);
+            ast_dump_targs(d, depth + 1, "targs", x.targs);
+        }
         AstExpr::StructLit(x) => {
             ast_line(d, depth, "struct-lit " + x.name + " @" + ast_dump_pos(x.pos));
             for f in x.fields {
@@ -223,6 +354,10 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
         }
         AstExpr::If(x) => {
             ast_line(d, depth, "if @" + ast_dump_pos(x.pos));
+            match x.pat {
+                Some(pt) => ast_dump_pattern(d, depth + 1, pt),
+                None => {}
+            }
             ast_dump_expr(d, depth + 1, x.cond);
             ast_dump_block(d, depth + 1, x.then);
             match x.els {
@@ -248,11 +383,45 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             ast_dump_expr(d, depth + 1, x.x);
         }
         AstExpr::Closure(x) => {
-            ast_line(d, depth, "closure @" + ast_dump_pos(x.pos));
+            ast_line(
+                d,
+                depth,
+                if x.is_move {
+                    "move-closure @"
+                } else {
+                    "closure @"
+                } + ast_dump_pos(x.pos),
+            );
             for p in x.params {
                 ast_dump_param(d, depth + 1, p);
             }
+            match x.result {
+                Some(r) => {
+                    ast_line(d, depth + 1, "result");
+                    ast_dump_type(d, depth + 2, r);
+                }
+                None => {}
+            }
             ast_dump_expr(d, depth + 1, x.body);
+        }
+        AstExpr::Range(x) => {
+            ast_line(
+                d,
+                depth,
+                if x.inclusive {
+                    "range-incl @"
+                } else {
+                    "range @"
+                } + ast_dump_pos(x.pos),
+            );
+            ast_dump_expr(d, depth + 1, x.start);
+            ast_dump_expr(d, depth + 1, x.end);
+        }
+        AstExpr::Tuple(x) => {
+            ast_line(d, depth, "tuple @" + ast_dump_pos(x.pos));
+            for a in x.elems {
+                ast_dump_expr(d, depth + 1, a);
+            }
         }
     }
 }
@@ -261,6 +430,13 @@ fn ast_dump_pattern(d: AstDumper, depth: Int, p: AstPattern) {
     let at = " @" + ast_dump_pos(p.pos);
     if p.wildcard {
         ast_line(d, depth, "pat _" + at);
+        return;
+    }
+    if p.tuple {
+        ast_line(d, depth, "pat tuple" + at);
+        for a in p.args {
+            ast_dump_pattern(d, depth + 1, a);
+        }
         return;
     }
     match p.int_value {
@@ -284,7 +460,8 @@ fn ast_dump_pattern(d: AstDumper, depth: Int, p: AstPattern) {
         }
         None => {}
     }
-    ast_line(d, depth, "pat type=" + p.ty + " ctor=" + p.ctor + " bind=" + p.bind + at);
+    let m = if p.mutable { " mut" } else { "" };
+    ast_line(d, depth, "pat type=" + p.ty + " ctor=" + p.ctor + " bind=" + p.bind + m + at);
     for a in p.args {
         ast_dump_pattern(d, depth + 1, a);
     }

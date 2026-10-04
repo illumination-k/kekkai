@@ -27,7 +27,7 @@ fn testrun_main_name() -> String {
 fn testrun_discover(info: ChkInfo) -> Vec<TestrunTest> {
     let tests = Vec::new();
     for fun in info.func_list {
-        if !fun.test {
+        if !fun.test || chk_is_lib(fun) {
             continue;
         }
         let caps = Vec::new();
@@ -85,7 +85,7 @@ fn testrun_kind(t: TestrunTest) -> String {
 
 // testrun_harness returns the source of the synthesized #[main].
 fn testrun_harness(tests: Vec<TestrunTest>) -> String {
-    let used: Map<String, Bool> = Map::new();
+    let used: HashMap<String, Bool> = HashMap::new();
     for t in tests {
         for c in t.caps {
             used.insert(c, true);
@@ -184,7 +184,7 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let mut tests = all;
     if mode == "-run" {
-        let want: Map<String, Bool> = Map::new();
+        let want: HashMap<String, Bool> = HashMap::new();
         let mut i = 4;
         while i < args.len() {
             want.insert(args.get(i).unwrap_or(""), true);

@@ -210,9 +210,6 @@ fn irjson_typedef(td: IrTypeDef) -> IrjVal {
     if td.coll != "" {
         irjson_set(o, "coll", IrjVal::Str(td.coll));
         irjson_set(o, "elem", irjson_ty(td.elem));
-        if td.coll == "map" {
-            irjson_set(o, "key", irjson_ty(td.key));
-        }
     }
     irjson_val(o)
 }

@@ -16,15 +16,14 @@ struct IrTy {
 }
 
 // IrTypeDef is an aggregate layout: a struct (fields), a variant
-// (variants) or a collection (coll = "vec": Vec<elem>; "map": Map<key, elem>).
+// (variants) or a collection (coll = "vec": Vec<elem>).
 struct IrTypeDef {
     name: String,
-    is_variant: Bool,
+    mut is_variant: Bool,
     fields: Vec<IrTy>,
     variants: Vec<Vec<IrTy>>,
-    coll: String,
-    elem: IrTy,
-    key: IrTy,
+    mut coll: String,
+    mut elem: IrTy,
 }
 
 // IrConst is a literal; kind selects the payload.
@@ -38,13 +37,13 @@ struct IrConst {
 // IrInstr is one instruction.
 struct IrInstr {
     op: String,
-    dst: Int,
-    args: Vec<Int>,
-    name: String,
-    ty: Int, // aggregate index ("type" in JSON)
-    tag: Int,
-    index: Int,
-    cst: IrConst, // op == "const"
+    mut dst: Int,
+    mut args: Vec<Int>,
+    mut name: String,
+    mut ty: Int, // aggregate index ("type" in JSON)
+    mut tag: Int,
+    mut index: Int,
+    mut cst: IrConst, // op == "const"
 }
 
 // IrTerm ends a block: jump br switch ret unreachable.
@@ -56,7 +55,7 @@ struct IrTerm {
 
 struct IrBlock {
     instrs: Vec<IrInstr>,
-    term: IrTerm,
+    mut term: IrTerm,
 }
 
 struct IrFunc {
@@ -66,7 +65,7 @@ struct IrFunc {
     names: Vec<String>, // debug names of locals
     result: IrTy,
     is_async: Bool,
-    blocks: Vec<IrBlock>, // entry is block 0
+    mut blocks: Vec<IrBlock>, // entry is block 0
 }
 
 // IrHandlerParam: kind is "request", "args" or a capability name.
@@ -78,8 +77,8 @@ struct IrHandlerParam {
 struct IrProgram {
     types: Vec<IrTypeDef>,
     funcs: Vec<IrFunc>,
-    handler: String,
-    entry: String, // "handler", "main" or ""
+    mut handler: String,
+    mut entry: String, // "handler", "main" or ""
     handler_params: Vec<IrHandlerParam>,
 }
 

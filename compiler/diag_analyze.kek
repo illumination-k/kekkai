@@ -9,7 +9,7 @@ struct DiagDiag {
     line: Int,
     col: Int,
     end_line: Int,
-    end_col: Int,
+    mut end_col: Int,
     severity: String, // "error" or "warning"
     phase: String, // "parse", "type" or "lint"
     message: String,
@@ -22,7 +22,7 @@ struct DiagAnalysis {
     lines: Vec<Int>,
     toks: Vec<Tok>,
     // token index by position (diag_pos_key)
-    tok_at: Map<Int, Int>,
+    tok_at: HashMap<Int, Int>,
     file: AstFile,
     info: ChkInfo,
     parse_ok: Bool,
@@ -46,7 +46,7 @@ fn diag_analyze(src: String) -> DiagAnalysis {
         i = i + 1;
     }
     let lr = lex_file("", src);
-    let tok_at: Map<Int, Int> = Map::new();
+    let tok_at: HashMap<Int, Int> = HashMap::new();
     let mut k = 0;
     for t in lr.toks {
         tok_at.insert(diag_pos_key(t.pos.line, t.pos.col), k);
@@ -166,6 +166,9 @@ fn diag_caps(fun: ChkFunc) -> Vec<ChkBinding> {
 // diag_add_lints reports capabilities that are granted but never used.
 fn diag_add_lints(a: DiagAnalysis) {
     for fun in a.info.func_list {
+        if chk_is_lib(fun) {
+            continue;
+        }
         for c in diag_caps(fun) {
             if c.uses == 0 && c.name != "_" {
                 a.diags.push(DiagDiag {
@@ -285,10 +288,10 @@ fn diag_error_count(a: DiagAnalysis) -> Int {
 
 struct DiagFlags {
     // flag name -> value ("true"/"false" for booleans)
-    vals: Map<String, String>,
+    vals: HashMap<String, String>,
     rest: Vec<String>,
     // the error message, or "help" for -h / -help
-    err: String,
+    mut err: String,
 }
 
 // diag_flag_usage is the flag.FlagSet usage text of a tooling command.
@@ -320,7 +323,7 @@ fn diag_parse_bool(s: String) -> Option<Bool> {
 // diag_parse_flags parses args[start..] for the flags of cmd: -json, and
 // -limit for search.
 fn diag_parse_flags(args: Vec<String>, start: Int, cmd: String) -> DiagFlags {
-    let fl = DiagFlags { vals: Map::new(), rest: Vec::new(), err: "" };
+    let fl = DiagFlags { vals: HashMap::new(), rest: Vec::new(), err: "" };
     let mut i = start;
     while i < args.len() {
         let a = args.get(i).unwrap_or("");

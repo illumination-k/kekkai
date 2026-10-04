@@ -79,7 +79,13 @@ fn frontend_read_sources(path: String, fs: &Fs, log: &Log) -> Option<Vec<FeSourc
 // frontend_parse_all parses the files of one program into a single AstFile.
 fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
     let ids = AstIds { next: 0 };
-    let out = AstFile { structs: Vec::new(), enums: Vec::new(), funcs: Vec::new() };
+    let out = AstFile {
+        structs: Vec::new(),
+        enums: Vec::new(),
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+    };
     let errs = Vec::new();
     for s in srcs {
         let pr = parse_file(s.name, s.text, ids);
@@ -94,6 +100,12 @@ fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
         }
         for x in pr.file.funcs {
             out.funcs.push(x);
+        }
+        for x in pr.file.impls {
+            out.impls.push(x);
+        }
+        for x in pr.file.traits {
+            out.traits.push(x);
         }
     }
     FeProgram { file: out, errs: ast_sort_errors(errs) }

@@ -37,10 +37,10 @@ struct WasmImport {
 struct WasmFunc {
     name: String,
     sig: WasmSig,
-    locals: Vec<Int>, // excluding params
-    body: Vec<Int>,
-    export: String,
-    built: Bool,
+    mut locals: Vec<Int>, // excluding params
+    mut body: Vec<Int>,
+    mut export: String,
+    mut built: Bool,
 }
 
 struct WasmMod {
@@ -50,23 +50,21 @@ struct WasmMod {
     agg_type: Vec<Int>, // IR aggregate index -> wasm type index
     vec_arr: Vec<Int>, // vec aggregate index -> wasm array type index
     agg_slots: Vec<Vec<Vec<Int>>>, // variant aggregates: [tag][field] -> struct field
-    chars_t: Int, // (array (mut i16)): strings
-    lits_t: Int, // (array (mut (ref null chars))): the literal cache
-    box_t: Int, // (struct i64): boxed Int / Bool map values
-    map_t: Int, // the prelude's __Map
-    frame: Map<String, Int>,
+    mut chars_t: Int, // (array (mut i16)): strings
+    mut lits_t: Int, // (array (mut (ref null chars))): the literal cache
+    frame: HashMap<String, Int>,
     imports: Vec<WasmImport>,
-    import_idx: Map<String, Int>,
+    import_idx: HashMap<String, Int>,
     funcs: Vec<WasmFunc>,
-    func_idx: Map<String, Int>,
+    func_idx: HashMap<String, Int>,
     strings: Vec<String>,
-    string_idx: Map<String, Int>,
+    string_idx: HashMap<String, Int>,
     string_off: Vec<Int>, // byte offset of each literal in the data segment
-    data_len: Int,
-    lifts: Map<Int, Int>,
-    prog_func: Map<String, Int>, // IR function name -> index in prog.funcs
-    reach: Map<String, Bool>, // IR functions that are compiled
-    err: String,
+    mut data_len: Int,
+    lifts: HashMap<Int, Int>,
+    prog_func: HashMap<String, Int>, // IR function name -> index in prog.funcs
+    reach: HashMap<String, Bool>, // IR functions that are compiled
+    mut err: String,
 }
 
 // WasmOutput is the result of compilation.
@@ -109,7 +107,6 @@ fn wasm_td(m: WasmMod, i: Int) -> IrTypeDef {
                 variants: Vec::new(),
                 coll: "",
                 elem: ir_ty_none(),
-                key: ir_ty_none(),
             }
         }
     }
@@ -126,7 +123,7 @@ fn wasm_ty_at(v: Vec<IrTy>, i: Int) -> IrTy {
     }
 }
 
-fn wasm_lookup(tbl: Map<String, Int>, k: String) -> Int {
+fn wasm_lookup(tbl: HashMap<String, Int>, k: String) -> Int {
     tbl.get(k).unwrap_or(-1)
 }
 
@@ -151,25 +148,23 @@ fn wasm_compile(p: IrProgram) -> WasmOutput {
         agg_slots: Vec::new(),
         chars_t: 0,
         lits_t: 0,
-        box_t: 0,
-        map_t: 0,
-        frame: Map::new(),
+        frame: HashMap::new(),
         imports: Vec::new(),
-        import_idx: Map::new(),
+        import_idx: HashMap::new(),
         funcs: Vec::new(),
-        func_idx: Map::new(),
+        func_idx: HashMap::new(),
         strings: Vec::new(),
-        string_idx: Map::new(),
+        string_idx: HashMap::new(),
         string_off: Vec::new(),
         data_len: 0,
-        lifts: Map::new(),
-        prog_func: Map::new(),
-        reach: Map::new(),
+        lifts: HashMap::new(),
+        prog_func: HashMap::new(),
+        reach: HashMap::new(),
         err: "",
     };
     let mut fi = 0;
     for f in p.funcs {
-        if !m.prog_func.contains(f.name) {
+        if !m.prog_func.contains_key(f.name) {
             m.prog_func.insert(f.name, fi);
         }
         fi = fi + 1;
@@ -178,7 +173,7 @@ fn wasm_compile(p: IrProgram) -> WasmOutput {
     wasm_reachability(m);
     wasm_collect_imports(m);
     for f in p.funcs {
-        if !m.reach.contains(f.name) {
+        if !m.reach.contains_key(f.name) {
             continue;
         }
         if f.is_async {
@@ -193,7 +188,7 @@ fn wasm_compile(p: IrProgram) -> WasmOutput {
         }
     }
     for f in p.funcs {
-        if !m.reach.contains(f.name) {
+        if !m.reach.contains_key(f.name) {
             continue;
         }
         if f.is_async {
@@ -240,9 +235,6 @@ fn wasm_val(m: WasmMod, t: IrTy) -> Int {
         return wasm_any_t();
     }
     if k == "agg" {
-        if wasm_td(m, t.agg).coll == "map" {
-            return m.map_t;
-        }
         return wasm_at(m.agg_type, t.agg);
     }
     wasm_fail(m, "bad type " + k);
@@ -281,9 +273,6 @@ fn wasm_layout_types(m: WasmMod) {
     let mut next = 0;
     for i in 0..n {
         let td = wasm_td(m, i);
-        if td.coll == "map" {
-            continue;
-        }
         if td.coll == "vec" {
             m.agg_type.set(i, next);
             m.vec_arr.set(i, next + 1);
@@ -295,22 +284,12 @@ fn wasm_layout_types(m: WasmMod) {
     }
     m.chars_t = next;
     m.lits_t = next + 1;
-    m.box_t = next + 2;
-    next = next + 3;
-    let map_agg = wasm_agg_named(m, "__Map");
-    m.map_t = if map_agg >= 0 {
-        wasm_at(m.agg_type, map_agg)
-    } else {
-        m.box_t
-    };
+    next = next + 2;
     for i in 0..next {
         m.structs.push(wasm_comp(Vec::new(), true, false));
     }
     for i in 0..n {
         let td = wasm_td(m, i);
-        if td.coll == "map" {
-            continue;
-        }
         let at = wasm_at(m.agg_type, i);
         if td.coll == "vec" {
             let va = wasm_at(m.vec_arr, i);
@@ -339,7 +318,6 @@ fn wasm_layout_types(m: WasmMod) {
     }
     m.structs.set(m.chars_t, wasm_comp(wasm_v1(wasm_i16_storage()), true, true));
     m.structs.set(m.lits_t, wasm_comp(wasm_v1(m.chars_t), true, true));
-    m.structs.set(m.box_t, wasm_comp(wasm_v1(wasm_i64_t()), false, false));
     for f in p.funcs {
         if !f.is_async {
             continue;
@@ -420,10 +398,10 @@ fn wasm_op_kind(m: WasmMod, name: String) -> String {
 // ---- reachability ----
 
 fn wasm_reach_add(m: WasmMod, work: Vec<String>, name: String) {
-    if m.reach.contains(name) {
+    if m.reach.contains_key(name) {
         return;
     }
-    if !m.prog_func.contains(name) {
+    if !m.prog_func.contains_key(name) {
         return;
     }
     m.reach.insert(name, true);
@@ -445,12 +423,6 @@ fn wasm_op_deps(m: WasmMod, f: IrFunc, ins: IrInstr) -> Vec<String> {
         let k = wasm_op_kind(m, ins.name);
         if k == "prelude" {
             deps.push(wasm_prelude_name(ins.name));
-        } else if k == "coll" && ins.name.starts_with("map.") {
-            for d in "__map_new __map_find_int __map_find_str __map_insert_int __map_insert_str __map_val __map_remove_int __map_remove_str __map_len __map_keys_int __map_keys_str".split(
-                " ",
-            ) {
-                deps.push(d);
-            }
         } else if k == "intrinsic" && ins.name == "__Rt.get" {
             deps.push("__rt_new");
         } else if k == "import" {
@@ -614,7 +586,7 @@ fn wasm_collect_imports(m: WasmMod) {
         wasm_add_js_helper_imports(m);
     }
     for f in m.prog.funcs {
-        if !m.reach.contains(f.name) {
+        if !m.reach.contains_key(f.name) {
             continue;
         }
         for b in f.blocks {
@@ -903,8 +875,6 @@ fn wasm_lift_to(m: WasmMod, c: Vec<Int>, t: IrTy) {
         let td = wasm_td(m, t.agg);
         if td.coll == "vec" {
             cg_call(c, wasm_vec_from_host_func(m, t.agg));
-        } else if td.coll == "map" {
-            wasm_fail(m, "cannot convert a JS value into a Map");
         } else if !td.is_variant {
             cg_call(c, wasm_prelude_func(m, "__js_lift_" + td.name));
         } else {
@@ -1011,14 +981,14 @@ struct CgGen {
     c: Vec<Int>,
     local: Vec<Int>, // wasm local index of each IR local
     locals: Vec<Int>, // declared wasm locals (excluding params)
-    state: Int,
-    child: Int,
-    frame_l: Int,
-    frame_t: Int,
+    mut state: Int,
+    mut child: Int,
+    mut frame_l: Int,
+    mut frame_t: Int,
     segs: Vec<CgSeg>,
     block_seg: Vec<Int>,
-    nseg: Int,
-    cur: Int,
+    mut nseg: Int,
+    mut cur: Int,
 }
 
 fn cg_local(g: CgGen, i: Int) -> Int {
@@ -1764,7 +1734,7 @@ fn wasm_gen_handler_exports(m: WasmMod) {
 // as `<name>` (Workers: reading Response values).
 fn wasm_gen_js_exports(m: WasmMod) {
     for f in m.prog.funcs {
-        if f.name.starts_with("__js_export_") && m.reach.contains(f.name) {
+        if f.name.starts_with("__js_export_") && m.reach.contains_key(f.name) {
             wasm_def(m, f.name).export = f.name.slice(12, f.name.len());
         }
     }
@@ -1827,7 +1797,7 @@ fn wasm_str_less(a: String, b: String) -> Bool {
     n < k
 }
 
-fn wasm_type_of(sigs: Vec<WasmSig>, sig_idx: Map<String, Int>, base: Int, s: WasmSig) -> Int {
+fn wasm_type_of(sigs: Vec<WasmSig>, sig_idx: HashMap<String, Int>, base: Int, s: WasmSig) -> Int {
     let k = wasm_sig_key(s);
     match sig_idx.get(k) {
         Some(i) => {
@@ -1855,7 +1825,7 @@ fn wasm_sig_body(b: Vec<Int>, s: WasmSig) {
 fn wasm_encode(m: WasmMod) -> Vec<Int> {
     // function types (after the rec group of struct types)
     let sigs: Vec<WasmSig> = Vec::new();
-    let sig_idx: Map<String, Int> = Map::new();
+    let sig_idx: HashMap<String, Int> = HashMap::new();
     let base = m.structs.len();
     let import_types = Vec::new();
     for im in m.imports {

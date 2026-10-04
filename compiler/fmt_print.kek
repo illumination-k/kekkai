@@ -22,11 +22,11 @@ struct FmtPrinter {
     // UTF-16 offset of the start of each line
     line_start: Vec<Int>,
     toks: Vec<Tok>,
-    tok_at: Map<Int, Int>,
+    tok_at: HashMap<Int, Int>,
     comments: Vec<TokComment>,
     used: Vec<Bool>,
     // > 0 while trying to print a binary expression on one line
-    flat: Int,
+    mut flat: Int,
 }
 
 struct FmtResult {
@@ -40,6 +40,9 @@ enum FmtUnitKind {
     Struct(AstStructDecl),
     Enum(AstEnumDecl),
     Func(AstFuncDecl),
+    Impl(AstImplDecl),
+    Trait(AstTraitDecl),
+    Assoc(AstAssocType),
     Field(AstField),
     Variant(AstVariant),
     Stmt(AstStmt),
@@ -61,7 +64,7 @@ enum FmtList {
 // FmtBuf accumulates the lines of a container.
 struct FmtBuf {
     parts: Vec<String>,
-    first: Bool,
+    mut first: Bool,
     ind: String,
 }
 
@@ -104,7 +107,7 @@ fn fmt_source(src: String) -> FmtResult {
         ascii: ascii,
         line_start: line_start,
         toks: lr.toks,
-        tok_at: Map::new(),
+        tok_at: HashMap::new(),
         comments: lr.comments,
         used: used,
         flat: 0,
@@ -437,7 +440,14 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
         FmtUnitKind::Struct(d) => fmt_struct_decl(p, d, ind),
         FmtUnitKind::Enum(d) => fmt_enum_decl(p, d, ind),
         FmtUnitKind::Func(d) => fmt_func_decl(p, d, ind),
-        FmtUnitKind::Field(f) => f.name + ": " + fmt_typ(f.ty) + ",",
+        FmtUnitKind::Impl(d) => fmt_impl_decl(p, d, ind),
+        FmtUnitKind::Trait(d) => fmt_trait_decl(p, d, ind),
+        FmtUnitKind::Assoc(a) => fmt_assoc(a),
+        FmtUnitKind::Field(f) => if f.mutable { "mut " } else { "" }
+            + f.name
+            + ": "
+            + fmt_typ(f.ty)
+            + ",",
         FmtUnitKind::Variant(v) => {
             let mut s = v.name;
             if v.fields.len() > 0 {
@@ -497,10 +507,13 @@ fn fmt_next_brace(p: FmtPrinter, i: Int) -> Int {
 fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
     let items = Vec::new();
     for d in f.structs {
-        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Struct(d) });
+        items.push(FmtUnit { start: fmt_attrs_start(d.attrs, d.pos), kind: FmtUnitKind::Struct(d) });
     }
     for d in f.enums {
-        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Enum(d) });
+        items.push(FmtUnit { start: fmt_attrs_start(d.attrs, d.pos), kind: FmtUnitKind::Enum(d) });
+    }
+    for d in f.traits {
+        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Trait(d) });
     }
     for d in f.funcs {
         let mut start = d.pos;
@@ -512,7 +525,15 @@ fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
         }
         items.push(FmtUnit { start: start, kind: FmtUnitKind::Func(d) });
     }
-    // restore source order
+    for d in f.impls {
+        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Impl(d) });
+    }
+    fmt_sort_units(items);
+    fmt_container(p, -1, p.toks.len() - 1, items, 0)
+}
+
+// fmt_sort_units restores source order.
+fn fmt_sort_units(items: Vec<FmtUnit>) {
     let n = items.len();
     for i in 1..n {
         let mut j = i;
@@ -523,7 +544,53 @@ fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
             j = j - 1;
         }
     }
-    fmt_container(p, -1, p.toks.len() - 1, items, 0)
+}
+
+fn fmt_attrs_start(attrs: Vec<AstAttr>, pos: AstPos) -> AstPos {
+    match attrs.get(0) {
+        Some(a) => a.pos,
+        None => pos,
+    }
+}
+
+fn fmt_attrs(attrs: Vec<AstAttr>, ind: Int) -> String {
+    let mut s = "";
+    for a in attrs {
+        s = s + "#[" + a.name;
+        if a.args.len() > 0 {
+            s = s + "(" + a.args.join(", ") + ")";
+        }
+        s = s + "]\n" + fmt_indent(ind);
+    }
+    s
+}
+
+fn fmt_trait_decl(p: FmtPrinter, d: AstTraitDecl, ind: Int) -> String {
+    let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
+    let units = Vec::new();
+    for a in d.assoc {
+        units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
+    }
+    for f in d.funcs {
+        units.push(FmtUnit { start: f.pos, kind: FmtUnitKind::Func(f) });
+    }
+    fmt_sort_units(units);
+    let mut head = "trait " + d.name + fmt_generics(d.generics);
+    if d.supers.len() > 0 {
+        let ss = Vec::new();
+        for t in d.supers {
+            ss.push(fmt_typ(t));
+        }
+        head = head + ": " + ss.join(" + ");
+    }
+    head + " " + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+}
+
+fn fmt_assoc(a: AstAssocType) -> String {
+    match a.ty {
+        Some(t) => "type " + a.name + " = " + fmt_typ(t) + ";",
+        None => "type " + a.name + ";",
+    }
 }
 
 fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
@@ -532,7 +599,96 @@ fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
     for fd in d.fields {
         units.push(FmtUnit { start: fd.pos, kind: FmtUnitKind::Field(fd) });
     }
-    "struct " + d.name + " " + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+    fmt_attrs(d.attrs, ind)
+        + "struct "
+        + d.name
+        + fmt_generics(d.generics)
+        + " "
+        + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+}
+
+fn fmt_generics(gs: Vec<AstGeneric>) -> String {
+    if gs.len() == 0 {
+        return "";
+    }
+    let parts = Vec::new();
+    for g in gs {
+        if g.bounds.len() == 0 {
+            parts.push(g.name);
+        } else {
+            let bs = Vec::new();
+            for b in g.bounds {
+                bs.push(fmt_typ(b));
+            }
+            parts.push(g.name + ": " + bs.join(" + "));
+        }
+    }
+    "<" + parts.join(", ") + ">"
+}
+
+// fmt_wheres prints a `where` clause on its own lines (rustfmt style).
+fn fmt_wheres(ws: Vec<AstWhere>, ind: Int) -> String {
+    if ws.len() == 0 {
+        return "";
+    }
+    let mut s = "\n" + fmt_indent(ind) + "where";
+    for w in ws {
+        let bs = Vec::new();
+        for b in w.bounds {
+            bs.push(fmt_typ(b));
+        }
+        s = s + "\n" + fmt_indent(ind + 1) + fmt_typ(w.ty) + ": " + bs.join(" + ") + ",";
+    }
+    s
+}
+
+fn fmt_impl_decl(p: FmtPrinter, d: AstImplDecl, ind: Int) -> String {
+    let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
+    let units = Vec::new();
+    for a in d.assoc {
+        units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
+    }
+    for f in d.funcs {
+        units.push(FmtUnit { start: f.pos, kind: FmtUnitKind::Func(f) });
+    }
+    fmt_sort_units(units);
+    let mut head = "impl" + fmt_generics(d.generics) + " ";
+    match d.trait_ty {
+        Some(t) => {
+            head = head + fmt_typ(t) + " for ";
+        }
+        None => {}
+    }
+    let wh = fmt_wheres(d.wheres, ind);
+    let sep = if wh == "" {
+        " "
+    } else {
+        "\n" + fmt_indent(ind)
+    };
+    head
+        + fmt_typ(d.target)
+        + wh
+        + sep
+        + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+}
+
+// fmt_type_args prints `<A, B>` (nothing for no arguments).
+fn fmt_type_args(ts: Vec<AstType>) -> String {
+    if ts.len() == 0 {
+        return "";
+    }
+    let parts = Vec::new();
+    for t in ts {
+        parts.push(fmt_typ(t));
+    }
+    "<" + parts.join(", ") + ">"
+}
+
+fn fmt_turbofish(ts: Vec<AstType>) -> String {
+    if ts.len() == 0 {
+        return "";
+    }
+    "::" + fmt_type_args(ts)
 }
 
 fn fmt_enum_decl(p: FmtPrinter, d: AstEnumDecl, ind: Int) -> String {
@@ -541,7 +697,12 @@ fn fmt_enum_decl(p: FmtPrinter, d: AstEnumDecl, ind: Int) -> String {
     for v in d.variants {
         units.push(FmtUnit { start: v.pos, kind: FmtUnitKind::Variant(v) });
     }
-    "enum " + d.name + " " + fmt_container(p, open, fmt_match_close(p, open), units, ind)
+    fmt_attrs(d.attrs, ind)
+        + "enum "
+        + d.name
+        + fmt_generics(d.generics)
+        + " "
+        + fmt_container(p, open, fmt_match_close(p, open), units, ind)
 }
 
 fn fmt_opt_typ(t: Option<AstType>) -> String {
@@ -552,25 +713,36 @@ fn fmt_opt_typ(t: Option<AstType>) -> String {
 }
 
 fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
-    let mut s = "";
-    for a in d.attrs {
-        s = s + "#[" + a.name + "]\n" + fmt_indent(ind);
-    }
+    let s = fmt_attrs(d.attrs, ind);
     let params = Vec::new();
+    let mut i = 0;
     for prm in d.params {
-        params.push(prm.name + ": " + fmt_opt_typ(prm.ty));
+        if i == 0 && d.self_kind != "" {
+            params.push(d.self_kind);
+        } else {
+            params.push(prm.name + ": " + fmt_opt_typ(prm.ty));
+        }
+        i = i + 1;
     }
     let ret = match d.result {
         Some(t) => " -> " + fmt_typ(t),
         None => "",
     };
-    let mut head = "fn " + d.name + "(" + params.join(", ") + ")" + ret;
+    let name = d.name + fmt_generics(d.generics);
+    let wh = fmt_wheres(d.wheres, ind);
+    let mut head = "fn " + name + "(" + params.join(", ") + ")" + ret;
     if ind * 4 + fmt_w(p, head) + 2 > fmt_max_width() && params.len() > 0 {
-        head = "fn " + d.name + "(\n";
+        head = "fn " + name + "(\n";
         for ps in params {
             head = head + fmt_indent(ind + 1) + ps + ",\n";
         }
         head = head + fmt_indent(ind) + ")" + ret;
+    }
+    if !d.has_body {
+        return s + head + wh + ";";
+    }
+    if wh != "" {
+        return s + head + wh + "\n" + fmt_indent(ind) + fmt_block(p, d.body, ind);
     }
     s + head + " " + fmt_block(p, d.body, ind)
 }
@@ -578,16 +750,38 @@ fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
 fn fmt_typ(t: AstType) -> String {
     match t {
         AstType::Unit(_) => "()",
-        AstType::Ref(r) => "&" + fmt_typ(r.elem),
+        AstType::Ref(r) => if r.mutable { "&mut " } else { "&" } + fmt_typ(r.elem),
+        AstType::Fn(ft) => {
+            let ps = Vec::new();
+            for a in ft.params {
+                ps.push(fmt_typ(a));
+            }
+            let s = ft.kind + "(" + ps.join(", ") + ")";
+            match ft.result {
+                Some(r) => s + " -> " + fmt_typ(r),
+                None => s,
+            }
+        }
+        AstType::Tuple(tt) => {
+            let es = Vec::new();
+            for a in tt.elems {
+                es.push(fmt_typ(a));
+            }
+            if es.len() == 1 {
+                return "(" + es.join("") + ",)";
+            }
+            "(" + es.join(", ") + ")"
+        }
         AstType::Named(n) => {
-            if n.args.len() == 0 {
-                return n.name;
+            if n.name.starts_with("=") {
+                // associated type binding `Item = T`
+                let mut t = "";
+                for a in n.args {
+                    t = fmt_typ(a);
+                }
+                return n.name.slice(1, n.name.len()) + " = " + t;
             }
-            let as_ = Vec::new();
-            for a in n.args {
-                as_.push(fmt_typ(a));
-            }
-            n.name + "<" + as_.join(", ") + ">"
+            n.name + fmt_type_args(n.args)
         }
     }
 }
@@ -640,7 +834,10 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             if x.mutable {
                 h = h + "mut ";
             }
-            h = h + x.name;
+            h = h + match x.pat {
+                Some(pt) => fmt_pat(p, pt),
+                None => x.name,
+            };
             match x.ty {
                 Some(t) => {
                     h = h + ": " + fmt_typ(t);
@@ -654,12 +851,16 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             let h = x.name + " = ";
             h + fmt_expr(p, x.value, ind, col + fmt_w(p, h), false) + ";"
         }
-        AstStmt::While(x) => "while "
-            + fmt_expr(p, x.cond, ind, col + 6, true)
-            + " "
-            + fmt_block(p, x.body, ind),
+        AstStmt::While(x) => {
+            let h = "while " + fmt_let_pat(p, x.pat);
+            h + fmt_expr(p, x.cond, ind, col + fmt_w(p, h), true) + " " + fmt_block(p, x.body, ind)
+        }
         AstStmt::For(x) => {
-            let mut h = "for " + x.var + " in ";
+            let v = match x.pat {
+                Some(pt) => fmt_pat(p, pt),
+                None => x.var,
+            };
+            let mut h = "for " + v + " in ";
             h = h + fmt_expr(p, x.iter, ind, col + fmt_w(p, h), true);
             match x.end {
                 Some(e) => {
@@ -810,6 +1011,7 @@ fn fmt_precedence(op: String) -> Int {
 fn fmt_prec(e: AstExpr) -> Int {
     match e {
         AstExpr::Closure(_) => 0,
+        AstExpr::Range(_) => 0,
         AstExpr::Binary(b) => fmt_precedence(b.op),
         AstExpr::Unary(_) => 6,
         AstExpr::Call(_) => 7,
@@ -837,17 +1039,23 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
         AstExpr::StrLit(x) => fmt_str_text(p, x.pos),
         AstExpr::BoolLit(x) => if x.value { "true" } else { "false" },
         AstExpr::UnitLit(_) => "()",
-        AstExpr::Ident(x) => x.name,
-        AstExpr::Path(x) => x.ty + "::" + x.name,
+        AstExpr::Ident(x) => x.name + fmt_turbofish(x.targs),
+        AstExpr::Path(x) => x.ty + fmt_turbofish(x.ty_args) + "::" + x.name + fmt_turbofish(x.targs),
         AstExpr::Binary(x) => fmt_binary(p, x, ind, col, ns),
         AstExpr::Unary(x) => x.op + fmt_sub(p, x.x, ind, col + 1, ns, fmt_prec(x.x) < 6),
         AstExpr::Call(x) => {
-            let f = fmt_sub(p, x.func, ind, col, ns, fmt_prec(x.func) < 7);
+            // `(self.f)(x)` calls a field: without parentheses it would be a
+            // method call
+            let field = match x.func {
+                AstExpr::Field(_) => true,
+                _ => false,
+            };
+            let f = fmt_sub(p, x.func, ind, col, ns, fmt_prec(x.func) < 7 || field);
             f + fmt_args(p, x.args, ind, fmt_advance(p, col, f))
         }
         AstExpr::Method(x) => {
             let r = fmt_sub(p, x.recv, ind, col, ns, fmt_prec(x.recv) < 7);
-            let h = r + "." + x.name;
+            let h = r + "." + x.name + fmt_turbofish(x.targs);
             h + fmt_args(p, x.args, ind, fmt_advance(p, col, h))
         }
         AstExpr::Field(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "." + x.name,
@@ -860,9 +1068,24 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
         }
         AstExpr::If(x) => fmt_if(p, x, ind, col),
         AstExpr::Match(x) => fmt_match(p, x, ind, col),
+        AstExpr::Range(x) => {
+            let l = fmt_sub(p, x.start, ind, col, ns, fmt_prec(x.start) < 1);
+            let op = if x.inclusive { "..=" } else { ".." };
+            l
+                + op
+                + fmt_sub(p, x.end, ind, fmt_advance(p, col, l) + op.len(), ns, fmt_prec(x.end) < 1)
+        }
+        AstExpr::Tuple(x) => {
+            if x.elems.len() == 1 {
+                return "("
+                    + fmt_expr(p, x.elems.get(0).unwrap_or(AstExpr::Tuple(x)), ind, col + 1, false)
+                    + ",)";
+            }
+            fmt_args(p, x.elems, ind, col)
+        }
         AstExpr::Block(x) => fmt_block(p, x, ind),
         AstExpr::Closure(x) => {
-            let mut h = "||";
+            let mut h = if x.is_move { "move ||" } else { "||" };
             if x.params.len() > 0 {
                 let ps = Vec::new();
                 for prm in x.params {
@@ -871,7 +1094,13 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
                         None => ps.push(prm.name),
                     }
                 }
-                h = "|" + ps.join(", ") + "|";
+                h = if x.is_move { "move |" } else { "|" } + ps.join(", ") + "|";
+            }
+            match x.result {
+                Some(r) => {
+                    h = h + " -> " + fmt_typ(r);
+                }
+                None => {}
             }
             h = h + " ";
             h + fmt_expr(p, x.body, ind, col + fmt_w(p, h), ns)
@@ -1067,12 +1296,21 @@ fn fmt_if(p: FmtPrinter, e: AstIf, ind: Int, col: Int) -> String {
         }
         None => {}
     }
-    let cond = fmt_expr(p, e.cond, ind, col + 3, true);
-    let s = "if " + cond + " " + fmt_block(p, e.then, ind);
+    let h = "if " + fmt_let_pat(p, e.pat);
+    let cond = fmt_expr(p, e.cond, ind, col + fmt_w(p, h), true);
+    let s = h + cond + " " + fmt_block(p, e.then, ind);
     match e.els {
         Some(AstExpr::If(el)) => s + " else " + fmt_if(p, el, ind, ind * 4 + 7),
         Some(AstExpr::Block(el)) => s + " else " + fmt_block(p, el, ind),
         _ => s,
+    }
+}
+
+// fmt_let_pat is the `let pat = ` of `if let` / `while let` ("" without).
+fn fmt_let_pat(p: FmtPrinter, pat: Option<AstPattern>) -> String {
+    match pat {
+        Some(pt) => "let " + fmt_pat(p, pt) + " = ",
+        None => "",
     }
 }
 
@@ -1112,7 +1350,7 @@ fn fmt_single_line_if(p: FmtPrinter, e: AstIf, ind: Int, col: Int) -> Option<Str
             return None;
         }
     };
-    if fmt_contains_block(e.cond) {
+    if fmt_contains_block(e.cond) || e.pat.is_some() {
         return None;
     }
     let saved = fmt_save(p);
@@ -1150,6 +1388,8 @@ fn fmt_contains_block(e: AstExpr) -> Bool {
             }
             false
         }
+        AstExpr::Tuple(x) => fmt_any_block(x.elems),
+        AstExpr::Range(x) => fmt_contains_block(x.start) || fmt_contains_block(x.end),
         _ => false,
     }
 }
@@ -1187,6 +1427,19 @@ fn fmt_match(p: FmtPrinter, e: AstMatch, ind: Int, col: Int) -> String {
 fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
     if pt.wildcard {
         return "_";
+    }
+    if pt.tuple {
+        let es = Vec::new();
+        for a in pt.args {
+            es.push(fmt_pat(p, a));
+        }
+        if es.len() == 1 {
+            return "(" + es.join("") + ",)";
+        }
+        return "(" + es.join(", ") + ")";
+    }
+    if pt.mutable {
+        return "mut " + pt.bind;
     }
     if pt.int_value.is_some() {
         return fmt_int_text(p, pt.pos);

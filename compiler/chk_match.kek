@@ -2,7 +2,7 @@
 // algorithm).
 
 struct ChkCtors {
-    finite: Bool,
+    mut finite: Bool,
     names: Vec<String>,
     fields: Vec<Vec<Ty>>,
 }
@@ -76,15 +76,19 @@ fn chk_ctors(t: Ty) -> ChkCtors {
             out.fields.push(Vec::new());
             out.fields.push(chk_tys1(el));
         }
-        Ty::Enum(en) => {
+        Ty::Enum(en, args) => {
             for v in en.variants {
                 let mut n = en.name + "::" + v.name;
                 if v.fields.len() > 0 {
                     n = n + "(..)";
                 }
                 out.names.push(n);
-                out.fields.push(v.fields);
+                out.fields.push(ty_variant_fields(en, args, v));
             }
+        }
+        Ty::Tuple(ts) => {
+            out.names.push("(..)");
+            out.fields.push(ts);
         }
         Ty::Prim(n) => {
             if n == "Bool" {
@@ -109,7 +113,7 @@ fn chk_pat_tag(info: ChkInfo, p: AstPattern) -> ChkTag {
     match info.patterns.get(p.id) {
         None => ChkTag { tag: 0, refutable: false },
         Some(pi) => {
-            if pi.kind == "ctor" {
+            if pi.kind == "ctor" || pi.kind == "tuple" {
                 return ChkTag { tag: pi.tag, refutable: true };
             }
             if pi.kind == "bool" {
@@ -131,6 +135,8 @@ fn chk_wild_pat() -> AstPattern {
         id: -1,
         pos: chk_dummy_pos(),
         wildcard: true,
+        tuple: false,
+        mutable: false,
         bind: "",
         ty: "",
         ctor: "",
@@ -314,6 +320,10 @@ fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
         pi.kind = "wild";
         return;
     }
+    if p.tuple {
+        chk_tuple_pattern(c, p, pi, st);
+        return;
+    }
     if p.int_value.is_some() {
         pi.kind = "int";
         if !ty_unify(st, ty_int()) {
@@ -366,8 +376,8 @@ fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
                 return;
             }
         }
-        Ty::Enum(en) => {
-            if p.ty != "" && p.ty != en.name {
+        Ty::Enum(en, args) => {
+            if p.ty != "" && p.ty != en.name && !(p.ty == "Self" && chk_self_is(c, en.name)) {
                 chk_errorf(
                     c,
                     p.pos,
@@ -381,7 +391,7 @@ fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
                 if v.name == ctor {
                     pi.kind = "ctor";
                     pi.tag = tag;
-                    chk_subpatterns(c, p, pi, v.fields);
+                    chk_subpatterns(c, p, pi, ty_variant_fields(en, args, v));
                     return;
                 }
                 tag = tag + 1;
@@ -406,6 +416,60 @@ fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
     }
     pi.kind = "bind";
     let b = chk_new_binding(c, p.bind, st, p.pos);
+    b.mutable = p.mutable;
     chk_bind(c, b);
     pi.bind = Some(b);
+}
+
+// chk_self_is reports whether `Self` names the type called name.
+fn chk_self_is(c: Chk, name: String) -> Bool {
+    match c.tscope.get("Self") {
+        Some(t) => chk_recv_name(t) == name,
+        None => false,
+    }
+}
+
+// chk_tuple_pattern checks `(p, q, ...)` (`()` matches the unit value).
+fn chk_tuple_pattern(c: Chk, p: AstPattern, pi: ChkPatInfo, st: Ty) {
+    if p.args.len() == 0 {
+        if !ty_unify(st, ty_unit()) {
+            chk_errorf(c, p.pos, "pattern `()` does not match type `" + ty_str(st) + "`");
+        }
+        pi.kind = "wild";
+        return;
+    }
+    if ty_is_var(st) {
+        let ts = Vec::new();
+        for a in p.args {
+            ts.push(chk_new_var(c));
+        }
+        ty_unify(st, Ty::Tuple(ts));
+    }
+    match ty_prune(st) {
+        Ty::Tuple(ts) => {
+            if ts.len() == p.args.len() {
+                pi.kind = "tuple";
+                pi.ty = ty_prune(st);
+                chk_subpatterns(c, p, pi, ts);
+                return;
+            }
+            chk_errorf(
+                c,
+                p.pos,
+                "mismatched types: expected a tuple with "
+                    + ts.len().to_string()
+                    + " element(s), found one with "
+                    + p.args.len().to_string(),
+            );
+        }
+        _ => {
+            if !ty_is_prim(ty_prune(st), "<invalid>") {
+                chk_errorf(c, p.pos, "tuple pattern used on `" + ty_str(st) + "`");
+            }
+        }
+    }
+    pi.kind = "wild";
+    for sub in p.args {
+        chk_pattern(c, sub, ty_invalid());
+    }
 }

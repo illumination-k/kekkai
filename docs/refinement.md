@@ -129,13 +129,41 @@ goal: i < len(v)             // 省略すると false
 - `kek mutate`：篩型の証明に失敗する変異体は「篩型で検出」として数える。
 - Lean：コア計算に事前条件付きの呼び出し・除算・固定長配列の添字を加え、「検証条件が成り立つプログラムは除算と添字で行き詰まらない」を証明する（ソルバは仮定として与える）。
 
-## 個人情報の最小版（`Pii<T>`）
+## 個人情報の最小版（`Pii<T>`）（実装済み）
 
 - core の型 `Pii<T>`：`Pii::new(x)` で包む。`to_string`・連結・`==` 以外の比較・`Hash` はない（`String` として取り出せない）。
 - 格下げ：`mask() -> String`（`String` の場合、先頭 1 文字と `@` 以降を残す）、`hash() -> String`（固定のハッシュ）、`expose_unchecked() -> T`（脱出口）。格下げの呼び出しは `kek caps` に一覧され、`kek assure` に前提（`pii.declassify`）として記録され、`[pii] max_declassify_per_module` で上限を設けられる。
-- `#[derive]` は `Pii` のフィールドを持つ struct に `Hash`・`PartialEq` 以外を導出しない。
+- `#[derive]` は `Pii` のフィールドを持つ struct に `PartialEq`・`Eq` 以外を導出しない。
 
-## 冪等性（`#[handler(idempotent)]`）
+実装（`lib/core/pii.kek`、`compiler/chk_pii.kek`。言語としての説明は [language.md](language.md)）での決定：
+
+| 項目 | 決定 |
+| --- | --- |
+| 不透明さ | 新しい仕組みは足さない。フィールド名 `__value` は core と prelude の外では字句解析が拒否する（`__` は予約）ので、読むことも struct リテラルで作ることもできない。IR も Lean の参照インタプリタも変えない（ふつうの core の Kekkai） |
+| `mask` | 最後の `@` 以降（e-mail のドメイン）と先頭の 1 コードポイントを残し、ほかのコードポイントを 1 つずつ `*` にする（長さは見える）。`@` がなければ先頭以外をすべて隠す。`@` の前が 1 文字ならそれも隠す（`"a@x.com"` → `"*@x.com"`、`"x"` → `"*"`）。`""` → `""` |
+| `hash` | `T: Hash` の `Pii<T>` に定義。core の `DefaultHasher`（固定、seed なし）の結果を 16 桁の小文字の16進数（2 の補数）で |
+| `Hash` trait | 実装しない。`HashMap` のキーには `Ord` も要るが、`Ord` は `Pii::new(候補)` との比較による二分探索で値を割り出せるので実装しない。`Ord` なしでは `Hash` はキーの役に立たず、`h.finish()` で記録されない格下げになるだけ。キーには `p.hash()` を使う |
+| derive | `Pii` を含む型（フィールドの型のどこかに `Pii`）には `PartialEq`・`Eq` だけ。ほかは「personal data (`Pii`), which has no `Hash`」のエラー（設計の `Hash`・`PartialEq` から `Hash` を外し `Eq` を加えた） |
+| エラーの説明 | `Pii` が `String` などとして使われた型エラー（引数、連結、比較、メソッドがない）に「`mask()`・`hash()`・`expose_unchecked()` で格下げする」を添える |
+| 格下げの承認 | 関数の属性 `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` に書く（`#[allow(similar)]` と同じくコード側の前提）。`[pii] declassify_requires` は、格下げする関数のこの属性に必須の項目。期限切れは `kek assure` の expired になる |
+| モジュール | `max_declassify_per_module` のモジュールはファイル |
+| 残る制限 | `==` は使えるので、候補を包んで比べる総当たりは防げない。格下げした値の行き先は追わない（本格版の情報フロー型、P2） |
+
+## 冪等性（`#[handler(idempotent)]`）（実装済み）
 
 - `#[handler(idempotent)]` のハンドラ（と、そこから呼ばれる関数）は、冪等でない capability の操作を呼べない：`Net.post`、`tx.outbox`、キーを指定しない書き込みなど。`Net.get`・`Db.get`・`tx.put`（同じ値の上書き）は冪等とみなす。
 - 冪等性は capability と同じく呼び出しグラフを通じて検査し、`kek caps` と `kek assure`（`idempotent`）に現れる。
+
+実装（`compiler/chk_pii.kek`）での決定：
+
+| 項目 | 決定 |
+| --- | --- |
+| 冪等な操作 | 許可リスト：`log.*`、`clock.now_ms`、`net.get`、`db.get`、`db.transaction`、`tx.get`・`tx.put`・`tx.delete`・`tx.commit`・`tx.rollback`、`fs.read`・`fs.list`・`fs.set_cwd`。リストにない操作（今後増えるものを含む）は冪等でない |
+| 冪等でない操作 | `net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`（ストアの外の書き込みで、ハンドラからは保守的に禁止）、`fs.read_line`（入力を消費する）、`random.int`（リトライで別の ID・トークンを作り、それを書けば 2 件目のレコードになる） |
+| `tx.delete` | 冪等（2 回目は何もしない） |
+| `Clock` | 冪等（時刻は読むだけ。キーを時刻から作るような値の依存は見ない） |
+| 判定の単位 | 操作の種類だけ。値（何を書くか、キーの有無で分岐するか）は見ない。Idempotency-Key で重複を検出して `tx.outbox` を使うパターン（`examples/payments`）は型では冪等と認めない |
+| 呼び出しグラフ | 型検査器の `calls`（関数・メソッド・関数値）を幅優先でたどり、最短の経路で報告する：``idempotent handler `h` reaches `net.post` via `settle` -> `charge` (payments.kek:12), which is not idempotent: a retry would do it again``。trait のメソッド呼び出しはたどらない（capability を取る trait のメソッドは今はコンパイルできない） |
+| `kek caps` | JSON は全関数に `idempotent`（純粋な関数は true）。テキストは capability を受け取る関数に `idempotent: true` か `idempotent: false (<op> via <callee>)`、ハンドラに `#[handler(idempotent)]` |
+| `kek assure` | 真偽の保証 `idempotent`（capability を受け取る関数で、成り立つときだけ記録）。成り立たなくなると弱化。純粋になって消えたときは変化にしない（`effects` の強化が出る） |
+| Workers | 実行時の変更はない。リトライの設定（Queues・Workflows の再試行など）に使うなら `kek caps -json` の `idempotent` を参照する。`worker.js`・`wrangler.toml` にはまだ出さない |

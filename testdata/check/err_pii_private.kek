@@ -1,0 +1,10 @@
+// The field of Pii is private: `__` identifiers are reserved for the core
+// library and the runtime prelude.
+
+fn read_field(p: Pii<String>) -> String {
+    p.__value // ERROR "identifiers starting with `__` are reserved"
+}
+
+fn forge(s: String) -> Pii<String> {
+    Pii { __value: s } // ERROR "identifiers starting with `__` are reserved"
+}

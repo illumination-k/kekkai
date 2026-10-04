@@ -3,6 +3,8 @@ $ kek assure plan app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): new contract 1
 --- exit 0
 
 $ kek assure plan -json app
@@ -19,9 +21,9 @@ $ kek assure plan -json app
   "ok": false,
   "summary": {
     "definitions": 8,
-    "changes": 1,
+    "changes": 2,
     "needs_review": 1,
-    "auto_approved": 0,
+    "auto_approved": 1,
     "violations": 0,
     "expired": 0,
     "config_errors": 0
@@ -44,6 +46,22 @@ $ kek assure plan -json app
       "message": "weaken effects: +Log",
       "review": true,
       "escalate": "owner"
+    },
+    {
+      "definition": "rate_key",
+      "file": "app/rates.kek",
+      "line": 19,
+      "class": "strengthen",
+      "rule": "new_contract",
+      "guarantee": "idempotent",
+      "evidence": "type",
+      "from": "false",
+      "to": "true",
+      "added": [],
+      "removed": [],
+      "message": "new contract idempotent",
+      "review": false,
+      "escalate": ""
     }
   ],
   "violations": [],
@@ -56,14 +74,18 @@ $ kek assure check app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): new contract 1
 --- stderr
-kek assure check: kekkai.assure.lock is out of date: 1 change(s), 1 needing review (run kek assure plan, then kek assure apply)
+kek assure check: kekkai.assure.lock is out of date: 2 change(s), 1 needing review (run kek assure plan, then kek assure apply)
 --- exit 1
 
 $ kek assure apply app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): new contract 1
 --- stderr
 kek assure apply: 1 change(s) need review: rerun with -yes to approve them
 --- exit 1
@@ -72,6 +94,8 @@ $ kek assure apply -yes app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): new contract 1
 --- stderr
 kek assure apply: refusing: approving 1 escalated change(s) needs -reason, -owner, -expires (required by [assure] require)
 --- exit 1
@@ -80,6 +104,8 @@ $ kek assure apply -yes -reason audit log -owner shogo app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): new contract 1
 --- stderr
 kek assure apply: refusing: approving 1 escalated change(s) needs -expires (required by [assure] require)
 --- exit 1
@@ -88,6 +114,8 @@ $ kek assure apply -yes -reason audit log -owner shogo -expires 2026-01-01 app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (1): new contract 1
 --- stderr
 kek assure apply: refusing: -expires 2026-01-01 is already in the past (today is 2026-10-04)
 --- exit 1
@@ -96,7 +124,9 @@ $ kek assure apply -yes -reason audit log -owner shogo -expires 2027-01-31 app
 Needs review (1):
   ! weaken effects: +Log   rate_key
     -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
-kekkai.assure.lock updated: 8 definitions, 1 change(s) approved, 1 waiver(s) recorded
+
+Auto-approved (1): new contract 1
+kekkai.assure.lock updated: 8 definitions, 2 change(s) approved, 1 waiver(s) recorded
 --- exit 0
 
 # waivers in the lock:

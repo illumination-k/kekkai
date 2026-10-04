@@ -4,6 +4,8 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 
 - **capability 渡し**：`&Log` `&Net` `&Db` `&Clock` `&Random` を引数で受け取らない関数は副作用を持てない（第二級値なので保存も返却もできない）
 - **線形なトランザクション**：`db.transaction(|tx| ...)` の `Tx` は必ず一度だけ commit / rollback される。トランザクション内で取り消せない副作用は書けない（`tx.outbox` で commit 後に送る）
+- **個人情報の型**：`Pii<T>` に包んだ値は文字列にできず、ログ・レスポンス・ストアに渡すと型エラーになる。取り出す（格下げ）のは `mask()`・`hash()`・`expose_unchecked()` だけで、その呼び出しは `kek caps` と `kek assure` に記録される
+- **冪等なハンドラ**：`#[handler(idempotent)]` のハンドラと、そこから呼ばれる関数は、冪等でない操作（`net.post`、`tx.outbox`、ファイルへの書き込み、乱数）を使えない
 - **コア計算の健全性を Lean で証明**（`lean/`）
 
 設計は [docs/design.md](docs/design.md) を参照してください。
@@ -33,7 +35,7 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | コマンド | 内容 |
 | --- | --- |
 | `kek check <file>` | 型検査（capability、エフェクト、トランザクション） |
-| `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧 |
+| `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧。冪等か（`idempotent`）と個人情報の格下げ（`declassify`）も表示 |
 | `kek ir [-json] <file>` | 中間表現を表示（`-json` は Lean 参照インタプリタの入力形式） |
 | `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力。`module.wasm` はプログラムの定義ハッシュをキーにキャッシュする（コメントや整形だけの変更では再コンパイルしない） |
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
@@ -117,7 +119,7 @@ test shapes_are_small ... FAILED (pure: hermetic, cacheable; 0.4ms)
 
 ### 保証の台帳（`kek assure`）
 
-コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
+コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、冪等性、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`・個人情報の格下げ `pii.declassify`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
 
 ```sh
 ./kek assure plan app       # ロックとの差分（-json が基本の出力、-v で自動承認分も表示）
@@ -133,7 +135,7 @@ Needs review (1):
 Auto-approved (3): strengthen 1, allowed host 2
 ```
 
-ポリシーは `kekkai.toml` の `[net] allowed_hosts`・`[effects] forbid`・`[auto_approve]`・`[escalate]`・`[module."path"]`（厳しくする方向にだけ上書きできる）・`[assure] extends`（組織の設定を継承）で書きます。詳細は [docs/assure.md](docs/assure.md)。
+ポリシーは `kekkai.toml` の `[net] allowed_hosts`・`[effects] forbid`・`[pii] max_declassify_per_module`／`declassify_requires`・`[auto_approve]`・`[escalate]`・`[module."path"]`（厳しくする方向にだけ上書きできる）・`[assure] extends`（組織の設定を継承）で書きます。詳細は [docs/assure.md](docs/assure.md)。
 ### 類似コードの検出（`kek similar`）
 
 LLM が既存の実装を探さずに似た関数を書き足すのを防ぐためのコマンドです（設計は [docs/design.md](docs/design.md) の「類似コードの検出」、JSON は [docs/tooling.md](docs/tooling.md)）。定義ハッシュ（`compiler/defhash.kek`）の上で、次の 3 種類を報告します。

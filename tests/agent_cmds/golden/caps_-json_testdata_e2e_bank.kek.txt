@@ -9,10 +9,12 @@
       "handler": false,
       "pure": true,
       "async": false,
+      "idempotent": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
-      "calls": []
+      "calls": [],
+      "declassify": []
     },
     {
       "name": "parse_amount",
@@ -22,10 +24,12 @@
       "handler": false,
       "pure": true,
       "async": false,
+      "idempotent": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
-      "calls": []
+      "calls": [],
+      "declassify": []
     },
     {
       "name": "read_balance",
@@ -35,6 +39,7 @@
       "handler": false,
       "pure": false,
       "async": true,
+      "idempotent": true,
       "caps": [
         {
           "name": "tx",
@@ -48,7 +53,8 @@
       "unused_caps": [],
       "calls": [
         "balance_key"
-      ]
+      ],
+      "declassify": []
     },
     {
       "name": "transfer",
@@ -58,6 +64,7 @@
       "handler": false,
       "pure": false,
       "async": true,
+      "idempotent": false,
       "caps": [
         {
           "name": "db",
@@ -82,7 +89,8 @@
       "calls": [
         "balance_key",
         "read_balance"
-      ]
+      ],
+      "declassify": []
     },
     {
       "name": "get_balance",
@@ -92,6 +100,7 @@
       "handler": false,
       "pure": false,
       "async": true,
+      "idempotent": true,
       "caps": [
         {
           "name": "db",
@@ -105,7 +114,8 @@
       "unused_caps": [],
       "calls": [
         "balance_key"
-      ]
+      ],
+      "declassify": []
     },
     {
       "name": "handle",
@@ -115,6 +125,7 @@
       "handler": true,
       "pure": false,
       "async": true,
+      "idempotent": false,
       "caps": [
         {
           "name": "db",
@@ -133,7 +144,8 @@
         "get_balance",
         "parse_amount",
         "transfer"
-      ]
+      ],
+      "declassify": []
     }
   ]
 }

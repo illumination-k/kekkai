@@ -2,9 +2,13 @@ balance_key: pure
 parse_amount: pure
 read_balance: tx: &Tx
     direct effects: tx.get
+    idempotent: true
 transfer: db: &Db, log: &Log
     direct effects: db.transaction, log.info, tx.commit, tx.outbox, tx.put, tx.rollback
+    idempotent: false (tx.outbox)
 get_balance: db: &Db
     direct effects: db.get
+    idempotent: true
 handle #[handler]: db: &Db, log: &Log
+    idempotent: false (tx.outbox via transfer)
 --- exit 0

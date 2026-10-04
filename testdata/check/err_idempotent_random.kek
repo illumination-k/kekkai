@@ -1,0 +1,11 @@
+// Fresh randomness is not idempotent: a retry would mint another value
+// (an id, a token). `idempotent` is the only argument of #[handler].
+
+fn new_id(random: &Random) -> String {
+    "id-" + random.int(0, 1000000).to_string()
+}
+
+#[handler(idempotent, retries = 3)] // ERROR "unknown argument `retries = 3` of `#[handler]` (expected `idempotent`)"
+fn handle(req: Request, random: &Random) -> Response { // ERROR "idempotent handler `handle` reaches `random.int` via `new_id` (err_idempotent_random.kek:5)"
+    Response::text(201, new_id(random))
+}

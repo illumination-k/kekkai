@@ -1,0 +1,22 @@
+// tx.outbox queues an irrevocable effect: an idempotent handler cannot
+// use it, even inside a transaction.
+
+fn audit(log: &Log, random: &Random) -> Int {
+    log.info("audit");
+    random.int(0, 100)
+}
+
+#[handler(idempotent)]
+fn handle(req: Request, db: &Db, log: &Log, random: &Random) -> Response { // ERROR "idempotent handler `handle` calls `tx.outbox` (err_idempotent_direct.kek:14)"
+    let id = req.segment(0).unwrap_or("");
+    let r = db.transaction(|tx| {
+        tx.put("seen:" + id, "1")?;
+        tx.outbox("https://hooks.example/seen", id);
+        tx.commit()
+    });
+    audit(log, random);
+    match r {
+        Ok(_) => Response::text(200, "ok"),
+        Err(e) => Response::text(500, e.message()),
+    }
+}

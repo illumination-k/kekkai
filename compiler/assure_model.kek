@@ -8,7 +8,7 @@
 //   "set"   an upper bound: the value lists what the definition may do
 //           (capabilities, network hosts). More items is weaker.
 //   "bool"  a property that holds or not (covered by a test, linear
-//           transactions). Losing it is weaker.
+//           transactions, idempotent). Losing it is weaker.
 //
 // and the evidence it rests on ("type": the type checker, "test": a #[test]
 // reaches it through the call graph). Future evidence kinds (SMT proofs)
@@ -22,13 +22,19 @@ struct AsrGuar {
     evidence: String,
 }
 
-// An assumption written in the code: `#[allow(similar, ...)]` or `#[rare]`.
+// An assumption written in the code: `#[allow(similar, ...)]`, `#[rare]`,
+// or a declassification of personal data (kind "pii.declassify", call
+// "mask", "hash" or "expose_unchecked", with the reason, owner and expiry
+// of the function's `#[declassify(...)]`).
 struct AsrAssume {
     kind: String,
+    // the declassifying call ("" for the other kinds)
+    call: String,
     reason: String,
     owner: String,
     expires: String,
     line: Int,
+    col: Int,
 }
 
 // A recorded approval of a weakening (`kek assure apply -reason -owner
@@ -385,23 +391,60 @@ fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
         if a.name == "allow" && ast_attr_has(a, "similar") {
             out.push(AsrAssume {
                 kind: "allow(similar)",
+                call: "",
                 reason: ast_attr_value(a, "reason").unwrap_or(""),
                 owner: ast_attr_value(a, "owner").unwrap_or(""),
                 expires: ast_attr_value(a, "expires").unwrap_or(""),
                 line: a.pos.line,
+                col: 0,
             });
         }
         if a.name == "rare" {
             out.push(AsrAssume {
                 kind: "rare",
+                call: "",
                 reason: "",
                 owner: "",
                 expires: "",
                 line: a.pos.line,
+                col: 0,
             });
         }
     }
+    // declassifications of personal data, approved by #[declassify(...)]
+    let meta = ast_find_attr(fun.decl.attrs, "declassify");
+    for d in fun.declass {
+        let mut reason = "";
+        let mut owner = "";
+        let mut expires = "";
+        match meta {
+            Some(a) => {
+                reason = ast_attr_value(a, "reason").unwrap_or("");
+                owner = ast_attr_value(a, "owner").unwrap_or("");
+                expires = ast_attr_value(a, "expires").unwrap_or("");
+            }
+            None => {}
+        }
+        out.push(AsrAssume {
+            kind: "pii.declassify",
+            call: d.call,
+            reason: reason,
+            owner: owner,
+            expires: expires,
+            line: d.pos.line,
+            col: d.pos.col,
+        });
+    }
     out
+}
+
+// asr_assume_key identifies an assumption of a definition (several
+// declassifications of the same kind are told apart by their order).
+fn asr_assume_key(a: AsrAssume) -> String {
+    if a.call != "" {
+        return a.kind + "(" + a.call + ")";
+    }
+    a.kind
 }
 
 // ---- the model of a program ----
@@ -451,6 +494,11 @@ fn asr_model(l: DhLoaded) -> AsrState {
         }
         if fun.effects.contains_key("db.transaction") {
             guars.push(asr_bool_guar("tx.linear", true, "type"));
+        }
+        // every capability operation it can reach is idempotent (only for
+        // functions that take capabilities: a pure one trivially is)
+        if d.caps.len() > 0 && chk_idem_violation(info, fun).is_none() {
+            guars.push(asr_bool_guar("idempotent", true, "type"));
         }
         if !fun.test {
             guars.push(asr_bool_guar("tested", tested.contains_key(d.name), "test"));

@@ -3,21 +3,30 @@ done_key: pure
 valid_title: pure
 read_int: tx: &Tx
     direct effects: tx.get
+    idempotent: true
 create_once: db: &Db
     direct effects: db.transaction, tx.commit, tx.put
+    idempotent: true
 set_done_once: db: &Db
     direct effects: db.transaction, tx.commit, tx.get, tx.put, tx.rollback
+    idempotent: true
 delete_once: db: &Db
     direct effects: db.transaction, tx.commit, tx.delete, tx.get, tx.put, tx.rollback
+    idempotent: true
 should_retry_int: pure
 should_retry_unit: pure
 create: db: &Db
+    idempotent: true
 set_done: db: &Db
+    idempotent: true
 remove: db: &Db
+    idempotent: true
 store_error: pure
 todo_error: pure
 show: db: &Db
     direct effects: db.get
+    idempotent: true
 handle #[handler]: db: &Db, log: &Log
     direct effects: db.get, log.info
+    idempotent: true
 --- exit 0

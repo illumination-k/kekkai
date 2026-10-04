@@ -9,10 +9,12 @@
       "handler": false,
       "pure": true,
       "async": false,
+      "idempotent": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
-      "calls": []
+      "calls": [],
+      "declassify": []
     },
     {
       "name": "report",
@@ -22,6 +24,7 @@
       "handler": false,
       "pure": false,
       "async": false,
+      "idempotent": true,
       "caps": [
         {
           "name": "log",
@@ -42,7 +45,8 @@
       ],
       "calls": [
         "area"
-      ]
+      ],
+      "declassify": []
     },
     {
       "name": "describe",
@@ -52,10 +56,12 @@
       "handler": false,
       "pure": true,
       "async": false,
+      "idempotent": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
-      "calls": []
+      "calls": [],
+      "declassify": []
     }
   ]
 }

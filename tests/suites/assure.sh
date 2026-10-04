@@ -346,6 +346,84 @@ EOF
 	step assure plan app
 }
 
+case_idempotent_lost() {
+	note "fetch_rate starts posting: it, and convert that calls it, are no longer idempotent"
+	edit app/rates.kek 's|net.get("https://api.rates.example/v1/" + cur)|net.post("https://api.rates.example/v1/" + cur, "")|'
+	step assure plan app
+	step assure plan -json app
+	step assure check app
+	step assure apply -yes -reason "the rates API wants a POST" -owner shogo -expires 2027-01-31 app
+	step assure check app
+	note "convert stops calling it (pure now): no weakening of idempotent, its effects strengthen"
+	edit app/rates.kek 's/    amount \* fetch_rate(net, log, cur)/    amount/'
+	edit app/rates.kek 's/^fn convert(net: &Net, log: &Log, amount: Int, cur: String)/fn convert(amount: Int, cur: String)/'
+	step assure plan -v app
+	note "#[handler(idempotent)] on handle does not compile: buy queues an outbox message"
+	edit app/shop.kek 's/^#\[handler\]$/#[handler(idempotent)]/'
+	step assure plan app
+}
+
+case_pii() {
+	note "notify_rate declassifies personal data twice: new assumptions"
+	cat >>"$d/w/app/rates.kek" <<'EOF'
+
+fn notify_rate(log: &Log, email: Pii<String>, cur: String) {
+    log.info("rate " + cur + " for " + email.mask());
+    log.info("user " + email.hash());
+}
+EOF
+	step assure plan app
+	step assure plan -json app
+	step assure apply -yes app
+	note "the assumptions in the lock:"
+	grep -B 1 -A 4 '"kind": "pii.declassify"' "$d/w/kekkai.assure.lock" >>"$d/got"
+	echo >>"$d/got"
+	step assure check app
+	note "[pii]: at most one declassification per module, approved with a reason and an owner"
+	cat >>"$d/w/kekkai.toml" <<'EOF'
+
+[pii]
+max_declassify_per_module = 1
+declassify_requires = ["reason", "owner"]
+EOF
+	step assure plan app
+	step assure plan -json app
+	step assure check app
+	note "notify_rate names who approved it and keeps one declassification"
+	edit app/rates.kek 's/^fn notify_rate/#[declassify(reason = "support sees the domain", owner = "shogo", expires = "2027-06-30")]\
+fn notify_rate/'
+	edit app/rates.kek '/email.hash()/d'
+	step assure plan app
+	step assure apply -yes app
+	step assure check app
+	note "it expires"
+	KEK_TODAY=2027-07-01
+	export KEK_TODAY
+	step assure check app
+	note "malformed [pii] settings, and loosening the limit of a parent"
+	cat >"$d/w/bad.toml" <<'EOF'
+[pii]
+max_declassify_per_module = "two"
+declassify_requires = ["reason", "signature"]
+mask = true
+EOF
+	step assure plan -config bad.toml app
+	cat >"$d/w/org.toml" <<'EOF'
+[pii]
+max_declassify_per_module = 1
+declassify_requires = ["owner"]
+EOF
+	cat >"$d/w/child.toml" <<'EOF'
+[assure]
+extends = "org.toml"
+
+[pii]
+max_declassify_per_module = 3
+declassify_requires = ["expires"]
+EOF
+	step assure plan -config child.toml app
+}
+
 case_usage() {
 	step assure
 	step assure plan
@@ -359,7 +437,7 @@ case_usage() {
 
 cases="initial no_changes strengthen weaken_capability allowed_host forbidden_host unknown_host
 weaken_host_no_allowlist forbidden_capability expired_assumption tested_lost tx_and_body module_review
-config_errors extends usage"
+config_errors extends idempotent_lost pii usage"
 
 one() {
 	name=$1

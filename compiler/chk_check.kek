@@ -32,6 +32,17 @@ struct ChkFunc {
     calls: HashMap<String, Bool>,
     // capability operations used directly in the body
     effects: HashMap<String, Bool>,
+    // where each of effects is first used
+    effect_pos: HashMap<String, AstPos>,
+    // declassifications of personal data (Pii) in the body
+    declass: Vec<ChkDeclass>,
+}
+
+// ChkDeclass is a call of a declassifying method of Pii (call: "mask",
+// "hash" or "expose_unchecked").
+struct ChkDeclass {
+    call: String,
+    pos: AstPos,
 }
 
 // kind: "func", "ok", "err", "some", "none", "variant", "static", "collection"
@@ -195,6 +206,8 @@ fn chk_dummy_func() -> ChkFunc {
         async: false,
         calls: HashMap::new(),
         effects: HashMap::new(),
+        effect_pos: HashMap::new(),
+        declass: Vec::new(),
         decl: AstFuncDecl {
             id: 0,
             pos: p,
@@ -308,12 +321,43 @@ fn chk_is_core(p: AstPos) -> Bool {
 
 // chk_is_lib reports whether a function belongs to the core library or the
 // runtime prelude (not to the user's program).
-// chk_check_attr validates a function attribute: #[handler], #[main],
+// chk_check_attr validates a function attribute: #[handler] /
+// #[handler(idempotent)], #[main], #[declassify(reason = "...", owner =
+// "...", expires = "YYYY-MM-DD")] (who approved the Pii declassifications
+// of the function; see `kek assure`),
 // #[test] / #[test(cases = N)], #[rare] (a path that is rarely taken; see
 // `kek assure`) and #[allow(similar, reason = "...", owner = "...",
 // expires = "YYYY-MM-DD")].
 fn chk_check_attr(c: Chk, a: AstAttr) {
-    if a.name == "handler" || a.name == "main" || a.name == "rare" {
+    if a.name == "handler" {
+        for x in a.args {
+            if x != "idempotent" {
+                chk_errorf(
+                    c,
+                    a.pos,
+                    "unknown argument `" + x + "` of `#[handler]` (expected `idempotent`)",
+                );
+            }
+        }
+        return;
+    }
+    if a.name == "declassify" {
+        for x in a.args {
+            if !x.starts_with("reason = \"")
+                && !x.starts_with("owner = \"")
+                && !x.starts_with("expires = \"") {
+                chk_errorf(
+                    c,
+                    a.pos,
+                    "unknown argument `"
+                        + x
+                        + "` of `#[declassify]` (expected reason, owner, expires)",
+                );
+            }
+        }
+        return;
+    }
+    if a.name == "main" || a.name == "rare" {
         if a.args.len() > 0 {
             chk_errorf(c, a.pos, "`#[" + a.name + "]` takes no arguments");
         }
@@ -416,6 +460,7 @@ fn chk_check_mode(user: AstFile, prelude: Bool, core: ChkCore) -> ChkResult {
         }
     }
     chk_compute_async(c);
+    chk_check_idempotent(c);
     for fun in c.info.func_list {
         lin_check(c.info, fun, c.errs);
     }
@@ -793,6 +838,8 @@ fn chk_declare_func(
         async: false,
         calls: HashMap::new(),
         effects: HashMap::new(),
+        effect_pos: HashMap::new(),
+        declass: Vec::new(),
     };
     for a in fd.attrs {
         chk_check_attr(c, a);
@@ -1212,7 +1259,8 @@ fn chk_expect(c: Chk, pos: AstPos, got: Ty, want: Ty, what: String) {
                 + ty_str(want)
                 + "`, found `"
                 + ty_str(got)
-                + "`",
+                + "`"
+                + chk_pii_hint(got, want),
         );
     }
 }
@@ -2096,7 +2144,7 @@ fn chk_call_func(
     }
     chk_args(c, pos, "`" + fun.name + "`", args, ps);
     chk_oblige_bounds(c, pos, fun, targs);
-    c.cur.calls.insert(fun.name, true);
+    chk_note_call(c, fun, pos);
     let result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
     let ci = chk_call_info("func", result);
     ci.func = Some(fun);
@@ -2116,7 +2164,15 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
     }
     if op == "==" || op == "!=" {
         if !ty_unify(xt, yt) {
-            chk_errorf(c, e.pos, "cannot compare `" + ty_str(xt) + "` with `" + ty_str(yt) + "`");
+            let mut hint = chk_pii_hint(xt, yt);
+            if hint == "" {
+                hint = chk_pii_hint(yt, xt);
+            }
+            chk_errorf(
+                c,
+                e.pos,
+                "cannot compare `" + ty_str(xt) + "` with `" + ty_str(yt) + "`" + hint,
+            );
             return ty_bool();
         }
         let p = ty_prune(xt);
@@ -2427,7 +2483,7 @@ fn chk_fn_item(c: Chk, e: AstIdent, fun: ChkFunc) -> Ty {
     }
     chk_fn_bounds(c, fun.tparams, targs);
     chk_oblige_bounds(c, e.pos, fun, targs);
-    c.cur.calls.insert(fun.name, true);
+    chk_note_call(c, fun, e.pos);
     let ci = chk_call_info("fnitem", ty_unit());
     ci.func = Some(fun);
     ci.targs = targs;
@@ -2906,7 +2962,16 @@ fn chk_method(c: Chk, e: AstMethodCall) -> Ty {
                     None => {}
                 }
             }
-            chk_errorf(c, e.pos, "no method named `" + e.name + "` found for `" + ty_str(rt) + "`");
+            chk_errorf(
+                c,
+                e.pos,
+                "no method named `"
+                    + e.name
+                    + "` found for `"
+                    + ty_str(rt)
+                    + "`"
+                    + chk_pii_hint(rt, ty_unit()),
+            );
             chk_exprs(c, e.args);
             ty_invalid()
         }
@@ -2923,6 +2988,9 @@ fn chk_method(c: Chk, e: AstMethodCall) -> Ty {
             let what = "`" + name + "." + e.name + "`";
             chk_args(c, e.pos, what, e.args, b.params);
             if is_cap {
+                if !c.cur.effects.contains_key(b.op) {
+                    c.cur.effect_pos.insert(b.op, e.pos);
+                }
                 c.cur.effects.insert(b.op, true);
             }
             chk_no_turbofish(c, e.pos, what, e.targs);
@@ -2969,7 +3037,7 @@ fn chk_user_method(c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
     }
     chk_args(c, e.pos, "`" + fun.name + "`", e.args, rest);
     chk_oblige_bounds(c, e.pos, fun, targs);
-    c.cur.calls.insert(fun.name, true);
+    chk_note_call(c, fun, e.pos);
     c.info.methods.insert(e.id, ChkMethodInfo {
         kind: "func",
         builtin: None,
@@ -3112,6 +3180,9 @@ fn chk_generic_method(c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
 }
 
 fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
+    if !c.cur.effects.contains_key("db.transaction") {
+        c.cur.effect_pos.insert("db.transaction", e.pos);
+    }
     c.cur.effects.insert("db.transaction", true);
     if e.args.len() != 1 {
         chk_errorf(c, e.pos, "`transaction` takes exactly one closure argument `|tx| { ... }`");

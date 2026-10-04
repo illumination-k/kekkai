@@ -23,6 +23,11 @@ fn derive_items(f: AstFile, ids: AstIds, errs: Vec<AstError>) {
                 if !derive_known(tr, errs, a.pos) {
                     continue;
                 }
+                let pii = derive_pii_struct(sd);
+                if pii != "" && !derive_pii_ok(tr) {
+                    errs.push(derive_pii_error(a.pos, tr, sd.name, "field `" + pii + "`"));
+                    continue;
+                }
                 if tr == "Hash" {
                     // a key must not change while it is in a HashMap
                     let mut bad = "";
@@ -58,6 +63,11 @@ fn derive_items(f: AstFile, ids: AstIds, errs: Vec<AstError>) {
                 if !derive_known(tr, errs, a.pos) {
                     continue;
                 }
+                let pii = derive_pii_enum(ed);
+                if pii != "" && !derive_pii_ok(tr) {
+                    errs.push(derive_pii_error(a.pos, tr, ed.name, "variant `" + pii + "`"));
+                    continue;
+                }
                 if tr == "Default" {
                     errs.push(AstError {
                         pos: a.pos,
@@ -80,6 +90,78 @@ fn derive_items(f: AstFile, ids: AstIds, errs: Vec<AstError>) {
             f.impls.push(im);
         }
     }
+}
+
+// Personal data: Pii (lib/core/pii.kek) implements only PartialEq and Eq,
+// so only these can be derived for a type that holds one (a derived Hash,
+// order or default would need the same of Pii).
+
+fn derive_pii_ok(tr: String) -> Bool {
+    tr == "PartialEq" || tr == "Eq"
+}
+
+fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstError {
+    AstError {
+        pos: pos,
+        msg: "cannot derive `"
+            + tr
+            + "` for `"
+            + name
+            + "`: "
+            + what
+            + " holds personal data (`Pii`), which has no `"
+            + tr
+            + "` (only `PartialEq` and `Eq` can be derived)",
+    }
+}
+
+// derive_mentions reports whether type t mentions the type name n.
+fn derive_mentions(t: AstType, n: String) -> Bool {
+    match t {
+        AstType::Named(x) => {
+            if x.name == n {
+                return true;
+            }
+            for a in x.args {
+                if derive_mentions(a, n) {
+                    return true;
+                }
+            }
+            false
+        }
+        AstType::Ref(x) => derive_mentions(x.elem, n),
+        AstType::Unit(_) => false,
+        AstType::Tuple(x) => {
+            for a in x.elems {
+                if derive_mentions(a, n) {
+                    return true;
+                }
+            }
+            false
+        }
+        AstType::Fn(_) => false,
+    }
+}
+
+// derive_pii_struct is the first field of sd that holds a Pii ("" if none).
+fn derive_pii_struct(sd: AstStructDecl) -> String {
+    for f in sd.fields {
+        if derive_mentions(f.ty, "Pii") {
+            return f.name;
+        }
+    }
+    ""
+}
+
+fn derive_pii_enum(ed: AstEnumDecl) -> String {
+    for v in ed.variants {
+        for t in v.fields {
+            if derive_mentions(t, "Pii") {
+                return v.name;
+            }
+        }
+    }
+    ""
 }
 
 fn derive_known(tr: String, errs: Vec<AstError>, pos: AstPos) -> Bool {

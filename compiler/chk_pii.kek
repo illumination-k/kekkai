@@ -1,0 +1,196 @@
+// Personal data and idempotency in the type checker (docs/refinement.md):
+//
+// - Pii<T> (lib/core/pii.kek) is an ordinary core struct; what makes it
+//   opaque is that its field `__value` cannot be named outside the core
+//   library and the runtime prelude (the lexer reserves `__` identifiers),
+//   so a program can neither read it nor build `Pii { ... }`. Calls of its
+//   declassifying methods (mask, hash, expose_unchecked) are recorded per
+//   function (ChkFunc.declass) for `kek caps` and `kek assure`.
+// - `#[handler(idempotent)]`: the handler, and every function it reaches
+//   through the call graph, may only use idempotent capability operations.
+
+// ---- Pii ----
+
+// chk_note_call records that the current function calls fun (at pos).
+fn chk_note_call(c: Chk, fun: ChkFunc, pos: AstPos) {
+    c.cur.calls.insert(fun.name, true);
+    let k = chk_declass_kind(fun);
+    if k != "" && !chk_is_lib(c.cur) {
+        c.cur.declass.push(ChkDeclass { call: k, pos: pos });
+    }
+}
+
+// chk_declass_kind is "mask", "hash" or "expose_unchecked" when fun is a
+// declassifying method of the core Pii, else "".
+fn chk_declass_kind(fun: ChkFunc) -> String {
+    if !chk_is_core(fun.decl.pos) {
+        return "";
+    }
+    if fun.name == "Pii::mask" || fun.name == "Pii::hash" || fun.name == "Pii::expose_unchecked" {
+        return fun.name.slice(5, fun.name.len());
+    }
+    ""
+}
+
+// chk_is_pii reports whether t is Pii<_>.
+fn chk_is_pii(t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Struct(st, _) => st.name == "Pii",
+        _ => false,
+    }
+}
+
+// chk_pii_hint explains a type error involving personal data (got is the
+// type found).
+fn chk_pii_hint(got: Ty, want: Ty) -> String {
+    if !chk_is_pii(got) || chk_is_pii(want) {
+        return "";
+    }
+    " (personal data `"
+        + ty_str(got)
+        + "` cannot be used as a plain value: declassify it with `mask()`, `hash()` or `expose_unchecked()`)"
+}
+
+// ---- idempotency ----
+
+// chk_idempotent_attr reports whether fun is `#[handler(idempotent)]`.
+fn chk_idempotent_attr(fun: ChkFunc) -> Bool {
+    match ast_find_attr(fun.decl.attrs, "handler") {
+        Some(a) => ast_attr_has(a, "idempotent"),
+        None => false,
+    }
+}
+
+// chk_idempotent_op lists the capability operations that are idempotent:
+// doing them again (a retry) leaves the same state. Reads, logging, the
+// clock, overwriting a key (tx.put), deleting a key (tx.delete) and the
+// transaction itself. Everything else is not (net.post, tx.outbox,
+// fs.write, fs.write_bytes, fs.read_line, random.int, and any operation
+// added later until it is listed here).
+fn chk_idempotent_op(op: String) -> Bool {
+    op.starts_with("log.")
+        || op == "clock.now_ms"
+        || op == "net.get"
+        || op == "db.get"
+        || op == "db.transaction"
+        || op == "tx.get"
+        || op == "tx.put"
+        || op == "tx.delete"
+        || op == "tx.commit"
+        || op == "tx.rollback"
+        || op == "fs.read"
+        || op == "fs.list"
+        || op == "fs.set_cwd"
+}
+
+// ChkIdemPath is a non-idempotent operation op reached from a function:
+// path runs from it to the function that performs op (at pos).
+struct ChkIdemPath {
+    op: String,
+    path: Vec<String>,
+    pos: AstPos,
+}
+
+// chk_idem_violation finds a non-idempotent operation that fun can perform
+// itself or through the functions it calls (breadth first, so the path is
+// a shortest one). Calls through trait methods are not followed (a trait
+// method cannot use a capability that it is not given, and today a trait
+// method that takes one cannot be compiled).
+fn chk_idem_violation(info: ChkInfo, fun: ChkFunc) -> Option<ChkIdemPath> {
+    let parent: HashMap<String, String> = HashMap::new();
+    let work = Vec::new();
+    work.push(fun);
+    parent.insert(fun.name, "");
+    let mut i = 0;
+    while i < work.len() {
+        let f = work.get(i).unwrap_or(fun);
+        i = i + 1;
+        let ops: Vec<String> = f.effects.keys().collect();
+        chk_sort_strings(ops);
+        for op in ops {
+            if !chk_idempotent_op(op) {
+                let path = Vec::new();
+                let mut n = f.name;
+                while n != "" {
+                    path.push(n);
+                    n = parent.get(n).unwrap_or("");
+                }
+                let rev = Vec::new();
+                let mut k = path.len() - 1;
+                while k >= 0 {
+                    rev.push(path.get(k).unwrap_or(""));
+                    k = k - 1;
+                }
+                return Some(ChkIdemPath {
+                    op: op,
+                    path: rev,
+                    pos: f.effect_pos.get(op).unwrap_or(f.decl.pos),
+                });
+            }
+        }
+        let callees: Vec<String> = f.calls.keys().collect();
+        chk_sort_strings(callees);
+        for g in callees {
+            if parent.contains_key(g) {
+                continue;
+            }
+            match info.funcs.get(g) {
+                Some(gf) => {
+                    parent.insert(g, f.name);
+                    work.push(gf);
+                }
+                None => {}
+            }
+        }
+    }
+    None
+}
+
+// chk_pos_str is `file.kek:12` (the files of a program are one directory,
+// so the base name is enough).
+fn chk_pos_str(p: AstPos) -> String {
+    if p.file == "" {
+        return "line " + p.line.to_string();
+    }
+    let parts = p.file.split("/");
+    parts.get(parts.len() - 1).unwrap_or(p.file) + ":" + p.line.to_string()
+}
+
+// chk_check_idempotent checks the `#[handler(idempotent)]` functions.
+fn chk_check_idempotent(c: Chk) {
+    for fun in c.info.func_list {
+        if !fun.handler || !chk_idempotent_attr(fun) {
+            continue;
+        }
+        match chk_idem_violation(c.info, fun) {
+            Some(v) => {
+                let mut how = "calls";
+                let mut via = "";
+                if v.path.len() > 1 {
+                    how = "reaches";
+                    let mids = Vec::new();
+                    for k in 1..v.path.len() {
+                        mids.push("`" + v.path.get(k).unwrap_or("") + "`");
+                    }
+                    via = " via " + mids.join(" -> ");
+                }
+                chk_errorf(
+                    c,
+                    fun.decl.pos,
+                    "idempotent handler `"
+                        + fun.name
+                        + "` "
+                        + how
+                        + " `"
+                        + v.op
+                        + "`"
+                        + via
+                        + " ("
+                        + chk_pos_str(v.pos)
+                        + "), which is not idempotent: a retry would do it again",
+                );
+            }
+            None => {}
+        }
+    }
+}

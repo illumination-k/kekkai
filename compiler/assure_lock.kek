@@ -16,7 +16,8 @@
 //           "net.hosts": {"value": ["api.example.com"], "evidence": "type"},
 //           "tested": {"value": true, "evidence": "test"}
 //         },
-//         "assumptions": [{"kind": "rare", "reason": "", "owner": "", "expires": ""}],
+//         "assumptions": [{"kind": "rare", "reason": "", "owner": "", "expires": ""},
+//                         {"kind": "pii.declassify", "call": "mask", "reason": "...", ...}],
 //         "waivers": [{"guarantee": "net.hosts", "items": ["cdn.example.com"],
 //                      "reason": "...", "owner": "...", "expires": "2027-01-01",
 //                      "approved": "2026-10-04"}]
@@ -97,10 +98,12 @@ fn asr_lock_decode(v: ToolJson, path: String) -> AsrLockRead {
         for a in tool_json_arr(tool_json_get(o, "assumptions")) {
             assumes.push(AsrAssume {
                 kind: tool_json_str(tool_json_get(a, "kind"), ""),
+                call: tool_json_str(tool_json_get(a, "call"), ""),
                 reason: tool_json_str(tool_json_get(a, "reason"), ""),
                 owner: tool_json_str(tool_json_get(a, "owner"), ""),
                 expires: tool_json_str(tool_json_get(a, "expires"), ""),
                 line: 0,
+                col: 0,
             });
         }
         let waivers = Vec::new();
@@ -145,6 +148,9 @@ fn asr_guar_json(g: AsrGuar) -> IrjVal {
 fn asr_assume_json(a: AsrAssume) -> IrjVal {
     let o = irjson_obj();
     irjson_set(o, "kind", IrjVal::Str(a.kind));
+    if a.call != "" {
+        irjson_set(o, "call", IrjVal::Str(a.call));
+    }
     irjson_set(o, "reason", IrjVal::Str(a.reason));
     irjson_set(o, "owner", IrjVal::Str(a.owner));
     irjson_set(o, "expires", IrjVal::Str(a.expires));
@@ -174,10 +180,13 @@ fn asr_guar_order(name: String) -> Int {
     if name == "tx.linear" {
         return 2;
     }
-    if name == "tested" {
+    if name == "idempotent" {
         return 3;
     }
-    4
+    if name == "tested" {
+        return 4;
+    }
+    5
 }
 
 fn asr_guar_before(a: AsrGuar, b: AsrGuar) -> Bool {

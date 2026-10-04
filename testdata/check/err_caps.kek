@@ -26,9 +26,6 @@ fn needs_log(log: &Log) {
     log.info("ok");
 }
 
-fn not_a_ref(x: &Int) { // ERROR "`&` can only be applied to capability types"
-}
-
-fn closure_value() {
-    let f = |x| x; // ERROR "closures are second-class"
+fn closure_capture(log: &Log) {
+    let f = |x: String| log.info(x); // ERROR "closures cannot capture capability `log`"
 }

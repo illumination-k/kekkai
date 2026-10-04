@@ -8,7 +8,7 @@ enum Expr {
 
 struct Env {
     names: Vec<String>,
-    exprs: Map<String, Expr>,
+    exprs: HashMap<String, Expr>,
 }
 
 fn eval(e: Expr) -> Int {
@@ -39,7 +39,7 @@ fn build(n: Int) -> Expr {
 
 #[main]
 fn main(log: &Log) -> Int {
-    let env = Env { names: Vec::new(), exprs: Map::new() };
+    let env = Env { names: Vec::new(), exprs: HashMap::new() };
     env.exprs.insert("e", build(3));
     env.names.push("e");
     for n in env.names {

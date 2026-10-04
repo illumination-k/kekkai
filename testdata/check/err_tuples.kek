@@ -1,0 +1,10 @@
+fn g(o: Option<Int>, t: (Int, String)) -> Int {
+    let (a, b, c) = t; // ERROR "expected a tuple with 2 element(s), found one with 3"
+    let Some(x) = o; // ERROR "refutable pattern in local binding: missing `None`"
+    t.0 = 3; // ERROR "cannot assign to a tuple element"
+    let z = t.5; // ERROR "no field `5` on type `(Int, String)`"
+    for (k, v) in 0..3 { // ERROR "tuple pattern used on `Int`"
+    }
+    let w: (Int,) = (1, 2); // ERROR "expected `(Int,)`, found `(Int, Int)`"
+    0
+}

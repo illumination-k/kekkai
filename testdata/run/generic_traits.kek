@@ -1,0 +1,44 @@
+trait Convert<T> {
+    fn convert(&self) -> T;
+}
+
+impl Convert<String> for Int {
+    fn convert(&self) -> String {
+        "#" + self.to_string()
+    }
+}
+
+impl Convert<Bool> for Int {
+    fn convert(&self) -> Bool {
+        *self != 0
+    }
+}
+
+struct Meters {
+    v: Int,
+}
+
+trait MyFrom<T> {
+    fn my_from(x: T) -> Self;
+}
+
+impl MyFrom<Int> for Meters {
+    fn my_from(x: Int) -> Meters {
+        Meters { v: x }
+    }
+}
+
+fn conv<T, U: Convert<T>>(x: U) -> T {
+    x.convert()
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let s: String = 5.convert();
+    let b: Bool = conv(0);
+    log.info(s + " " + b.to_string());
+    let m = Meters::my_from(3);
+    let m2: Meters = MyFrom::my_from(4);
+    log.info((m.v + m2.v).to_string());
+    0
+}

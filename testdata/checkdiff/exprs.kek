@@ -16,7 +16,7 @@ fn helper(a: Int, b: String) -> Int {
 
 fn uses_log(log: &Log) {}
 
-fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
+fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: HashMap<String, Int>) -> Int {
     let a = 1 + "s";
     let b = "s" + 1;
     let c = true && 1;
@@ -59,8 +59,8 @@ fn exprs(log: &Log, net: &Net, v: Vec<Int>, m: Map<String, Int>) -> Int {
     let al = 1.abs();
     let am = Vec::new();
     am.len();
-    let an: Map<Pt, Int> = Map::new();
-    let ao = Map::new();
+    let an: HashMap<Pt, Int> = HashMap::new();
+    let ao = HashMap::new();
     let ap = ao.get(Pt { x: 1, y: 2 });
     let aq = Ok(1) == Ok(2);
     let ar = e == e;
@@ -140,7 +140,7 @@ fn matches(s: Sh, o: Option<Result<Int, Bool>>, n: Int, t: String, b: Bool) -> I
     match Vec::new() {
         x => 1,
     };
-    let e = Map::new();
+    let e = HashMap::new();
     match e.get(1) {
         Some(v) => 1,
         None => 2,

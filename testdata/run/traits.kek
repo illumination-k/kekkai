@@ -1,0 +1,91 @@
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Shape {
+    Circle(Int),
+    Rect(Point, Point),
+    Empty,
+}
+
+trait Area {
+    fn area(&self) -> Int;
+
+    fn describe(&self) -> String {
+        "area " + self.area().to_string()
+    }
+}
+
+impl Area for Shape {
+    fn area(&self) -> Int {
+        match self {
+            Shape::Circle(r) => 3 * r * r,
+            Shape::Rect(a, b) => (b.x - a.x) * (b.y - a.y),
+            Shape::Empty => 0,
+        }
+    }
+}
+
+fn total<T: Area>(v: Vec<T>) -> Int {
+    let mut s = 0;
+    for x in v {
+        s = s + x.area();
+    }
+    s
+}
+
+fn largest<T: Ord>(v: Vec<T>, d: T) -> T {
+    let mut best = d;
+    for x in v {
+        if x > best {
+            best = x;
+        }
+    }
+    best
+}
+
+fn hash_of<T: Hash>(x: T) -> Int {
+    let h = DefaultHasher::new();
+    x.hash(&mut h);
+    h.finish()
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let p = Point { x: 1, y: 2 };
+    let q = Point { x: 1, y: 3 };
+    log.info((p == q).to_string() + " " + (p != q).to_string() + " " + (p < q).to_string());
+    log.info((p == Point { x: 1, y: 2 }).to_string());
+    let shapes = Vec::new();
+    shapes.push(Shape::Circle(2));
+    shapes.push(Shape::Rect(Point { x: 0, y: 0 }, Point { x: 3, y: 4 }));
+    shapes.push(Shape::Empty);
+    log.info(total(shapes).to_string());
+    log.info(Shape::Circle(1).describe());
+    log.info(
+        (Shape::Circle(5) < Shape::Empty).to_string()
+            + " "
+            + (Shape::Circle(5) < Shape::Circle(3)).to_string(),
+    );
+    let ns = Vec::new();
+    ns.push(3);
+    ns.push(9);
+    ns.push(4);
+    log.info(largest(ns, 0).to_string());
+    let ss = Vec::new();
+    ss.push("pear");
+    ss.push("apple");
+    log.info(largest(ss, ""));
+    log.info(
+        (hash_of(p) == hash_of(Point { x: 1, y: 2 })).to_string()
+            + " "
+            + (hash_of(p) == hash_of(q)).to_string(),
+    );
+    log.info(((1, "a") < (1, "b")).to_string() + " " + ((2, "a") == (2, "a")).to_string());
+    log.info((Some(3) == Some(3)).to_string() + " " + (Some(1) < None).to_string());
+    log.info(3.cmp(&5).is_lt().to_string() + " " + "b".max("a"));
+    0
+}

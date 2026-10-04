@@ -66,7 +66,7 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     log.info(parts.join(" "));
 
-    let counts: Map<String, Int> = Map::new();
+    let counts: HashMap<String, Int> = HashMap::new();
     for t in toks {
         let c = counts.get(t.kind).unwrap_or(0);
         counts.insert(t.kind, c + 1);
@@ -78,7 +78,7 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     log.info(summary);
 
-    let nested: Map<Int, Vec<String>> = Map::new();
+    let nested: HashMap<Int, Vec<String>> = HashMap::new();
     nested.insert(1, Vec::new());
     match nested.get(1) {
         Some(v) => {

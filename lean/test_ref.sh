@@ -61,7 +61,7 @@ check coll "$(ok 231430)" maps 10
 check coll "$(ok '"x|y"')" keys_str
 check coll "$(ok '"a+bc++de/8/,bc/a,bc,,de/2/a--bc----de/97/-1/Ba,bc,,de/-43"')" strops '"a,bc,,de"'
 check coll "$(ok '{"vec":[0,1,2]}')" retvec 3
-check coll "$(ok '{"map":[["k",1]]}')" retmap
+check coll "$(ok '{"vec":["k"]}')" retmap
 check coll "$(ok '{"fields":[1,{"vec":[2]}]}')" retcell
 check coll "$(ok 40389)" nested 3
 check coll "$(ok 123)" vsum3 '{"vec":[0,1,2,3]}'

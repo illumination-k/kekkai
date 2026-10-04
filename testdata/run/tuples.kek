@@ -1,0 +1,38 @@
+fn divmod(a: Int, b: Int) -> (Int, Int) {
+    (a / b, a % b)
+}
+
+fn swap(p: (String, Int)) -> (Int, String) {
+    let (s, n) = p;
+    (n, s)
+}
+
+fn classify(p: (Bool, Option<Int>)) -> String {
+    match p {
+        (true, Some(n)) => "yes " + n.to_string(),
+        (true, None) => "yes none",
+        (false, _) => "no",
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let (q, r) = divmod(17, 5);
+    log.info(q.to_string() + " " + r.to_string());
+    let t = swap(("a", 1));
+    log.info(t.0.to_string() + t.1);
+    let nested = ((1, 2), (3,));
+    log.info((nested.0.1 + nested.1.0).to_string());
+    let v: Vec<(String, Int)> = Vec::new();
+    v.push(("x", 1));
+    v.push(("y", 2));
+    let mut total = 0;
+    for (name, n) in v {
+        log.info(name);
+        total = total + n;
+    }
+    let (mut a, _) = (10, 20);
+    a = a + 1;
+    log.info(classify((true, Some(a))) + " " + classify((false, None)) + " " + total.to_string());
+    0
+}

@@ -1,0 +1,83 @@
+struct Countdown {
+    mut n: Int,
+}
+
+impl Iterator for Countdown {
+    type Item = Int;
+
+    fn next(&mut self) -> Option<Int> {
+        if self.n == 0 {
+            return None;
+        }
+        self.n = self.n - 1;
+        Some(self.n + 1)
+    }
+}
+
+fn total<I: Iterator<Item = Int>>(it: I) -> Int {
+    it.sum()
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let v: Vec<Int> = (1..6).collect();
+    log.info(v.len().to_string() + " " + v.iter().sum::<Int>().to_string());
+    let sq: Vec<String> = v.iter().map(|x| (x * x).to_string()).collect();
+    log.info(sq.join(","));
+    let evens: Vec<Int> = (0..20).filter(|x| x % 2 == 0).skip(2).take(3).collect();
+    log.info(evens.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(" "));
+    for (i, s) in sq.iter().enumerate() {
+        if i == 1 {
+            log.info("second is " + s);
+        }
+    }
+    let mut acc = 0;
+    for x in (Countdown { n: 4 }) {
+        acc = acc * 10 + x;
+    }
+    log.info(acc.to_string());
+    log.info(total(Countdown { n: 10 }).to_string() + " " + Countdown { n: 3 }.count().to_string());
+    let words = Vec::new();
+    words.push("pear");
+    words.push("fig");
+    words.push("banana");
+    log.info(
+        words.iter().max().unwrap_or("") + " " + words.iter().min_by_key(|w| w.len()).unwrap_or(""),
+    );
+    log.info(words.iter().rev().collect::<Vec<String>>().join(","));
+    let z: Vec<(Int, String)> = (10..20).zip(words.iter()).collect();
+    log.info(z.len().to_string() + " " + z.get(2).unwrap_or((0, "")).1);
+    log.info(
+        (1..=5).product::<Int>().to_string()
+            + " "
+            + (1..=4).rev().map(|x| x.to_string()).collect::<String>(),
+    );
+    log.info(
+        words.iter().any(|w| w.starts_with("b")).to_string()
+            + " "
+            + words.iter().all(|w| w.len() > 3).to_string(),
+    );
+    log.info(words.iter().position(|w| w == "fig").unwrap_or(-1).to_string());
+    let firsts: String = words.iter().filter_map(|w| if w.len() > 3 {
+        Some(w.slice(0, 1))
+    } else {
+        None
+    }).collect();
+    log.info(firsts);
+    let it = (0..10).peekable();
+    let mut out = Vec::new();
+    while let Some(x) = it.next() {
+        if let Some(nx) = it.peek() {
+            if nx % 3 == 0 {
+                out.push(x);
+            }
+        }
+    }
+    log.info(out.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","));
+    log.info(
+        (0..10).step_by(3).fold(0, |a, x| a + x).to_string()
+            + " "
+            + (0..5).chain(7..9).count().to_string(),
+    );
+    0
+}

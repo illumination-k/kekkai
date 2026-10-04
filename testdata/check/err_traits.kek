@@ -1,0 +1,49 @@
+struct P {
+    x: Int,
+}
+
+trait Show {
+    fn show(&self) -> String;
+    fn twice(&self) -> String {
+        self.show() + self.show()
+    }
+}
+
+impl Show for P {
+    fn show(&self) -> Int { // ERROR "incompatible return type for trait: expected `String`, found `Int`"
+        self.x
+    }
+}
+
+impl Show for Int {} // ERROR "not all trait items implemented, missing: `show`"
+
+impl Hash for Int { // ERROR "only traits defined in this program can be implemented for `Int`"
+    fn hash<H: Hasher>(&self, state: &mut H) {}
+}
+
+impl Eq for P {} // ERROR "the trait bound `P: PartialEq` is not satisfied"
+
+#[derive(Debug)] // ERROR "cannot derive `Debug`"
+struct Q {
+    p: P,
+}
+
+#[derive(PartialEq)] // ERROR "binary operation `==` cannot be applied to type `P`"
+struct R {
+    p: P,
+}
+
+fn need<T: Show>(x: T) -> String {
+    x.show()
+}
+
+fn g(p: P) -> Bool {
+    let a = need(3);
+    let b = p.missing(); // ERROR "no method named `missing` found for `P`"
+    let c = need("s"); // ERROR "the trait bound `String: Show` is not satisfied"
+    p == p // ERROR "binary operation `==` cannot be applied to type `P`"
+}
+
+fn h<T>(x: T, y: T) -> Bool {
+    x < y // ERROR "binary operation `<` cannot be applied to type `T`"
+}

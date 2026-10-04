@@ -1,0 +1,49 @@
+#[derive(PartialEq, Eq, Hash)]
+struct P {
+    x: Int,
+}
+
+trait Shape: PartialEq {
+    type Unit;
+    fn area(&self) -> Int;
+    fn twice(&self) -> Int {
+        self.area() * 2
+    }
+}
+
+impl Shape for P {
+    type Unit = Int;
+    fn area(&self) -> Int {
+        self.x
+    }
+}
+
+fn big<T>(v: Vec<T>) -> Option<T>
+where
+    T: Ord + Hash,
+{
+    v.iter().max()
+}
+
+fn apply<F: Fn(Int) -> Int>(f: F) -> impl Fn(Int) -> Int {
+    move |x| f(x) + 1
+}
+
+fn main() {
+    let f = |x: Int| -> Int {
+        x * 2
+    };
+    if let Some(y) = big(v) {
+        g(y);
+    } else {
+        h();
+    }
+    while let Some(x) = it.next() {
+        log(x);
+    }
+    for i in 0..=10 {
+        let r = (0..i).rev();
+    }
+    let s = &mut v;
+    let t = *s;
+}

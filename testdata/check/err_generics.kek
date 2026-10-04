@@ -1,0 +1,42 @@
+struct Box<T> {
+    v: T,
+}
+
+impl<T> Box<T> {
+    fn get(self) -> T {
+        self.v
+    }
+}
+
+impl Box<Int> {
+    fn inc(self) -> Int {
+        self.v + 1
+    }
+}
+
+impl<T, U> Box<T> { // ERROR "the type parameter `U` is not constrained by the impl target"
+    fn bad(self) {}
+}
+
+impl Int { // ERROR "cannot define methods on `Int`"
+    fn twice(self) -> Int {
+        self * 2
+    }
+}
+
+fn add<T>(a: T, b: T) -> T {
+    a + b // ERROR "binary operation `+` cannot be applied to type `T`"
+}
+
+fn g(x: Box<String>) -> Int {
+    let a = x.inc(); // ERROR "no method named `inc` found for `Box<String>` (it is defined for `Box<Int>`)"
+    let b: Box<Int, Int> = Box { v: 1 }; // ERROR "`Box` expects 1 type argument(s), found 2"
+    let c = Box::<Int>::get(Box { v: "s" }); // ERROR "expected `Box<Int>`, found `Box<String>`"
+    let d = add::<Int, Int>(1, 2); // ERROR "`add` takes 1 generic argument(s) but 2 were supplied"
+    let e: Vec<_> = Vec::new();
+    0
+}
+
+fn h(_: _) {} // ERROR "the placeholder `_` is not allowed in item signatures"
+
+fn self_outside(self) {} // ERROR "`self` parameter is only allowed in methods"

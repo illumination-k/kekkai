@@ -74,23 +74,13 @@
     },
     {
       "file": "testdata/check/err_caps.kek",
-      "line": 29,
-      "col": 17,
-      "end_line": 29,
-      "end_col": 18,
+      "line": 30,
+      "col": 25,
+      "end_line": 30,
+      "end_col": 28,
       "severity": "error",
       "phase": "type",
-      "message": "`&` can only be applied to capability types (Log, Net, Db, Clock, Random, Tx)"
-    },
-    {
-      "file": "testdata/check/err_caps.kek",
-      "line": 33,
-      "col": 13,
-      "end_line": 33,
-      "end_col": 14,
-      "severity": "error",
-      "phase": "type",
-      "message": "closures are second-class: they can only appear as the body of `transaction`"
+      "message": "closures cannot capture capability `log`: a closure is a pure value (call the capability outside, or pass it to a function)"
     },
     {
       "file": "testdata/check/err_caps.kek",

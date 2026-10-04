@@ -1,7 +1,7 @@
 // exit: 0
 // Aggregate arguments (Vec, struct) passed to async (state-machine) callees.
 struct Ctx {
-    count: Int,
+    mut count: Int,
 }
 
 fn save(args: Vec<String>, ctx: Ctx, fs: &Fs, log: &Log) -> Int {

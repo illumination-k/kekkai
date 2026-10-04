@@ -1,0 +1,19 @@
+fn apply<F: Fn(Int) -> Int>(f: F) -> Int {
+    f(1)
+}
+
+fn g(log: &Log) -> Int {
+    let mut n = 0;
+    let inc = || {
+        n = n + 1; // ERROR "cannot assign to `n`: closures capture variables by value"
+    };
+    let bad = |l: &Log| 1; // ERROR "a closure cannot take a capability parameter"
+    let s = apply(|x| "a"); // ERROR "expected `Int`, found `String`"
+    let two = apply(|x, y| x); // ERROR "expected a closure that takes 1 argument(s), but it takes 2"
+    let notf = 3;
+    notf(1); // ERROR "expected function, found `Int`"
+    let h = needs_log; // ERROR "`needs_log` takes a capability and cannot be used as a value"
+    0
+}
+
+fn needs_log(log: &Log) {}

@@ -57,14 +57,14 @@ struct Var {
 
 struct Gen {
     // PRNG state
-    state: Int,
+    mut state: Int,
     out: Vec<String>,
     vars: Vec<Var>,
-    fresh: Int,
+    mut fresh: Int,
     // loop nesting depth of the statement being generated
-    loops: Int,
+    mut loops: Int,
     // inside `for x in vec`: no pushes (the loop re-reads the length)
-    no_push: Bool,
+    mut no_push: Bool,
 }
 
 // ---- random source ----
@@ -194,8 +194,8 @@ fn prelude(g: Gen) {
     ln(g, "}");
     ln(g, "");
     ln(g, "struct Acc {");
-    ln(g, "    total: Int,");
-    ln(g, "    hits: Int,");
+    ln(g, "    mut total: Int,");
+    ln(g, "    mut hits: Int,");
     ln(g, "    log: Vec<Int>,");
     ln(g, "}");
     ln(g, "");
@@ -214,18 +214,18 @@ fn prelude(g: Gen) {
     ln(g, "    s");
     ln(g, "}");
     ln(g, "");
-    ln(g, "fn mfold(m: Map<Int, Int>) -> Int {");
+    ln(g, "fn mfold(m: HashMap<Int, Int>) -> Int {");
     ln(g, "    let mut s = 0;");
     ln(g, "    for k in m.keys() {");
-    ln(g, "        s = s * 31 + k * 7 + m.get(k).unwrap_or(0);");
+    ln(g, "        s = s * 31 + k * 7 + m.get(&k).unwrap_or(0);");
     ln(g, "    }");
     ln(g, "    s");
     ln(g, "}");
     ln(g, "");
-    ln(g, "fn sfold(m: Map<String, Int>) -> Int {");
+    ln(g, "fn sfold(m: HashMap<String, Int>) -> Int {");
     ln(g, "    let mut s = 0;");
     ln(g, "    for k in m.keys() {");
-    ln(g, "        s = s * 31 + hash(k) + m.get(k).unwrap_or(0);");
+    ln(g, "        s = s * 31 + hash(k) + m.get(&k).unwrap_or(0);");
     ln(g, "    }");
     ln(g, "    s");
     ln(g, "}");
@@ -500,9 +500,9 @@ fn map_key(g: Gen, idx: Int, ty: Int) -> String {
 
 fn map_type(ty: Int) -> String {
     if ty == t_mapi() {
-        "Map<Int, Int>"
+        "HashMap<Int, Int>"
     } else {
-        "Map<String, Int>"
+        "HashMap<String, Int>"
     }
 }
 
@@ -552,7 +552,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
             prefix = "n";
         }
         let m = declare(g, ty, prefix, false);
-        ln(g, ind + "let " + m + ": " + map_type(ty) + " = Map::new();");
+        ln(g, ind + "let " + m + ": " + map_type(ty) + " = HashMap::new();");
         let n = intn(g, 4);
         for i in 0..n {
             let key = map_key(g, idx, ty);
@@ -574,7 +574,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
         if op <= 1 {
             ln(g, ind + m + ".insert(" + key + ", " + int_expr(g, idx, 2) + ");");
         } else if op == 2 {
-            ln(g, ind + m + ".remove(" + key + ");");
+            ln(g, ind + m + ".remove(&" + key + ");");
         } else {
             let a = declare(g, ty, "alias", false);
             ln(g, ind + "let " + a + " = " + m + ";");
@@ -716,12 +716,12 @@ fn coll_int_expr(g: Gen, idx: Int, d: Int, k: Int) -> String {
             let key = map_key(g, idx, ty);
             return match intn(g, 4) {
                 0 => m + ".len()",
-                1 => m + ".get(" + key + ").unwrap_or(" + int_leaf(g) + ")",
+                1 => m + ".get(&" + key + ").unwrap_or(" + int_leaf(g) + ")",
                 2 => {
                     let l = int_leaf(g);
                     "(if "
                         + m
-                        + ".contains("
+                        + ".contains_key(&"
                         + key
                         + ") { "
                         + l

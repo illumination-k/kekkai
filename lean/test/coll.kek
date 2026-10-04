@@ -1,6 +1,6 @@
 // Collections, mutable structs and string operations (lean/test_ref.sh).
 struct Cell {
-    v: Int,
+    mut v: Int,
     xs: Vec<Int>,
 }
 
@@ -29,24 +29,24 @@ fn vecs(n: Int) -> Int {
 }
 
 fn maps(n: Int) -> Int {
-    let m: Map<Int, Int> = Map::new();
+    let m: HashMap<Int, Int> = HashMap::new();
     for i in 0..n { m.insert(i % 4, i); }
     m.remove(1);
     m.insert(1, 50);
-    let ks = m.keys();
+    let ks: Vec<Int> = m.keys().collect();
     let mut s = 0;
     for k in ks { s = s * 10 + k; }
-    let names: Map<String, Int> = Map::new();
+    let names: HashMap<String, Int> = HashMap::new();
     names.insert("a", 1);
     names.insert("b", 2);
     names.insert("a", 3);
-    s * 1000 + m.len() * 100 + names.get("a").unwrap_or(0) * 10 + (if names.contains("z") { 1 } else { 0 })
+    s * 1000 + m.len() * 100 + names.get("a").unwrap_or(0) * 10 + (if names.contains_key("z") { 1 } else { 0 })
 }
 
 fn keys_str() -> String {
-    let m: Map<String, Int> = Map::new();
+    let m: HashMap<String, Int> = HashMap::new();
     m.insert("x", 1); m.insert("y", 2); m.insert("x", 3); m.remove("y"); m.insert("y", 4);
-    m.keys().join("|")
+    m.keys().collect::<Vec<String>>().join("|")
 }
 
 fn strops(s: String) -> String {
@@ -65,10 +65,10 @@ fn retvec(n: Int) -> Vec<Int> {
     v
 }
 
-fn retmap() -> Map<String, Int> {
-    let m = Map::new();
+fn retmap() -> Vec<String> {
+    let m = HashMap::new();
     m.insert("k", 1);
-    m
+    m.keys().collect()
 }
 
 fn retcell() -> Cell {
@@ -78,7 +78,7 @@ fn retcell() -> Cell {
 }
 
 fn nested(a: Int) -> Int {
-    let m: Map<Int, Vec<Int>> = Map::new();
+    let m: HashMap<Int, Vec<Int>> = HashMap::new();
     let v: Vec<Int> = Vec::new();
     m.insert(1, v);
     m.insert(2, v);

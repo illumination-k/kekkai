@@ -1,0 +1,7 @@
+fn pair( a:Int,b:(Int,String) )->(Int,(Int,String)) {
+    let (x , mut y)=( a ,b.0 );
+    y=y+1;
+    let one:(Int,)=(x ,);
+    for (i,_) in pairs() { log(i); }
+    match (x,y) { (0,_)=>(one.0,b), (_ ,n)=>(n,( 1,"s" )) }
+}

@@ -1,0 +1,151 @@
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+impl<A, B> Pair<A, B> {
+    fn new(first: A, second: B) -> Self {
+        Pair { first, second }
+    }
+
+    fn swap(self) -> Pair<B, A> {
+        Pair::new(self.second, self.first)
+    }
+
+    fn first(&self) -> A {
+        self.first
+    }
+}
+
+impl Pair<Int, Int> {
+    fn sum(self) -> Int {
+        self.first + self.second
+    }
+}
+
+enum List<T> {
+    Nil,
+    Cons(T, List<T>),
+}
+
+impl<T> List<T> {
+    fn len(&self) -> Int {
+        match self {
+            List::Nil => 0,
+            List::Cons(_, rest) => 1 + rest.len(),
+        }
+    }
+
+    fn push(self, x: T) -> List<T> {
+        List::Cons(x, self)
+    }
+}
+
+fn id<T>(x: T) -> T {
+    x
+}
+
+fn first_or<T>(v: Vec<T>, d: T) -> T {
+    v.get(0).unwrap_or(d)
+}
+
+fn map_opt<T>(o: Option<T>, d: T) -> (T, Bool) {
+    match o {
+        Some(x) => (x, true),
+        None => (d, false),
+    }
+}
+
+struct Stack<T> {
+    items: Vec<T>,
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> {
+        Stack { items: Vec::new() }
+    }
+
+    fn push(self, x: T) {
+        self.items.push(x);
+    }
+
+    fn pop(self) -> Option<T> {
+        self.items.pop()
+    }
+
+    fn len(self) -> Int {
+        self.items.len()
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let p = Pair::new(1, "one");
+    let q = p.swap();
+    log.info(q.first + " " + q.second.to_string() + " " + p.first().to_string());
+    log.info(Pair::new(3, 4).sum().to_string());
+    let l: List<String> = List::Nil;
+    let l2 = l.push("a").push("b");
+    log.info(l2.len().to_string());
+    log.info(id(5).to_string() + id("x") + id::<Bool>(true).to_string());
+    let v = Vec::<Int>::new();
+    log.info(first_or(v, 9).to_string());
+    let (x, ok) = map_opt(Some("s"), "d");
+    log.info(x + ok.to_string());
+    let s = Stack::new();
+    s.push(1);
+    s.push(2);
+    log.info(s.pop().unwrap_or(0).to_string() + " " + s.len().to_string());
+    let ss: Stack<String> = Stack::new();
+    ss.push("z");
+    log.info(ss.pop().unwrap_or("?"));
+    log.info(tree_demo(10).to_string());
+    0
+}
+
+enum Tree<T> {
+    Leaf,
+    Node(Tree<T>, T, Tree<T>),
+}
+
+impl<T> Tree<T> {
+    fn size(self) -> Int {
+        match self {
+            Self::Leaf => 0,
+            Self::Node(l, _, r) => l.size() + 1 + r.size(),
+        }
+    }
+}
+
+fn insert(t: Tree<Int>, x: Int) -> Tree<Int> {
+    match t {
+        Tree::Leaf => Tree::Node(Tree::Leaf, x, Tree::Leaf),
+        Tree::Node(l, v, r) => if x < v {
+            Tree::Node(insert(l, x), v, r)
+        } else {
+            Tree::Node(l, v, insert(r, x))
+        },
+    }
+}
+
+fn sum(t: Tree<Int>) -> Int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Node(l, v, r) => sum(l) + v + sum(r),
+    }
+}
+
+fn wrap<T>(x: T) -> Option<(T, T)> {
+    Some((x, x))
+}
+
+fn tree_demo(n: Int) -> Int {
+    let mut t = Tree::Leaf;
+    for i in 0..n {
+        t = insert(t, i * 7 % 11);
+    }
+    match wrap(t.size()) {
+        Some((a, b)) => a * 1000 + b + sum(t),
+        None => -1,
+    }
+}

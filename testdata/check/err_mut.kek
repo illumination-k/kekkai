@@ -1,0 +1,15 @@
+struct Point {
+    x: Int,
+    mut y: Int,
+}
+
+#[derive(PartialEq, Eq, Hash)] // ERROR "cannot derive `Hash` for `Counter`: field `n` is `mut`"
+struct Counter {
+    mut n: Int,
+}
+
+fn f(p: Point) -> Int {
+    p.y = 3;
+    p.x = 4; // ERROR "cannot assign to field `x` of `Point`: it is not declared `mut`"
+    p.x + p.y
+}

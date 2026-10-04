@@ -1,0 +1,42 @@
+#[derive(Default, PartialEq)]
+struct Config {
+    name: String,
+    retries: Int,
+    tags: Vec<String>,
+    verbose: Option<Bool>,
+}
+
+fn make<T: Default>() -> T {
+    T::default()
+}
+
+fn pair<T: Default + PartialEq>(x: T) -> Bool {
+    x == T::default()
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let c: Config = Default::default();
+    log.info(
+        "["
+            + c.name
+            + "] "
+            + c.retries.to_string()
+            + " "
+            + c.tags.len().to_string()
+            + " "
+            + c.verbose.is_none().to_string(),
+    );
+    let n: Int = make();
+    let s = make::<String>();
+    log.info(n.to_string() + "[" + s + "]");
+    log.info(
+        pair(0).to_string()
+            + " "
+            + pair("x").to_string()
+            + " "
+            + pair(Config::default()).to_string(),
+    );
+    log.info((Int::default() + 1).to_string());
+    0
+}

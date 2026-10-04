@@ -1,0 +1,69 @@
+fn apply<F: Fn(Int) -> Int>(f: F, x: Int) -> Int {
+    f(x)
+}
+
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {
+    move |x| g(f(x))
+}
+
+fn map_vec<T, U>(v: Vec<T>, f: impl Fn(T) -> U) -> Vec<U> {
+    let out = Vec::new();
+    for x in v {
+        out.push(f(x));
+    }
+    out
+}
+
+fn double(x: Int) -> Int {
+    x * 2
+}
+
+struct Counter {
+    mut n: Int,
+}
+
+fn make_adder(k: Int) -> fn(Int) -> Int {
+    |x| x + k
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let k = 10;
+    let add_k = |x| x + k;
+    log.info(
+        apply(add_k, 5).to_string() + " " + apply(double, 5).to_string() + " " + apply(
+            |x: Int| -> Int {
+                x - 1
+            },
+            5,
+        ).to_string(),
+    );
+    let h = compose(double, make_adder(3));
+    log.info(h(4).to_string());
+    let v = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    let strs = map_vec(v, |x| "n" + x.to_string());
+    log.info(strs.join(","));
+    let c = Counter { n: 0 };
+    let bump = || {
+        c.n = c.n + 1;
+        c.n
+    };
+    bump();
+    bump();
+    log.info(bump().to_string() + " " + c.n.to_string());
+    let fs: Vec<fn(Int) -> Int> = Vec::new();
+    fs.push(double);
+    fs.push(make_adder(100));
+    fs.push(|x| x * x);
+    let mut acc = 0;
+    for f in fs {
+        acc = acc + f(3);
+    }
+    log.info(acc.to_string());
+    let pairs = map_vec(strs, |s| (s.len(), s));
+    log.info(pairs.len().to_string());
+    0
+}

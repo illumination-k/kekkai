@@ -1,0 +1,55 @@
+trait Container {
+    type Item;
+
+    fn first(&self) -> Option<Self::Item>;
+
+    fn first_or(&self, d: Self::Item) -> Self::Item {
+        self.first().unwrap_or(d)
+    }
+}
+
+struct Wrap<T> {
+    v: Vec<T>,
+}
+
+impl<T> Container for Wrap<T> {
+    type Item = T;
+
+    fn first(&self) -> Option<T> {
+        self.v.get(0)
+    }
+}
+
+struct Countdown {
+    n: Int,
+}
+
+impl Container for Countdown {
+    type Item = Int;
+
+    fn first(&self) -> Option<Self::Item> {
+        if self.n > 0 { Some(self.n) } else { None }
+    }
+}
+
+fn get_first<C: Container>(c: C) -> Option<C::Item> {
+    c.first()
+}
+
+fn plus_one<C: Container<Item = Int>>(c: C) -> Int {
+    c.first_or(0) + 1
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let w = Wrap { v: Vec::new() };
+    w.v.push("x");
+    log.info(get_first(w).unwrap_or("none"));
+    log.info(
+        plus_one(Countdown { n: 5 }).to_string() + " " + plus_one(Countdown { n: 0 }).to_string(),
+    );
+    let wi: Wrap<Int> = Wrap { v: Vec::new() };
+    log.info(plus_one(wi).to_string());
+    log.info(Countdown { n: 2 }.first_or(7).to_string());
+    0
+}

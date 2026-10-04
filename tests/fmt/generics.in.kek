@@ -1,0 +1,14 @@
+struct Pair<A,B>{ a:A, b:B }
+enum List<T>{Nil,Cons(T,List<T>)}
+impl<A,B> Pair<A,B> {
+    fn new(a:A,b:B)->Self { Pair{a,b} }
+    fn swap(&self)->Pair<B,A>{ Pair::<B,A>::new(self.b,self.a) }
+
+    fn first(&mut self) -> A { self.a }
+}
+fn id<T>(x:T)->T{x}
+fn main() {
+    let v:Vec<_> = Vec::<Int>::new();
+    let x = id::<Int>(1);
+    let l = List::<Int>::Nil;
+}

@@ -7,7 +7,7 @@ struct P {
     a: Int,
     a: String,
     b: Vec<Int, Int>,
-    c: Map<Bool, Int>,
+    c: HashMap<Bool, Int>,
     d: Unknown,
     e: Option,
 }

@@ -26,6 +26,9 @@
 #   similar       kek similar (duplicate / similar code) against tests/similar goldens
 #   smt           the refinement-type solver (kek smt): testdata/smt goldens,
 #                 random formulas against brute force, a timed benchmark
+#   refine        refinement types in kek check: plain, -v and -json
+#                 diagnostics (counterexamples, facts) and the [refine]
+#                 configuration against tests/refine goldens
 #   fmt           kek fmt goldens, -check / -w, and round trips (idempotent,
 #                 same AST, comments and diagnostics) over the sources and
 #                 random programs
@@ -76,7 +79,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar smt fmt difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar smt refine fmt difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

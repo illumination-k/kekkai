@@ -11,8 +11,8 @@
 //           transactions, idempotent). Losing it is weaker.
 //
 // and the evidence it rests on ("type": the type checker, "test": a #[test]
-// reaches it through the call graph). Future evidence kinds (SMT proofs)
-// and guarantees (pii.*) slot into the same shape.
+// reaches it through the call graph, "smt": the refinement checker proved
+// every verification condition of that kind, see compiler/refine.kek).
 
 struct AsrGuar {
     name: String,
@@ -345,6 +345,10 @@ fn asr_w_expr(w: AsrWalk, e: AstExpr) {
             asr_w_expr(w, x.start);
             asr_w_expr(w, x.end);
         }
+        AstExpr::Index(x) => {
+            asr_w_expr(w, x.x);
+            asr_w_expr(w, x.index);
+        }
     }
 }
 
@@ -478,6 +482,10 @@ fn asr_model(l: DhLoaded) -> AsrState {
             }
         }
     }
+    // refinement proofs: every VC kind in every function (as lints)
+    let rcfg = ref_config_default();
+    rcfg.all = true;
+    let rr = ref_program(info, rcfg, l.file);
     let st = asr_state_new();
     for d in p.defs {
         let fun = d.fun;
@@ -502,6 +510,29 @@ fn asr_model(l: DhLoaded) -> AsrState {
         }
         if !fun.test {
             guars.push(asr_bool_guar("tested", tested.contains_key(d.name), "test"));
+        }
+        // refine.*: every VC of the kind in the function is proved (only
+        // for functions that have some)
+        match ref_sum_find(rr, d.name) {
+            Some(sum) => {
+                let kinds = Vec::new();
+                kinds.push("index");
+                kinds.push("div");
+                kinds.push("overflow");
+                let names = Vec::new();
+                names.push("refine.index_safe");
+                names.push("refine.no_div_zero");
+                names.push("refine.no_overflow");
+                let mut i = 0;
+                for k in kinds {
+                    let n = ref_sum_get(sum, k);
+                    if n > 0 && ref_sum_get(sum, k + "_ok") == n {
+                        guars.push(asr_bool_guar(names.get(i).unwrap_or(""), true, "smt"));
+                    }
+                    i = i + 1;
+                }
+            }
+            None => {}
         }
         let mut entry = "";
         if fun.handler {

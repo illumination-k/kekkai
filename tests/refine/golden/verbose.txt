@@ -1,0 +1,19 @@
+# -v: the facts behind each diagnostic, and the proved conditions as notes
+$ kek check -v demo.kek
+demo.kek:11:6: note: proved the index is in bounds: `0 <= i && i < v.len()`
+    fact: demo.kek:8:7: precondition `0 <= i`
+    fact: demo.kek:9:7: precondition `i < v.len()`
+demo.kek:16:16: note: proved the precondition `0 <= i` of `get` at `get(v, 0)`
+demo.kek:16:16: note: proved the precondition `i < v.len()` of `get` at `get(v, 0)`
+    fact: demo.kek:15:16: condition `v.len() > 0`
+demo.kek:30:7: note: proved `p + 1` does not overflow (|value| <= 2^60)
+    fact: demo.kek:29:9: parameter `p` is a `Port` (`0 < self && self < 65536`)
+--- stderr
+demo.kek:18:6: cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)
+    fact: demo.kek:14:13: `v.len() >= 0`
+    fact: demo.kek:15:16: condition `!(v.len() > 0)`
+demo.kek:18:10: warning: cannot prove `v[0] + d` does not overflow (|value| <= 2^60) (counterexample: v[0] = 1152921504606846977, d = 0)
+demo.kek:30:7: cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)
+    fact: demo.kek:29:9: parameter `p` is a `Port` (`0 < self && self < 65536`)
+--- exit 1
+

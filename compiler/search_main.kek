@@ -578,13 +578,17 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
                 continue;
             }
         };
-        let c = search_cand(
-            fun.name,
-            "function",
-            r.signature,
-            Vec::new(),
-            search_term_of(fun.result),
-        );
+        // refinement predicates are part of the contract: shown after the
+        // signature (`where 0 <= i, i < v.len()`)
+        let mut sig = r.signature;
+        if fun.decl.preds.len() > 0 {
+            let ps = Vec::new();
+            for e in fun.decl.preds {
+                ps.push(ref_show(e));
+            }
+            sig = sig + " where " + ps.join(", ");
+        }
+        let c = search_cand(fun.name, "function", sig, Vec::new(), search_term_of(fun.result));
         c.pure = r.pure;
         c.line = r.line;
         c.col = r.col;

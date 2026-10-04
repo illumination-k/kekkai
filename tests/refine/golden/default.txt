@@ -1,0 +1,8 @@
+# errors: index, alias; warnings: overflow in functions that use refinements
+$ kek check demo.kek
+--- stderr
+demo.kek:18:6: cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)
+demo.kek:18:10: warning: cannot prove `v[0] + d` does not overflow (|value| <= 2^60) (counterexample: v[0] = 1152921504606846977, d = 0)
+demo.kek:30:7: cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)
+--- exit 1
+

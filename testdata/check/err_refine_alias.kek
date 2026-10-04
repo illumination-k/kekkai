@@ -1,0 +1,59 @@
+// Refined aliases: converting into one needs a proof; a value of one
+// carries its predicate as a fact.
+
+type Port = Int where 0 < self && self < 65536;
+type Index = Int where 0 <= self;
+type SmallIndex = Index where self < 10;
+
+struct Server {
+    host: String,
+    port: Port,
+}
+
+fn listen(p: Port) -> Int {
+    p
+}
+
+fn ok_literal() -> Int {
+    listen(8080)
+}
+
+fn bad_literal() -> Int {
+    listen(0) // ERROR "cannot prove the argument `p` of `listen` is a `Port` (`0 < self && self < 65536`)"
+}
+
+fn from_int(n: Int) -> Int {
+    listen(n) // ERROR "the argument `p` of `listen` is a `Port`"
+}
+
+fn checked(n: Int) -> Int {
+    if n > 0 && n < 65536 {
+        return listen(n);
+    }
+    0
+}
+
+fn annotated(n: Int) -> Int {
+    let i: Index = n; // ERROR "cannot prove `n` is a `Index` (`0 <= self`) (counterexample: n = -1)"
+    i
+}
+
+// a refined parameter is a fact
+fn at(v: Vec<Int>, i: SmallIndex) -> Int {
+    if v.len() >= 10 {
+        return v[i];
+    }
+    0
+}
+
+fn next_port(p: Port) -> Port {
+    p + 1 // ERROR "the result of `next_port` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)"
+}
+
+fn server(p: Int) -> Server {
+    Server { host: "localhost", port: p } // ERROR "field `port` is a `Port`"
+}
+
+fn server_ok(p: Port) -> Server {
+    Server { host: "localhost", port: p }
+}

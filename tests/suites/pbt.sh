@@ -215,8 +215,25 @@ EOF2
 	rm -rf "$d"
 }
 
+# refined: parameters of refined alias types get values satisfying the
+# predicate, shrinking stays within it
+t_refined() {
+	d=$(tmpdir)
+	run_test "$d/out" testdata/test/refined.kek
+	r=
+	[ $code -eq 1 ] || r="exit $code, want 1"
+	r="$r$(contains "$d/out" \
+		"test ports_are_unprivileged ... ok (pure: hermetic, cacheable; 100 cases" \
+		"test first_is_an_element ... ok (pure: hermetic, cacheable; 100 cases" \
+		"test small_ports ... FAILED" \
+		"    counterexample: small_ports(p = 2000)" \
+		"test result: FAILED. 2 passed; 1 failed")"
+	result refined "$r" "$d/out"
+	rm -rf "$d"
+}
+
 if [ "${1:-}" = --case ]; then
 	"t_$2"
 	exit 0
 fi
-run_parallel "$0" props seed cases mocks trap types
+run_parallel "$0" props seed cases mocks trap types refined

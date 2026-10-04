@@ -19,6 +19,17 @@ struct AstFile {
     funcs: Vec<AstFuncDecl>,
     impls: Vec<AstImplDecl>,
     traits: Vec<AstTraitDecl>,
+    aliases: Vec<AstTypeAlias>,
+}
+
+// `type Name = T;` or `type Name = T where pred;` (a refined alias: pred
+// mentions the value as `self`). Aliases are transparent.
+struct AstTypeAlias {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    ty: AstType,
+    mut pred: Option<AstExpr>,
 }
 
 // ---- types ----
@@ -147,6 +158,9 @@ struct AstFuncDecl {
     params: Vec<AstParam>,
     result: Option<AstType>,
     wheres: Vec<AstWhere>,
+    // refinement predicates of the `where` clause (preconditions; those
+    // mentioning `result` are postconditions)
+    preds: Vec<AstExpr>,
     // false for a required trait method `fn f(&self);` (body is empty)
     has_body: Bool,
     body: AstBlock,
@@ -298,6 +312,15 @@ enum AstExpr {
     Closure(AstClosure),
     Tuple(AstTupleLit),
     Range(AstRange),
+    Index(AstIndex),
+}
+
+// `x[i]`: element i of a Vec (the refinement checker proves the bounds).
+struct AstIndex {
+    id: Int,
+    pos: AstPos,
+    x: AstExpr,
+    index: AstExpr,
 }
 
 // `start..end` or `start..=end` (inclusive).
@@ -523,6 +546,7 @@ fn ast_expr_pos(e: AstExpr) -> AstPos {
         AstExpr::Closure(x) => x.pos,
         AstExpr::Tuple(x) => x.pos,
         AstExpr::Range(x) => x.pos,
+        AstExpr::Index(x) => x.pos,
     }
 }
 
@@ -547,6 +571,7 @@ fn ast_expr_id(e: AstExpr) -> Int {
         AstExpr::Closure(x) => x.id,
         AstExpr::Tuple(x) => x.id,
         AstExpr::Range(x) => x.id,
+        AstExpr::Index(x) => x.id,
     }
 }
 

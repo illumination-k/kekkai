@@ -42,6 +42,7 @@ enum FmtUnitKind {
     Func(AstFuncDecl),
     Impl(AstImplDecl),
     Trait(AstTraitDecl),
+    Alias(AstTypeAlias),
     Assoc(AstAssocType),
     Field(AstField),
     Variant(AstVariant),
@@ -390,7 +391,11 @@ fn fmt_container(p: FmtPrinter, open: Int, close: Int, units: Vec<FmtUnit>, ind:
         let u = fmt_unit_at(units, i);
         let lead = fmt_take(p, !top, open_pos, true, u.start, 0);
         fmt_own_line(p, b, lead, top && i > 0);
-        let mut blank = fmt_blank_before(p, u.start.line) || (top && i > 0 && lead.len() == 0);
+        // top-level items are separated by a blank line, except
+        // consecutive `type` aliases (kept as written)
+        let alias_run = i > 0 && fmt_is_alias(u) && fmt_is_alias(fmt_unit_at(units, i - 1));
+        let mut blank = fmt_blank_before(p, u.start.line)
+            || (top && i > 0 && lead.len() == 0 && !alias_run);
 
         let mut text = fmt_render(p, u, content_ind);
 
@@ -435,6 +440,13 @@ fn fmt_container(p: FmtPrinter, open: Int, close: Int, units: Vec<FmtUnit>, ind:
     head + "\n" + b.parts.join("") + fmt_indent(ind) + "}"
 }
 
+fn fmt_is_alias(u: FmtUnit) -> Bool {
+    match u.kind {
+        FmtUnitKind::Alias(_) => true,
+        _ => false,
+    }
+}
+
 fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
     match u.kind {
         FmtUnitKind::Struct(d) => fmt_struct_decl(p, d, ind),
@@ -443,6 +455,16 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
         FmtUnitKind::Impl(d) => fmt_impl_decl(p, d, ind),
         FmtUnitKind::Trait(d) => fmt_trait_decl(p, d, ind),
         FmtUnitKind::Assoc(a) => fmt_assoc(a),
+        FmtUnitKind::Alias(a) => {
+            let h = "type " + a.name + " = " + fmt_typ(a.ty);
+            match a.pred {
+                Some(e) => {
+                    let w = h + " where ";
+                    w + fmt_expr(p, e, ind, ind * 4 + fmt_w(p, w), false) + ";"
+                }
+                None => h + ";",
+            }
+        }
         FmtUnitKind::Field(f) => if f.mutable { "mut " } else { "" }
             + f.name
             + ": "
@@ -527,6 +549,9 @@ fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
     }
     for d in f.impls {
         items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Impl(d) });
+    }
+    for d in f.aliases {
+        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Alias(d) });
     }
     fmt_sort_units(items);
     fmt_container(p, -1, p.toks.len() - 1, items, 0)
@@ -642,6 +667,22 @@ fn fmt_wheres(ws: Vec<AstWhere>, ind: Int) -> String {
     s
 }
 
+// fmt_wheres_preds prints a function's `where` clause: the trait bounds,
+// then the refinement predicates (each on its own line).
+fn fmt_wheres_preds(p: FmtPrinter, ws: Vec<AstWhere>, preds: Vec<AstExpr>, ind: Int) -> String {
+    let mut s = fmt_wheres(ws, ind);
+    if preds.len() == 0 {
+        return s;
+    }
+    if s == "" {
+        s = "\n" + fmt_indent(ind) + "where";
+    }
+    for e in preds {
+        s = s + "\n" + fmt_indent(ind + 1) + fmt_expr(p, e, ind + 1, (ind + 1) * 4, false) + ",";
+    }
+    s
+}
+
 fn fmt_impl_decl(p: FmtPrinter, d: AstImplDecl, ind: Int) -> String {
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
     let units = Vec::new();
@@ -729,7 +770,7 @@ fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
         None => "",
     };
     let name = d.name + fmt_generics(d.generics);
-    let wh = fmt_wheres(d.wheres, ind);
+    let wh = fmt_wheres_preds(p, d.wheres, d.preds, ind);
     let mut head = "fn " + name + "(" + params.join(", ") + ")" + ret;
     if ind * 4 + fmt_w(p, head) + 2 > fmt_max_width() && params.len() > 0 {
         head = "fn " + name + "(\n";
@@ -953,6 +994,7 @@ fn fmt_left_child(e: AstExpr) -> Option<AstExpr> {
         },
         AstExpr::Field(f) => if fmt_prec(f.x) < 7 { None } else { Some(f.x) },
         AstExpr::Try(t) => if fmt_prec(t.x) < 7 { None } else { Some(t.x) },
+        AstExpr::Index(t) => if fmt_prec(t.x) < 7 { None } else { Some(t.x) },
         AstExpr::Call(c) => Some(c.func),
         _ => None,
     }
@@ -973,6 +1015,9 @@ fn fmt_start_pos(e: AstExpr) -> AstPos {
                 cur = x.x;
             }
             AstExpr::Try(x) => {
+                cur = x.x;
+            }
+            AstExpr::Index(x) => {
                 cur = x.x;
             }
             AstExpr::Call(x) => {
@@ -1018,6 +1063,7 @@ fn fmt_prec(e: AstExpr) -> Int {
         AstExpr::Method(_) => 7,
         AstExpr::Field(_) => 7,
         AstExpr::Try(_) => 7,
+        AstExpr::Index(_) => 7,
         _ => 8,
     }
 }
@@ -1060,6 +1106,10 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
         }
         AstExpr::Field(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "." + x.name,
         AstExpr::Try(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "?",
+        AstExpr::Index(x) => {
+            let b = fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7);
+            b + "[" + fmt_expr(p, x.index, ind, fmt_advance(p, col, b) + 1, false) + "]"
+        }
         AstExpr::StructLit(x) => {
             if ns {
                 return "(" + fmt_struct_lit(p, x, ind, col + 1) + ")";
@@ -1390,6 +1440,7 @@ fn fmt_contains_block(e: AstExpr) -> Bool {
         }
         AstExpr::Tuple(x) => fmt_any_block(x.elems),
         AstExpr::Range(x) => fmt_contains_block(x.start) || fmt_contains_block(x.end),
+        AstExpr::Index(x) => fmt_contains_block(x.x) || fmt_contains_block(x.index),
         _ => false,
     }
 }

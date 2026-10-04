@@ -235,6 +235,7 @@ fn cov_div_expr(e: AstExpr, loops: Int) -> Bool {
         AstExpr::Try(_) => true,
         AstExpr::Tuple(x) => cov_div_exprs(x.elems, loops),
         AstExpr::Range(x) => cov_div_expr(x.start, loops) || cov_div_expr(x.end, loops),
+        AstExpr::Index(x) => cov_div_expr(x.x, loops) || cov_div_expr(x.index, loops),
         _ => false,
     }
 }
@@ -256,6 +257,7 @@ fn cov_walk_func(w: CovW, fd: AstFuncDecl) -> AstFuncDecl {
         params: fd.params,
         result: fd.result,
         wheres: fd.wheres,
+        preds: fd.preds,
         has_body: fd.has_body,
         body: mut_hook_result(w, fd, body),
     }
@@ -512,6 +514,10 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
                 end: cov_expr(w, x.end),
                 inclusive: x.inclusive,
             })
+        }
+        AstExpr::Index(x) => {
+            let base = cov_expr(w, x.x);
+            AstExpr::Index(AstIndex { id: x.id, pos: x.pos, x: base, index: cov_expr(w, x.index) })
         }
         _ => e,
     };

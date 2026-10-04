@@ -1,0 +1,35 @@
+// The fixture of tests/suites/refine.sh: one function of each kind of
+// verification condition.
+
+type Port = Int where 0 < self && self < 65536;
+
+fn get(v: Vec<Int>, i: Int) -> Int
+where
+    0 <= i,
+    i < v.len(),
+{
+    v[i]
+}
+
+fn first_or(v: Vec<Int>, d: Int) -> Int {
+    if v.len() > 0 {
+        return get(v, 0);
+    }
+    v[0] + d
+}
+
+fn mean(v: Vec<Int>, total: Int) -> Int {
+    if v.len() > 0 {
+        total / v.len()
+    } else {
+        total / v.len()
+    }
+}
+
+fn next(p: Port) -> Port {
+    p + 1
+}
+
+fn grow(n: Int) -> Int {
+    n * 2 + 1
+}

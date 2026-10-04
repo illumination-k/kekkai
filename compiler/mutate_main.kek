@@ -129,7 +129,11 @@ fn mut_schema(p: CovProg, sel: HashMap<Int, Bool>, cands: Vec<MutCand>) -> ChkRe
     if !p.main {
         cov_demote(prog.file);
     }
-    chk_check_prelude(prog.file)
+    // the schema hides what a mutant computes behind prelude calls: its
+    // refinements are checked per mutant, as plain code, before
+    let cfg = ref_config_default();
+    cfg.off = true;
+    chk_check_cfg(prog.file, true, chk_parse_core(), cfg)
 }
 
 // `mutate-build <file|dir> <outdir> [-base <file|dir>]`
@@ -200,6 +204,19 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     cov_rewrite_file(w, p.file, p, sel);
     let cands = w.cands;
+    // in a function with refinement VCs, any mutant may break a proof
+    // (`i < v.len()` -> `i <= v.len()`): such mutants are checked too, and
+    // the ones that fail are killed by types
+    for c in cands {
+        match p.info.funcs.get(c.func) {
+            Some(f) => {
+                if ref_fun_uses(p.info, f) {
+                    c.risky = true;
+                }
+            }
+            None => {}
+        }
+    }
     // candidates that can be ill-typed: group testing per kind (a deleted
     // statement and a replaced result in one function could hide each
     // other's errors)

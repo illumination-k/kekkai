@@ -1,0 +1,120 @@
+# kekkai.toml: [refine] overflow = "error" division = "lint"
+$ kek check demo.kek
+--- stderr
+demo.kek:18:6: cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)
+demo.kek:18:10: cannot prove `v[0] + d` does not overflow (|value| <= 2^60) (counterexample: v[0] = 1152921504606846977, d = 0)
+demo.kek:25:15: warning: cannot prove the divisor `v.len()` is nonzero (counterexample: v.len() = 0)
+demo.kek:30:7: cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)
+demo.kek:34:7: cannot prove `n * 2` does not overflow (|value| <= 2^60) (counterexample: n = 576460752303423489)
+demo.kek:34:11: cannot prove `n * 2 + 1` does not overflow (|value| <= 2^60) (counterexample: n = 576460752303423488)
+--- exit 1
+
+# kekkai.toml: [refine] overflow = "off" division = "error"
+$ kek check demo.kek
+--- stderr
+demo.kek:18:6: cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)
+demo.kek:25:15: cannot prove the divisor `v.len()` is nonzero (counterexample: v.len() = 0)
+demo.kek:30:7: cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)
+--- exit 1
+
+$ kek check -json demo.kek
+{
+  "file": "demo.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "demo.kek",
+      "line": 18,
+      "col": 6,
+      "end_line": 18,
+      "end_col": 7,
+      "severity": "error",
+      "phase": "refine",
+      "message": "cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)",
+      "counterexample": {
+        "v.len()": 0
+      },
+      "facts": [
+        {
+          "line": 14,
+          "col": 13,
+          "fact": "`v.len() >= 0`"
+        },
+        {
+          "line": 15,
+          "col": 16,
+          "fact": "condition `!(v.len() > 0)`"
+        }
+      ]
+    },
+    {
+      "file": "demo.kek",
+      "line": 25,
+      "col": 15,
+      "end_line": 25,
+      "end_col": 16,
+      "severity": "error",
+      "phase": "lint",
+      "message": "cannot prove the divisor `v.len()` is nonzero (counterexample: v.len() = 0)",
+      "counterexample": {
+        "v.len()": 0
+      },
+      "facts": [
+        {
+          "line": 21,
+          "col": 9,
+          "fact": "`v.len() >= 0`"
+        },
+        {
+          "line": 22,
+          "col": 16,
+          "fact": "condition `!(v.len() > 0)`"
+        }
+      ]
+    },
+    {
+      "file": "demo.kek",
+      "line": 30,
+      "col": 7,
+      "end_line": 30,
+      "end_col": 8,
+      "severity": "error",
+      "phase": "refine",
+      "message": "cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)",
+      "counterexample": {
+        "p": 65535
+      },
+      "facts": [
+        {
+          "line": 29,
+          "col": 9,
+          "fact": "parameter `p` is a `Port` (`0 < self && self < 65536`)"
+        }
+      ]
+    }
+  ]
+}
+--- exit 1
+
+# kekkai.toml: [refine] overflow = "lint"
+$ kek check demo.kek
+--- stderr
+demo.kek:18:6: cannot prove the index is in bounds: `0 <= 0 && 0 < v.len()` (counterexample: v.len() = 0)
+demo.kek:18:10: warning: cannot prove `v[0] + d` does not overflow (|value| <= 2^60) (counterexample: v[0] = 1152921504606846977, d = 0)
+demo.kek:30:7: cannot prove the result of `next` is a `Port` (`0 < self && self < 65536`) (counterexample: p = 65535)
+demo.kek:34:7: warning: cannot prove `n * 2` does not overflow (|value| <= 2^60) (counterexample: n = 576460752303423489)
+demo.kek:34:11: warning: cannot prove `n * 2 + 1` does not overflow (|value| <= 2^60) (counterexample: n = 576460752303423488)
+--- exit 1
+
+# kekkai.toml: [refine] overflow = "always"
+$ kek check demo.kek
+--- stderr
+kekkai.toml: [refine] overflow must be "auto", "off", "lint" or "error", found "always"
+--- exit 1
+
+# kekkai.toml: [refine] division = 1
+$ kek check demo.kek
+--- stderr
+kekkai.toml: [refine] division must be a string
+--- exit 1
+

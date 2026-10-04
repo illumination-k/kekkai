@@ -1,0 +1,60 @@
+# refinement proofs: the indexes, divisions and arithmetic of a function are all proved
+$ kek assure plan app
+Auto-approved (1): added 1
+--- exit 0
+
+$ kek assure apply -yes app
+Auto-approved (1): added 1
+kekkai.assure.lock updated: 9 definitions, 1 change(s) approved
+--- exit 0
+
+    "largest_share": {
+      "hash": "b0722a97e753168aa22fb57a2aec4872",
+      "file": "app/stats.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "refine.index_safe": {
+          "value": true,
+          "evidence": "smt"
+        },
+        "refine.no_div_zero": {
+          "value": true,
+          "evidence": "smt"
+        },
+        "refine.no_overflow": {
+          "value": true,
+          "evidence": "smt"
+        }
+      },
+      "assumptions": [],
+
+# an off-by-one loop does not type-check: the index is out of bounds for i == v.len()
+$ kek assure plan app
+--- stderr
+app/stats.kek:5:13: cannot prove the index is in bounds: `0 <= i && i < v.len()` (counterexample: i = 0, v.len() = 0)
+--- exit 1
+
+# best + 1 may overflow: refine.no_overflow is lost (a weakening)
+$ kek assure plan app
+Needs review (1):
+  ! weaken refine.no_overflow (no longer holds)   largest_share
+    -> app/stats.kek:1  escalate: owner (apply needs -reason, -owner, -expires)
+--- exit 0
+
+$ kek assure check app
+Needs review (1):
+  ! weaken refine.no_overflow (no longer holds)   largest_share
+    -> app/stats.kek:1  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 1 change(s), 1 needing review (run kek assure plan, then kek assure apply)
+--- exit 1
+

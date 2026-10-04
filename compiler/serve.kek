@@ -77,7 +77,7 @@ fn serve_main(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
         } else if cmd == "build" {
             code = frontend_build_c(c, a, fs, log);
         } else if cmd == "check" && a.len() == 2 {
-            code = frontend_check_c(c, a.get(1).unwrap_or(""), fs, log);
+            code = frontend_check_c(c, a.get(1).unwrap_or(""), fs, log, true);
             if code == 0 {
                 log.info(a.get(1).unwrap_or("") + ": ok");
             }

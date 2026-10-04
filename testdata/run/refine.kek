@@ -1,0 +1,120 @@
+// Refinement types: every `v[i]` below is proved in bounds from the facts
+// on its path (ranges, loop conditions, monotone loop bounds, contracts).
+
+type Port = Int where 0 < self && self < 65536;
+type Percent = Int where 0 <= self && self <= 100;
+
+struct Server {
+    name: String,
+    port: Port,
+}
+
+fn sum(v: Vec<Int>) -> Int {
+    let mut t = 0;
+    for i in 0..v.len() {
+        t = t + v[i];
+    }
+    t
+}
+
+// binary search: `lo` only increases from 0 and `hi` only decreases from
+// v.len(), so `lo <= mid < hi <= v.len()`
+fn lower_bound(v: Vec<Int>, x: Int) -> Int
+where
+    0 <= result,
+    result <= v.len(),
+{
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if v[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn clamp(x: Int, lo: Int, hi: Int) -> Int
+where
+    lo <= hi,
+    lo <= result,
+    result <= hi,
+{
+    if x < lo {
+        lo
+    } else if x > hi { hi } else { x }
+}
+
+fn percent(x: Int) -> Percent {
+    clamp(x, 0, 100)
+}
+
+fn get(v: Vec<Int>, i: Int) -> Int
+where
+    0 <= i,
+    i < v.len(),
+{
+    v[i]
+}
+
+fn last(v: Vec<Int>) -> Int {
+    if v.len() == 0 {
+        return -1;
+    }
+    get(v, v.len() - 1)
+}
+
+fn reversed(v: Vec<Int>) -> Vec<Int> {
+    let out = Vec::new();
+    let mut i = v.len();
+    while i > 0 {
+        i = i - 1;
+        out.push(v[i]);
+    }
+    out
+}
+
+fn kind(v: Vec<Int>, k: Int) -> Int {
+    match k {
+        0 => v.len(),
+        _ => {
+            if k > 0 && k < v.len() { v[k] } else { -1 }
+        }
+    }
+}
+
+fn describe(s: Server) -> String {
+    s.name + ":" + s.port.to_string()
+}
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let v = Vec::new();
+    for x in 0..10 {
+        v.push(x * 3);
+    }
+    log.info("sum " + sum(v).to_string());
+    log.info("lower_bound 12 = " + lower_bound(v, 12).to_string());
+    log.info("lower_bound 13 = " + lower_bound(v, 13).to_string());
+    log.info("lower_bound 100 = " + lower_bound(v, 100).to_string());
+    log.info("clamp " + clamp(-5, 0, 10).to_string() + " " + clamp(50, 0, 10).to_string());
+    log.info("percent " + percent(250).to_string());
+    log.info("last " + last(v).to_string() + " " + last(Vec::new()).to_string());
+    let r = reversed(v);
+    if r.len() == 10 {
+        log.info("reversed " + r[0].to_string() + ".." + r[9].to_string());
+    }
+    log.info(
+        "kind "
+            + kind(v, 0).to_string()
+            + " "
+            + kind(v, 4).to_string()
+            + " "
+            + kind(v, 40).to_string(),
+    );
+    log.info(describe(Server { name: "api", port: 8080 }));
+    0
+}

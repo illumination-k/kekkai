@@ -44,7 +44,7 @@ struct MutCand {
     orig: String,
     mutated: String,
     // can be ill-typed: checked one by one before the schema is built
-    risky: Bool,
+    mut risky: Bool,
     // cache identity: function trans hash + ord + description
     key: String,
     // "" (well-typed so far) or "types" (killed by the type checker)

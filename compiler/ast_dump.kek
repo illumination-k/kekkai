@@ -90,6 +90,17 @@ fn ast_dump_file(f: AstFile) -> Vec<String> {
             ast_dump_func(d, 1, fd);
         }
     }
+    for a in f.aliases {
+        ast_line(d, 0, "type " + a.name + " @" + ast_dump_pos(a.pos));
+        ast_dump_type(d, 1, a.ty);
+        match a.pred {
+            Some(e) => {
+                ast_line(d, 1, "where");
+                ast_dump_expr(d, 2, e);
+            }
+            None => {}
+        }
+    }
     d.lines
 }
 
@@ -123,6 +134,10 @@ fn ast_dump_func(d: AstDumper, depth: Int, fd: AstFuncDecl) {
     ast_dump_attrs(d, depth + 1, fd.attrs);
     ast_dump_generics(d, depth + 1, fd.generics);
     ast_dump_wheres(d, depth + 1, fd.wheres);
+    for e in fd.preds {
+        ast_line(d, depth + 1, "pred");
+        ast_dump_expr(d, depth + 2, e);
+    }
     for p in fd.params {
         ast_dump_param(d, depth + 1, p);
     }
@@ -416,6 +431,11 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             );
             ast_dump_expr(d, depth + 1, x.start);
             ast_dump_expr(d, depth + 1, x.end);
+        }
+        AstExpr::Index(x) => {
+            ast_line(d, depth, "index @" + ast_dump_pos(x.pos));
+            ast_dump_expr(d, depth + 1, x.x);
+            ast_dump_expr(d, depth + 1, x.index);
         }
         AstExpr::Tuple(x) => {
             ast_line(d, depth, "tuple @" + ast_dump_pos(x.pos));

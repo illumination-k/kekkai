@@ -1,0 +1,17 @@
+# buy stops opening a transaction; parse_price changes only its body
+$ kek assure plan -v app
+Auto-approved (4): strengthen 2, change 2
+  + strengthen net.hosts: -hooks.warehouse.example   buy (+1 more: handle)
+  + change tx.linear (no transaction any more)   buy
+  + change body (guarantees unchanged)   parse_price
+--- exit 0
+
+$ kek assure apply app
+Auto-approved (4): strengthen 2, change 2
+kekkai.assure.lock updated: 8 definitions, 4 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+

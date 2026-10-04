@@ -1,0 +1,127 @@
+# fetch_rate contacts a host outside allowed_hosts
+$ kek assure plan app
+Needs review (1):
+  ! weaken net.hosts: +rates.evil.example -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+
+Policy violations (1):
+  x host not in allowed_hosts: rates.evil.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- exit 1
+
+$ kek assure plan -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {
+    "definitions": 8,
+    "changes": 2,
+    "needs_review": 2,
+    "auto_approved": 0,
+    "violations": 2,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [
+    {
+      "definition": "convert",
+      "file": "app/rates.kek",
+      "line": 14,
+      "class": "weaken",
+      "rule": "weaken",
+      "guarantee": "net.hosts",
+      "evidence": "type",
+      "from": "api.rates.example",
+      "to": "rates.evil.example",
+      "added": [
+        "rates.evil.example"
+      ],
+      "removed": [
+        "api.rates.example"
+      ],
+      "message": "weaken net.hosts: +rates.evil.example -api.rates.example",
+      "review": true,
+      "escalate": "owner"
+    },
+    {
+      "definition": "fetch_rate",
+      "file": "app/rates.kek",
+      "line": 3,
+      "class": "weaken",
+      "rule": "weaken",
+      "guarantee": "net.hosts",
+      "evidence": "type",
+      "from": "api.rates.example",
+      "to": "rates.evil.example",
+      "added": [
+        "rates.evil.example"
+      ],
+      "removed": [
+        "api.rates.example"
+      ],
+      "message": "weaken net.hosts: +rates.evil.example -api.rates.example",
+      "review": true,
+      "escalate": "owner"
+    }
+  ],
+  "violations": [
+    {
+      "definition": "convert",
+      "file": "app/rates.kek",
+      "line": 14,
+      "rule": "allowed_hosts",
+      "guarantee": "net.hosts",
+      "items": [
+        "rates.evil.example"
+      ],
+      "message": "host not in allowed_hosts: rates.evil.example"
+    },
+    {
+      "definition": "fetch_rate",
+      "file": "app/rates.kek",
+      "line": 3,
+      "rule": "allowed_hosts",
+      "guarantee": "net.hosts",
+      "items": [
+        "rates.evil.example"
+      ],
+      "message": "host not in allowed_hosts: rates.evil.example"
+    }
+  ],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 1
+
+$ kek assure apply -yes -reason r -owner o -expires 2027-01-01 app
+Needs review (1):
+  ! weaken net.hosts: +rates.evil.example -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+
+Policy violations (1):
+  x host not in allowed_hosts: rates.evil.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- stderr
+kek assure apply: refusing: 2 policy violation(s) (change the code or the policy; they cannot be approved)
+--- exit 1
+
+$ kek assure check app
+Needs review (1):
+  ! weaken net.hosts: +rates.evil.example -api.rates.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+
+Policy violations (1):
+  x host not in allowed_hosts: rates.evil.example   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 2 change(s), 2 needing review (run kek assure plan, then kek assure apply); 2 policy violation(s)
+--- exit 1
+

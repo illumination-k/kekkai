@@ -1,0 +1,245 @@
+// The guarantee ledger, part 3: the lock file kekkai.assure.lock (prefix
+// asr_). It is JSON with a fixed key order and one entry per definition,
+// sorted by name, so that a change of guarantees is a small git diff:
+//
+//   {
+//     "version": 1,
+//     "config": "<hash of the effective policy>",
+//     "definitions": {
+//       "fetch_rates": {
+//         "hash": "<definition hash>",
+//         "file": "app/rates.kek",
+//         "entry": "",
+//         "async": true,
+//         "guarantees": {
+//           "effects": {"value": ["Net"], "evidence": "type"},
+//           "net.hosts": {"value": ["api.example.com"], "evidence": "type"},
+//           "tested": {"value": true, "evidence": "test"}
+//         },
+//         "assumptions": [{"kind": "rare", "reason": "", "owner": "", "expires": ""}],
+//         "waivers": [{"guarantee": "net.hosts", "items": ["cdn.example.com"],
+//                      "reason": "...", "owner": "...", "expires": "2027-01-01",
+//                      "approved": "2026-10-04"}]
+//       }
+//     }
+//   }
+//
+// A "set" guarantee is an array value and a "bool" one a boolean; unknown
+// guarantee names are kept, so that newer guarantees slot in.
+
+fn asr_lock_version() -> Int {
+    1
+}
+
+struct AsrLockRead {
+    found: Bool,
+    err: String,
+    state: AsrState,
+}
+
+fn asr_lock_read(fs: &Fs, path: String) -> AsrLockRead {
+    let text = match fs.read(path) {
+        Ok(t) => t,
+        Err(_) => {
+            return AsrLockRead { found: false, err: "", state: asr_state_new() };
+        }
+    };
+    match tool_json_parse(text) {
+        Ok(v) => asr_lock_decode(v, path),
+        Err(e) => AsrLockRead { found: true, err: path + ": " + e, state: asr_state_new() },
+    }
+}
+
+fn asr_lock_decode(v: ToolJson, path: String) -> AsrLockRead {
+    let st = asr_state_new();
+    let ver = tool_json_int(tool_json_get(v, "version"), 0);
+    if ver != asr_lock_version() {
+        return AsrLockRead {
+            found: true,
+            err: path
+                + ": unsupported lock version "
+                + ver.to_string()
+                + " (this compiler writes version "
+                + asr_lock_version().to_string()
+                + ")",
+            state: st,
+        };
+    }
+    st.config = tool_json_str(tool_json_get(v, "config"), "");
+    let defs = tool_json_get(v, "definitions");
+    for name in tool_json_keys(defs) {
+        let o = tool_json_get(defs, name);
+        let guars = Vec::new();
+        let go = tool_json_get(o, "guarantees");
+        for g in tool_json_keys(go) {
+            let gv = tool_json_get(go, g);
+            let ev = tool_json_str(tool_json_get(gv, "evidence"), "");
+            match tool_json_get(gv, "value") {
+                ToolJson::Bool(b) => guars.push(asr_bool_guar(g, b, ev)),
+                ToolJson::Arr(_) => {
+                    guars.push(asr_set_guar(g, tool_json_strs(tool_json_get(gv, "value")), ev))
+                }
+                _ => {
+                    return AsrLockRead {
+                        found: true,
+                        err: path
+                            + ": "
+                            + name
+                            + ": guarantee "
+                            + g
+                            + " has no array or boolean value",
+                        state: st,
+                    };
+                }
+            }
+        }
+        let assumes = Vec::new();
+        for a in tool_json_arr(tool_json_get(o, "assumptions")) {
+            assumes.push(AsrAssume {
+                kind: tool_json_str(tool_json_get(a, "kind"), ""),
+                reason: tool_json_str(tool_json_get(a, "reason"), ""),
+                owner: tool_json_str(tool_json_get(a, "owner"), ""),
+                expires: tool_json_str(tool_json_get(a, "expires"), ""),
+                line: 0,
+            });
+        }
+        let waivers = Vec::new();
+        for w in tool_json_arr(tool_json_get(o, "waivers")) {
+            waivers.push(AsrWaiver {
+                guarantee: tool_json_str(tool_json_get(w, "guarantee"), ""),
+                items: tool_json_strs(tool_json_get(w, "items")),
+                reason: tool_json_str(tool_json_get(w, "reason"), ""),
+                owner: tool_json_str(tool_json_get(w, "owner"), ""),
+                expires: tool_json_str(tool_json_get(w, "expires"), ""),
+                approved: tool_json_str(tool_json_get(w, "approved"), ""),
+            });
+        }
+        asr_state_add(st, AsrDef {
+            name: name,
+            hash: tool_json_str(tool_json_get(o, "hash"), ""),
+            file: tool_json_str(tool_json_get(o, "file"), ""),
+            line: 0,
+            entry: tool_json_str(tool_json_get(o, "entry"), ""),
+            async: tool_json_bool(tool_json_get(o, "async"), false),
+            guars: guars,
+            assumes: assumes,
+            waivers: waivers,
+        });
+    }
+    AsrLockRead { found: true, err: "", state: st }
+}
+
+// ---- writing ----
+
+fn asr_guar_json(g: AsrGuar) -> IrjVal {
+    let o = irjson_obj();
+    if g.kind == "set" {
+        irjson_set(o, "value", irjson_strs(g.items));
+    } else {
+        irjson_set(o, "value", irjson_bool(g.holds));
+    }
+    irjson_set(o, "evidence", IrjVal::Str(g.evidence));
+    irjson_val(o)
+}
+
+fn asr_assume_json(a: AsrAssume) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "kind", IrjVal::Str(a.kind));
+    irjson_set(o, "reason", IrjVal::Str(a.reason));
+    irjson_set(o, "owner", IrjVal::Str(a.owner));
+    irjson_set(o, "expires", IrjVal::Str(a.expires));
+    irjson_val(o)
+}
+
+fn asr_waiver_json(w: AsrWaiver) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "guarantee", IrjVal::Str(w.guarantee));
+    irjson_set(o, "items", irjson_strs(w.items));
+    irjson_set(o, "reason", IrjVal::Str(w.reason));
+    irjson_set(o, "owner", IrjVal::Str(w.owner));
+    irjson_set(o, "expires", IrjVal::Str(w.expires));
+    irjson_set(o, "approved", IrjVal::Str(w.approved));
+    irjson_val(o)
+}
+
+// asr_guar_order is the position of a guarantee in the lock (known ones
+// first, the others by name).
+fn asr_guar_order(name: String) -> Int {
+    if name == "effects" {
+        return 0;
+    }
+    if name == "net.hosts" {
+        return 1;
+    }
+    if name == "tx.linear" {
+        return 2;
+    }
+    if name == "tested" {
+        return 3;
+    }
+    4
+}
+
+fn asr_guar_before(a: AsrGuar, b: AsrGuar) -> Bool {
+    let oa = asr_guar_order(a.name);
+    let ob = asr_guar_order(b.name);
+    if oa != ob {
+        return oa < ob;
+    }
+    a.name < b.name
+}
+
+fn asr_sorted_guars(gs: Vec<AsrGuar>) -> Vec<AsrGuar> {
+    let out = Vec::new();
+    for g in gs {
+        out.push(g);
+        let mut i = out.len() - 1;
+        while i > 0 {
+            let prev = out.get(i - 1).unwrap_or(g);
+            if !asr_guar_before(g, prev) {
+                break;
+            }
+            out.set(i, prev);
+            out.set(i - 1, g);
+            i = i - 1;
+        }
+    }
+    out
+}
+
+fn asr_def_lock_json(d: AsrDef) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "hash", IrjVal::Str(d.hash));
+    irjson_set(o, "file", IrjVal::Str(d.file));
+    irjson_set(o, "entry", IrjVal::Str(d.entry));
+    irjson_set(o, "async", irjson_bool(d.async));
+    let go = irjson_obj();
+    for g in asr_sorted_guars(d.guars) {
+        irjson_set(go, g.name, asr_guar_json(g));
+    }
+    irjson_set(o, "guarantees", irjson_val(go));
+    let asm = Vec::new();
+    for a in d.assumes {
+        asm.push(asr_assume_json(a));
+    }
+    irjson_set(o, "assumptions", IrjVal::Arr(asm));
+    let ws = Vec::new();
+    for w in d.waivers {
+        ws.push(asr_waiver_json(w));
+    }
+    irjson_set(o, "waivers", IrjVal::Arr(ws));
+    irjson_val(o)
+}
+
+// asr_lock_text renders a state as the lock file (with a final newline).
+fn asr_lock_text(st: AsrState) -> String {
+    let o = irjson_obj();
+    irjson_set(o, "version", irjson_int(asr_lock_version()));
+    irjson_set(o, "config", IrjVal::Str(st.config));
+    let defs = irjson_obj();
+    for d in st.defs {
+        irjson_set(defs, d.name, asr_def_lock_json(d));
+    }
+    irjson_set(o, "definitions", irjson_val(defs));
+    irjson_encode(irjson_val(o), false) + "\n"
+}

@@ -1,0 +1,38 @@
+# app/rates.kek requires review of every change; rate_key is renamed (same hash)
+$ kek assure plan app
+Needs review (3):
+  ! change policy 39e08b1a536b -> 0322d2267721   (policy)
+    -> kekkai.toml
+  ! change body (guarantees unchanged)   convert
+    -> app/rates.kek:14
+  ! rename: rate_key -> currency_key   currency_key
+    -> app/rates.kek:19
+--- exit 0
+
+$ kek assure apply app
+Needs review (3):
+  ! change policy 39e08b1a536b -> 0322d2267721   (policy)
+    -> kekkai.toml
+  ! change body (guarantees unchanged)   convert
+    -> app/rates.kek:14
+  ! rename: rate_key -> currency_key   currency_key
+    -> app/rates.kek:19
+--- stderr
+kek assure apply: 3 change(s) need review: rerun with -yes to approve them
+--- exit 1
+
+$ kek assure apply -yes app
+Needs review (3):
+  ! change policy 39e08b1a536b -> 0322d2267721   (policy)
+    -> kekkai.toml
+  ! change body (guarantees unchanged)   convert
+    -> app/rates.kek:14
+  ! rename: rate_key -> currency_key   currency_key
+    -> app/rates.kek:19
+kekkai.assure.lock updated: 8 definitions, 3 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+

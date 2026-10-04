@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "config": "39e08b1a536bf81fa473387097946df7",
+  "definitions": {
+    "buy": {
+      "hash": "60ef4f03e62dc1e7d79cf1700b3ac24f",
+      "file": "app/shop.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db",
+            "Log"
+          ],
+          "evidence": "type"
+        },
+        "net.hosts": {
+          "value": [
+            "hooks.warehouse.example"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "convert": {
+      "hash": "1dbcf432adb9398ccb56a3ea7c8fe7b6",
+      "file": "app/rates.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Log",
+            "Net"
+          ],
+          "evidence": "type"
+        },
+        "net.hosts": {
+          "value": [
+            "api.rates.example"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [
+        {
+          "kind": "rare",
+          "reason": "",
+          "owner": "",
+          "expires": ""
+        }
+      ],
+      "waivers": []
+    },
+    "fetch_rate": {
+      "hash": "268ed180651244919dcb808847c782dc",
+      "file": "app/rates.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Log",
+            "Net"
+          ],
+          "evidence": "type"
+        },
+        "net.hosts": {
+          "value": [
+            "api.rates.example"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "handle": {
+      "hash": "4bbc559c7112ecf6f52280de4af9b365",
+      "file": "app/shop.kek",
+      "entry": "handler",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db",
+            "Log"
+          ],
+          "evidence": "type"
+        },
+        "net.hosts": {
+          "value": [
+            "hooks.warehouse.example"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "parse_price": {
+      "hash": "91fa0f7c8852740b2a9520a6080545c4",
+      "file": "app/shop.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "price_defaults_to_zero": {
+      "hash": "059526157f95ca67819b82eaca1edf2d",
+      "file": "app/shop.kek",
+      "entry": "test",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "price_key": {
+      "hash": "7d4642210540e50e754817cd2cd21855",
+      "file": "app/shop.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "rate_key": {
+      "hash": "dfb979a79a4083fafbdae9ef5e8f218e",
+      "file": "app/rates.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [
+        {
+          "kind": "allow(similar)",
+          "reason": "kept apart from price_key",
+          "owner": "shogo",
+          "expires": "2027-03-31"
+        }
+      ],
+      "waivers": []
+    }
+  }
+}

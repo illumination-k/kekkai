@@ -1,0 +1,199 @@
+# rate_key starts logging: it gains &Log
+$ kek assure plan app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+--- exit 0
+
+$ kek assure plan -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {
+    "definitions": 8,
+    "changes": 1,
+    "needs_review": 1,
+    "auto_approved": 0,
+    "violations": 0,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [
+    {
+      "definition": "rate_key",
+      "file": "app/rates.kek",
+      "line": 19,
+      "class": "weaken",
+      "rule": "weaken",
+      "guarantee": "effects",
+      "evidence": "type",
+      "from": "pure",
+      "to": "Log",
+      "added": [
+        "Log"
+      ],
+      "removed": [],
+      "message": "weaken effects: +Log",
+      "review": true,
+      "escalate": "owner"
+    }
+  ],
+  "violations": [],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 0
+
+$ kek assure check app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 1 change(s), 1 needing review (run kek assure plan, then kek assure apply)
+--- exit 1
+
+$ kek assure apply app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure apply: 1 change(s) need review: rerun with -yes to approve them
+--- exit 1
+
+$ kek assure apply -yes app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure apply: refusing: approving 1 escalated change(s) needs -reason, -owner, -expires (required by [assure] require)
+--- exit 1
+
+$ kek assure apply -yes -reason audit log -owner shogo app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure apply: refusing: approving 1 escalated change(s) needs -expires (required by [assure] require)
+--- exit 1
+
+$ kek assure apply -yes -reason audit log -owner shogo -expires 2026-01-01 app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure apply: refusing: -expires 2026-01-01 is already in the past (today is 2026-10-04)
+--- exit 1
+
+$ kek assure apply -yes -reason audit log -owner shogo -expires 2027-01-31 app
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+kekkai.assure.lock updated: 8 definitions, 1 change(s) approved, 1 waiver(s) recorded
+--- exit 0
+
+# waivers in the lock:
+      "waivers": [
+        {
+          "guarantee": "effects",
+          "items": [
+            "Log"
+          ],
+          "reason": "audit log",
+          "owner": "shogo",
+          "expires": "2027-01-31",
+          "approved": "2026-10-04"
+        }
+      ]
+    }
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+# a month after the waiver expired
+$ kek assure plan app
+Expired (1):
+  x waiver effects +Log expired 2027-01-31   rate_key  owner: shogo  reason: "audit log"
+    -> app/rates.kek:19
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+$ kek assure plan -strict app
+Expired (1):
+  x waiver effects +Log expired 2027-01-31   rate_key  owner: shogo  reason: "audit log"
+    -> app/rates.kek:19
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 1
+
+$ kek assure check app
+Expired (1):
+  x waiver effects +Log expired 2027-01-31   rate_key  owner: shogo  reason: "audit log"
+    -> app/rates.kek:19
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- stderr
+kek assure check: 1 expired escape hatch(es)
+--- exit 1
+
+$ kek assure apply -renew app
+Expired (1):
+  x waiver effects +Log expired 2027-01-31   rate_key  owner: shogo  reason: "audit log"
+    -> app/rates.kek:19
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- stderr
+kek assure apply: -renew needs -reason, -owner, -expires (required by [assure] require)
+--- exit 1
+
+$ kek assure apply -renew -reason audit log, still needed -owner shogo -expires 2027-06-30 app
+Expired (1):
+  x waiver effects +Log expired 2027-01-31   rate_key  owner: shogo  reason: "audit log"
+    -> app/rates.kek:19
+
+No changes: kekkai.assure.lock matches the program (8 definitions).
+kekkai.assure.lock updated: 8 definitions, 0 change(s) approved, 1 waiver(s) renewed
+--- exit 0
+
+# waivers in the lock:
+      "waivers": [
+        {
+          "guarantee": "effects",
+          "items": [
+            "Log"
+          ],
+          "reason": "audit log, still needed",
+          "owner": "shogo",
+          "expires": "2027-06-30",
+          "approved": "2027-02-01"
+        }
+      ]
+    }
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+# rate_key stops logging: the waiver goes away
+$ kek assure plan app
+Auto-approved (1): strengthen 1
+--- exit 0
+
+$ kek assure apply app
+Auto-approved (1): strengthen 1
+kekkai.assure.lock updated: 8 definitions, 1 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+

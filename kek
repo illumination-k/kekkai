@@ -179,6 +179,8 @@ Usage:
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
                                   search functions by type
+  kek assure (plan|apply|check) [flags] <file|dir>
+                                  the guarantee ledger kekkai.assure.lock (docs/assure.md)
 
 Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps
@@ -426,6 +428,16 @@ bootstrap-update)
 build) cmd_build "$@" ;;
 run) cmd_run "$@" ;;
 test) cmd_test "$@" ;;
+assure)
+	# the compiler has no clock: pass today's date (KEK_TODAY overrides it)
+	if [ $# -gt 0 ]; then
+		_sub=$1
+		shift
+		compiler assure "$_sub" -today="${KEK_TODAY:-$(date +%Y-%m-%d)}" "$@"
+	else
+		compiler assure
+	fi
+	;;
 help | -h | --help) usage ;;
 *) compiler "$cmd" "$@" ;;
 esac

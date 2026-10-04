@@ -87,3 +87,63 @@ first, and functions from the file rank above builtins.
 `-json` prints `{"query": ..., "matches": [{"name", "kind", "signature",
 "match", "score", "pure", "caps", "builtin", "line", "col"}]}`.
 `kind` is one of `function`, `method`, `static` or `constructor`.
+
+## `kek assure plan|apply|check [-json] <file|dir>`
+
+The guarantee ledger (design and policy reference: [assure.md](assure.md)).
+For every function it records the guarantees the compiler establishes
+(`effects`, `net.hosts`, `tx.linear`, `tested`) and the assumptions written
+in the code (`#[allow(similar, ...)]`, `#[rare]`) in `kekkai.assure.lock`.
+`plan` diffs the lock against the program and applies the policy in
+`kekkai.toml`; `apply` rewrites the lock (`-yes` approves changes that need
+review, and weakenings also need `-reason`, `-owner`, `-expires`); `check`
+exits 1 when the lock is missing or stale, on policy violations and on
+expired escape hatches. The launcher passes today's date as `-today`
+(override it with `KEK_TODAY`).
+
+`-json` (plan and check) prints:
+
+```json
+{
+  "version": 1, "path": "app", "lock": "kekkai.assure.lock", "lock_found": true,
+  "config": {"lock": "<policy hash in the lock>", "current": "<current policy hash>"},
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {"definitions": 8, "changes": 1, "needs_review": 1, "auto_approved": 0,
+              "violations": 0, "expired": 0, "config_errors": 0},
+  "changes": [
+    {"definition": "rate_key", "file": "app/rates.kek", "line": 19,
+     "class": "weaken", "rule": "weaken", "guarantee": "effects", "evidence": "type",
+     "from": "pure", "to": "Log", "added": ["Log"], "removed": [],
+     "message": "weaken effects: +Log", "review": true, "escalate": "owner"}
+  ],
+  "violations": [
+    {"definition": "fetch_rate", "file": "app/rates.kek", "line": 3, "rule": "allowed_hosts",
+     "guarantee": "net.hosts", "items": ["rates.evil.example"],
+     "message": "host not in allowed_hosts: rates.evil.example"}
+  ],
+  "expired": [
+    {"definition": "rate_key", "file": "app/rates.kek", "line": 18, "source": "code",
+     "kind": "#[allow(similar)]", "expires": "2027-03-31", "reason": "...", "owner": "shogo"}
+  ],
+  "config_errors": []
+}
+```
+
+- `class` is one of `strengthen`, `change`, `weaken`, `assumption`,
+  `added`, `removed`. `rule` is the policy key that decided the change:
+  `strengthen`, `new_contract`, `change`, `allowed_host`, `added`,
+  `removed`, `weaken`, `new_assumption`, `config`.
+- `guarantee` names what changed: a guarantee, or `hash` (body only),
+  `file`, `entry`, `async`, `name` (a rename: same definition hash),
+  `assumption`, `definition` (added/removed) or `config` (the policy).
+- `from`/`to` are display strings; `added`/`removed` are the items of a
+  set guarantee (or the assumption kind).
+- `review` is true when the policy does not auto-approve the change;
+  `escalate` is the role it is escalated to (approval then needs the
+  metadata of `[assure] require`).
+- `violations[].rule` is `forbid`, `allowed_hosts` or `expires`;
+  violations cannot be approved. `expired[].source` is `code` (an
+  attribute) or `lock` (a waiver recorded by `apply`).
+- `ok` is what `check` requires: a lock exists, no changes, no violations,
+  nothing expired, no configuration errors.

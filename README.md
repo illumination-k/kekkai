@@ -39,6 +39,7 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
 | `kek test [-run re] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス） |
+| `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)） |
 
 ### テスト（`kek test`）
 
@@ -70,6 +71,26 @@ fn visits_are_counted(db: &Db, log: &Log) -> Result<(), String> {
 capability を受け取らないテストは純粋なので hermetic で、出力に `pure: hermetic, cacheable` と表示されます（定義ハッシュをキーにしたキャッシュは今後の課題）。
 
 オプションは `./kek test [-run re] [-seed n] [-clock ms] [-net f.json] [-db f.json] <file|dir>`（`-run` は拡張正規表現）。コンパイラの `test-build`（`compiler/testrun.kek`）がテストを発見し、テスト名で 1 つを実行する `#[main]` を合成してビルドします。モックは prelude（`lib/prelude/test.kek`）にあり、`./kek` がテストごとに wasmtime のプロセスを起動します。トラップ（スタックの使い切りなど）はそのテストだけの失敗になります。
+
+### 保証の台帳（`kek assure`）
+
+コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
+
+```sh
+./kek assure plan app       # ロックとの差分（-json が基本の出力、-v で自動承認分も表示）
+./kek assure apply app      # 自動承認分だけならそのまま更新。要レビューは -yes、弱化はさらに -reason -owner -expires が必要
+./kek assure check app      # CI 用：ロックのずれ・ポリシー違反・期限切れで終了コード 1
+```
+
+```
+Needs review (1):
+  ! weaken effects: +Log   rate_key
+    -> app/rates.kek:19  escalate: owner (apply needs -reason, -owner, -expires)
+
+Auto-approved (3): strengthen 1, allowed host 2
+```
+
+ポリシーは `kekkai.toml` の `[net] allowed_hosts`・`[effects] forbid`・`[auto_approve]`・`[escalate]`・`[module."path"]`（厳しくする方向にだけ上書きできる）・`[assure] extends`（組織の設定を継承）で書きます。詳細は [docs/assure.md](docs/assure.md)。
 
 ## 開発
 

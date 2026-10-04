@@ -1,0 +1,30 @@
+# kekkai.toml extends an organization policy and may only tighten it
+# the organization policy adds rules: the policy hash changes
+$ kek assure plan app
+Needs review (1):
+  ! change policy 39e08b1a536b -> 1e6456c63881   (policy)
+    -> kekkai.toml
+--- exit 0
+
+# loosening the parent is an error
+$ kek assure plan app
+Configuration errors (2):
+  x kekkai.toml [net] allowed_hosts: more.example not allowed by org.toml (a configuration may only tighten the one it extends)
+  x kekkai.toml [auto_approve] change = true: org.toml requires review (a configuration may only tighten the one it extends)
+
+Needs review (1):
+  ! change policy 39e08b1a536b -> ed4c2802eec0   (policy)
+    -> kekkai.toml
+--- exit 1
+
+# tightening it is fine; the parent's [auto_approve] change = false applies
+$ kek assure plan app
+Needs review (1):
+  ! change policy 39e08b1a536b -> 56745251bc45   (policy)
+    -> kekkai.toml
+
+Policy violations (1):
+  x host not in allowed_hosts: hooks.warehouse.example   buy (+1 more: handle)
+    -> app/shop.kek:16
+--- exit 1
+

@@ -13,6 +13,8 @@
 #   kek <command> [args...]         run a compiler command (check, ir, build, ...)
 #   kek run <file|dir> [args...]    build a #[main] program and run it
 #   kek test [flags] <file|dir>     run #[test] functions with mock capabilities
+#   kek cover [flags] <file|dir>    coverage of the tests (.kek-cache/cover/)
+#   kek mutate [flags] <file|dir>   mutation testing (.kek-cache/mutate/)
 #   kek similar -diff <rev> ...     similar code, only what changed since a git revision
 #   KEK_STAGE=bootstrap kek ...     use the bootstrap compiler directly
 #
@@ -197,6 +199,10 @@ Usage:
            [-clock ms] [-net f.json] [-db f.json] <file|dir>
                                   run the #[test] functions with mock capabilities
                                   (property tests, results cached by definition hash)
+  kek cover [-json] [-lcov file] [-run re] [-seed n] <file|dir>
+                                  line and branch coverage of the tests
+  kek mutate [-json] [-run re] [-base <file|dir> | -diff rev] [-timeout 2s] <file|dir>
+                                  mutation testing (typed mutants, cached results)
   kek fmt [-w|-check] <paths>     format
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
@@ -209,6 +215,8 @@ Usage:
 Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps
   kek test-build <file|dir> <outdir> [-list | -run name...]
+  kek cover-build <file|dir> <outdir> [-main] | kek cover-report [-json] [-lcov f] <outdir>
+  kek mutate-build <file|dir> <outdir> [-base p] [-main] | kek mutate-report [-json] <outdir>
   kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
   kek embed-prelude lib/core compiler/core_src.kek -as core [-check]
 
@@ -850,6 +858,449 @@ cmd_similar() {
 	exit $_code
 }
 
+# ---- kek cover / kek mutate ----
+
+# tool_flags_parse <usage-fn> <spec> <args...>: Go-style flag parsing for
+# cover and mutate. spec lists the flags: "json" is a boolean, "run=" takes
+# a value, "seed#" an integer. Sets flag_<name> and leaves the remaining
+# arguments in $tool_rest (count $tool_nrest, the path in $tool_path).
+tool_flags_parse() {
+	_tf_usage=$1
+	_tf_spec=$2
+	shift 2
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--) shift; break ;;
+		-?*) ;;
+		*) break ;;
+		esac
+		_name=${1#-}
+		_name=${_name#-}
+		_val=
+		_has=0
+		case $_name in
+		*=*)
+			_val=${_name#*=}
+			_name=${_name%%=*}
+			_has=1
+			;;
+		esac
+		case $_name in
+		h | help) "$_tf_usage"; exit 0 ;;
+		esac
+		_kind=
+		for _s in $_tf_spec; do
+			case $_s in
+			"$_name") _kind=bool ;;
+			"$_name=") _kind=str ;;
+			"$_name#") _kind=int ;;
+			esac
+		done
+		if [ -z "$_kind" ]; then
+			echo "flag provided but not defined: -$_name" >&2
+			"$_tf_usage"
+			exit 2
+		fi
+		if [ "$_kind" = bool ]; then
+			[ $_has -eq 1 ] || _val=true
+			case $_val in
+			1 | t | T | true | TRUE | True) _val=true ;;
+			0 | f | F | false | FALSE | False) _val=false ;;
+			*)
+				echo "invalid boolean value \"$_val\" for -$_name: parse error" >&2
+				"$_tf_usage"
+				exit 2
+				;;
+			esac
+		else
+			if [ $_has -eq 0 ]; then
+				if [ $# -lt 2 ]; then
+					echo "flag needs an argument: -$_name" >&2
+					"$_tf_usage"
+					exit 2
+				fi
+				_val=$2
+				shift
+			fi
+			if [ "$_kind" = int ] && ! is_int64 "$_val"; then
+				echo "invalid value \"$_val\" for flag -$_name: parse error" >&2
+				"$_tf_usage"
+				exit 2
+			fi
+		fi
+		eval "flag_$_name=\$_val"
+		shift
+	done
+	tool_nrest=$#
+	tool_path=${1:-}
+}
+
+# select_tests <dir> <re>: <dir>/selected.txt = the tests matching re.
+select_tests() {
+	if [ -n "$2" ]; then
+		set +e
+		grep -E -- "$2" "$1/tests.txt" >"$1/selected.txt" 2>/dev/null
+		_g=$?
+		set -e
+		[ $_g -le 1 ] || die "kek: -run: invalid regular expression: $2"
+	else
+		cp "$1/tests.txt" "$1/selected.txt"
+	fi
+}
+
+# test_key <dir> <test>: the trans hash of a test (testkeys.txt).
+test_key() {
+	awk -F '\t' -v t="$2" '$1 == t { print $2 }' "$1/testkeys.txt"
+}
+
+# cache_put <file> <content-file>: store a cache entry atomically.
+cache_put() {
+	_cp_tmp=$1.tmp.$$
+	cp "$2" "$_cp_tmp" && mv "$_cp_tmp" "$1"
+}
+
+cover_usage() {
+	cat >&2 <<'EOF'
+Usage of cover: kek cover [flags] <file|dir>
+  -j int
+    	parallel test processes (default: number of CPUs)
+  -json
+    	print the report as JSON
+  -lcov string
+    	also write an lcov tracefile to this file
+  -run string
+    	run only tests whose name matches this extended regular expression
+  -seed int
+    	seed of the mock &Random
+EOF
+}
+
+# test_jobs <dir>: "index test trans-hash" for every selected test.
+test_jobs() {
+	awk -F '\t' 'NR == FNR { k[$1] = $2; next } { printf "%05d %s %s\n", FNR, $0, k[$0] }' \
+		"$1/testkeys.txt" "$1/selected.txt"
+}
+
+# cover_one <dir> <index> <test> <test key> (a parallel worker): runs one
+# instrumented test and writes "test<TAB>status<TAB>probe ids" to
+# <dir>/hits/<index>, and to the cache file $KEK_W_CACHE-<test key>.
+cover_one() {
+	wasm_extra="$KEK_W_EXTRA --env KEK_COVER_OUT=$1/ids/$2"
+	set +e
+	wasm "$1/module.cwasm" "$3" >"$1/out/$2" 2>&1
+	_c=$?
+	set -e
+	case $_c in
+	0) _st=ok ;;
+	1) _st=failed ;;
+	*) _st=trapped ;;
+	esac
+	printf '%s\t%s\t%s\n' "$3" "$_st" "$(cat "$1/ids/$2" 2>/dev/null)" >"$1/hits/$2"
+	[ -z "${4:-}" ] || cache_put "$KEK_W_CACHE-$4" "$1/hits/$2"
+}
+
+cmd_cover() {
+	flag_json=false
+	flag_lcov=
+	flag_run=
+	flag_seed=0
+	flag_j=$(ncpu)
+	tool_flags_parse cover_usage "json lcov= run= seed# j#" "$@"
+	[ "$tool_nrest" -eq 1 ] || { cover_usage; exit 2; }
+	_file=$tool_path
+	[ -e "$_file" ] || die "stat $_file: no such file or directory"
+	_stage=$(current_stage)
+	_dir=$(mktemp -d "${TMPDIR:-/tmp}/kek-cover-XXXXXX")
+	trap 'rm -rf "$_dir"' EXIT
+	compiler cover-build "$_file" "$_dir" || exit $?
+	select_tests "$_dir" "$flag_run"
+	mkdir -p "$_dir/hits" "$_dir/ids" "$_dir/out" "$cache/cover"
+	if [ -s "$_dir/selected.txt" ]; then
+		# a test's coverage is cached by the compiler, the probe table, the
+		# seed and the test's trans hash (everything it can reach)
+		KEK_W_CACHE=$cache/cover/$(basename "$_stage")-$(sha <"$_dir/sites.json")-$flag_seed
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=$flag_seed --env KEK_TEST_CASES=100"
+		export KEK_W_CACHE KEK_W_EXTRA
+		: >"$_dir/torun.txt"
+		test_jobs "$_dir" | while read -r _i _t _tk; do
+			if [ -n "$_tk" ] && [ -f "$KEK_W_CACHE-$_tk" ]; then
+				cp "$KEK_W_CACHE-$_tk" "$_dir/hits/$_i"
+			else
+				echo "$_i $_t $_tk" >>"$_dir/torun.txt"
+			fi
+		done
+		if [ -s "$_dir/torun.txt" ]; then
+			precompile "$_dir"
+			xargs -L 1 -P "$flag_j" "$root/kek" __cover-one "$_dir" <"$_dir/torun.txt"
+		fi
+		cat "$_dir"/hits/* >"$_dir/hits.txt"
+	else
+		: >"$_dir/hits.txt"
+	fi
+	set -- "$_dir"
+	[ "$flag_json" = true ] && set -- -json "$@"
+	[ -z "$flag_lcov" ] || set -- -lcov "$flag_lcov" "$@"
+	compiler cover-report "$@"
+}
+
+mutate_usage() {
+	cat >&2 <<'EOF'
+Usage of mutate: kek mutate [flags] <file|dir>
+  -base string
+    	mutate only the definitions that differ from this program (file or directory)
+  -diff string
+    	mutate only the definitions changed since this git revision
+  -j int
+    	parallel test processes (default: number of CPUs)
+  -json
+    	print the report as JSON
+  -run string
+    	use only tests whose name matches this extended regular expression
+  -timeout string
+    	time limit of a test run with a mutant: 2s, 500ms (default: 1s + 10x the slowest test)
+EOF
+}
+
+# mutate_base_one <dir> <index> <test> <test key> (a parallel worker):
+# runs a test without mutants, recording the mutant sites it reaches.
+# Writes <dir>/base/<index> ("test<TAB>status<TAB>ms") and
+# <dir>/reach/<index> (the ids), both cached in $KEK_W_CACHE-<test key>.
+mutate_base_one() {
+	wasm_extra="$KEK_W_EXTRA --env KEK_MUTANT=0 --env KEK_COVER_OUT=$1/reach/$2"
+	set +e
+	wasm "$1/module.cwasm" "$3" >"$1/out/$2" 2>&1
+	_c=$?
+	set -e
+	case $_c in
+	0) _st=ok ;;
+	1) _st=failed ;;
+	*) _st=trapped ;;
+	esac
+	_ms=$(sed -n 's/.*; \([0-9]*\)\.[0-9]*ms)$/\1/p' "$1/out/$2" | head -n 1)
+	printf '%s\t%s\t%s\n' "$3" "$_st" "${_ms:-0}" >"$1/base/$2"
+	[ -f "$1/reach/$2" ] || : >"$1/reach/$2"
+	if [ -n "${4:-}" ]; then
+		cat "$1/base/$2" "$1/reach/$2" >"$1/out/$2.cache"
+		cache_put "$KEK_W_CACHE-$4" "$1/out/$2.cache"
+	fi
+}
+
+# mutate_one <dir> <id> <mutant key> <test...> (a parallel worker): runs
+# the tests that reach mutant <id> until one fails, and writes
+# "id<TAB>killed|survived|timeout<TAB>test" to <dir>/res/<id>. The result
+# of every (mutant, test) pair is cached in
+# .kek-cache/mutate/run-<stage>-<mutant key>-<test key>.
+mutate_one() {
+	_d=$1
+	_id=$2
+	_mk=$3
+	shift 3
+	_res=survived
+	_by=
+	for _t in "$@"; do
+		_tk=$(test_key "$_d" "$_t")
+		_cf=$cache/mutate/run-$KEK_W_STAGE-$_mk-$_tk
+		if [ -n "$_tk" ] && [ -f "$_cf" ]; then
+			_r=$(cat "$_cf")
+		else
+			wasm_extra="$KEK_W_EXTRA --env KEK_MUTANT=$_id"
+			set +e
+			wasm "$_d/module.cwasm" "$_t" >"$_d/out/m$_id" 2>&1
+			_c=$?
+			set -e
+			if [ $_c -eq 0 ]; then
+				_r=survived
+			elif grep -q 'wasm trap: interrupt' "$_d/out/m$_id"; then
+				_r=timeout
+			else
+				_r=killed
+			fi
+			if [ -n "$_tk" ]; then
+				echo "$_r" >"$_d/out/m$_id.cache"
+				cache_put "$_cf" "$_d/out/m$_id.cache"
+			fi
+		fi
+		if [ "$_r" != survived ]; then
+			_res=$_r
+			_by=$_t
+			break
+		fi
+	done
+	printf '%s\t%s\t%s\n' "$_id" "$_res" "$_by" >"$_d/res/$_id"
+}
+
+# mutate_extract <rev> <path> <outdir>: the program at a git revision.
+# Prints the path of the base program.
+mutate_extract() {
+	if [ -d "$2" ]; then
+		(cd "$2" && git archive --format=tar "$1:./") | tar -x -C "$3" ||
+			die "kek mutate: -diff: cannot read $2 at $1"
+		echo "$3"
+	else
+		_bn=$(basename "$2")
+		(cd "$(dirname "$2")" && git show "$1:./$_bn") >"$3/$_bn" 2>/dev/null ||
+			die "kek mutate: -diff: cannot read $2 at $1"
+		echo "$3/$_bn"
+	fi
+}
+
+# timeout_ms <s>: "2s", "500ms" or "2" (seconds) in milliseconds.
+timeout_ms() {
+	case $1 in
+	*ms) _n=${1%ms}; _m=1 ;;
+	*s) _n=${1%s}; _m=1000 ;;
+	*) _n=$1; _m=1000 ;;
+	esac
+	printf '%s' "$_n" | grep -Eq '^[0-9]+$' || die "kek mutate: invalid -timeout $1 (use 2s or 500ms)"
+	echo $((_n * _m))
+}
+
+cmd_mutate() {
+	flag_json=false
+	flag_run=
+	flag_base=
+	flag_diff=
+	flag_timeout=
+	flag_j=$(ncpu)
+	tool_flags_parse mutate_usage "json run= base= diff= timeout= j#" "$@"
+	[ "$tool_nrest" -eq 1 ] || { mutate_usage; exit 2; }
+	_file=$tool_path
+	[ -e "$_file" ] || die "stat $_file: no such file or directory"
+	[ -z "$flag_base" ] || [ -z "$flag_diff" ] || die "kek mutate: -base and -diff are exclusive"
+	_tmo=
+	[ -z "$flag_timeout" ] || _tmo=$(timeout_ms "$flag_timeout")
+	_stage=$(current_stage)
+	_sk=$(basename "$_stage")
+	_dir=$(mktemp -d "${TMPDIR:-/tmp}/kek-mutate-XXXXXX")
+	trap 'rm -rf "$_dir"' EXIT
+	_base=$flag_base
+	if [ -n "$flag_diff" ]; then
+		mkdir "$_dir/base-src"
+		_base=$(mutate_extract "$flag_diff" "$_file" "$_dir/base-src")
+	fi
+	[ -z "$_base" ] || [ -e "$_base" ] || die "stat $_base: no such file or directory"
+	# the build (mutant generation, type checks, schema) is cached by the
+	# compiler and the contents of the program and of the base
+	_bk=$(
+		{
+			echo "$_sk"
+			for _p in "$_file" ${_base:+"$_base"}; do
+				echo "=="
+				if [ -d "$_p" ]; then
+					for _f in "$_p"/*.kek; do
+						printf '%s\0' "${_f##*/}"
+						cat "$_f"
+					done
+				else
+					cat "$_p"
+				fi
+			done
+		} | sha
+	)
+	_b=$cache/mutate/build-$_bk
+	mkdir -p "$cache/mutate"
+	if [ ! -f "$_b/module.cwasm" ]; then
+		_tmp=$(mktemp -d "$cache/tmp-XXXXXX")
+		set +e
+		if [ -n "$_base" ]; then
+			compiler mutate-build "$_file" "$_tmp" -base "$_base"
+		else
+			compiler mutate-build "$_file" "$_tmp"
+		fi
+		_c=$?
+		set -e
+		if [ $_c -ne 0 ]; then
+			rm -rf "$_tmp"
+			exit $_c
+		fi
+		# the time limit needs epoch interruption compiled in
+		# shellcheck disable=SC2086
+		"$wasmtime" compile $wasm_flags -W epoch-interruption=y "$_tmp/module.wasm" -o "$_tmp/module.cwasm"
+		if [ -e "$_b" ]; then
+			rm -rf "$_tmp"
+		else
+			mv "$_tmp" "$_b"
+			rm -rf "${_b:?}/$(basename "$_tmp")"
+		fi
+	fi
+	for _f in tests.txt testkeys.txt mutants.txt mutants.json; do
+		cp "$_b/$_f" "$_dir/$_f"
+	done
+	ln -s "$_b/module.cwasm" "$_dir/module.cwasm"
+	select_tests "$_dir" "$flag_run"
+	mkdir -p "$_dir/base" "$_dir/reach" "$_dir/out" "$_dir/res"
+	: >"$_dir/baseline.txt"
+	: >"$_dir/results.txt"
+	if [ -s "$_dir/selected.txt" ] && [ -s "$_dir/mutants.txt" ]; then
+		KEK_W_STAGE=$_sk
+		KEK_W_CACHE=$cache/mutate/base-$_bk
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=60s"
+		export KEK_W_STAGE KEK_W_CACHE KEK_W_EXTRA
+		# baseline: which mutant sites each test reaches
+		: >"$_dir/torun.txt"
+		test_jobs "$_dir" | while read -r _i _t _tk; do
+			if [ -n "$_tk" ] && [ -f "$KEK_W_CACHE-$_tk" ]; then
+				sed -n 1p "$KEK_W_CACHE-$_tk" >"$_dir/base/$_i"
+				sed -n 2p "$KEK_W_CACHE-$_tk" >"$_dir/reach/$_i"
+			else
+				echo "$_i $_t $_tk" >>"$_dir/torun.txt"
+			fi
+		done
+		if [ -s "$_dir/torun.txt" ]; then
+			xargs -L 1 -P "$flag_j" "$root/kek" __mutate-base "$_dir" <"$_dir/torun.txt"
+		fi
+		cat "$_dir"/base/* >"$_dir/baseline.txt"
+		if [ -z "$_tmo" ]; then
+			_max=$(awk -F '\t' 'BEGIN { m = 0 } $3 + 0 > m { m = $3 + 0 } END { print m }' "$_dir/baseline.txt")
+			_tmo=$((1000 + 10 * _max))
+		fi
+		KEK_W_EXTRA="--env KEK_TEST=1 --env KEK_TEST_CLOCK=1767225600000 --env KEK_TEST_SEED=0 --env KEK_TEST_CASES=100 -W timeout=${_tmo}ms"
+		export KEK_W_EXTRA
+		# plan: for every mutant, the passing tests that reach it; mutants
+		# whose result is known from the cache are settled here
+		for _bf in "$_dir"/base/*; do
+			_i=${_bf##*/}
+			awk -F '\t' -v r="$_dir/reach/$_i" '$2 == "ok" {
+				while ((getline line < r) > 0) {
+					n = split(line, ids, " ")
+					for (k = 1; k <= n; k++) print ids[k], $1
+				}
+			}' "$_bf"
+		done >"$_dir/reached.txt"
+		awk -v reached="$_dir/reached.txt" -v keys="$_dir/testkeys.txt" -v res="$_dir/res/known" \
+			-v pre="$cache/mutate/run-$_sk-" '
+			BEGIN {
+				while ((getline l < reached) > 0) { split(l, a, " "); t[a[1]] = t[a[1]] " " a[2] }
+				while ((getline l < keys) > 0) { split(l, a, "\t"); k[a[1]] = a[2] }
+				printf "" > res
+			}
+			{
+				split($0, m, "\t")
+				if (!(m[1] in t)) { printf "%s\tnocov\t\n", m[1] > res; next }
+				n = split(t[m[1]], ts, " ")
+				for (i = 1; i <= n; i++) {
+					f = pre m[2] "-" k[ts[i]]
+					r = ""
+					if (k[ts[i]] != "" && (getline r < f) > 0) close(f)
+					else r = ""
+					if (r == "") { print m[1], m[2] t[m[1]]; next }
+					if (r != "survived") { printf "%s\t%s\t%s\n", m[1], r, ts[i] > res; next }
+				}
+				printf "%s\tsurvived\t\n", m[1] > res
+			}
+		' "$_dir/mutants.txt" >"$_dir/plan.txt"
+		if [ -s "$_dir/plan.txt" ]; then
+			xargs -L 1 -P "$flag_j" "$root/kek" __mutate-one "$_dir" <"$_dir/plan.txt"
+		fi
+		cat "$_dir"/res/* >"$_dir/results.txt"
+	elif [ -s "$_dir/selected.txt" ]; then
+		awk '{ printf "%s\tok\t0\n", $0 }' "$_dir/selected.txt" >"$_dir/baseline.txt"
+	fi
+	set -- "$_dir"
+	[ "$flag_json" = true ] && set -- -json "$@"
+	compiler mutate-report "$@"
+}
+
 cmd=${1:-help}
 [ $# -gt 0 ] && shift
 case $cmd in
@@ -864,6 +1315,11 @@ bootstrap-update)
 build) cmd_build "$@" ;;
 run) cmd_run "$@" ;;
 test) cmd_test "$@" ;;
+cover) cmd_cover "$@" ;;
+mutate) cmd_mutate "$@" ;;
+__cover-one) cover_one "$@" ;;
+__mutate-base) mutate_base_one "$@" ;;
+__mutate-one) mutate_one "$@" ;;
 assure)
 	# the compiler has no clock: pass today's date (KEK_TODAY overrides it)
 	if [ $# -gt 0 ]; then

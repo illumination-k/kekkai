@@ -88,6 +88,89 @@ first, and functions from the file rank above builtins.
 "match", "score", "pure", "caps", "builtin", "line", "col"}]}`.
 `kind` is one of `function`, `method`, `static` or `constructor`.
 
+## `kek cover [-json] [-lcov file] [-run re] [-seed n] [-j n] <file|dir>`
+
+Line and branch coverage of the program's `#[test]` functions. The
+compiler (`cover-build`, `compiler/cover_walk.kek`) inserts probes
+`__cov_hit(k);` into the AST of every user function (not `#[test]`
+functions) before type checking: at function entry, in both branches of
+every `if` (an implicit empty `else` included), in every `match` arm, in
+loop and closure bodies, and after every statement that can leave its block
+early (`return`, `?`, `break`, `continue`). Each test runs in its own
+process; the probes it hit are written at exit to the file named by
+`KEK_COVER_OUT`. Functions marked `#[rare]` are reported separately and are
+not counted. The exit status is 1 when a test fails or the line coverage is
+below `[cover] min_line` of `kekkai.toml`.
+
+```json
+{
+  "path": "testdata/cover/shapes.kek",
+  "tests": [{"name": "areas", "status": "ok"}],
+  "summary": {"lines": {"hit": 16, "total": 21, "percent": 76.2},
+              "branches": {"hit": 6, "total": 9, "percent": 66.7},
+              "functions": {"hit": 3, "total": 4, "percent": 75.0}},
+  "min_line": null, "ok": true,
+  "files": [{"file": "...", "lines": {...}, "branches": {...}, "uncovered": [13, 21]}],
+  "functions": [{"name": "area", "file": "...", "line": 11, "rare": false, "hits": 1,
+                 "lines": {...}, "branches": {...}, "uncovered": [13]}],
+  "sites": [{"id": 3, "func": "area", "file": "...", "line": 13, "col": 29, "kind": "arm",
+             "branch": 0, "decision_line": 12, "lines": [13], "tests": []}]
+}
+```
+
+- `status` of a test: `ok`, `failed` or `trapped`. `hits` is the number of
+  tests that entered the function.
+- `kind` of a site: `fn`, `then`, `else`, `arm`, `loop`, `closure`, `seq`
+  (after an early exit). Branch sites (`then`, `else`, `arm`) carry their
+  index in the decision and the decision's line.
+- `-lcov file` writes an lcov tracefile (`SF`, `FN`/`FNDA`, `BRDA`, `DA`,
+  `LF`/`LH`); counts are numbers of tests.
+- Results are cached per test in `.kek-cache/cover/`, keyed by the
+  compiler, the probe table, the seed and the test's `trans` hash.
+
+## `kek mutate [-json] [-run re] [-base <file|dir> | -diff <rev>] [-timeout 2s] [-j n] <file|dir>`
+
+Mutation testing on the typed AST (`compiler/mutate_gen.kek`). Mutants:
+arithmetic swaps on `Int`, comparison boundaries and negations, `&&`/`||`,
+negated `if`/`while` conditions, dropped `!`/`-`, integer literals (n+1, 0),
+flipped booleans, strings to `""`, deleted call/assignment statements, and
+function results replaced by `0`, `""`, `None`, `Vec::new()` (negated for
+`Bool`). `#[test]` and `#[rare]` functions are not mutated. Statement
+deletions and result replacements are type-checked one by one; the
+rejected ones are **killed by types** (e.g. deleting `tx.commit()?;` breaks
+`Tx` linearity). The others are compiled into one mutant schema, where the
+active mutant is chosen by `KEK_MUTANT`. A baseline run of every test
+records which mutant sites it reaches; each mutant then runs only the
+passing tests that reach it, until one fails.
+
+Statuses: `killed` (a test failed or trapped; `killed_by` names it),
+`survived`, `timeout` (counted as detected; default limit 1s + 10x the
+slowest test), `no_coverage`, `killed_by_types`. The score is
+(killed + timeout) / (killed + timeout + survived + no_coverage);
+`covered_score` leaves out `no_coverage`. The exit status is 1 when the
+score is below `[mutate] min_score` of `kekkai.toml`.
+
+```json
+{
+  "path": "testdata/mutate/calc.kek", "base": null,
+  "functions": ["clamp", "triangle", "is_adult", "deposit"],
+  "tests": [{"name": "clamp_inside", "status": "ok", "ms": 0}],
+  "summary": {"generated": 30, "killed_by_types": 1, "killed": 18, "survived": 8,
+              "timeout": 3, "no_coverage": 0, "score": 72.4, "covered_score": 72.4,
+              "min_score": null, "ok": true},
+  "mutants": [{"id": 1, "file": "...", "line": 8, "col": 10, "func": "clamp", "kind": "boundary",
+               "description": "`<` → `<=`", "original": "if x < lo {", "mutated": "if x <= lo {",
+               "status": "survived"}]
+}
+```
+
+- `-base` / `-diff rev` mutate only the definitions whose `hash` differs
+  from the base program (`-diff` extracts it with `git show` / `git
+  archive`) or that are new; the others are listed as `unchanged`.
+- The build is cached by the sources, and each (mutant, test) result by the
+  mutant's identity (the function's `trans` hash, the mutant's position in
+  the function and the mutation) and the test's `trans` hash, under
+  `.kek-cache/mutate/`: an unchanged second run starts no test process.
 ## `kek assure plan|apply|check [-json] <file|dir>`
 
 The guarantee ledger (design and policy reference: [assure.md](assure.md)).

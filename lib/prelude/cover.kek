@@ -1,0 +1,98 @@
+// `kek cover` and `kek mutate`: runtime support of instrumented programs.
+//
+// `kek cover` inserts `__cov_hit(k);` probes into the user's functions
+// (compiler/cover_walk.kek); `kek mutate` compiles every mutant into one
+// module (a mutant schema) whose sites call `__mut_on(k)` and friends
+// (compiler/mutate_gen.kek). Both record the probes / mutant sites that
+// ran in `__Rt.cov`, and `__exit` writes them to the file named by the
+// environment variable KEK_COVER_OUT (ids separated by spaces). The active
+// mutant is KEK_MUTANT (0 or unset: none).
+
+fn __cov_hit(k: Int) {
+    let c = __Rt::get().cov;
+    while c.len() <= k {
+        c.push(false);
+    }
+    c.set(k, true);
+}
+
+// __cov_flush is called by __exit.
+fn __cov_flush() {
+    let rt = __Rt::get();
+    if rt.cov_out == "" {
+        return;
+    }
+    let ids = Vec::new();
+    let mut i = 0;
+    for b in rt.cov {
+        if b {
+            ids.push(i.to_string());
+        }
+        i = i + 1;
+    }
+    match __fs_write(__Any::null(), rt.cov_out, ids.join(" ") + "\n") {
+        Ok(_) => {}
+        Err(e) => __eprint("kek cover: " + rt.cov_out + ": " + e.message),
+    }
+}
+
+// __mut_on records that mutant site k was reached and reports whether
+// mutant k is the active one.
+fn __mut_on(k: Int) -> Bool {
+    __cov_hit(k);
+    __Rt::get().mutant == k
+}
+
+fn __mut_is(k: Int) -> Bool {
+    __Rt::get().mutant == k
+}
+
+fn __mut_isnot(k: Int) -> Bool {
+    __Rt::get().mutant != k
+}
+
+// b, negated when mutant k is active (negated conditions, dropped `!`,
+// flipped boolean literals, `==` / `!=` swaps).
+fn __mut_flip(k: Int, b: Bool) -> Bool {
+    if __mut_on(k) { !b } else { b }
+}
+
+// b XOR (mutant k is active): `&&` / `||` swaps (see mutate_gen.kek).
+fn __mut_xor(k: Int, b: Bool) -> Bool {
+    b != __mut_on(k)
+}
+
+// an integer replaced by alt when mutant k is active (literals, results)
+fn __mut_int(k: Int, x: Int, alt: Int) -> Int {
+    if __mut_on(k) { alt } else { x }
+}
+
+fn __mut_str(k: Int, s: String) -> String {
+    if __mut_on(k) { "" } else { s }
+}
+
+// `-x`, or x when mutant k (dropping the minus) is active
+fn __mut_neg(k: Int, x: Int) -> Int {
+    if __mut_on(k) { x } else { 0 - x }
+}
+
+// operator codes: 1 + 2 - 3 * 4 / 5 % 6 < 7 <= 8 > 9 >=
+fn __mut_iop(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Int {
+    let o = if __mut_on(k) { alt } else { op };
+    if o == 1 {
+        x + y
+    } else if o == 2 {
+        x - y
+    } else if o == 3 {
+        x * y
+    } else if o == 4 { x / y } else { x % y }
+}
+
+fn __mut_icmp(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Bool {
+    let o = if __mut_on(k) { alt } else { op };
+    if o == 6 {
+        x < y
+    } else if o == 7 {
+        x <= y
+    } else if o == 8 { x > y } else { x >= y }
+}

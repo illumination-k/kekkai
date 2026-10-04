@@ -1,0 +1,488 @@
+// `kek mutate` (prefix mut_): the compiler side. The launcher (`kek
+// mutate`) runs
+//
+//   mutate-build <file|dir> <outdir> [-base <file|dir>]
+//       check the program, generate the mutants of its functions (not
+//       #[test] or #[rare] ones; with -base only those whose definition
+//       hash differs from the base program, or that are new), check the
+//       ones that can be ill-typed one by one (rejected: "killed by
+//       types"), and build the mutant schema with the `kek test` harness:
+//       <outdir>/module.wasm, tests.txt, testkeys.txt ("name<TAB>trans"),
+//       mutants.txt ("id<TAB>cache key" per well-typed mutant) and
+//       mutants.json (every mutant, for the report)
+//   mutate-report [-json] <outdir>
+//       combine mutants.json, baseline.txt ("test<TAB>status<TAB>ms") and
+//       results.txt ("id<TAB>killed|survived|timeout|nocov<TAB>test") into
+//       the report; exit 1 when the score is below [mutate] min_score of
+//       kekkai.toml
+//
+// The mutation score is detected / (detected + survived + no coverage),
+// where detected = killed + timeout. Mutants killed by types are counted
+// separately: they never reach the tests.
+
+// mut_check_one type-checks the program with only mutant c applied (as
+// plain code) and returns the first error ("" when it checks).
+fn mut_check_one(p: CovProg, sel: HashMap<Int, Bool>, c: MutCand) -> String {
+    let prog = frontend_parse_all(p.srcs);
+    let w = cov_new_walk("apply");
+    w.real = true;
+    w.active.insert(c.node, mut_one_cand(c));
+    cov_rewrite_file(w, prog.file, p, sel);
+    let res = chk_check(prog.file);
+    match res.errs.get(0) {
+        Some(e) => ast_error_string(e),
+        None => "",
+    }
+}
+
+fn mut_one_cand(c: MutCand) -> Vec<MutCand> {
+    let v = Vec::new();
+    v.push(c);
+    v
+}
+
+// mut_schema rewrites the program with the harness so that every
+// well-typed mutant is in it, and checks it with the prelude.
+fn mut_schema(p: CovProg, sel: HashMap<Int, Bool>, cands: Vec<MutCand>) -> ChkResult {
+    let prog = cov_with_harness(p);
+    let w = cov_new_walk("apply");
+    for c in cands {
+        if c.status != "" {
+            continue;
+        }
+        match w.active.get(c.node) {
+            Some(v) => v.push(c),
+            None => {
+                w.active.insert(c.node, mut_one_cand(c));
+            }
+        }
+    }
+    cov_rewrite_file(w, prog.file, p, sel);
+    if !p.main {
+        cov_demote(prog.file);
+    }
+    chk_check_prelude(prog.file)
+}
+
+// `mutate-build <file|dir> <outdir> [-base <file|dir>]`
+fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let usage = "mutate-build <file|dir> <outdir> [-base <file|dir>] [-main]";
+    let mut base = "";
+    let mut main = false;
+    let mut i = 3;
+    while i < args.len() {
+        let a = args.get(i).unwrap_or("");
+        if a == "-base" && i + 1 < args.len() {
+            base = args.get(i + 1).unwrap_or("");
+            i = i + 1;
+        } else if a == "-main" {
+            main = true;
+        } else {
+            log.error("usage: kek " + usage);
+            return 2;
+        }
+        i = i + 1;
+    }
+    if args.len() < 3 {
+        log.error("usage: kek " + usage);
+        return 2;
+    }
+    let path = args.get(1).unwrap_or("");
+    let out_dir = frontend_clean_dir(args.get(2).unwrap_or(""));
+    let p = match cov_load(path, fs, log) {
+        Some(p) => p,
+        None => {
+            return 1;
+        }
+    };
+    p.main = main;
+    // definitions changed since the base
+    let base_hash: HashMap<String, String> = HashMap::new();
+    if base != "" {
+        let bp = match cov_load(base, fs, log) {
+            Some(b) => b,
+            None => {
+                log.error("kek mutate: the base program " + base + " does not check");
+                return 1;
+            }
+        };
+        for d in bp.dh.defs {
+            base_hash.insert(d.name, d.hash);
+        }
+    }
+    let sel: HashMap<Int, Bool> = HashMap::new();
+    let funcs = Vec::new();
+    let unchanged = Vec::new();
+    for fd in cov_all_funcs(p.file) {
+        if p.istest.get(fd.id).unwrap_or(false) || p.rare.get(fd.id).unwrap_or(false) {
+            continue;
+        }
+        let name = p.names.get(fd.id).unwrap_or(fd.name);
+        if base != "" && base_hash.get(name).unwrap_or("") == p.hashes.get(fd.id).unwrap_or("") {
+            unchanged.push(name);
+            continue;
+        }
+        sel.insert(fd.id, true);
+        funcs.push(name);
+    }
+    let w = cov_new_walk("collect");
+    w.info = Some(p.info);
+    for s in p.srcs {
+        w.lines.insert(s.name, cov_split_lines(s.text));
+    }
+    cov_rewrite_file(w, p.file, p, sel);
+    let cands = w.cands;
+    // candidates that can be ill-typed: check them one by one
+    for c in cands {
+        if c.risky {
+            let msg = mut_check_one(p, sel, c);
+            if msg != "" {
+                c.status = "types";
+                c.msg = msg;
+            }
+        }
+    }
+    if !cov_write_tests(p, out_dir, fs, log) {
+        return 1;
+    }
+    let mut res = mut_schema(p, sel, cands);
+    if res.errs.len() > 0 {
+        // a candidate assumed well-typed is not: check every one
+        for c in cands {
+            if c.status == "" && !c.risky {
+                let msg = mut_check_one(p, sel, c);
+                if msg != "" {
+                    c.status = "types";
+                    c.msg = msg;
+                }
+            }
+        }
+        res = mut_schema(p, sel, cands);
+        if res.errs.len() > 0 {
+            log.error("kek mutate: internal error: the mutant schema does not check:");
+            frontend_print_errors(log, res.errs);
+            return 1;
+        }
+    }
+    let runnable = Vec::new();
+    let all = Vec::new();
+    for c in cands {
+        if c.status == "" {
+            runnable.push(c.id.to_string() + "\t" + c.key + "\n");
+        }
+        all.push(mut_cand_json(c));
+    }
+    let o = irjson_obj();
+    irjson_set(o, "path", IrjVal::Str(path));
+    irjson_set(o, "base", if base == "" {
+        IrjVal::Null
+    } else {
+        IrjVal::Str(base)
+    });
+    irjson_set(o, "functions", irjson_strs(funcs));
+    irjson_set(o, "unchanged", irjson_strs(unchanged));
+    irjson_set(o, "mutants", IrjVal::Arr(all));
+    if !tool_write(fs, log, out_dir + "/mutants.json", irjson_encode(irjson_val(o), false) + "\n")
+        || !tool_write(fs, log, out_dir + "/mutants.txt", runnable.join("")) {
+        return 1;
+    }
+    cov_emit(res.info, out_dir, fs, log)
+}
+
+fn mut_cand_json(c: MutCand) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "id", irjson_int(c.id));
+    irjson_set(o, "file", IrjVal::Str(c.pos.file));
+    irjson_set(o, "line", irjson_int(c.pos.line));
+    irjson_set(o, "col", irjson_int(c.pos.col));
+    irjson_set(o, "func", IrjVal::Str(c.func));
+    irjson_set(o, "kind", IrjVal::Str(c.kind));
+    irjson_set(o, "description", IrjVal::Str(c.desc));
+    irjson_set(o, "original", IrjVal::Str(c.orig));
+    irjson_set(o, "mutated", IrjVal::Str(c.mutated));
+    irjson_set(o, "key", IrjVal::Str(c.key));
+    irjson_set(
+        o,
+        "status",
+        IrjVal::Str(if c.status == "" {
+            "pending"
+        } else {
+            "killed_by_types"
+        }),
+    );
+    if c.msg != "" {
+        irjson_set(o, "message", IrjVal::Str(c.msg));
+    }
+    irjson_val(o)
+}
+
+// ---- report ----
+
+fn mut_status_name(s: String) -> String {
+    if s == "killed_by_types" {
+        "killed by types"
+    } else if s == "nocov" || s == "no_coverage" {
+        "no coverage"
+    } else {
+        s
+    }
+}
+
+fn mut_plural(n: Int, word: String) -> String {
+    n.to_string() + " " + word + if n == 1 { "" } else { "s" }
+}
+
+// `mutate-report [-json] <outdir>`
+fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let usage = "mutate-report [-json] <outdir>";
+    let fl = tool_flags(args, 1, "json");
+    if fl.err != "" {
+        return tool_flag_error(fl, usage, log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek " + usage);
+        return 2;
+    }
+    let dir = frontend_clean_dir(fl.rest.get(0).unwrap_or(""));
+    let table = match fs.read(dir + "/mutants.json") {
+        Ok(t) => match tool_json_parse(t) {
+            Ok(v) => v,
+            Err(e) => {
+                log.error(dir + "/mutants.json: " + e);
+                return 1;
+            }
+        },
+        Err(e) => {
+            log.error(dir + "/mutants.json: " + e.message());
+            return 1;
+        }
+    };
+    let cfg = match tool_config(fs, log) {
+        Some(c) => c,
+        None => {
+            return 1;
+        }
+    };
+    let min_score = tool_json_int(tool_config_get(cfg, "mutate", "min_score"), -1);
+    let status: HashMap<Int, String> = HashMap::new();
+    let killer: HashMap<Int, String> = HashMap::new();
+    for l in cov_read_lines(fs, dir + "/results.txt") {
+        let parts = l.split("\t");
+        match parts.get(0).unwrap_or("").parse_int() {
+            Some(k) => {
+                let st = parts.get(1).unwrap_or("");
+                status.insert(k, if st == "nocov" { "no_coverage" } else { st });
+                killer.insert(k, parts.get(2).unwrap_or(""));
+            }
+            None => {}
+        }
+    }
+    let tests = Vec::new();
+    let failing = Vec::new();
+    for l in cov_read_lines(fs, dir + "/baseline.txt") {
+        let parts = l.split("\t");
+        let t = irjson_obj();
+        let name = parts.get(0).unwrap_or("");
+        let st = parts.get(1).unwrap_or("");
+        irjson_set(t, "name", IrjVal::Str(name));
+        irjson_set(t, "status", IrjVal::Str(st));
+        irjson_set(t, "ms", irjson_int(parts.get(2).unwrap_or("0").parse_int().unwrap_or(0)));
+        tests.push(irjson_val(t));
+        if st != "ok" {
+            failing.push(name);
+        }
+    }
+    let mut n_types = 0;
+    let mut n_killed = 0;
+    let mut n_surv = 0;
+    let mut n_timeout = 0;
+    let mut n_nocov = 0;
+    let objs = Vec::new();
+    let rows: HashMap<String, Vec<String>> = HashMap::new();
+    let muts = tool_json_arr(tool_json_get(table, "mutants"));
+    for m in muts {
+        let id = tool_json_int(tool_json_get(m, "id"), 0);
+        let mut st = tool_json_str(tool_json_get(m, "status"), "");
+        if st == "pending" {
+            st = status.get(&id).unwrap_or("no_coverage");
+        }
+        if st == "killed_by_types" {
+            n_types = n_types + 1;
+        } else if st == "killed" {
+            n_killed = n_killed + 1;
+        } else if st == "survived" {
+            n_surv = n_surv + 1;
+        } else if st == "timeout" {
+            n_timeout = n_timeout + 1;
+        } else {
+            st = "no_coverage";
+            n_nocov = n_nocov + 1;
+        }
+        let o = irjson_obj();
+        irjson_set(o, "id", irjson_int(id));
+        for k in "file line col func kind description original mutated".split(" ") {
+            let v = tool_json_get(m, k);
+            irjson_set(o, k, match v {
+                ToolJson::Num(n) => irjson_int(n),
+                _ => IrjVal::Str(tool_json_str(v, "")),
+            });
+        }
+        irjson_set(o, "status", IrjVal::Str(st));
+        let by = killer.get(&id).unwrap_or("");
+        if by != "" && (st == "killed" || st == "timeout") {
+            irjson_set(o, "killed_by", IrjVal::Str(by));
+        }
+        let msg = tool_json_str(tool_json_get(m, "message"), "");
+        if msg != "" {
+            irjson_set(o, "message", IrjVal::Str(msg));
+        }
+        objs.push(irjson_val(o));
+        // human rows
+        let where_ = cov_base(tool_json_str(tool_json_get(m, "file"), ""))
+            + ":"
+            + tool_json_int(tool_json_get(m, "line"), 0).to_string()
+            + ":"
+            + tool_json_int(tool_json_get(m, "col"), 0).to_string();
+        let orig = tool_json_str(tool_json_get(m, "original"), "");
+        let mutated = tool_json_str(tool_json_get(m, "mutated"), "");
+        let mut row = "  "
+            + where_
+            + "  "
+            + tool_json_str(tool_json_get(m, "func"), "")
+            + ": "
+            + tool_json_str(tool_json_get(m, "description"), "");
+        if mutated == "" {
+            row = row + "\n      " + orig + "   (deleted)";
+        } else if mutated != orig {
+            row = row + "\n      " + orig + "   →   " + mutated;
+        } else {
+            row = row + "\n      " + orig;
+        }
+        if st == "killed_by_types" && msg != "" {
+            row = row + "\n      " + msg;
+        }
+        match rows.get(st) {
+            Some(v) => v.push(row),
+            None => {
+                let v = Vec::new();
+                v.push(row);
+                rows.insert(st, v);
+            }
+        }
+    }
+    let detected = n_killed + n_timeout;
+    let denom = detected + n_surv + n_nocov;
+    let below = min_score >= 0 && denom > 0 && detected * 100 < min_score * denom;
+    let path = tool_json_str(tool_json_get(table, "path"), "");
+    let funcs = tool_json_strs(tool_json_get(table, "functions"));
+    if tool_flag_bool(fl, "json") {
+        let o = irjson_obj();
+        irjson_set(o, "path", IrjVal::Str(path));
+        let base = tool_json_str(tool_json_get(table, "base"), "");
+        irjson_set(o, "base", if base == "" {
+            IrjVal::Null
+        } else {
+            IrjVal::Str(base)
+        });
+        irjson_set(o, "functions", irjson_strs(funcs));
+        irjson_set(o, "tests", IrjVal::Arr(tests));
+        let s = irjson_obj();
+        irjson_set(s, "generated", irjson_int(muts.len()));
+        irjson_set(s, "killed_by_types", irjson_int(n_types));
+        irjson_set(s, "killed", irjson_int(n_killed));
+        irjson_set(s, "survived", irjson_int(n_surv));
+        irjson_set(s, "timeout", irjson_int(n_timeout));
+        irjson_set(s, "no_coverage", irjson_int(n_nocov));
+        irjson_set(s, "score", cov_pct_num(detected, denom));
+        irjson_set(s, "covered_score", cov_pct_num(detected, detected + n_surv));
+        irjson_set(s, "min_score", if min_score >= 0 {
+            irjson_int(min_score)
+        } else {
+            IrjVal::Null
+        });
+        irjson_set(s, "ok", irjson_bool(!below));
+        irjson_set(o, "summary", irjson_val(s));
+        irjson_set(o, "mutants", IrjVal::Arr(objs));
+        log.info(irjson_encode(irjson_val(o), false));
+        return if below { 1 } else { 0 };
+    }
+    let out = Vec::new();
+    out.push(
+        "mutation testing of "
+            + path
+            + ": "
+            + mut_plural(muts.len(), "mutant")
+            + " in "
+            + mut_plural(funcs.len(), "function")
+            + ", "
+            + mut_plural(tests.len(), "test"),
+    );
+    let unchanged = tool_json_strs(tool_json_get(table, "unchanged"));
+    if unchanged.len() > 0 {
+        out.push("unchanged since the base (skipped): " + unchanged.join(", "));
+    }
+    if failing.len() > 0 {
+        out.push("tests failing without mutants (not used): " + failing.join(", "));
+    }
+    for st in "survived timeout no_coverage killed_by_types".split(" ") {
+        match rows.get(st) {
+            Some(v) => {
+                out.push("");
+                let title = if st == "survived" {
+                    "survived (every test passes with the mutant):"
+                } else if st == "timeout" {
+                    "timeout (counted as detected):"
+                } else if st == "no_coverage" {
+                    "no coverage (no test reaches the mutant):"
+                } else {
+                    "killed by types (the mutant does not type-check):"
+                };
+                out.push(title);
+                for r in v {
+                    out.push(r);
+                }
+            }
+            None => {}
+        }
+    }
+    out.push("");
+    out.push(
+        "generated "
+            + muts.len().to_string()
+            + ": killed by types "
+            + n_types.to_string()
+            + ", killed "
+            + n_killed.to_string()
+            + ", survived "
+            + n_surv.to_string()
+            + ", timeout "
+            + n_timeout.to_string()
+            + ", no coverage "
+            + n_nocov.to_string(),
+    );
+    out.push(
+        "mutation score "
+            + cov_pct(detected, denom)
+            + " ("
+            + detected.to_string()
+            + "/"
+            + denom.to_string()
+            + "; covered mutants "
+            + cov_pct(detected, detected + n_surv)
+            + "); killed by types "
+            + cov_pct(n_types, muts.len())
+            + " of the mutants",
+    );
+    frontend_print(log, out);
+    if below {
+        log.error(
+            "kek mutate: mutation score "
+                + cov_pct(detected, denom)
+                + " is below [mutate] min_score = "
+                + min_score.to_string()
+                + "%",
+        );
+        return 1;
+    }
+    0
+}

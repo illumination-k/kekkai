@@ -117,6 +117,7 @@ fn __eprint(s: String) {
 }
 
 fn __exit(code: Int) {
+    __cov_flush();
     __Wasi::proc_exit(code);
 }
 

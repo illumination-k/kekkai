@@ -70,7 +70,11 @@ fn main(log: &Log) -> Int {
     let snapshot = inv.clone();
     grow(inv, "q");
     log.info(inv.items.len().to_string() + " " + snapshot.items.len().to_string());
-    log.info(snapshot.index.contains_key(&"q").to_string() + " " + inv.index.contains_key(&"q").to_string());
+    log.info(
+        snapshot.index.contains_key(&"q").to_string()
+            + " "
+            + inv.index.contains_key(&"q").to_string(),
+    );
 
     let v = (1, a.clone(), Some(b.clone()));
     let mut w = v.clone();

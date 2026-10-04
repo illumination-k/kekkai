@@ -46,7 +46,7 @@ fn diag_analyze(src: String) -> DiagAnalysis {
 // diag_analyze_cfg is diag_analyze with a `[refine]` configuration.
 fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
     let bytes = src.to_bytes();
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     lines.push(0);
     let mut i = 0;
     for b in bytes {
@@ -56,7 +56,7 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
         i = i + 1;
     }
     let lr = lex_file("", src);
-    let tok_at: HashMap<Int, Int> = HashMap::new();
+    let mut tok_at: HashMap<Int, Int> = HashMap::new();
     let mut k = 0;
     for t in lr.toks {
         tok_at.insert(diag_pos_key(t.pos.line, t.pos.col), k);
@@ -64,7 +64,7 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
     }
     let pr = parse_file("", src, AstIds { next: 0 });
     let res = chk_check_cfg(pr.file, false, chk_parse_core(), cfg);
-    let a = DiagAnalysis {
+    let mut a = DiagAnalysis {
         src: src,
         bytes: bytes,
         lines: lines,
@@ -79,21 +79,21 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
     if a.parse_ok {
         // refinement errors are among res.errs: report them with their
         // phase and details instead
-        let skip: HashMap<String, Bool> = HashMap::new();
+        let mut skip: HashMap<String, Bool> = HashMap::new();
         for d in res.refine.diags {
             if d.severity == "error" {
                 skip.insert(ast_pos_string(d.pos) + "\t" + d.msg, true);
             }
         }
         // so are the mutability errors (phase "mut")
-        let mu: HashMap<String, Bool> = HashMap::new();
+        let mut mu: HashMap<String, Bool> = HashMap::new();
         if mu_enforce() {
             for d in res.mu.diags {
                 mu.insert(ast_pos_string(d.pos) + "\t" + d.msg, true);
             }
         }
-        let errs = Vec::new();
-        let mu_errs = Vec::new();
+        let mut errs = Vec::new();
+        let mut mu_errs = Vec::new();
         for e in res.errs {
             let k = ast_pos_string(e.pos) + "\t" + e.msg;
             if mu.contains_key(k) {
@@ -137,7 +137,7 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
 
 // diag_sort orders diagnostics by position (stable).
 fn diag_sort(ds: Vec<DiagDiag>) -> Vec<DiagDiag> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for d in ds {
         out.push(d);
         let mut j = out.len() - 1;
@@ -201,10 +201,10 @@ fn diag_rune_size(a: DiagAnalysis, off: Int) -> Int {
     size
 }
 
-fn diag_add_errors(a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
+fn diag_add_errors(mut a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
     for e in errs {
         let end = diag_token_end(a, e.pos.line, e.pos.col);
-        let d = DiagDiag {
+        let mut d = DiagDiag {
             line: e.pos.line,
             col: e.pos.col,
             end_line: e.pos.line,
@@ -238,7 +238,7 @@ fn diag_add_errors(a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
 
 // diag_caps returns the capability parameters of a function (Func.Caps).
 fn diag_caps(fun: ChkFunc) -> Vec<ChkBinding> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in fun.params {
         if ty_is_cap(p.ty) {
             out.push(p);
@@ -248,7 +248,7 @@ fn diag_caps(fun: ChkFunc) -> Vec<ChkBinding> {
 }
 
 // diag_add_lints reports capabilities that are granted but never used.
-fn diag_add_lints(a: DiagAnalysis) {
+fn diag_add_lints(mut a: DiagAnalysis) {
     for fun in a.info.func_list {
         if chk_is_lib(fun) {
             continue;
@@ -410,7 +410,7 @@ fn diag_parse_bool(s: String) -> Option<Bool> {
 // diag_parse_flags parses args[start..] for the flags of cmd: -json, and
 // -limit for search.
 fn diag_parse_flags(args: Vec<String>, start: Int, cmd: String) -> DiagFlags {
-    let fl = DiagFlags { vals: HashMap::new(), rest: Vec::new(), err: "" };
+    let mut fl = DiagFlags { vals: HashMap::new(), rest: Vec::new(), err: "" };
     let mut i = start;
     while i < args.len() {
         let a = args.get(i).unwrap_or("");
@@ -555,7 +555,7 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let path = fl.rest.get(0).unwrap_or("");
     if !diag_flag_bool(fl, "json") {
-        let plain = Vec::new();
+        let mut plain = Vec::new();
         plain.push(if diag_flag_bool(fl, "v") {
             cmd + "-v"
         } else {
@@ -580,7 +580,7 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     };
     let a = diag_analyze_cfg(src, cfg);
-    let ds = Vec::new();
+    let mut ds = Vec::new();
     for d in a.diags {
         let o = irjson_obj();
         irjson_set(o, "file", IrjVal::Str(path));
@@ -597,7 +597,7 @@ fn diag_json_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
                 irjson_set(cx, b.atom, irjson_int(b.value));
             }
             irjson_set(o, "counterexample", irjson_val(cx));
-            let fs2 = Vec::new();
+            let mut fs2 = Vec::new();
             for u in d.facts {
                 let fo = irjson_obj();
                 irjson_set(fo, "line", irjson_int(u.pos.line));

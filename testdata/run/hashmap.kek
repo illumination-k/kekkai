@@ -7,7 +7,7 @@ enum Color {
 
 #[main]
 fn main(log: &Log) -> Int {
-    let m: HashMap<String, Int> = HashMap::new();
+    let mut m: HashMap<String, Int> = HashMap::new();
     log.info(m.insert("a", 1).is_none().to_string());
     m.insert("b", 2);
     m.insert("c", 3);
@@ -29,7 +29,7 @@ fn main(log: &Log) -> Int {
     }
     log.info(total.to_string());
     // composite keys
-    let pm: HashMap<(Int, String), Color> = HashMap::new();
+    let mut pm: HashMap<(Int, String), Color> = HashMap::new();
     pm.insert((1, "x"), Color::Red);
     pm.insert((2, "y"), Color::Rgb(1, 2, 3));
     log.info(
@@ -37,12 +37,12 @@ fn main(log: &Log) -> Int {
             + " "
             + pm.contains_key(&(1, "y")).to_string(),
     );
-    let cm: HashMap<Color, Int> = HashMap::new();
+    let mut cm: HashMap<Color, Int> = HashMap::new();
     cm.insert(Color::Green, 7);
     cm.insert(Color::Rgb(0, 0, 0), 8);
     log.info(cm.get(&Color::Rgb(0, 0, 0)).unwrap_or(0).to_string());
     // many entries, removals, growth
-    let big: HashMap<Int, Int> = HashMap::new();
+    let mut big: HashMap<Int, Int> = HashMap::new();
     for i in 0..2000 {
         big.insert(i * 7919 % 10007, i);
     }
@@ -57,7 +57,7 @@ fn main(log: &Log) -> Int {
     }
     log.info(big.len().to_string() + " " + ok.to_string());
     // live view: insert while iterating
-    let lv: HashMap<Int, Int> = HashMap::new();
+    let mut lv: HashMap<Int, Int> = HashMap::new();
     lv.insert(1, 1);
     let mut seen = 0;
     for (k, v) in lv.iter() {
@@ -68,7 +68,7 @@ fn main(log: &Log) -> Int {
     }
     log.info(seen.to_string());
     // sets
-    let s: HashSet<String> = HashSet::new();
+    let mut s: HashSet<String> = HashSet::new();
     log.info(
         s.insert("x").to_string() + " " + s.insert("x").to_string() + " " + s.len().to_string(),
     );
@@ -80,7 +80,7 @@ fn main(log: &Log) -> Int {
             + " "
             + t.difference(&s).len().to_string(),
     );
-    let counts: HashMap<String, Int> = HashMap::new();
+    let mut counts: HashMap<String, Int> = HashMap::new();
     for w in vec_of("a b a c b a") {
         counts.insert(w, counts.get_or(&w, 0) + 1);
     }

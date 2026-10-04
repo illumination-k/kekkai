@@ -22,7 +22,7 @@ fn fmt_join(dir: String, name: String) -> String {
 // fmt_walk appends the .kek files below dir (whose sorted entries are
 // names) in lexical order, depth first. A path is a directory iff Fs.list
 // succeeds on it.
-fn fmt_walk(dir: String, names: Vec<String>, fs: &Fs, files: Vec<String>) {
+fn fmt_walk(dir: String, names: Vec<String>, fs: &Fs, mut files: Vec<String>) {
     for name in names {
         let path = fmt_join(dir, name);
         match fs.list(path) {
@@ -47,7 +47,7 @@ fn fmt_usage(log: &Log) {
 fn fmt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut write = false;
     let mut check = false;
-    let paths = Vec::new();
+    let mut paths = Vec::new();
     let mut flags = true;
     let n = args.len();
     for i in 1..n {
@@ -84,7 +84,7 @@ fn fmt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.error("kek fmt: expected .kek files or directories");
         return 1;
     }
-    let files = Vec::new();
+    let mut files = Vec::new();
     for arg in paths {
         match fs.list(arg) {
             Ok(names) => fmt_walk(arg, names, fs, files),
@@ -97,7 +97,7 @@ fn fmt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             },
         }
     }
-    let unformatted = Vec::new();
+    let mut unformatted = Vec::new();
     let mut failed = false;
     for path in files {
         let src = match fs.read(path) {
@@ -110,7 +110,7 @@ fn fmt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         let res = fmt_source(src);
         if res.errs.len() > 0 {
             failed = true;
-            let lines = Vec::new();
+            let mut lines = Vec::new();
             for e in res.errs {
                 lines.push(path + ":" + ast_error_string(e));
             }

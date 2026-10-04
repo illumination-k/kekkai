@@ -23,13 +23,13 @@ fn search_tvar(name: String) -> SearchTerm {
 }
 
 fn search_list1(a: SearchTerm) -> Vec<SearchTerm> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v
 }
 
 fn search_list2(a: SearchTerm, b: SearchTerm) -> Vec<SearchTerm> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     v
@@ -53,7 +53,7 @@ fn search_term_string(t: SearchTerm) -> String {
     if t.args.len() == 0 {
         return t.con;
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for a in t.args {
         parts.push(search_term_string(a));
     }
@@ -77,7 +77,7 @@ fn search_term_of(t0: Ty) -> SearchTerm {
 }
 
 fn search_terms_of(ts: Vec<Ty>) -> Vec<SearchTerm> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for t in ts {
         out.push(search_term_of(t));
     }
@@ -113,7 +113,7 @@ fn search_query_string(q: SearchQuery) -> String {
     if q.result_only {
         return search_term_string(q.result);
     }
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for p in q.params {
         ps.push(search_term_string(p));
     }
@@ -135,7 +135,7 @@ fn search_peek(p: SearchParser) -> String {
     search_tok(p).kind
 }
 
-fn search_next(p: SearchParser) -> Tok {
+fn search_next(mut p: SearchParser) -> Tok {
     let t = search_tok(p);
     if t.kind != "EOF" {
         p.i = p.i + 1;
@@ -143,7 +143,7 @@ fn search_next(p: SearchParser) -> Tok {
     t
 }
 
-fn search_fail(p: SearchParser, msg: String) {
+fn search_fail(mut p: SearchParser, msg: String) {
     if p.err == "" {
         p.err = msg;
     }
@@ -169,7 +169,7 @@ fn search_parse_query(s: String) -> Result<SearchQuery, String> {
 
 fn search_parse(p: SearchParser) -> SearchQuery {
     let dummy = SearchQuery { params: Vec::new(), result: search_con0("()"), result_only: true };
-    let segs: Vec<Vec<SearchTerm>> = Vec::new();
+    let mut segs: Vec<Vec<SearchTerm>> = Vec::new();
     while true {
         let seg = search_segment(p);
         if p.err != "" {
@@ -191,7 +191,7 @@ fn search_parse(p: SearchParser) -> SearchQuery {
         search_fail(p, "the result must be a single type");
         return dummy;
     }
-    let q = SearchQuery {
+    let mut q = SearchQuery {
         params: Vec::new(),
         result: last.get(0).unwrap_or(search_con0("()")),
         result_only: false,
@@ -212,7 +212,7 @@ fn search_parse(p: SearchParser) -> SearchQuery {
     q
 }
 
-fn search_segment(p: SearchParser) -> Vec<SearchTerm> {
+fn search_segment(mut p: SearchParser) -> Vec<SearchTerm> {
     if search_peek(p) == "(" {
         let save = p.i;
         search_next(p);
@@ -236,7 +236,7 @@ fn search_segment(p: SearchParser) -> Vec<SearchTerm> {
 }
 
 fn search_list(p: SearchParser) -> Vec<SearchTerm> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     while true {
         let t = search_typ(p);
         if p.err != "" {
@@ -251,7 +251,7 @@ fn search_list(p: SearchParser) -> Vec<SearchTerm> {
     out
 }
 
-fn search_typ(p: SearchParser) -> SearchTerm {
+fn search_typ(mut p: SearchParser) -> SearchTerm {
     let bad = search_con0("()");
     let t = search_next(p);
     if t.kind == "&" {
@@ -285,7 +285,7 @@ fn search_typ(p: SearchParser) -> SearchTerm {
         if search_is_cap_name(name) {
             return search_con0("&" + name);
         }
-        let args = Vec::new();
+        let mut args = Vec::new();
         if search_peek(p) == "<" {
             search_next(p);
             while true {
@@ -340,7 +340,7 @@ fn search_occurs(s: HashMap<String, SearchTerm>, v: String, t0: SearchTerm) -> B
     false
 }
 
-fn search_unify(s: HashMap<String, SearchTerm>, a0: SearchTerm, b0: SearchTerm) -> Bool {
+fn search_unify(mut s: HashMap<String, SearchTerm>, a0: SearchTerm, b0: SearchTerm) -> Bool {
     let a = search_walk(s, a0);
     let b = search_walk(s, b0);
     if a.v != "" && b.v != "" && a.v == b.v {
@@ -376,7 +376,7 @@ fn search_at(ts: Vec<SearchTerm>, i: Int) -> SearchTerm {
 }
 
 fn search_clone(s: HashMap<String, SearchTerm>) -> HashMap<String, SearchTerm> {
-    let c: HashMap<String, SearchTerm> = HashMap::new();
+    let mut c: HashMap<String, SearchTerm> = HashMap::new();
     for k in s.keys() {
         match s.get(k) {
             Some(v) => {
@@ -432,7 +432,7 @@ fn search_is_static(bs: ChkBuiltins, b: ChkBuiltin) -> Bool {
 
 // search_builtin_signature renders a builtin (tooling.BuiltinSignature).
 fn search_builtin_signature(bs: ChkBuiltins, b: ChkBuiltin) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut sep = ".";
     if search_is_static(bs, b) {
         sep = "::";
@@ -452,10 +452,10 @@ fn search_builtin_signature(bs: ChkBuiltins, b: ChkBuiltin) -> String {
 }
 
 fn search_builtin_cands() -> Vec<SearchCand> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let bs = chk_new_builtins();
     for b in bs.all {
-        let c = search_cand(
+        let mut c = search_cand(
             "",
             "",
             search_builtin_signature(bs, b),
@@ -544,7 +544,7 @@ fn search_builtin_cands() -> Vec<SearchCand> {
     out.push(search_cand("None", "constructor", "None : Option<T>", Vec::new(), opt));
     out.push(search_cand("Ok", "constructor", "Ok(T) -> Result<T, E>", search_list1(t), res));
     out.push(search_cand("Err", "constructor", "Err(E) -> Result<T, E>", search_list1(e), res));
-    let tx = search_cand(
+    let mut tx = search_cand(
         "Db.transaction",
         "method",
         "fn Db.transaction(&self, |tx: Tx| -> Result<T, E>) -> Result<Result<T, E>, TxError>",
@@ -560,7 +560,7 @@ fn search_builtin_cands() -> Vec<SearchCand> {
 fn search_variant_text(en: TyEnum, v: TyVariant) -> String {
     let mut s = en.name + "::" + v.name;
     if v.fields.len() > 0 {
-        let fs = Vec::new();
+        let mut fs = Vec::new();
         for f in v.fields {
             fs.push(ty_str(f));
         }
@@ -570,7 +570,7 @@ fn search_variant_text(en: TyEnum, v: TyVariant) -> String {
 }
 
 fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for r in caps_reports(a) {
         let fun = match a.info.funcs.get(r.name) {
             Some(f) => f,
@@ -582,13 +582,13 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
         // signature (`where 0 <= i, i < v.len()`)
         let mut sig = r.signature;
         if fun.decl.preds.len() > 0 {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for e in fun.decl.preds {
                 ps.push(ref_show(e));
             }
             sig = sig + " where " + ps.join(", ");
         }
-        let c = search_cand(fun.name, "function", sig, Vec::new(), search_term_of(fun.result));
+        let mut c = search_cand(fun.name, "function", sig, Vec::new(), search_term_of(fun.result));
         c.pure = r.pure;
         c.line = r.line;
         c.col = r.col;
@@ -601,10 +601,10 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
         out.push(c);
     }
     // variant positions of the first declaration of each enum
-    let vpos: HashMap<String, Vec<AstPos>> = HashMap::new();
+    let mut vpos: HashMap<String, Vec<AstPos>> = HashMap::new();
     for ed in a.file.enums {
         if a.info.enums.contains_key(ed.name) && !vpos.contains_key(ed.name) {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for v in ed.variants {
                 ps.push(v.pos);
             }
@@ -623,7 +623,7 @@ fn search_user_cands(a: DiagAnalysis) -> Vec<SearchCand> {
         let ps = vpos.get(n).unwrap_or(Vec::new());
         let mut i = 0;
         for v in en.variants {
-            let c = search_cand(
+            let mut c = search_cand(
                 en.name + "::" + v.name,
                 "constructor",
                 search_variant_text(en, v),
@@ -708,7 +708,7 @@ fn search_perm(
     s: HashMap<String, SearchTerm>,
     qs: Vec<SearchTerm>,
     cs: Vec<SearchTerm>,
-    used: Vec<Bool>,
+    mut used: Vec<Bool>,
     i: Int,
 ) -> Bool {
     if i == qs.len() {
@@ -733,7 +733,7 @@ fn search_perm(
 // search_match_cand returns the match kind and score, or kind "" if c
 // does not match.
 fn search_match_cand(q: SearchQuery, c: SearchCand) -> SearchMatch {
-    let m = SearchMatch { cand: c, kind: "", score: 0, builtin: false };
+    let mut m = SearchMatch { cand: c, kind: "", score: 0, builtin: false };
     if q.result_only {
         if search_exactly(q.result, c.result) {
             m.kind = "result";
@@ -770,7 +770,7 @@ fn search_match_cand(q: SearchQuery, c: SearchCand) -> SearchMatch {
             m.score = 5 + search_generality(c);
             return m;
         }
-        let used = Vec::new();
+        let mut used = Vec::new();
         for k in 0..c.params.len() {
             used.push(false);
         }
@@ -800,8 +800,8 @@ fn search_sort(xs: Vec<SearchMatch>) -> Vec<SearchMatch> {
     if n <= 1 {
         return xs;
     }
-    let left = Vec::new();
-    let right = Vec::new();
+    let mut left = Vec::new();
+    let mut right = Vec::new();
     let mut i = 0;
     for x in xs {
         if i < n / 2 {
@@ -813,7 +813,7 @@ fn search_sort(xs: Vec<SearchMatch>) -> Vec<SearchMatch> {
     }
     let l = search_sort(left);
     let r = search_sort(right);
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut a = 0;
     let mut b = 0;
     while a < l.len() || b < r.len() {
@@ -846,11 +846,11 @@ fn search_sort(xs: Vec<SearchMatch>) -> Vec<SearchMatch> {
 }
 
 fn search_run(q: SearchQuery, a: Option<DiagAnalysis>) -> Vec<SearchMatch> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     match a {
         Some(an) => {
             for c in search_user_cands(an) {
-                let m = search_match_cand(q, c);
+                let mut m = search_match_cand(q, c);
                 if m.kind != "" {
                     m.score = m.score - 1; // prefer reusing project code
                     out.push(m);
@@ -860,7 +860,7 @@ fn search_run(q: SearchQuery, a: Option<DiagAnalysis>) -> Vec<SearchMatch> {
         None => {}
     }
     for c in search_builtin_cands() {
-        let m = search_match_cand(q, c);
+        let mut m = search_match_cand(q, c);
         if m.kind != "" {
             m.builtin = true;
             out.push(m);
@@ -907,14 +907,14 @@ fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     }
     let all = search_run(q, an);
-    let ms = Vec::new();
+    let mut ms = Vec::new();
     for m in all {
         if limit <= 0 || ms.len() < limit {
             ms.push(m);
         }
     }
     if diag_flag_bool(fl, "json") {
-        let xs = Vec::new();
+        let mut xs = Vec::new();
         for m in ms {
             let o = irjson_obj();
             irjson_set(o, "name", IrjVal::Str(m.cand.name));
@@ -943,7 +943,7 @@ fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.info("no functions match " + search_query_string(q));
         return 0;
     }
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     for m in ms {
         let mut loc = "builtin";
         if !m.builtin {

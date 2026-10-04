@@ -47,7 +47,7 @@ fn cov_load_srcs(srcs: Vec<FeSource>, log: &Log) -> Option<CovProg> {
         return None;
     }
     let dh = dh_program(prog.file, res.info);
-    let p = CovProg {
+    let mut p = CovProg {
         srcs: srcs,
         file: prog.file,
         info: res.info,
@@ -92,7 +92,7 @@ fn cov_is_user(fd: AstFuncDecl) -> Bool {
 
 // cov_rewrite_file rewrites the selected functions of f with walker w
 // (collect mode leaves f unchanged).
-fn cov_rewrite_file(w: CovW, f: AstFile, p: CovProg, sel: HashMap<Int, Bool>) {
+fn cov_rewrite_file(w: CovW, mut f: AstFile, p: CovProg, sel: HashMap<Int, Bool>) {
     let n = f.funcs.len();
     for i in 0..n {
         match f.funcs.get(i) {
@@ -115,7 +115,7 @@ fn cov_rewrite_file(w: CovW, f: AstFile, p: CovProg, sel: HashMap<Int, Bool>) {
     }
 }
 
-fn cov_rewrite_funcs(w: CovW, fs: Vec<AstFuncDecl>, p: CovProg, sel: HashMap<Int, Bool>) {
+fn cov_rewrite_funcs(w: CovW, mut fs: Vec<AstFuncDecl>, p: CovProg, sel: HashMap<Int, Bool>) {
     let n = fs.len();
     for i in 0..n {
         match fs.get(i) {
@@ -132,7 +132,7 @@ fn cov_rewrite_funcs(w: CovW, fs: Vec<AstFuncDecl>, p: CovProg, sel: HashMap<Int
     }
 }
 
-fn cov_walk_one(w: CovW, fd: AstFuncDecl, p: CovProg) -> AstFuncDecl {
+fn cov_walk_one(mut w: CovW, fd: AstFuncDecl, p: CovProg) -> AstFuncDecl {
     w.func = p.names.get(fd.id).unwrap_or(fd.name);
     w.rare = p.rare.get(fd.id).unwrap_or(false);
     w.fkey = p.trans.get(fd.id).unwrap_or("");
@@ -142,7 +142,7 @@ fn cov_walk_one(w: CovW, fd: AstFuncDecl, p: CovProg) -> AstFuncDecl {
 // cov_all_funcs lists the user function declarations of a file in source
 // order (functions, then impl methods, then trait default methods).
 fn cov_all_funcs(f: AstFile) -> Vec<AstFuncDecl> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for fd in f.funcs {
         if cov_is_user(fd) {
             out.push(fd);
@@ -168,7 +168,7 @@ fn cov_all_funcs(f: AstFile) -> Vec<AstFuncDecl> {
 // cov_with_harness returns the sources plus the `kek test` harness and the
 // runtime prelude, parsed.
 fn cov_with_harness(p: CovProg) -> FeProgram {
-    let all = Vec::new();
+    let mut all = Vec::new();
     for s in p.srcs {
         all.push(s);
     }
@@ -184,11 +184,11 @@ fn cov_with_harness(p: CovProg) -> FeProgram {
 // cov_demote demotes the program's own entry points (the harness is the
 // entry).
 fn cov_demote(f: AstFile) {
-    for fd in f.funcs {
+    for mut fd in f.funcs {
         if fd.name == testrun_main_name() {
             continue;
         }
-        let attrs = Vec::new();
+        let mut attrs = Vec::new();
         for a in fd.attrs {
             if a.name != "handler" && a.name != "main" {
                 attrs.push(a);
@@ -232,8 +232,8 @@ fn cov_emit(info: ChkInfo, out_dir: String, fs: &Fs, log: &Log) -> Int {
 
 // cov_write_tests writes tests.txt and testkeys.txt.
 fn cov_write_tests(p: CovProg, out_dir: String, fs: &Fs, log: &Log) -> Bool {
-    let names = Vec::new();
-    let keys = Vec::new();
+    let mut names = Vec::new();
+    let mut keys = Vec::new();
     for t in p.tests {
         names.push(t.name + "\n");
         let tr = match p.dh.by_name.get(t.name) {
@@ -254,7 +254,7 @@ fn cov_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let path = args.get(1).unwrap_or("");
     let out_dir = frontend_clean_dir(args.get(2).unwrap_or(""));
-    let p = match cov_load(path, fs, log) {
+    let mut p = match cov_load(path, fs, log) {
         Some(p) => p,
         None => {
             return 1;
@@ -266,7 +266,7 @@ fn cov_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         frontend_print_errors(log, prog.errs);
         return 1;
     }
-    let sel: HashMap<Int, Bool> = HashMap::new();
+    let mut sel: HashMap<Int, Bool> = HashMap::new();
     for fd in cov_all_funcs(prog.file) {
         if !p.istest.get(fd.id).unwrap_or(false) {
             sel.insert(fd.id, true);
@@ -278,7 +278,7 @@ fn cov_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         return 1;
     }
     // the function table: every instrumented function and its entry probe
-    let funcs = Vec::new();
+    let mut funcs = Vec::new();
     for fd in cov_all_funcs(p.file) {
         if !sel.contains_key(fd.id) {
             continue;
@@ -290,7 +290,7 @@ fn cov_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         irjson_set(o, "rare", irjson_bool(p.rare.get(fd.id).unwrap_or(false)));
         funcs.push(irjson_val(o));
     }
-    let sites = Vec::new();
+    let mut sites = Vec::new();
     for s in w.sites {
         sites.push(cov_site_json(s));
     }
@@ -324,7 +324,7 @@ fn cov_site_json(s: CovSite) -> IrjVal {
 // ---- small helpers ----
 
 // cov_sort_ints sorts in place (insertion sort; the lists are short).
-fn cov_sort_ints(v: Vec<Int>) {
+fn cov_sort_ints(mut v: Vec<Int>) {
     let n = v.len();
     for i in 1..n {
         let mut j = i;
@@ -338,8 +338,8 @@ fn cov_sort_ints(v: Vec<Int>) {
 }
 
 fn cov_uniq_ints(v: Vec<Int>) -> Vec<Int> {
-    let seen: HashSet<Int> = HashSet::new();
-    let out = Vec::new();
+    let mut seen: HashSet<Int> = HashSet::new();
+    let mut out = Vec::new();
     for x in v {
         if seen.insert(x) {
             out.push(x);
@@ -381,7 +381,7 @@ fn cov_pad(s: String, n: Int, right: Bool) -> String {
 
 // cov_ranges renders sorted line numbers as "3, 5-7".
 fn cov_ranges(v: Vec<Int>) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 0;
     let n = v.len();
     while i < n {
@@ -410,7 +410,7 @@ fn cov_base(file: String) -> String {
 
 // cov_read_lines reads a text file into lines (no trailing empty line).
 fn cov_read_lines(fs: &Fs, p: String) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     match fs.read(p) {
         Ok(text) => {
             for l in text.split("\n") {
@@ -456,7 +456,7 @@ fn cov_count_lines(m: HashMap<Int, Int>) -> Int {
 }
 
 fn cov_uncovered(m: HashMap<Int, Int>) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for kv in m.iter() {
         if kv.1 == 0 {
             out.push(kv.0);
@@ -468,7 +468,7 @@ fn cov_uncovered(m: HashMap<Int, Int>) -> Vec<Int> {
 
 // cov_merge_line records that line l is instrumented and was hit by n
 // tests (the maximum over the probes covering it).
-fn cov_merge_line(m: HashMap<Int, Int>, l: Int, n: Int) {
+fn cov_merge_line(mut m: HashMap<Int, Int>, l: Int, n: Int) {
     let old = m.get(&l).unwrap_or(0);
     if !m.contains_key(&l) || n > old {
         m.insert(l, n);
@@ -508,9 +508,9 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     };
     let min_line = tool_json_int(tool_config_get(cfg, "cover", "min_line"), -1);
     // per test runs: name, status, probe ids
-    let test_names = Vec::new();
-    let test_status = Vec::new();
-    let hits_by_site: HashMap<Int, Vec<String>> = HashMap::new();
+    let mut test_names = Vec::new();
+    let mut test_status = Vec::new();
+    let mut hits_by_site: HashMap<Int, Vec<String>> = HashMap::new();
     for l in cov_read_lines(fs, dir + "/hits.txt") {
         let parts = l.split("\t");
         let name = parts.get(0).unwrap_or("");
@@ -520,9 +520,9 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             match s.parse_int() {
                 Some(k) => {
                     match hits_by_site.get(&k) {
-                        Some(v) => v.push(name),
+                        Some(mut v) => v.push(name),
                         None => {
-                            let v = Vec::new();
+                            let mut v = Vec::new();
                             v.push(name);
                             hits_by_site.insert(k, v);
                         }
@@ -533,9 +533,9 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     }
     // functions and files
-    let files = Vec::new();
-    let file_by: HashMap<String, CovFileAgg> = HashMap::new();
-    let fn_by: HashMap<String, CovFn> = HashMap::new();
+    let mut files = Vec::new();
+    let mut file_by: HashMap<String, CovFileAgg> = HashMap::new();
+    let mut fn_by: HashMap<String, CovFn> = HashMap::new();
     for f in tool_json_arr(tool_json_get(table, "functions")) {
         let file = tool_json_str(tool_json_get(f, "file"), "");
         let cf = CovFn {
@@ -549,7 +549,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             br_hit: 0,
         };
         fn_by.insert(cf.name, cf);
-        let fa = match file_by.get(file) {
+        let mut fa = match file_by.get(file) {
             Some(x) => x,
             None => {
                 let x = CovFileAgg {
@@ -566,9 +566,9 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         };
         fa.funcs.push(cf);
     }
-    let site_objs = Vec::new();
+    let mut site_objs = Vec::new();
     // branch groups: group id -> any site of it hit
-    let group_seen: HashMap<Int, Bool> = HashMap::new();
+    let mut group_seen: HashMap<Int, Bool> = HashMap::new();
     let sites = tool_json_arr(tool_json_get(table, "sites"));
     for s in sites {
         let id = tool_json_int(tool_json_get(s, "id"), 0);
@@ -578,7 +578,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         if g > 0 && n > 0 {
             group_seen.insert(g, true);
         }
-        let cf = match fn_by.get(tool_json_str(tool_json_get(s, "func"), "")) {
+        let mut cf = match fn_by.get(tool_json_str(tool_json_get(s, "func"), "")) {
             Some(x) => x,
             None => {
                 continue;
@@ -608,7 +608,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             irjson_set(o, "branch", irjson_int(tool_json_int(tool_json_get(s, "arm"), 0)));
             irjson_set(o, "decision_line", irjson_int(tool_json_int(tool_json_get(s, "dline"), 0)));
         }
-        let ls = Vec::new();
+        let mut ls = Vec::new();
         for lv in tool_json_arr(tool_json_get(s, "lines")) {
             ls.push(tool_json_int(lv, 0));
         }
@@ -623,7 +623,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut bh = 0;
     let mut ft = 0;
     let mut fh = 0;
-    for fa in files {
+    for mut fa in files {
         for cf in fa.funcs {
             if cf.rare {
                 continue;
@@ -660,7 +660,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if tool_flag_bool(fl, "json") {
         let o = irjson_obj();
         irjson_set(o, "path", IrjVal::Str(path));
-        let tests = Vec::new();
+        let mut tests = Vec::new();
         let mut i = 0;
         for name in test_names {
             let t = irjson_obj();
@@ -681,7 +681,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             IrjVal::Null
         });
         irjson_set(o, "ok", irjson_bool(!below && passed == test_names.len()));
-        let fos = Vec::new();
+        let mut fos = Vec::new();
         for fa in files {
             let fo = irjson_obj();
             irjson_set(fo, "file", IrjVal::Str(fa.file));
@@ -691,7 +691,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             fos.push(irjson_val(fo));
         }
         irjson_set(o, "files", IrjVal::Arr(fos));
-        let fns = Vec::new();
+        let mut fns = Vec::new();
         for fa in files {
             for cf in fa.funcs {
                 let fo = irjson_obj();
@@ -715,7 +715,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             0
         };
     }
-    let out = Vec::new();
+    let mut out = Vec::new();
     out.push(
         "coverage of "
             + path
@@ -726,7 +726,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             + " passed)",
     );
     if passed < test_names.len() {
-        let failed = Vec::new();
+        let mut failed = Vec::new();
         let mut i = 0;
         for name in test_names {
             if test_status.get(i).unwrap_or("") != "ok" {
@@ -738,7 +738,7 @@ fn cov_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     out.push("");
     out.push("  lines           branches        function");
-    let rare = Vec::new();
+    let mut rare = Vec::new();
     for fa in files {
         for cf in fa.funcs {
             let row = cov_fn_row(cf);
@@ -865,7 +865,7 @@ fn cov_lcov(
     hits: HashMap<Int, Vec<String>>,
     fn_by: HashMap<String, CovFn>,
 ) -> String {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for fa in files {
         out.push("TN:");
         out.push("SF:" + fa.file);
@@ -890,7 +890,7 @@ fn cov_lcov(
         out.push("FNF:" + fnf.to_string());
         out.push("FNH:" + fnh.to_string());
         // branches: one block per decision; "-" when the decision never ran
-        let ran: HashMap<Int, Bool> = HashMap::new();
+        let mut ran: HashMap<Int, Bool> = HashMap::new();
         for s in sites {
             let g = tool_json_int(tool_json_get(s, "group"), 0);
             let id = tool_json_int(tool_json_get(s, "id"), 0);
@@ -936,7 +936,7 @@ fn cov_lcov(
         }
         out.push("BRF:" + brf.to_string());
         out.push("BRH:" + brh.to_string());
-        let ls = Vec::new();
+        let mut ls = Vec::new();
         for kv in fa.lines.iter() {
             ls.push(kv.0);
         }

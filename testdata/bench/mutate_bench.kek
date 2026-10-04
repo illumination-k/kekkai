@@ -58,7 +58,7 @@ fn test_sum_0() -> Bool {
 
 #[test]
 fn test_count_0() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -128,7 +128,7 @@ fn test_sum_1() -> Bool {
 
 #[test]
 fn test_count_1() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -198,7 +198,7 @@ fn test_sum_2() -> Bool {
 
 #[test]
 fn test_count_2() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -268,7 +268,7 @@ fn test_sum_3() -> Bool {
 
 #[test]
 fn test_count_3() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -338,7 +338,7 @@ fn test_sum_4() -> Bool {
 
 #[test]
 fn test_count_4() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -408,7 +408,7 @@ fn test_sum_5() -> Bool {
 
 #[test]
 fn test_count_5() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -478,7 +478,7 @@ fn test_sum_6() -> Bool {
 
 #[test]
 fn test_count_6() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -548,7 +548,7 @@ fn test_sum_7() -> Bool {
 
 #[test]
 fn test_count_7() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -618,7 +618,7 @@ fn test_sum_8() -> Bool {
 
 #[test]
 fn test_count_8() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -688,7 +688,7 @@ fn test_sum_9() -> Bool {
 
 #[test]
 fn test_count_9() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -758,7 +758,7 @@ fn test_sum_10() -> Bool {
 
 #[test]
 fn test_count_10() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -828,7 +828,7 @@ fn test_sum_11() -> Bool {
 
 #[test]
 fn test_count_11() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -898,7 +898,7 @@ fn test_sum_12() -> Bool {
 
 #[test]
 fn test_count_12() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -968,7 +968,7 @@ fn test_sum_13() -> Bool {
 
 #[test]
 fn test_count_13() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1038,7 +1038,7 @@ fn test_sum_14() -> Bool {
 
 #[test]
 fn test_count_14() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1108,7 +1108,7 @@ fn test_sum_15() -> Bool {
 
 #[test]
 fn test_count_15() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1178,7 +1178,7 @@ fn test_sum_16() -> Bool {
 
 #[test]
 fn test_count_16() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1248,7 +1248,7 @@ fn test_sum_17() -> Bool {
 
 #[test]
 fn test_count_17() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1318,7 +1318,7 @@ fn test_sum_18() -> Bool {
 
 #[test]
 fn test_count_18() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1388,7 +1388,7 @@ fn test_sum_19() -> Bool {
 
 #[test]
 fn test_count_19() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1458,7 +1458,7 @@ fn test_sum_20() -> Bool {
 
 #[test]
 fn test_count_20() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1528,7 +1528,7 @@ fn test_sum_21() -> Bool {
 
 #[test]
 fn test_count_21() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1598,7 +1598,7 @@ fn test_sum_22() -> Bool {
 
 #[test]
 fn test_count_22() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1668,7 +1668,7 @@ fn test_sum_23() -> Bool {
 
 #[test]
 fn test_count_23() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);
@@ -1738,7 +1738,7 @@ fn test_sum_24() -> Bool {
 
 #[test]
 fn test_count_24() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(5);
     v.push(-2);

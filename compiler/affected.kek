@@ -41,10 +41,10 @@ fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             return 1;
         }
     };
-    let changed = Vec::new();
-    let added = Vec::new();
-    let affected = Vec::new();
-    let tests = Vec::new();
+    let mut changed = Vec::new();
+    let mut added = Vec::new();
+    let mut affected = Vec::new();
+    let mut tests = Vec::new();
     for d in cur.prog.defs {
         match old.prog.by_name.get(d.name) {
             Some(o) => {
@@ -67,7 +67,7 @@ fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             }
         }
     }
-    let removed = Vec::new();
+    let mut removed = Vec::new();
     for o in old.prog.defs {
         if !cur.prog.by_name.contains_key(o.name) {
             removed.push(o.name);
@@ -95,7 +95,7 @@ fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.info(irjson_encode(irjson_val(o), false));
         return 0;
     }
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     if !build {
         lines.push(
             "nothing affected: the definitions are unchanged (build output and test results stay)",
@@ -123,7 +123,7 @@ fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     0
 }
 
-fn aff_list(lines: Vec<String>, title: String, xs: Vec<String>) {
+fn aff_list(mut lines: Vec<String>, title: String, xs: Vec<String>) {
     if xs.len() == 0 {
         return;
     }

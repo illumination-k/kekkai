@@ -87,7 +87,7 @@ fn fmt_source(src: String) -> FmtResult {
         return FmtResult { out: "", errs: pr.errs };
     }
     let lr = lex_file_comments("", src);
-    let line_start = Vec::new();
+    let mut line_start = Vec::new();
     line_start.push(0);
     let mut ascii = true;
     let n = src.len();
@@ -99,11 +99,11 @@ fn fmt_source(src: String) -> FmtResult {
             ascii = false;
         }
     }
-    let used = Vec::new();
+    let mut used = Vec::new();
     for c in lr.comments {
         used.push(false);
     }
-    let p = FmtPrinter {
+    let mut p = FmtPrinter {
         src: src,
         ascii: ascii,
         line_start: line_start,
@@ -282,14 +282,14 @@ fn fmt_tok_index(p: FmtPrinter, pos: AstPos) -> Int {
 }
 
 fn fmt_save(p: FmtPrinter) -> Vec<Bool> {
-    let s = Vec::new();
+    let mut s = Vec::new();
     for u in p.used {
         s.push(u);
     }
     s
 }
 
-fn fmt_restore(p: FmtPrinter, s: Vec<Bool>) {
+fn fmt_restore(mut p: FmtPrinter, s: Vec<Bool>) {
     let mut i = 0;
     for u in s {
         p.used.set(i, u);
@@ -300,14 +300,14 @@ fn fmt_restore(p: FmtPrinter, s: Vec<Bool>) {
 // fmt_take marks and returns the unused comments strictly after lo (if
 // has_lo), strictly before hi (if has_hi) and on `line` (if line > 0).
 fn fmt_take(
-    p: FmtPrinter,
+    mut p: FmtPrinter,
     has_lo: Bool,
     lo: AstPos,
     has_hi: Bool,
     hi: AstPos,
     line: Int,
 ) -> Vec<TokComment> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut i = 0;
     for c in p.comments {
         if !p.used.get(i).unwrap_or(true)
@@ -336,7 +336,7 @@ fn fmt_has_comments(p: FmtPrinter, from: AstPos, to: AstPos) -> Bool {
 
 // ---- containers ----
 
-fn fmt_piece(b: FmtBuf, text: String, blank: Bool) {
+fn fmt_piece(mut b: FmtBuf, text: String, blank: Bool) {
     if blank && !b.first {
         b.parts.push("\n");
     }
@@ -473,7 +473,7 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
         FmtUnitKind::Variant(v) => {
             let mut s = v.name;
             if v.fields.len() > 0 {
-                let ts = Vec::new();
+                let mut ts = Vec::new();
                 for t in v.fields {
                     ts.push(fmt_typ(t));
                 }
@@ -527,7 +527,7 @@ fn fmt_next_brace(p: FmtPrinter, i: Int) -> Int {
 // ---- items ----
 
 fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
-    let items = Vec::new();
+    let mut items = Vec::new();
     for d in f.structs {
         items.push(FmtUnit { start: fmt_attrs_start(d.attrs, d.pos), kind: FmtUnitKind::Struct(d) });
     }
@@ -558,7 +558,7 @@ fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
 }
 
 // fmt_sort_units restores source order.
-fn fmt_sort_units(items: Vec<FmtUnit>) {
+fn fmt_sort_units(mut items: Vec<FmtUnit>) {
     let n = items.len();
     for i in 1..n {
         let mut j = i;
@@ -592,7 +592,7 @@ fn fmt_attrs(attrs: Vec<AstAttr>, ind: Int) -> String {
 
 fn fmt_trait_decl(p: FmtPrinter, d: AstTraitDecl, ind: Int) -> String {
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
-    let units = Vec::new();
+    let mut units = Vec::new();
     for a in d.assoc {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
     }
@@ -602,7 +602,7 @@ fn fmt_trait_decl(p: FmtPrinter, d: AstTraitDecl, ind: Int) -> String {
     fmt_sort_units(units);
     let mut head = "trait " + d.name + fmt_generics(d.generics);
     if d.supers.len() > 0 {
-        let ss = Vec::new();
+        let mut ss = Vec::new();
         for t in d.supers {
             ss.push(fmt_typ(t));
         }
@@ -620,7 +620,7 @@ fn fmt_assoc(a: AstAssocType) -> String {
 
 fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
-    let units = Vec::new();
+    let mut units = Vec::new();
     for fd in d.fields {
         units.push(FmtUnit { start: fd.pos, kind: FmtUnitKind::Field(fd) });
     }
@@ -636,12 +636,12 @@ fn fmt_generics(gs: Vec<AstGeneric>) -> String {
     if gs.len() == 0 {
         return "";
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for g in gs {
         if g.bounds.len() == 0 {
             parts.push(g.name);
         } else {
-            let bs = Vec::new();
+            let mut bs = Vec::new();
             for b in g.bounds {
                 bs.push(fmt_typ(b));
             }
@@ -658,7 +658,7 @@ fn fmt_wheres(ws: Vec<AstWhere>, ind: Int) -> String {
     }
     let mut s = "\n" + fmt_indent(ind) + "where";
     for w in ws {
-        let bs = Vec::new();
+        let mut bs = Vec::new();
         for b in w.bounds {
             bs.push(fmt_typ(b));
         }
@@ -707,7 +707,7 @@ fn fmt_wheres_preds(
 
 fn fmt_impl_decl(p: FmtPrinter, d: AstImplDecl, ind: Int) -> String {
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
-    let units = Vec::new();
+    let mut units = Vec::new();
     for a in d.assoc {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
     }
@@ -740,7 +740,7 @@ fn fmt_type_args(ts: Vec<AstType>) -> String {
     if ts.len() == 0 {
         return "";
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for t in ts {
         parts.push(fmt_typ(t));
     }
@@ -756,7 +756,7 @@ fn fmt_turbofish(ts: Vec<AstType>) -> String {
 
 fn fmt_enum_decl(p: FmtPrinter, d: AstEnumDecl, ind: Int) -> String {
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
-    let units = Vec::new();
+    let mut units = Vec::new();
     for v in d.variants {
         units.push(FmtUnit { start: v.pos, kind: FmtUnitKind::Variant(v) });
     }
@@ -777,7 +777,7 @@ fn fmt_opt_typ(t: Option<AstType>) -> String {
 
 fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
     let s = fmt_attrs(d.attrs, ind);
-    let params = Vec::new();
+    let mut params = Vec::new();
     let mut i = 0;
     for prm in d.params {
         if i == 0 && d.self_kind != "" {
@@ -816,7 +816,7 @@ fn fmt_typ(t: AstType) -> String {
         AstType::Unit(_) => "()",
         AstType::Ref(r) => if r.mutable { "&mut " } else { "&" } + fmt_typ(r.elem),
         AstType::Fn(ft) => {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for a in ft.params {
                 ps.push(fmt_typ(a));
             }
@@ -827,7 +827,7 @@ fn fmt_typ(t: AstType) -> String {
             }
         }
         AstType::Tuple(tt) => {
-            let es = Vec::new();
+            let mut es = Vec::new();
             for a in tt.elems {
                 es.push(fmt_typ(a));
             }
@@ -852,10 +852,10 @@ fn fmt_typ(t: AstType) -> String {
 
 // ---- statements ----
 
-fn fmt_block(p: FmtPrinter, b: AstBlock, ind: Int) -> String {
+fn fmt_block(mut p: FmtPrinter, b: AstBlock, ind: Int) -> String {
     let flat = p.flat;
     p.flat = 0;
-    let units = Vec::new();
+    let mut units = Vec::new();
     for s in b.stmts {
         units.push(FmtUnit { start: fmt_stmt_pos(s), kind: FmtUnitKind::Stmt(s) });
     }
@@ -1160,7 +1160,7 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
         AstExpr::Closure(x) => {
             let mut h = if x.is_move { "move ||" } else { "||" };
             if x.params.len() > 0 {
-                let ps = Vec::new();
+                let mut ps = Vec::new();
                 for prm in x.params {
                     let m = if prm.mutable { "mut " } else { "" };
                     match prm.ty {
@@ -1182,7 +1182,7 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
     }
 }
 
-fn fmt_binary(p: FmtPrinter, e: AstBinary, ind: Int, col: Int, ns: Bool) -> String {
+fn fmt_binary(mut p: FmtPrinter, e: AstBinary, ind: Int, col: Int, ns: Bool) -> String {
     let pr = fmt_precedence(e.op);
     let saved = fmt_save(p);
     // Operators are laid out by the outermost binary expression: nested
@@ -1198,8 +1198,8 @@ fn fmt_binary(p: FmtPrinter, e: AstBinary, ind: Int, col: Int, ns: Bool) -> Stri
     }
     // Too long: break before each operator of this precedence chain.
     fmt_restore(p, saved);
-    let operands = Vec::new();
-    let ops = Vec::new();
+    let mut operands = Vec::new();
+    let mut ops = Vec::new();
     let mut x = AstExpr::Binary(e);
     while true {
         match x {
@@ -1278,7 +1278,7 @@ fn fmt_elem(p: FmtPrinter, l: FmtList, i: Int, ind: Int, col: Int) -> String {
 // one element per line (with a trailing comma) otherwise. pad is put
 // inside the delimiters on one line (`{ a }` vs `(a)`).
 fn fmt_list(
-    p: FmtPrinter,
+    mut p: FmtPrinter,
     open: String,
     close: String,
     pad: String,
@@ -1292,7 +1292,7 @@ fn fmt_list(
         return open + close;
     }
     let saved = fmt_save(p);
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push(open + pad);
     let mut c = col + open.len() + pad.len();
     let mut multi = -1;
@@ -1333,7 +1333,7 @@ fn fmt_list(
     fmt_restore(p, saved);
     let flat = p.flat;
     p.flat = 0;
-    let out = Vec::new();
+    let mut out = Vec::new();
     out.push(open + "\n");
     for i in 0..n {
         out.push(fmt_indent(ind + 1));
@@ -1492,7 +1492,7 @@ fn fmt_match(p: FmtPrinter, e: AstMatch, ind: Int, col: Int) -> String {
             open = fmt_next_brace(p, fmt_tok_index(p, fmt_start_pos(e.x)) + 1);
         }
     }
-    let units = Vec::new();
+    let mut units = Vec::new();
     for a in e.arms {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Arm(a) });
     }
@@ -1504,7 +1504,7 @@ fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
         return "_";
     }
     if pt.tuple {
-        let es = Vec::new();
+        let mut es = Vec::new();
         for a in pt.args {
             es.push(fmt_pat(p, a));
         }
@@ -1536,7 +1536,7 @@ fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
                 return s;
             }
         }
-        let as_ = Vec::new();
+        let mut as_ = Vec::new();
         for a in pt.args {
             as_.push(fmt_pat(p, a));
         }

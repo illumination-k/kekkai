@@ -10,6 +10,7 @@
       "pure": true,
       "async": false,
       "idempotent": true,
+      "readonly": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
@@ -33,6 +34,7 @@
       "pure": false,
       "async": true,
       "idempotent": true,
+      "readonly": true,
       "caps": [
         {
           "name": "log",
@@ -123,6 +125,7 @@
       "pure": true,
       "async": false,
       "idempotent": true,
+      "readonly": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
@@ -138,6 +141,7 @@
       "pure": true,
       "async": false,
       "idempotent": true,
+      "readonly": true,
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],

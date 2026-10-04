@@ -78,7 +78,7 @@ fn wasm_sig(params: Vec<Int>, results: Vec<Int>) -> WasmSig {
 }
 
 fn wasm_sig_key(s: WasmSig) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for p in s.params {
         parts.push(p.to_string());
     }
@@ -89,7 +89,7 @@ fn wasm_sig_key(s: WasmSig) -> String {
     parts.join(",")
 }
 
-fn wasm_fail(m: WasmMod, msg: String) {
+fn wasm_fail(mut m: WasmMod, msg: String) {
     if m.err == "" {
         m.err = msg;
     }
@@ -139,7 +139,7 @@ fn wasm_target(p: IrProgram) -> String {
 // wasm_compile translates an IR program (including the prelude) into a
 // WasmGC module.
 fn wasm_compile(p: IrProgram) -> WasmOutput {
-    let m = WasmMod {
+    let mut m = WasmMod {
         prog: p,
         target: wasm_target(p),
         structs: Vec::new(),
@@ -242,7 +242,7 @@ fn wasm_val(m: WasmMod, t: IrTy) -> Int {
 }
 
 fn wasm_comp(fields: Vec<Int>, mutable: Bool, array: Bool) -> WasmComp {
-    let muts = Vec::new();
+    let mut muts = Vec::new();
     for f in fields {
         muts.push(mutable);
     }
@@ -261,7 +261,7 @@ fn wasm_agg_named(m: WasmMod, name: String) -> Int {
     -1
 }
 
-fn wasm_layout_types(m: WasmMod) {
+fn wasm_layout_types(mut m: WasmMod) {
     let p = m.prog;
     let n = p.types.len();
     for i in 0..n {
@@ -296,16 +296,16 @@ fn wasm_layout_types(m: WasmMod) {
             m.structs.set(at, wasm_comp(wasm_v2(wasm_i32_t(), va), true, false));
             m.structs.set(va, wasm_comp(wasm_v1(wasm_val(m, td.elem)), true, true));
         } else if !td.is_variant {
-            let fields = Vec::new();
+            let mut fields = Vec::new();
             for f in td.fields {
                 fields.push(wasm_val(m, f));
             }
             m.structs.set(at, wasm_comp(fields, true, false));
         } else {
-            let fields = wasm_v1(wasm_i32_t()); // tag
-            let slots = Vec::new();
+            let mut fields = wasm_v1(wasm_i32_t()); // tag
+            let mut slots = Vec::new();
             for vs in td.variants {
-                let s = Vec::new();
+                let mut s = Vec::new();
                 for f in vs {
                     s.push(fields.len());
                     fields.push(wasm_val(m, f));
@@ -322,7 +322,7 @@ fn wasm_layout_types(m: WasmMod) {
         if !f.is_async {
             continue;
         }
-        let fields = wasm_v3(wasm_i32_t(), wasm_struct_t(), wasm_val(m, f.result));
+        let mut fields = wasm_v3(wasm_i32_t(), wasm_struct_t(), wasm_val(m, f.result));
         for l in f.locals {
             fields.push(wasm_val(m, l));
         }
@@ -334,7 +334,7 @@ fn wasm_layout_types(m: WasmMod) {
 // frame struct fields: 0 state, 1 child, 2 ret, 3.. locals
 
 fn wasm_func_sig(m: WasmMod, f: IrFunc) -> WasmSig {
-    let params = Vec::new();
+    let mut params = Vec::new();
     for i in 0..f.nparams {
         params.push(wasm_val(m, wasm_ty_at(f.locals, i)));
     }
@@ -397,7 +397,7 @@ fn wasm_op_kind(m: WasmMod, name: String) -> String {
 
 // ---- reachability ----
 
-fn wasm_reach_add(m: WasmMod, work: Vec<String>, name: String) {
+fn wasm_reach_add(mut m: WasmMod, mut work: Vec<String>, name: String) {
     if m.reach.contains_key(name) {
         return;
     }
@@ -411,7 +411,7 @@ fn wasm_reach_add(m: WasmMod, work: Vec<String>, name: String) {
 // wasm_op_deps lists the prelude functions that the code for an
 // instruction calls.
 fn wasm_op_deps(m: WasmMod, f: IrFunc, ins: IrInstr) -> Vec<String> {
-    let deps = Vec::new();
+    let mut deps = Vec::new();
     if ins.op == "call" {
         deps.push(ins.name);
     } else if ins.op == "binop" {
@@ -438,7 +438,7 @@ fn wasm_op_deps(m: WasmMod, f: IrFunc, ins: IrInstr) -> Vec<String> {
 }
 
 fn wasm_reachability(m: WasmMod) {
-    let work = Vec::new();
+    let mut work = Vec::new();
     if m.prog.handler != "" {
         wasm_reach_add(m, work, m.prog.handler);
     }
@@ -473,7 +473,7 @@ fn wasm_reachability(m: WasmMod) {
 
 // ---- imports and functions ----
 
-fn wasm_add_import(m: WasmMod, module: String, name: String, s: WasmSig, is_async: Bool) {
+fn wasm_add_import(mut m: WasmMod, module: String, name: String, s: WasmSig, is_async: Bool) {
     let key = module + "." + name;
     match m.import_idx.get(key) {
         Some(i) => {
@@ -520,7 +520,7 @@ fn wasm_add_js_helper_imports(m: WasmMod) {
 // wasm_wasi_sig is the signature of a WASI preview 1 function: i32
 // parameters except the 64-bit ones, an i32 errno result.
 fn wasm_wasi_sig(name: String, n: Int) -> WasmSig {
-    let params = Vec::new();
+    let mut params = Vec::new();
     for i in 0..n {
         let wide = (name == "clock_time_get" && i == 1)
             || (name == "fd_readdir" && i == 3)
@@ -623,7 +623,7 @@ fn wasm_collect_imports(m: WasmMod) {
                 if wasm_op_kind(m, name) != "import" {
                     continue;
                 }
-                let params = Vec::new();
+                let mut params = Vec::new();
                 for a in ins.args {
                     params.push(wasm_host_param(m, wasm_ty_at(f.locals, a)));
                 }
@@ -637,7 +637,7 @@ fn wasm_collect_imports(m: WasmMod) {
     }
 }
 
-fn wasm_reserve(m: WasmMod, name: String, s: WasmSig) -> Int {
+fn wasm_reserve(mut m: WasmMod, name: String, s: WasmSig) -> Int {
     match m.func_idx.get(name) {
         Some(i) => {
             return i;
@@ -699,7 +699,7 @@ fn wasm_prelude_ir(m: WasmMod, name: String) -> Option<IrFunc> {
 
 // wasm_lit registers a literal; its UTF-16 code units are stored in the
 // passive data segment.
-fn wasm_lit(m: WasmMod, s: String) -> Int {
+fn wasm_lit(mut m: WasmMod, s: String) -> Int {
     match m.string_idx.get(s) {
         Some(i) => {
             return i;
@@ -776,7 +776,7 @@ fn wasm_div_func(m: WasmMod) -> Int {
     }
     let i64 = wasm_i64_t();
     let i = wasm_reserve(m, name, wasm_sig(wasm_v2(i64, i64), wasm_v1(i64)));
-    let f = wasm_def(m, name);
+    let mut f = wasm_def(m, name);
     let c = f.body;
     // if y == 0 { return 0 }
     cg_get(c, 1);
@@ -814,7 +814,7 @@ fn wasm_rem_func(m: WasmMod) -> Int {
     }
     let i64 = wasm_i64_t();
     let i = wasm_reserve(m, name, wasm_sig(wasm_v2(i64, i64), wasm_v1(i64)));
-    let f = wasm_def(m, name);
+    let mut f = wasm_def(m, name);
     let c = f.body;
     cg_get(c, 1);
     cg_op(c, 80); // i64.eqz
@@ -909,7 +909,7 @@ fn wasm_lift_build(m: WasmMod, c: Vec<Int>, agg: Int, tag: Int, mode: Int) {
     cg_struct_new(c, wasm_at(m.agg_type, agg));
 }
 
-fn wasm_lift_func(m: WasmMod, agg: Int) -> Int {
+fn wasm_lift_func(mut m: WasmMod, agg: Int) -> Int {
     match m.lifts.get(agg) {
         Some(i) => {
             return i;
@@ -920,7 +920,7 @@ fn wasm_lift_func(m: WasmMod, agg: Int) -> Int {
     let result = wasm_at(m.agg_type, agg);
     let i = wasm_reserve(m, name, wasm_sig(wasm_v1(wasm_any_t()), wasm_v1(result)));
     m.lifts.insert(agg, i);
-    let f = wasm_def(m, name);
+    let mut f = wasm_def(m, name);
     let td = wasm_td(m, agg);
     let c = f.body;
     let v0 = wasm_tys_at(td.variants, 0);
@@ -1021,7 +1021,7 @@ fn cg_is_suspend(g: CgGen, ins: IrInstr) -> Bool {
     false
 }
 
-fn cg_plan_segments(g: CgGen) {
+fn cg_plan_segments(mut g: CgGen) {
     let mut bi = 0;
     for b in g.f.blocks {
         g.block_seg.push(g.segs.len());
@@ -1073,7 +1073,7 @@ fn cg_suspend(g: CgGen, resume_seg: Int) {
     cg_op(c, 15); // return
 }
 
-fn cg_body(g: CgGen) {
+fn cg_body(mut g: CgGen) {
     let c = g.c;
     cg_plan_segments(g);
     cg_open(c, 3); // loop
@@ -1579,13 +1579,13 @@ fn cg_goto_seg_dyn(g: CgGen, t: IrTerm) {
     cg_br(c, cg_loop_depth(g));
 }
 
-fn cg_alloc(g: CgGen, next: Int, t: Int) -> Int {
+fn cg_alloc(mut g: CgGen, next: Int, t: Int) -> Int {
     g.locals.push(t);
     next
 }
 
 fn cg_new_gen(m: WasmMod, f: IrFunc, is_async: Bool, nparams: Int) -> CgGen {
-    let g = CgGen {
+    let mut g = CgGen {
         m: m,
         f: f,
         is_async: is_async,
@@ -1621,14 +1621,14 @@ fn cg_new_gen(m: WasmMod, f: IrFunc, is_async: Bool, nparams: Int) -> CgGen {
 fn wasm_gen_sync(m: WasmMod, f: IrFunc) {
     let g = cg_new_gen(m, f, false, f.nparams);
     cg_body(g);
-    let d = wasm_def(m, f.name);
+    let mut d = wasm_def(m, f.name);
     d.locals = g.locals;
     d.body = g.c;
     d.built = true;
 }
 
 fn wasm_gen_new(m: WasmMod, f: IrFunc) {
-    let d = wasm_def(m, f.name + "$new");
+    let mut d = wasm_def(m, f.name + "$new");
     let c = d.body;
     cg_i32(c, 0); // state
     cg_ref_null(c, 107); // structref
@@ -1648,7 +1648,7 @@ fn wasm_gen_new(m: WasmMod, f: IrFunc) {
 }
 
 fn wasm_gen_step(m: WasmMod, f: IrFunc) {
-    let g = cg_new_gen(m, f, true, 1);
+    let mut g = cg_new_gen(m, f, true, 1);
     g.frame_l = 0;
     g.frame_t = wasm_lookup(m.frame, f.name);
     let c = g.c;
@@ -1667,7 +1667,7 @@ fn wasm_gen_step(m: WasmMod, f: IrFunc) {
     cg_struct_get(c, g.frame_t, 0);
     cg_set(c, g.state);
     cg_body(g);
-    let d = wasm_def(m, f.name + "$step");
+    let mut d = wasm_def(m, f.name + "$step");
     d.locals = g.locals;
     d.body = c;
     d.built = true;
@@ -1697,12 +1697,12 @@ fn wasm_gen_handler_exports(m: WasmMod) {
         }
     };
     let ft = wasm_lookup(m.frame, f.name);
-    let params = Vec::new();
+    let mut params = Vec::new();
     for i in 0..f.nparams {
         params.push(wasm_val(m, wasm_ty_at(f.locals, i)));
     }
     wasm_reserve(m, "$handler_new", wasm_sig(params, wasm_v1(wasm_any_t())));
-    let d = wasm_def(m, "$handler_new");
+    let mut d = wasm_def(m, "$handler_new");
     for i in 0..f.nparams {
         cg_get(d.body, i);
     }
@@ -1712,7 +1712,7 @@ fn wasm_gen_handler_exports(m: WasmMod) {
     d.built = true;
 
     wasm_reserve(m, "$handler_step", wasm_sig(wasm_v1(wasm_any_t()), wasm_v1(wasm_i32_t())));
-    let d2 = wasm_def(m, "$handler_step");
+    let mut d2 = wasm_def(m, "$handler_step");
     cg_get(d2.body, 0);
     cg_cast_null(d2.body, ft);
     cg_call(d2.body, wasm_lookup(m.func_idx, f.name + "$step"));
@@ -1721,7 +1721,7 @@ fn wasm_gen_handler_exports(m: WasmMod) {
     d2.built = true;
 
     wasm_reserve(m, "$handler_result", wasm_sig(wasm_v1(wasm_any_t()), wasm_v1(wasm_any_t())));
-    let d3 = wasm_def(m, "$handler_result");
+    let mut d3 = wasm_def(m, "$handler_result");
     cg_get(d3.body, 0);
     cg_cast_null(d3.body, ft);
     cg_struct_get(d3.body, ft, 2);
@@ -1751,7 +1751,7 @@ fn wasm_gen_start(m: WasmMod) {
     };
     let ft = wasm_lookup(m.frame, f.name);
     wasm_reserve(m, "$start", wasm_sig(wasm_v0(), wasm_v0()));
-    let d = wasm_def(m, "$start");
+    let mut d = wasm_def(m, "$start");
     d.locals = wasm_v1(ft);
     let c = d.body;
     let mut i = 0;
@@ -1797,7 +1797,12 @@ fn wasm_str_less(a: String, b: String) -> Bool {
     n < k
 }
 
-fn wasm_type_of(sigs: Vec<WasmSig>, sig_idx: HashMap<String, Int>, base: Int, s: WasmSig) -> Int {
+fn wasm_type_of(
+    mut sigs: Vec<WasmSig>,
+    mut sig_idx: HashMap<String, Int>,
+    base: Int,
+    s: WasmSig,
+) -> Int {
     let k = wasm_sig_key(s);
     match sig_idx.get(k) {
         Some(i) => {
@@ -1827,11 +1832,11 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     let sigs: Vec<WasmSig> = Vec::new();
     let sig_idx: HashMap<String, Int> = HashMap::new();
     let base = m.structs.len();
-    let import_types = Vec::new();
+    let mut import_types = Vec::new();
     for im in m.imports {
         import_types.push(wasm_type_of(sigs, sig_idx, base, im.sig));
     }
-    let func_types = Vec::new();
+    let mut func_types = Vec::new();
     for f in m.funcs {
         if !f.built {
             wasm_fail(m, "function body not generated: " + f.name);
@@ -1839,7 +1844,7 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
         func_types.push(wasm_type_of(sigs, sig_idx, base, f.sig));
     }
 
-    let out = Vec::new();
+    let mut out = Vec::new();
     out.push(0);
     out.push(97);
     out.push(115);
@@ -1849,7 +1854,7 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     out.push(0);
     out.push(0);
 
-    let ts = Vec::new();
+    let mut ts = Vec::new();
     wasm_u32(ts, sigs.len() + 1);
     ts.push(78); // 0x4e rec
     wasm_u32(ts, m.structs.len());
@@ -1877,7 +1882,7 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     }
     wasm_section(out, 1, ts);
 
-    let is = Vec::new();
+    let mut is = Vec::new();
     wasm_u32(is, m.imports.len());
     let mut i = 0;
     for im in m.imports {
@@ -1897,14 +1902,14 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     wasm_section(out, 3, fs);
 
     // one memory (scratch space for WASI and for passing strings to JS)
-    let ms = Vec::new();
+    let mut ms = Vec::new();
     wasm_u32(ms, 1);
     ms.push(0); // no maximum
     wasm_u32(ms, 1);
     wasm_section(out, 5, ms);
 
     // globals: 0 the literal cache, 1 the runtime state
-    let gs = Vec::new();
+    let mut gs = Vec::new();
     wasm_u32(gs, 2);
     gs.push(99); // ref null lits
     wasm_s64(gs, m.lits_t);
@@ -1920,8 +1925,8 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     wasm_section(out, 6, gs);
 
     // exports sorted by name (insertion sort; names are unique)
-    let exports = Vec::new();
-    let names = Vec::new();
+    let mut exports = Vec::new();
+    let mut names = Vec::new();
     let mut fi = 0;
     for f in m.funcs {
         if f.export != "" {
@@ -1938,7 +1943,7 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
         }
         fi = fi + 1;
     }
-    let es = Vec::new();
+    let mut es = Vec::new();
     wasm_u32(es, exports.len() + 1);
     let mut k = 0;
     for e in exports {
@@ -1973,7 +1978,7 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     wasm_section(out, 10, cs);
 
     // one passive data segment: the literals as UTF-16LE
-    let ds = Vec::new();
+    let mut ds = Vec::new();
     wasm_u32(ds, 1);
     ds.push(1); // passive
     wasm_u32(ds, m.data_len);
@@ -1990,7 +1995,7 @@ fn wasm_encode(m: WasmMod) -> Vec<Int> {
     wasm_section(out, 11, ds);
 
     // name section (function names) for readable stack traces
-    let names_sec = Vec::new();
+    let mut names_sec = Vec::new();
     wasm_name(names_sec, "name");
     let sub = Vec::new();
     wasm_u32(sub, m.imports.len() + m.funcs.len());

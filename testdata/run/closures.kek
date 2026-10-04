@@ -7,7 +7,7 @@ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {
 }
 
 fn map_vec<T, U>(v: Vec<T>, f: impl Fn(T) -> U) -> Vec<U> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in v {
         out.push(f(x));
     }
@@ -40,13 +40,13 @@ fn main(log: &Log) -> Int {
     );
     let h = compose(double, make_adder(3));
     log.info(h(4).to_string());
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(2);
     v.push(3);
     let strs = map_vec(v, |x| "n" + x.to_string());
     log.info(strs.join(","));
-    let c = Counter { n: 0 };
+    let mut c = Counter { n: 0 };
     let bump = || {
         c.n = c.n + 1;
         c.n
@@ -54,7 +54,7 @@ fn main(log: &Log) -> Int {
     bump();
     bump();
     log.info(bump().to_string() + " " + c.n.to_string());
-    let fs: Vec<fn(Int) -> Int> = Vec::new();
+    let mut fs: Vec<fn(Int) -> Int> = Vec::new();
     fs.push(double);
     fs.push(make_adder(100));
     fs.push(|x| x * x);

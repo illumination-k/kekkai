@@ -626,7 +626,7 @@ fn ast_attr_value(a: AstAttr, key: String) -> Option<String> {
 // ast_unquote reverses ast_quote.
 fn ast_unquote(q: String) -> String {
     let s = q.slice(1, q.len() - 1);
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 0;
     let mut start = 0;
     while i < s.len() {
@@ -692,8 +692,8 @@ fn ast_sort_errors(errs: Vec<AstError>) -> Vec<AstError> {
         return errs;
     }
     let mid = n / 2;
-    let left = Vec::new();
-    let right = Vec::new();
+    let mut left = Vec::new();
+    let mut right = Vec::new();
     for i in 0..n {
         let e = errs.get(i).unwrap_or(AstError {
             pos: AstPos { file: "", line: 0, col: 0 },
@@ -707,7 +707,7 @@ fn ast_sort_errors(errs: Vec<AstError>) -> Vec<AstError> {
     }
     let l = ast_sort_errors(left);
     let r = ast_sort_errors(right);
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut i = 0;
     let mut j = 0;
     while i < l.len() || j < r.len() {
@@ -737,7 +737,7 @@ fn ast_err_at(v: Vec<AstError>, i: Int) -> AstError {
 
 // ast_quote is the canonical string quoting of the dumps.
 fn ast_quote(s: String) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push("\"");
     let n = s.len();
     let mut start = 0;

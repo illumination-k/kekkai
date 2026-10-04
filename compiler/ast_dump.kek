@@ -9,7 +9,7 @@ fn ast_dump_pos(p: AstPos) -> String {
 }
 
 fn ast_dump_tokens(toks: Vec<Tok>, errs: Vec<AstError>) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for t in toks {
         out.push(ast_dump_pos(t.pos) + " " + lex_kind_name(t.kind) + " " + ast_quote(t.text));
     }
@@ -20,14 +20,14 @@ fn ast_dump_tokens(toks: Vec<Tok>, errs: Vec<AstError>) -> Vec<String> {
 }
 
 fn ast_indent(depth: Int) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for i in 0..depth {
         parts.push("  ");
     }
     parts.join("")
 }
 
-fn ast_line(d: AstDumper, depth: Int, s: String) {
+fn ast_line(mut d: AstDumper, depth: Int, s: String) {
     d.lines.push(ast_indent(depth) + s);
 }
 

@@ -37,7 +37,7 @@ fn shipping_fee(weight: Int) -> Int {
 fn describe(p: Point) -> String {
     let xs = p.x.to_string();
     let ys = p.y.to_string();
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push(xs);
     parts.push(ys);
     "(" + parts.join(", ") + ")"
@@ -46,7 +46,7 @@ fn describe(p: Point) -> String {
 fn describe_point(p: Point) -> String {
     let a = p.x.to_string();
     let b = p.y.to_string();
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push(a);
     parts.push(b);
     parts.push("z");

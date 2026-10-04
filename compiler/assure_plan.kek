@@ -93,7 +93,7 @@ fn asr_guar_str(g: Option<AsrGuar>, name: String, kind: String) -> String {
 }
 
 fn asr_plus(xs: Vec<String>, sign: String) -> String {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in xs {
         out.push(sign + x);
     }
@@ -120,7 +120,7 @@ fn asr_assume_str(a: AsrAssume) -> String {
     if a.call != "" && a.line > 0 {
         s = s + " at " + a.line.to_string() + ":" + a.col.to_string();
     }
-    let meta = Vec::new();
+    let mut meta = Vec::new();
     if a.reason != "" {
         meta.push("reason: \"" + a.reason + "\"");
     }
@@ -139,7 +139,7 @@ fn asr_assume_str(a: AsrAssume) -> String {
 // ---- diff ----
 
 fn asr_change(
-    pl: AsrPlan,
+    mut pl: AsrPlan,
     d: AsrDef,
     class: String,
     rule: String,
@@ -174,14 +174,14 @@ fn asr_none() -> Vec<String> {
 }
 
 fn asr_one(x: String) -> Vec<String> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(x);
     v
 }
 
 // asr_take_assume finds the first assumption of xs with the key of a
 // that is not taken yet, and takes it (-1: none).
-fn asr_take_assume(xs: Vec<AsrAssume>, a: AsrAssume, taken: HashMap<Int, Bool>) -> Int {
+fn asr_take_assume(xs: Vec<AsrAssume>, a: AsrAssume, mut taken: HashMap<Int, Bool>) -> Int {
     let k = asr_assume_key(a);
     let mut i = 0;
     for x in xs {
@@ -375,7 +375,7 @@ fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
             "change async: " + o.async.to_string() + " -> " + n.async.to_string(),
         );
     }
-    let names = Vec::new();
+    let mut names = Vec::new();
     for g in asr_sorted_guars(o.guars) {
         names.push(g.name);
     }
@@ -519,7 +519,7 @@ fn asr_valid_date(s: String) -> Bool {
 }
 
 fn asr_violation(
-    pl: AsrPlan,
+    mut pl: AsrPlan,
     d: AsrDef,
     line: Int,
     rule: String,
@@ -548,7 +548,7 @@ fn asr_plan(
     today: String,
 ) -> AsrPlan {
     let old = lr.state;
-    let pl = AsrPlan {
+    let mut pl = AsrPlan {
         path: path,
         lock: lock,
         lock_found: lr.found,
@@ -595,7 +595,7 @@ fn asr_plan(
         );
     }
     // the union of both states, by name
-    let names = Vec::new();
+    let mut names = Vec::new();
     for d in old.defs {
         names.push(d.name);
     }
@@ -607,8 +607,8 @@ fn asr_plan(
     chk_sort_strings(names);
     // a definition that disappears while one with the same hash (the hash
     // does not depend on the name) appears was renamed
-    let renamed_from: HashMap<String, String> = HashMap::new();
-    let renamed_to: HashMap<String, String> = HashMap::new();
+    let mut renamed_from: HashMap<String, String> = HashMap::new();
+    let mut renamed_to: HashMap<String, String> = HashMap::new();
     for n in cur.defs {
         if old.by_name.contains_key(n.name) {
             continue;
@@ -707,7 +707,7 @@ fn asr_plan(
             },
         }
     }
-    for c in pl.changes {
+    for mut c in pl.changes {
         c.review = asr_needs_review(pol, c.file, c.rule);
         if c.review {
             c.escalate = asr_escalate(pol, c.rule);
@@ -718,7 +718,7 @@ fn asr_plan(
         let sc = asr_scope(pol, d.file);
         match asr_guar_get(d, "effects") {
             Some(g) => {
-                let bad = Vec::new();
+                let mut bad = Vec::new();
                 for c in g.items {
                     if asr_has(sc.forbid, c) {
                         bad.push(c);
@@ -743,7 +743,7 @@ fn asr_plan(
                 Some(g) => {
                     let bad = asr_minus(g.items, sc.hosts);
                     if bad.len() > 0 {
-                        let shown = Vec::new();
+                        let mut shown = Vec::new();
                         for h in bad {
                             if h == "*" {
                                 shown.push("* (a URL that is not a literal)");
@@ -828,8 +828,8 @@ fn asr_declassify_requires(pl: AsrPlan, pol: AsrPolicy, d: AsrDef) {
     if pol.declass_requires.len() == 0 {
         return;
     }
-    let missing = Vec::new();
-    let calls = Vec::new();
+    let mut missing = Vec::new();
+    let mut calls = Vec::new();
     let mut line = 0;
     for a in d.assumes {
         if a.kind != "pii.declassify" {
@@ -851,7 +851,7 @@ fn asr_declassify_requires(pl: AsrPlan, pol: AsrPolicy, d: AsrDef) {
     if missing.len() == 0 {
         return;
     }
-    let args = Vec::new();
+    let mut args = Vec::new();
     for r in missing {
         args.push(r + " = \"...\"");
     }
@@ -877,8 +877,8 @@ fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
     if !pol.has_max_declass {
         return;
     }
-    let counts: HashMap<String, Int> = HashMap::new();
-    let files = Vec::new();
+    let mut counts: HashMap<String, Int> = HashMap::new();
+    let mut files = Vec::new();
     for d in cur.defs {
         for a in d.assumes {
             if a.kind == "pii.declassify" {
@@ -896,7 +896,7 @@ fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
             continue;
         }
         // the definitions of f in source order: the first site over the limit
-        let sites = Vec::new();
+        let mut sites = Vec::new();
         for d in cur.defs {
             if d.file == f {
                 for a in d.assumes {
@@ -1008,12 +1008,12 @@ fn asr_plan_json(pl: AsrPlan) -> IrjVal {
     irjson_set(s, "expired", irjson_int(pl.expired.len()));
     irjson_set(s, "config_errors", irjson_int(pl.errors.len()));
     irjson_set(o, "summary", irjson_val(s));
-    let cs = Vec::new();
+    let mut cs = Vec::new();
     for c in pl.changes {
         cs.push(asr_change_json(c));
     }
     irjson_set(o, "changes", IrjVal::Arr(cs));
-    let vs = Vec::new();
+    let mut vs = Vec::new();
     for v in pl.violations {
         let vo = irjson_obj();
         irjson_set(vo, "definition", IrjVal::Str(v.def));
@@ -1026,7 +1026,7 @@ fn asr_plan_json(pl: AsrPlan) -> IrjVal {
         vs.push(irjson_val(vo));
     }
     irjson_set(o, "violations", IrjVal::Arr(vs));
-    let es = Vec::new();
+    let mut es = Vec::new();
     for x in pl.expired {
         let eo = irjson_obj();
         irjson_set(eo, "definition", IrjVal::Str(x.def));
@@ -1055,8 +1055,8 @@ struct AsrGroup {
     defs: Vec<String>,
 }
 
-fn asr_group_add(groups: Vec<AsrGroup>, key: String, c: AsrChange) {
-    for g in groups {
+fn asr_group_add(mut groups: Vec<AsrGroup>, key: String, c: AsrChange) {
+    for mut g in groups {
         if g.key == key {
             g.defs.push(c.def);
             return;
@@ -1072,9 +1072,9 @@ fn asr_group_add(groups: Vec<AsrGroup>, key: String, c: AsrChange) {
     });
 }
 
-fn asr_vgroup_add(groups: Vec<AsrGroup>, v: AsrViolation) {
+fn asr_vgroup_add(mut groups: Vec<AsrGroup>, v: AsrViolation) {
     let key = v.rule + "|" + v.message;
-    for g in groups {
+    for mut g in groups {
         if g.key == key {
             g.defs.push(v.def);
             return;
@@ -1102,7 +1102,7 @@ fn asr_defs_str(defs: Vec<String>) -> String {
     if defs.len() == 1 {
         return first;
     }
-    let rest = Vec::new();
+    let mut rest = Vec::new();
     let mut i = 1;
     while i < defs.len() && i <= 3 {
         rest.push(defs.get(i).unwrap_or(""));
@@ -1120,7 +1120,7 @@ fn asr_rule_label(rule: String) -> String {
 }
 
 fn asr_plan_text(pl: AsrPlan, pol: AsrPolicy, verbose: Bool) -> Vec<String> {
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     if pl.errors.len() > 0 {
         lines.push("Configuration errors (" + pl.errors.len().to_string() + "):");
         for e in pl.errors {
@@ -1149,7 +1149,7 @@ fn asr_plan_text(pl: AsrPlan, pol: AsrPolicy, verbose: Bool) -> Vec<String> {
             lines.push("  ! " + g.message + "   " + asr_defs_str(g.defs));
             let mut tail = "";
             if g.escalate != "" {
-                let flags = Vec::new();
+                let mut flags = Vec::new();
                 for r in asr_require(pol) {
                     flags.push("-" + r);
                 }
@@ -1160,7 +1160,7 @@ fn asr_plan_text(pl: AsrPlan, pol: AsrPolicy, verbose: Bool) -> Vec<String> {
         lines.push("");
     }
     if auto.len() > 0 {
-        let counts = Vec::new();
+        let mut counts = Vec::new();
         let mut total = 0;
         for r in asr_rules() {
             let mut n = 0;

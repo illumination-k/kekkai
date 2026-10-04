@@ -14,7 +14,7 @@ fn label(c: Customer) -> String {
 
 #[main]
 fn main(log: &Log) -> Int {
-    let inputs = Vec::new();
+    let mut inputs = Vec::new();
     inputs.push("alice@example.com");
     inputs.push("bob");
     inputs.push("a@x.com");
@@ -42,7 +42,7 @@ fn main(log: &Log) -> Int {
     log.info((x == y).to_string() + " " + (x == z).to_string());
     log.info(label(x));
     // in collections, keyed by the hash
-    let seen: HashMap<String, Int> = HashMap::new();
+    let mut seen: HashMap<String, Int> = HashMap::new();
     for p in vec_of(a, b, c) {
         let k = p.hash();
         seen.insert(k, seen.get_or(&k, 0) + 1);
@@ -54,7 +54,7 @@ fn main(log: &Log) -> Int {
 }
 
 fn vec_of(a: Pii<String>, b: Pii<String>, c: Pii<String>) -> Vec<Pii<String>> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     v.push(c);

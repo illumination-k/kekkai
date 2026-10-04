@@ -48,7 +48,7 @@ fn largest<T: Ord>(v: Vec<T>, d: T) -> T {
 }
 
 fn hash_of<T: Hash>(x: T) -> Int {
-    let h = DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     x.hash(&mut h);
     h.finish()
 }
@@ -59,7 +59,7 @@ fn main(log: &Log) -> Int {
     let q = Point { x: 1, y: 3 };
     log.info((p == q).to_string() + " " + (p != q).to_string() + " " + (p < q).to_string());
     log.info((p == Point { x: 1, y: 2 }).to_string());
-    let shapes = Vec::new();
+    let mut shapes = Vec::new();
     shapes.push(Shape::Circle(2));
     shapes.push(Shape::Rect(Point { x: 0, y: 0 }, Point { x: 3, y: 4 }));
     shapes.push(Shape::Empty);
@@ -70,12 +70,12 @@ fn main(log: &Log) -> Int {
             + " "
             + (Shape::Circle(5) < Shape::Circle(3)).to_string(),
     );
-    let ns = Vec::new();
+    let mut ns = Vec::new();
     ns.push(3);
     ns.push(9);
     ns.push(4);
     log.info(largest(ns, 0).to_string());
-    let ss = Vec::new();
+    let mut ss = Vec::new();
     ss.push("pear");
     ss.push("apple");
     log.info(largest(ss, ""));

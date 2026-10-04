@@ -8,7 +8,8 @@
 // names a binding or parameter that is not declared mutable (`let mut x`,
 // `mut x: T`, `mut self`, `Some(mut x)`, `for mut x`, `|mut x|`), a `&T`
 // parameter that is mutated becomes `&mut T` (`&self` becomes `&mut self`)
-// unless it is part of a trait's signature, and the program is checked
+// unless it is part of a trait's signature, an argument `&e` given to a
+// `&mut T` parameter becomes `&mut e`, and the program is checked
 // again until nothing changes. The edits are textual (comments and
 // layout are kept). Without -w the changes are printed as a diff; the
 // errors left (which need `clone()` or `&T` by hand) are listed.
@@ -35,7 +36,7 @@ fn fix_usage(log: &Log) {
 
 fn fix_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut write = false;
-    let paths = Vec::new();
+    let mut paths = Vec::new();
     for i in 1..args.len() {
         let a = args.get(i).unwrap_or("");
         if a == "-w" || a == "--w" {
@@ -93,7 +94,7 @@ fn fix_program(path: String, write: Bool, fs: &Fs, log: &Log) -> Int {
         }
     };
     let kind = fix_kind(path);
-    let files = Vec::new();
+    let mut files = Vec::new();
     for s in srcs {
         let base = s.name.slice(s.name.len() - fix_base_len(s.name), s.name.len());
         let name = if kind == "core" {
@@ -114,8 +115,8 @@ fn fix_program(path: String, write: Bool, fs: &Fs, log: &Log) -> Int {
         let res = fix_check(files, kind);
         left = Vec::new();
         ambiguous = Vec::new();
-        let edits: HashMap<String, FixEdit> = HashMap::new();
-        let mu_keys: HashMap<String, Bool> = HashMap::new();
+        let mut edits: HashMap<String, FixEdit> = HashMap::new();
+        let mut mu_keys: HashMap<String, Bool> = HashMap::new();
         for d in res.mu.diags {
             mu_keys.insert(ast_pos_string(d.pos) + "\t" + d.msg, true);
             if fix_find(files, d.fix_pos.file).is_none() {
@@ -167,7 +168,7 @@ fn fix_program(path: String, write: Bool, fs: &Fs, log: &Log) -> Int {
             log.info(fix_diff(f));
         }
     }
-    let msgs = Vec::new();
+    let mut msgs = Vec::new();
     for d in ambiguous {
         msgs.push(
             ast_pos_string(d.pos)
@@ -216,27 +217,35 @@ fn fix_find(files: Vec<FixFile>, name: String) -> Option<FixFile> {
 
 // fix_check checks the program made of files (with the mutability pass).
 fn fix_check(files: Vec<FixFile>, kind: String) -> ChkResult {
-    let srcs = Vec::new();
+    let mut srcs = Vec::new();
     for f in files {
         srcs.push(FeSource { name: f.name, text: f.text });
     }
     if kind == "core" {
         let core = chk_parse_core_from(srcs);
         let empty = frontend_parse_all(Vec::new());
-        return chk_check_full(empty.file, false, core, ref_config_default(), true);
+        return chk_check_full(empty.file, false, core, fix_cfg(), true);
     }
     if kind == "prelude" {
         let prog = frontend_parse_all(srcs);
         if prog.errs.len() > 0 {
             return fix_parse_failed(prog.errs);
         }
-        return chk_check_full(prog.file, true, chk_parse_core(), ref_config_default(), true);
+        return chk_check_full(prog.file, true, chk_parse_core(), fix_cfg(), true);
     }
     let prog = frontend_parse_all(srcs);
     if prog.errs.len() > 0 {
         return fix_parse_failed(prog.errs);
     }
-    chk_check_full(prog.file, false, chk_parse_core(), ref_config_default(), true)
+    chk_check_full(prog.file, false, chk_parse_core(), fix_cfg(), true)
+}
+
+// fix_cfg turns the refinement checks off: their errors are not fixed
+// here and do not stop the fixing.
+fn fix_cfg() -> RefConfig {
+    let mut cfg = ref_config_default();
+    cfg.off = true;
+    cfg
 }
 
 fn fix_parse_failed(errs: Vec<AstError>) -> ChkResult {
@@ -314,7 +323,7 @@ fn fix_edit(files: Vec<FixFile>, d: MuDiag) -> Option<FixEdit> {
         }
         return Some(FixEdit { file: f.name, off: at, text: "mut " });
     }
-    if k == "refparam" || k == "refself" {
+    if k == "refparam" || k == "refself" || k == "refarg" {
         if f.text.slice(off, off + 1) != "&" {
             return None;
         }
@@ -332,8 +341,8 @@ fn fix_edit(files: Vec<FixFile>, d: MuDiag) -> Option<FixEdit> {
 // fix_apply applies insertions (from the end of each file, so that the
 // offsets stay valid).
 fn fix_apply(files: Vec<FixFile>, edits: HashMap<String, FixEdit>) {
-    for f in files {
-        let mine = Vec::new();
+    for mut f in files {
+        let mut mine = Vec::new();
         for k in edits.keys() {
             match edits.get(k) {
                 Some(ed) => {
@@ -358,7 +367,7 @@ fn fix_apply(files: Vec<FixFile>, edits: HashMap<String, FixEdit>) {
                 j = j - 1;
             }
         }
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         let mut end = f.text.len();
         for ed in mine {
             parts.push(f.text.slice(ed.off, end));
@@ -366,7 +375,7 @@ fn fix_apply(files: Vec<FixFile>, edits: HashMap<String, FixEdit>) {
             end = ed.off;
         }
         parts.push(f.text.slice(0, end));
-        let out = Vec::new();
+        let mut out = Vec::new();
         let mut i = parts.len() - 1;
         while i >= 0 {
             out.push(parts.get(i).unwrap_or(""));
@@ -384,7 +393,7 @@ fn fix_edit_at(v: Vec<FixEdit>, i: Int) -> FixEdit {
 fn fix_diff(f: FixFile) -> String {
     let a = f.orig.split("\n");
     let b = f.text.split("\n");
-    let out = Vec::new();
+    let mut out = Vec::new();
     out.push("--- " + f.path);
     out.push("+++ " + f.path);
     // edits only insert within lines: the files have the same lines

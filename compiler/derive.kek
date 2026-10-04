@@ -10,9 +10,9 @@ fn derive_traits() -> Vec<String> {
 
 // derive_items adds the derived implementations of f's structs and enums
 // to f.
-fn derive_items(f: AstFile, ids: AstIds, errs: Vec<AstError>) {
-    let srcs = Vec::new();
-    let poss = Vec::new();
+fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
+    let mut srcs = Vec::new();
+    let mut poss = Vec::new();
     for sd in f.structs {
         for a in sd.attrs {
             if a.name != "derive" {
@@ -164,7 +164,7 @@ fn derive_pii_enum(ed: AstEnumDecl) -> String {
     ""
 }
 
-fn derive_known(tr: String, errs: Vec<AstError>, pos: AstPos) -> Bool {
+fn derive_known(tr: String, mut errs: Vec<AstError>, pos: AstPos) -> Bool {
     for t in derive_traits() {
         if t == tr {
             return true;
@@ -182,8 +182,8 @@ fn derive_header(tr: String, name: String, gs: Vec<AstGeneric>) -> String {
     if gs.len() == 0 {
         return "impl " + tr + " for " + name;
     }
-    let ps = Vec::new();
-    let ns = Vec::new();
+    let mut ps = Vec::new();
+    let mut ns = Vec::new();
     for g in gs {
         ps.push(g.name + ": " + tr);
         ns.push(g.name);
@@ -193,7 +193,7 @@ fn derive_header(tr: String, name: String, gs: Vec<AstGeneric>) -> String {
 
 fn derive_struct(sd: AstStructDecl, tr: String) -> String {
     let h = derive_header(tr, sd.name, sd.generics);
-    let fields = Vec::new();
+    let mut fields = Vec::new();
     for f in sd.fields {
         fields.push(f.name);
     }
@@ -207,7 +207,7 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         return h + " {}\n";
     }
     if tr == "PartialEq" {
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         for f in fields {
             parts.push("self." + f + " == other." + f);
         }
@@ -266,7 +266,7 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         // an owned deep copy: every field cloned
         let mut lit_s = "";
         if lit == "" {
-            let es = Vec::new();
+            let mut es = Vec::new();
             for f in fields {
                 es.push("self." + f + ".clone()");
             }
@@ -276,7 +276,7 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
             }
             lit_s = lit_s + ")";
         } else {
-            let inits = Vec::new();
+            let mut inits = Vec::new();
             for f in fields {
                 inits.push(f + ": self." + f + ".clone()");
             }
@@ -285,7 +285,7 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         return h + " {\n    fn clone(&self) -> Self {\n        " + lit_s + "\n    }\n}\n";
     }
     // Default (structs only)
-    let inits = Vec::new();
+    let mut inits = Vec::new();
     for f in fields {
         inits.push(f + ": Default::default()");
     }
@@ -303,7 +303,7 @@ fn derive_pat(en: String, v: AstVariant, prefix: String) -> String {
     if v.fields.len() == 0 {
         return en + "::" + v.name;
     }
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for i in 0..v.fields.len() {
         ps.push(prefix + i.to_string());
     }
@@ -317,9 +317,9 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
     }
     let n = ed.variants.len();
     if tr == "PartialEq" {
-        let arms = Vec::new();
+        let mut arms = Vec::new();
         for v in ed.variants {
-            let parts = Vec::new();
+            let mut parts = Vec::new();
             for i in 0..v.fields.len() {
                 parts.push("a" + i.to_string() + " == b" + i.to_string());
             }
@@ -356,10 +356,10 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
         } else {
             "Some(Ordering::Equal)"
         };
-        let arms = Vec::new();
+        let mut arms = Vec::new();
         let mut i = 0;
         for v in ed.variants {
-            let inner = Vec::new();
+            let mut inner = Vec::new();
             let mut j = 0;
             for w in ed.variants {
                 let mut r = "";
@@ -410,11 +410,11 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
             + "        }\n    }\n}\n";
     }
     if tr == "Clone" {
-        let arms = Vec::new();
+        let mut arms = Vec::new();
         for v in ed.variants {
             let mut r = ed.name + "::" + v.name;
             if v.fields.len() > 0 {
-                let es = Vec::new();
+                let mut es = Vec::new();
                 for i in 0..v.fields.len() {
                     es.push("a" + i.to_string() + ".clone()");
                 }
@@ -428,7 +428,7 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
             + "        }\n    }\n}\n";
     }
     // Hash: the variant index, then the fields
-    let arms = Vec::new();
+    let mut arms = Vec::new();
     let mut i = 0;
     for v in ed.variants {
         let mut body = "{\n                state.write_i64(" + i.to_string() + ");\n";
@@ -448,7 +448,7 @@ fn derive_wild_pat(en: String, v: AstVariant) -> String {
     if v.fields.len() == 0 {
         return en + "::" + v.name;
     }
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for f in v.fields {
         ps.push("_");
     }
@@ -461,8 +461,8 @@ fn derive_tuples() -> String {
     let names = "T0 T1 T2 T3 T4 T5 T6 T7".split(" ");
     let mut out = "";
     for n in 1..9 {
-        let ns = Vec::new();
-        let fields = Vec::new();
+        let mut ns = Vec::new();
+        let mut fields = Vec::new();
         for i in 0..n {
             ns.push(names.get(i).unwrap_or("A"));
             fields.push(i.to_string());
@@ -473,7 +473,7 @@ fn derive_tuples() -> String {
             "(" + ns.join(", ") + ")"
         };
         for tr in "PartialEq Eq PartialOrd Ord Hash Clone".split(" ") {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for x in ns {
                 ps.push(x + ": " + tr);
             }

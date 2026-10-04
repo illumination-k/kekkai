@@ -46,7 +46,7 @@ fn sim_abstract_label(l: String) -> String {
     l
 }
 
-fn sim_intern(t: SimIntern, l: String) -> Int {
+fn sim_intern(mut t: SimIntern, l: String) -> Int {
     match t.ids.get(l) {
         Some(n) => n,
         None => {
@@ -75,17 +75,17 @@ fn sim_shingle() -> Int {
 // sim_tree builds the tree of labels / depths.
 fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
     let n = labels.len();
-    let pre = Vec::new();
+    let mut pre = Vec::new();
     for l in labels {
         pre.push(sim_intern(t, sim_abstract_label(l)));
     }
     // subtree sizes: a node's subtree ends at the next label that is not
     // deeper
-    let size = Vec::new();
+    let mut size = Vec::new();
     for _ in 0..n {
         size.push(1);
     }
-    let stack = Vec::new();
+    let mut stack = Vec::new();
     for i in 0..n {
         let d = depths.get(i).unwrap_or(0);
         while stack.len() > 0
@@ -100,7 +100,7 @@ fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
         size.set(top, n - top);
     }
     // leftmost leaf (preorder): the first child chain
-    let lml_pre = Vec::new();
+    let mut lml_pre = Vec::new();
     for _ in 0..n {
         lml_pre.push(0);
     }
@@ -116,12 +116,12 @@ fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
     }
     // postorder index of preorder i: the nodes before it that are not its
     // ancestors, plus its descendants
-    let post = Vec::new();
+    let mut post = Vec::new();
     for i in 0..n {
         post.push(i - depths.get(i).unwrap_or(0) + size.get(i).unwrap_or(1) - 1 + 1);
     }
-    let lab = Vec::new();
-    let lml = Vec::new();
+    let mut lab = Vec::new();
+    let mut lml = Vec::new();
     for _ in 0..n + 1 {
         lab.push(0);
         lml.push(0);
@@ -132,8 +132,8 @@ fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
         lml.set(k, post.get(lml_pre.get(i).unwrap_or(i)).unwrap_or(0));
     }
     // keyroots: the highest node of each leftmost leaf
-    let seen: HashMap<Int, Bool> = HashMap::new();
-    let rev = Vec::new();
+    let mut seen: HashMap<Int, Bool> = HashMap::new();
+    let mut rev = Vec::new();
     let mut k = n;
     while k >= 1 {
         let l = lml.get(k).unwrap_or(0);
@@ -143,7 +143,7 @@ fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
         }
         k = k - 1;
     }
-    let keyroots = Vec::new();
+    let mut keyroots = Vec::new();
     let mut j = rev.len() - 1;
     while j >= 0 {
         keyroots.push(rev.get(j).unwrap_or(0));
@@ -155,7 +155,7 @@ fn sim_tree(t: SimIntern, labels: Vec<String>, depths: Vec<Int>) -> SimTree {
 // sim_sketch is the MinHash sketch of the label shingles.
 fn sim_sketch(pre: Vec<Int>) -> Vec<Int> {
     let k = sim_shingle();
-    let shingles = Vec::new();
+    let mut shingles = Vec::new();
     let mut i = 0;
     while i + k <= pre.len() || (i == 0 && pre.len() > 0) {
         let mut h = 1469598103934665603;
@@ -168,7 +168,7 @@ fn sim_sketch(pre: Vec<Int>) -> Vec<Int> {
         i = i + 1;
     }
     let m = sim_bands() * sim_rows();
-    let out = Vec::new();
+    let mut out = Vec::new();
     for s in 0..m {
         let seed = dh_mix((s + 1) * -7046029254386353131);
         let mut best = 9223372036854775807;
@@ -188,7 +188,7 @@ fn sim_sketch(pre: Vec<Int>) -> Vec<Int> {
 
 // sim_band_key is the bucket of band b of a sketch.
 fn sim_band_key(t: SimTree, b: Int) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push(b.to_string());
     for r in 0..sim_rows() {
         parts.push(t.sketch.get(b * sim_rows() + r).unwrap_or(0).to_string());
@@ -262,8 +262,8 @@ fn sim_tree_dist(a: SimTree, b: SimTree) -> Int {
     let n = a.n;
     let m = b.n;
     let w = m + 1;
-    let td = Vec::new();
-    let fd = Vec::new();
+    let mut td = Vec::new();
+    let mut fd = Vec::new();
     for _ in 0..(n + 1) * w {
         td.push(0);
         fd.push(0);
@@ -278,7 +278,7 @@ fn sim_tree_dist(a: SimTree, b: SimTree) -> Int {
 
 // sim_forest_dist fills the tree distances of the subtrees of keyroots i
 // and j. fd is a scratch matrix indexed from (li - 1, lj - 1).
-fn sim_forest_dist(a: SimTree, b: SimTree, i: Int, j: Int, td: Vec<Int>, fd: Vec<Int>) {
+fn sim_forest_dist(a: SimTree, b: SimTree, i: Int, j: Int, mut td: Vec<Int>, mut fd: Vec<Int>) {
     let w = b.n + 1;
     let li = a.lml.get(i).unwrap_or(1);
     let lj = b.lml.get(j).unwrap_or(1);

@@ -13,6 +13,8 @@ struct CapsReport {
     // every capability operation it can reach is idempotent (a pure
     // function trivially); `#[handler(idempotent)]` requires it
     idempotent: Bool,
+    // it mutates none of its inputs (compiler/chk_mut.kek, mu_readonly)
+    readonly: Bool,
     caps: Vec<ChkBinding>,
     direct_effects: Vec<String>,
     unused_caps: Vec<String>,
@@ -25,7 +27,7 @@ struct CapsReport {
 // shared and mutable references are shown as written (`&T`, `&mut T`,
 // `self: &Point` for `&self`).
 fn caps_func_signature(fun: ChkFunc) -> String {
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     let mut i = 0;
     for p in fun.params {
         let mut t = ty_str(p.ty);
@@ -80,16 +82,31 @@ fn caps_sorted_keys(m: HashMap<String, Bool>) -> Vec<String> {
     out
 }
 
+// caps_readonly is mu_readonly of a well-typed program (nothing
+// otherwise).
+fn caps_readonly(a: DiagAnalysis) -> HashMap<String, Int> {
+    if !a.parse_ok {
+        return HashMap::new();
+    }
+    for d in a.diags {
+        if d.severity == "error" && d.phase != "lint" {
+            return HashMap::new();
+        }
+    }
+    mu_readonly(a.info, a.file)
+}
+
 // caps_reports summarizes every function in declaration order (CapReports).
 fn caps_reports(a: DiagAnalysis) -> Vec<CapsReport> {
-    let out = Vec::new();
+    let mut out = Vec::new();
+    let ro = caps_readonly(a);
     for fun in a.info.func_list {
         if chk_is_lib(fun) {
             continue;
         }
         let p = diag_name_after(a, fun.decl.pos, fun.decl.name);
         let caps = diag_caps(fun);
-        let unused = Vec::new();
+        let mut unused = Vec::new();
         for c in caps {
             if c.uses == 0 {
                 unused.push(c.name);
@@ -104,6 +121,7 @@ fn caps_reports(a: DiagAnalysis) -> Vec<CapsReport> {
             pure: caps.len() == 0,
             async: fun.async,
             idempotent: chk_idem_violation(a.info, fun).is_none(),
+            readonly: ro.get(fun.name).unwrap_or(0) > 0,
             caps: caps,
             direct_effects: caps_sorted_keys(fun.effects),
             unused_caps: unused,
@@ -124,7 +142,8 @@ fn caps_report_json(r: CapsReport) -> IrjVal {
     irjson_set(o, "pure", irjson_bool(r.pure));
     irjson_set(o, "async", irjson_bool(r.async));
     irjson_set(o, "idempotent", irjson_bool(r.idempotent));
-    let cs = Vec::new();
+    irjson_set(o, "readonly", irjson_bool(r.readonly));
+    let mut cs = Vec::new();
     for c in r.caps {
         let co = irjson_obj();
         irjson_set(co, "name", IrjVal::Str(c.name));
@@ -136,7 +155,7 @@ fn caps_report_json(r: CapsReport) -> IrjVal {
     irjson_set(o, "direct_effects", irjson_strs(r.direct_effects));
     irjson_set(o, "unused_caps", irjson_strs(r.unused_caps));
     irjson_set(o, "calls", irjson_strs(r.calls));
-    let ds = Vec::new();
+    let mut ds = Vec::new();
     for d in r.declassify {
         let dobj = irjson_obj();
         irjson_set(dobj, "call", IrjVal::Str(d.call));
@@ -150,11 +169,11 @@ fn caps_report_json(r: CapsReport) -> IrjVal {
 
 // caps_declassify_line lists the declassifications of personal data
 // (`    declassify: mask (12:9), expose_unchecked (20:5)`).
-fn caps_declassify_line(lines: Vec<String>, fun: ChkFunc) {
+fn caps_declassify_line(mut lines: Vec<String>, fun: ChkFunc) {
     if fun.declass.len() == 0 {
         return;
     }
-    let ds = Vec::new();
+    let mut ds = Vec::new();
     for d in fun.declass {
         ds.push(d.call + " (" + d.pos.line.to_string() + ":" + d.pos.col.to_string() + ")");
     }
@@ -185,7 +204,7 @@ fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             }
         };
         let a = diag_analyze(src);
-        let fns = Vec::new();
+        let mut fns = Vec::new();
         for r in caps_reports(a) {
             fns.push(caps_report_json(r));
         }
@@ -195,13 +214,13 @@ fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.info(irjson_encode(irjson_val(o), false));
         return 0;
     }
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     for fun in res.info.func_list {
         if chk_is_lib(fun) {
             continue;
         }
-        let caps = Vec::new();
-        let unused = Vec::new();
+        let mut caps = Vec::new();
+        let mut unused = Vec::new();
         for c in diag_caps(fun) {
             caps.push(c.name + ": " + ty_str(c.ty));
             if c.uses == 0 {

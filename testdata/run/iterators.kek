@@ -37,7 +37,7 @@ fn main(log: &Log) -> Int {
     }
     log.info(acc.to_string());
     log.info(total(Countdown { n: 10 }).to_string() + " " + Countdown { n: 3 }.count().to_string());
-    let words = Vec::new();
+    let mut words = Vec::new();
     words.push("pear");
     words.push("fig");
     words.push("banana");
@@ -64,7 +64,7 @@ fn main(log: &Log) -> Int {
         None
     }).collect();
     log.info(firsts);
-    let it = (0..10).peekable();
+    let mut it = (0..10).peekable();
     let mut out = Vec::new();
     while let Some(x) = it.next() {
         if let Some(nx) = it.peek() {

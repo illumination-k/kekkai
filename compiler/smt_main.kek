@@ -41,7 +41,7 @@ fn smt_is_id_char(c: Int) -> Bool {
 }
 
 fn smt_lex(s: String) -> Result<Vec<SmtTok>, String> {
-    let toks = Vec::new();
+    let mut toks = Vec::new();
     let n = s.len();
     let mut i = 0;
     while i < n {
@@ -131,7 +131,7 @@ fn smt_p_is(p: SmtParser, text: String) -> Bool {
     t.kind == "op" && t.text == text
 }
 
-fn smt_p_fail(p: SmtParser, msg: String) {
+fn smt_p_fail(mut p: SmtParser, msg: String) {
     if p.err == "" {
         let t = smt_p_tok(p);
         let at = if t.kind == "eof" {
@@ -143,8 +143,8 @@ fn smt_p_fail(p: SmtParser, msg: String) {
     }
 }
 
-fn smt_p_formula(p: SmtParser) -> SmtF {
-    let parts = Vec::new();
+fn smt_p_formula(mut p: SmtParser) -> SmtF {
+    let mut parts = Vec::new();
     parts.push(smt_p_and(p));
     while p.err == "" && smt_p_is(p, "||") {
         p.pos = p.pos + 1;
@@ -156,8 +156,8 @@ fn smt_p_formula(p: SmtParser) -> SmtF {
     SmtF::Or(parts)
 }
 
-fn smt_p_and(p: SmtParser) -> SmtF {
-    let parts = Vec::new();
+fn smt_p_and(mut p: SmtParser) -> SmtF {
+    let mut parts = Vec::new();
     parts.push(smt_p_unary(p));
     while p.err == "" && smt_p_is(p, "&&") {
         p.pos = p.pos + 1;
@@ -174,7 +174,7 @@ fn smt_p_is_term_op(p: SmtParser) -> Bool {
     t.kind == "op" && "+ - * <= < >= > == !=".split(" ").iter().any(|o| o == t.text)
 }
 
-fn smt_p_unary(p: SmtParser) -> SmtF {
+fn smt_p_unary(mut p: SmtParser) -> SmtF {
     if smt_p_is(p, "!") {
         p.pos = p.pos + 1;
         return SmtF::Not(smt_p_unary(p));
@@ -211,7 +211,7 @@ fn smt_lin_const(k: Int) -> SmtLin {
 
 // smt_lin_comb: a + s * b
 fn smt_lin_comb(x: SmtCtx, a: SmtLin, s: Int, b: SmtLin) -> SmtLin {
-    let terms = Vec::new();
+    let mut terms = Vec::new();
     for t in a.terms {
         terms.push(t);
     }
@@ -225,10 +225,10 @@ fn smt_lin_scale(x: SmtCtx, s: Int, a: SmtLin) -> SmtLin {
     smt_lin_comb(x, smt_lin_const(0), s, a)
 }
 
-fn smt_p_cmp(p: SmtParser) -> SmtF {
+fn smt_p_cmp(mut p: SmtParser) -> SmtF {
     let x = p.x;
     let mut l = smt_p_lin(p);
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     while true {
         if p.err != "" {
             return SmtF::True;
@@ -272,7 +272,7 @@ fn smt_p_cmp(p: SmtParser) -> SmtF {
     SmtF::And(parts)
 }
 
-fn smt_p_lin(p: SmtParser) -> SmtLin {
+fn smt_p_lin(mut p: SmtParser) -> SmtLin {
     let mut l = smt_p_term(p);
     while p.err == "" && (smt_p_is(p, "+") || smt_p_is(p, "-")) {
         let s = if smt_p_is(p, "+") { 1 } else { -1 };
@@ -283,7 +283,7 @@ fn smt_p_lin(p: SmtParser) -> SmtLin {
     l
 }
 
-fn smt_p_term(p: SmtParser) -> SmtLin {
+fn smt_p_term(mut p: SmtParser) -> SmtLin {
     let mut l = smt_p_factor(p);
     while p.err == "" && smt_p_is(p, "*") {
         p.pos = p.pos + 1;
@@ -299,7 +299,7 @@ fn smt_p_term(p: SmtParser) -> SmtLin {
     l
 }
 
-fn smt_p_factor(p: SmtParser) -> SmtLin {
+fn smt_p_factor(mut p: SmtParser) -> SmtLin {
     let t = smt_p_tok(p);
     if t.kind == "num" {
         p.pos = p.pos + 1;
@@ -307,7 +307,7 @@ fn smt_p_factor(p: SmtParser) -> SmtLin {
     }
     if t.kind == "id" && t.text != "true" && t.text != "false" {
         p.pos = p.pos + 1;
-        let terms = Vec::new();
+        let mut terms = Vec::new();
         terms.push(SmtMono { coef: 1, atom: t.text });
         return SmtLin { terms, k: 0 };
     }
@@ -361,7 +361,7 @@ fn smt_problem_new() -> SmtProblem {
 }
 
 fn smt_parse_file(text: String) -> Vec<SmtProblem> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut cur = smt_problem_new();
     let mut ln = 0;
     for raw in text.split("\n") {
@@ -451,7 +451,7 @@ fn smt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     };
     let repeat = tool_flag_int(fl, "repeat", 1).max(1);
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     let mut status = 0;
     for pr in smt_parse_file(text) {
         let prefix = if pr.name == "" { "" } else { pr.name + ": " };
@@ -475,7 +475,7 @@ fn smt_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
 // ---- printing (for failures of the random test) ----
 
 fn smt_lin_text(l: SmtLin) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for t in l.terms {
         parts.push(t.coef.to_string() + "*" + t.atom);
     }
@@ -491,14 +491,14 @@ fn smt_f_text(f: SmtF) -> String {
         SmtF::Eq(l) => "(" + smt_lin_text(l) + " == 0)",
         SmtF::Not(g) => "!" + smt_f_text(g),
         SmtF::And(gs) => {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for g in gs {
                 ps.push(smt_f_text(g));
             }
             "(" + ps.join(" && ") + ")"
         }
         SmtF::Or(gs) => {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for g in gs {
                 ps.push(smt_f_text(g));
             }
@@ -509,7 +509,7 @@ fn smt_f_text(f: SmtF) -> String {
 }
 
 fn smt_problem_text(name: String, hyps: Vec<SmtF>, goal: SmtF) -> String {
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     lines.push("problem " + name);
     for h in hyps {
         match h {
@@ -531,7 +531,7 @@ struct SmtRng {
     mut s: Int,
 }
 
-fn smt_rng_int(r: SmtRng, lo: Int, hi: Int) -> Int {
+fn smt_rng_int(mut r: SmtRng, lo: Int, hi: Int) -> Int {
     r.s = r.s * 6364136223846793005 + 1442695040888963407;
     lo + r.s.ushr(33) % (hi - lo + 1)
 }
@@ -541,7 +541,7 @@ fn smt_rand_lin(r: SmtRng, maxc: Int) -> SmtLin {
 }
 
 fn smt_rand_lin_k(r: SmtRng, maxc: Int, maxk: Int) -> SmtLin {
-    let terms = Vec::new();
+    let mut terms = Vec::new();
     let n = smt_rng_int(r, 1, 3);
     for _ in 0..n {
         let mut c = smt_rng_int(r, 0 - maxc, maxc);
@@ -566,7 +566,7 @@ fn smt_rand_f(r: SmtRng, depth: Int, maxc: Int) -> SmtF {
     if roll < 6 {
         return SmtF::Not(smt_rand_f(r, depth - 1, maxc));
     }
-    let gs = Vec::new();
+    let mut gs = Vec::new();
     gs.push(smt_rand_f(r, depth - 1, maxc));
     gs.push(smt_rand_f(r, depth - 1, maxc));
     if roll < 8 {
@@ -585,13 +585,13 @@ fn smt_rand_f(r: SmtRng, depth: Int, maxc: Int) -> SmtF {
 fn smt_rand_problem(r: SmtRng, i: Int) -> (Vec<SmtF>, SmtF) {
     let bounded = i % 2 == 0;
     let kind = i / 2 % 4;
-    let hyps = Vec::new();
+    let mut hyps = Vec::new();
     if kind == 3 {
         // two or three thin strips lo <= p.a + q.b <= lo + w: the real
         // shadow is often satisfiable where no integer point is
         let ns = smt_rng_int(r, 2, 3);
         for j in 0..ns {
-            let terms = Vec::new();
+            let mut terms = Vec::new();
             let mut p = smt_rng_int(r, -11, 11);
             if p == 0 {
                 p = 5;
@@ -605,7 +605,7 @@ fn smt_rand_problem(r: SmtRng, i: Int) -> (Vec<SmtF>, SmtF) {
             let lo = smt_rng_int(r, -30, 30);
             let w = smt_rng_int(r, 0, 4);
             let lin = SmtLin { terms, k: 0 };
-            let s = Vec::new();
+            let mut s = Vec::new();
             s.push(SmtF::Le(smt_lin_comb(smt_ctx_new(), smt_lin_const(lo), -1, lin)));
             s.push(SmtF::Le(smt_lin_comb(smt_ctx_new(), lin, 1, smt_lin_const(0 - lo - w))));
             hyps.push(SmtF::Named("s" + (j + 1).to_string(), SmtF::And(s)));
@@ -638,14 +638,14 @@ fn smt_rand_problem(r: SmtRng, i: Int) -> (Vec<SmtF>, SmtF) {
     (hyps, goal)
 }
 
-fn smt_rand_bounds(hyps: Vec<SmtF>, bounded: Bool) {
+fn smt_rand_bounds(mut hyps: Vec<SmtF>, bounded: Bool) {
     if bounded {
         for i in 0..3 {
             let atom = "abc".slice(i, i + 1);
-            let up = Vec::new();
+            let mut up = Vec::new();
             up.push(SmtMono { coef: 1, atom });
             hyps.push(SmtF::Le(SmtLin { terms: up, k: -4 }));
-            let lo = Vec::new();
+            let mut lo = Vec::new();
             lo.push(SmtMono { coef: -1, atom });
             hyps.push(SmtF::Le(SmtLin { terms: lo, k: -4 }));
         }
@@ -691,7 +691,7 @@ fn smt_bf_valid(hyps: Vec<SmtF>, goal: SmtF) -> Bool {
     for a in -4..5 {
         for b in -4..5 {
             for c in -4..5 {
-                let vals = Vec::new();
+                let mut vals = Vec::new();
                 vals.push(a);
                 vals.push(b);
                 vals.push(c);
@@ -706,7 +706,7 @@ fn smt_bf_valid(hyps: Vec<SmtF>, goal: SmtF) -> Bool {
 
 // smt_core_hyps keeps the unnamed hypotheses and the named ones in core.
 fn smt_core_hyps(hyps: Vec<SmtF>, core: Vec<String>) -> Vec<SmtF> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for h in hyps {
         match h {
             SmtF::Named(n, _) => {
@@ -731,7 +731,7 @@ fn smt_random_main(n: Int, seed: Int, log: &Log) -> Int {
     let mut nvalid = 0;
     let mut ninvalid = 0;
     let mut nunknown = 0;
-    let fails = Vec::new();
+    let mut fails = Vec::new();
     for i in 0..n {
         let bounded = i % 2 == 0;
         let (hyps, goal) = smt_rand_problem(r, i);
@@ -749,7 +749,7 @@ fn smt_random_main(n: Int, seed: Int, log: &Log) -> Int {
             }
             SmtResult::Invalid(bs) => {
                 ninvalid = ninvalid + 1;
-                let vals = smt_zeros(3);
+                let mut vals = smt_zeros(3);
                 for b in bs {
                     let k = "abc".index_of(b.atom).unwrap_or(0);
                     vals.set(k, b.value);
@@ -769,7 +769,7 @@ fn smt_random_main(n: Int, seed: Int, log: &Log) -> Int {
             fails.push("FAIL " + name + ": " + why + "\n" + smt_problem_text(name, hyps, goal));
         }
     }
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     for f in fails {
         lines.push(f);
     }
@@ -795,7 +795,7 @@ fn smt_random_main(n: Int, seed: Int, log: &Log) -> Int {
 // smt_bench_main solves n random problems (generated up front).
 fn smt_bench_main(n: Int, seed: Int, log: &Log) -> Int {
     let r = SmtRng { s: seed };
-    let probs = Vec::new();
+    let mut probs = Vec::new();
     for i in 0..n {
         probs.push(smt_rand_problem(r, i));
     }

@@ -5,8 +5,8 @@ struct Cell {
 }
 
 fn alias(a: Int) -> Int {
-    let c = Cell { v: a, xs: Vec::new() };
-    let d = c;
+    let mut c = Cell { v: a, xs: Vec::new() };
+    let mut d = c;
     d.v = d.v + 1;
     d.xs.push(5);
     c.xs.push(6);
@@ -14,7 +14,7 @@ fn alias(a: Int) -> Int {
 }
 
 fn vecs(n: Int) -> Int {
-    let v: Vec<Int> = Vec::new();
+    let mut v: Vec<Int> = Vec::new();
     for i in 0..n {
         if i % 3 == 0 { continue; }
         if i > 20 { break; }
@@ -29,14 +29,14 @@ fn vecs(n: Int) -> Int {
 }
 
 fn maps(n: Int) -> Int {
-    let m: HashMap<Int, Int> = HashMap::new();
+    let mut m: HashMap<Int, Int> = HashMap::new();
     for i in 0..n { m.insert(i % 4, i); }
     m.remove(1);
     m.insert(1, 50);
     let ks: Vec<Int> = m.keys().collect();
     let mut s = 0;
     for k in ks { s = s * 10 + k; }
-    let names: HashMap<String, Int> = HashMap::new();
+    let mut names: HashMap<String, Int> = HashMap::new();
     names.insert("a", 1);
     names.insert("b", 2);
     names.insert("a", 3);
@@ -44,7 +44,7 @@ fn maps(n: Int) -> Int {
 }
 
 fn keys_str() -> String {
-    let m: HashMap<String, Int> = HashMap::new();
+    let mut m: HashMap<String, Int> = HashMap::new();
     m.insert("x", 1); m.insert("y", 2); m.insert("x", 3); m.remove("y"); m.insert("y", 4);
     m.keys().collect::<Vec<String>>().join("|")
 }
@@ -60,45 +60,45 @@ fn strops(s: String) -> String {
 }
 
 fn retvec(n: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     for i in 0..n { v.push(i); }
     v
 }
 
 fn retmap() -> Vec<String> {
-    let m = HashMap::new();
+    let mut m = HashMap::new();
     m.insert("k", 1);
     m.keys().collect()
 }
 
 fn retcell() -> Cell {
-    let c = Cell { v: 1, xs: Vec::new() };
+    let mut c = Cell { v: 1, xs: Vec::new() };
     c.xs.push(2);
     c
 }
 
 fn nested(a: Int) -> Int {
-    let m: HashMap<Int, Vec<Int>> = HashMap::new();
-    let v: Vec<Int> = Vec::new();
+    let mut m: HashMap<Int, Vec<Int>> = HashMap::new();
+    let mut v: Vec<Int> = Vec::new();
     m.insert(1, v);
     m.insert(2, v);
     v.push(a);
     match m.get(2) {
-        Some(w) => { w.push(a + 1); }
+        Some(mut w) => { w.push(a + 1); }
         None => {}
     }
-    let cells: Vec<Cell> = Vec::new();
+    let mut cells: Vec<Cell> = Vec::new();
     let c = Cell { v: 1, xs: v };
     cells.push(c);
     cells.push(c);
     match cells.get(0) {
-        Some(d) => { d.v = 40; }
+        Some(mut d) => { d.v = 40; }
         None => {}
     }
     let o = Some(c);
     let mut t = 0;
     match o {
-        Some(e) => { e.xs.push(9); t = e.v; }
+        Some(mut e) => { e.xs.push(9); t = e.v; }
         None => {}
     }
     t * 1000 + vsum3(m.get(1).unwrap_or(Vec::new())) + cells.get(1).unwrap_or(c).v

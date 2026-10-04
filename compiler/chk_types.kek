@@ -151,7 +151,7 @@ fn ty_str(t: Ty) -> String {
         Ty::Param(p) => p.name,
         Ty::Assoc(s, tr, n) => "<" + ty_str(s) + " as " + tr + ">::" + n,
         Ty::Fn(ps, r) => {
-            let parts = Vec::new();
+            let mut parts = Vec::new();
             for p in ps {
                 parts.push(ty_str(p));
             }
@@ -177,7 +177,7 @@ fn ty_args_str(args: Vec<Ty>) -> String {
     if args.len() == 0 {
         return "";
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for t in args {
         parts.push(ty_str(t));
     }
@@ -185,7 +185,7 @@ fn ty_args_str(args: Vec<Ty>) -> String {
 }
 
 fn ty_tuple_str(ts: Vec<Ty>) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for t in ts {
         parts.push(ty_str(t));
     }
@@ -210,7 +210,7 @@ fn ty_prune(t: Ty) -> Ty {
 fn ty_resolve(t0: Ty) -> Ty {
     let t = ty_prune(t0);
     match t {
-        Ty::Var(v) => {
+        Ty::Var(mut v) => {
             v.r = Some(ty_unit());
             ty_unit()
         }
@@ -233,7 +233,7 @@ fn ty_resolve(t0: Ty) -> Ty {
 }
 
 fn ty_resolve_all(ts: Vec<Ty>) -> Vec<Ty> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for e in ts {
         out.push(ty_resolve(e));
     }
@@ -279,7 +279,7 @@ fn ty_subst(t0: Ty, ps: Vec<TyParam>, args: Vec<Ty>) -> Ty {
 }
 
 fn ty_subst_all(ts: Vec<Ty>, ps: Vec<TyParam>, args: Vec<Ty>) -> Vec<Ty> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for e in ts {
         out.push(ty_subst(e, ps, args));
     }
@@ -288,7 +288,7 @@ fn ty_subst_all(ts: Vec<Ty>, ps: Vec<TyParam>, args: Vec<Ty>) -> Vec<Ty> {
 
 // ty_struct_fields returns the field types of a struct instance.
 fn ty_struct_fields(st: TyStruct, args: Vec<Ty>) -> Vec<Ty> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for f in st.fields {
         out.push(ty_subst(f.ty, st.params, args));
     }
@@ -400,7 +400,7 @@ fn ty_key(t: Ty) -> String {
     parts.join("")
 }
 
-fn ty_write_key(b: Vec<String>, t: Ty) {
+fn ty_write_key(mut b: Vec<String>, t: Ty) {
     match t {
         Ty::Result(o, e) => {
             b.push("Result<");
@@ -450,7 +450,7 @@ fn ty_write_key(b: Vec<String>, t: Ty) {
     }
 }
 
-fn ty_write_keys(b: Vec<String>, ts: Vec<Ty>) {
+fn ty_write_keys(mut b: Vec<String>, ts: Vec<Ty>) {
     let mut i = 0;
     for e in ts {
         if i > 0 {
@@ -511,7 +511,7 @@ fn ty_unify(a0: Ty, b0: Ty) -> Bool {
         return true;
     }
     match a {
-        Ty::Var(va) => {
+        Ty::Var(mut va) => {
             match b {
                 Ty::Var(vb) => {
                     if va.id == vb.id {

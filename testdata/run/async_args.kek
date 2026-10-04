@@ -4,7 +4,7 @@ struct Ctx {
     mut count: Int,
 }
 
-fn save(args: Vec<String>, ctx: Ctx, fs: &Fs, log: &Log) -> Int {
+fn save(args: Vec<String>, mut ctx: Ctx, fs: &Fs, log: &Log) -> Int {
     let path = args.get(0).unwrap_or("kek_async_args.txt");
     match fs.write(path, "n=" + args.len().to_string()) {
         Ok(_) => {}

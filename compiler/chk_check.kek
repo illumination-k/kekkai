@@ -278,7 +278,7 @@ fn chk_parse_core() -> ChkCore {
 
 // chk_parse_core_from parses a core library from its sources (`kek fix`
 // of lib/core checks the files being fixed).
-fn chk_parse_core_from(srcs: Vec<FeSource>) -> ChkCore {
+fn chk_parse_core_from(mut srcs: Vec<FeSource>) -> ChkCore {
     let out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
@@ -287,7 +287,7 @@ fn chk_parse_core_from(srcs: Vec<FeSource>) -> ChkCore {
         traits: Vec::new(),
         aliases: Vec::new(),
     };
-    let errs = Vec::new();
+    let mut errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
     srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples() });
     for s in srcs {
@@ -304,7 +304,7 @@ fn chk_parse_core_from(srcs: Vec<FeSource>) -> ChkCore {
 // (lib/core), which every program includes. Core items come first so
 // that a clash is reported at the user's definition; core nodes get ids
 // from a separate range.
-fn chk_with_core(f: AstFile, errs: Vec<AstError>, core: ChkCore) -> AstFile {
+fn chk_with_core(f: AstFile, mut errs: Vec<AstError>, core: ChkCore) -> AstFile {
     let out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
@@ -322,7 +322,7 @@ fn chk_with_core(f: AstFile, errs: Vec<AstError>, core: ChkCore) -> AstFile {
     out
 }
 
-fn chk_append_file(out: AstFile, f: AstFile) {
+fn chk_append_file(mut out: AstFile, f: AstFile) {
     for x in f.structs {
         out.structs.push(x);
     }
@@ -497,7 +497,7 @@ fn chk_check_full(
     };
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs, core);
-    let c = Chk {
+    let mut c = Chk {
         impl_idx: None,
         loops: 0,
         info: info,
@@ -527,8 +527,10 @@ fn chk_check_full(
     for fun in c.info.func_list {
         lin_check(c.info, fun, c.errs);
     }
+    // the mutability and refinement passes need a well-typed program
+    let typed = c.errs.len() == 0;
     let mut mr = mu_empty_report();
-    if c.errs.len() == 0 && mu {
+    if typed && mu {
         mr = mu_program(c.info, f);
         if mu_enforce() {
             for d in mr.diags {
@@ -537,7 +539,7 @@ fn chk_check_full(
         }
     }
     let mut rr = ref_report_empty();
-    if c.errs.len() == 0 && !cfg.off {
+    if typed && !cfg.off {
         rr = ref_program(c.info, cfg, f);
         for d in rr.diags {
             if d.severity == "error" {
@@ -548,16 +550,16 @@ fn chk_check_full(
     ChkResult { info: c.info, errs: ast_sort_errors(c.errs), mu: mr, refine: rr }
 }
 
-fn chk_errorf(c: Chk, pos: AstPos, msg: String) {
+fn chk_errorf(mut c: Chk, pos: AstPos, msg: String) {
     c.errs.push(AstError { pos: pos, msg: msg });
 }
 
-fn chk_new_var(c: Chk) -> Ty {
+fn chk_new_var(mut c: Chk) -> Ty {
     c.next_id = c.next_id + 1;
     Ty::Var(TyVar { id: c.next_id, r: None })
 }
 
-fn chk_new_binding(c: Chk, name: String, t: Ty, pos: AstPos) -> ChkBinding {
+fn chk_new_binding(mut c: Chk, name: String, t: Ty, pos: AstPos) -> ChkBinding {
     c.next_id = c.next_id + 1;
     ChkBinding { id: c.next_id, name: name, ty: t, mutable: false, pos: pos, param: false, uses: 0 }
 }
@@ -596,7 +598,7 @@ fn chk_prelude_type(n: String) -> Bool {
     n == "Response" || n == "TxError" || n == "NetError" || n == "IoError"
 }
 
-fn chk_declare(c: Chk, f: AstFile) {
+fn chk_declare(mut c: Chk, f: AstFile) {
     for ad in f.aliases {
         if chk_reserved(ad.name) || c.info.aliases.contains_key(ad.name) {
             chk_errorf(c, ad.pos, "type `" + ad.name + "` is already defined");
@@ -641,10 +643,10 @@ fn chk_declare(c: Chk, f: AstFile) {
     chk_declare_traits(c, f);
     for sd in f.structs {
         match c.info.structs.get(sd.name) {
-            Some(st) => {
+            Some(mut st) => {
                 if st.fields.len() == 0 {
                     c.tscope = chk_param_scope(st.params);
-                    let seen: HashMap<String, Bool> = HashMap::new();
+                    let mut seen: HashMap<String, Bool> = HashMap::new();
                     for fl in sd.fields {
                         if seen.contains_key(fl.name) {
                             chk_errorf(c, fl.pos, "duplicate field `" + fl.name + "`");
@@ -664,16 +666,16 @@ fn chk_declare(c: Chk, f: AstFile) {
     }
     for ed in f.enums {
         match c.info.enums.get(ed.name) {
-            Some(en) => {
+            Some(mut en) => {
                 if en.variants.len() == 0 {
                     c.tscope = chk_param_scope(en.params);
-                    let seen: HashMap<String, Bool> = HashMap::new();
+                    let mut seen: HashMap<String, Bool> = HashMap::new();
                     for v in ed.variants {
                         if seen.contains_key(v.name) {
                             chk_errorf(c, v.pos, "duplicate variant `" + v.name + "`");
                         }
                         seen.insert(v.name, true);
-                        let vi = TyVariant { name: v.name, fields: Vec::new() };
+                        let mut vi = TyVariant { name: v.name, fields: Vec::new() };
                         for ft in v.fields {
                             vi.fields.push(chk_resolve_type(c, ft, false));
                         }
@@ -719,7 +721,7 @@ fn chk_declare(c: Chk, f: AstFile) {
 // chk_alias_preds type-checks the predicates of refined aliases: `Bool`
 // expressions over `self` (the value, of the aliased type) in the linear
 // fragment.
-fn chk_alias_preds(c: Chk, f: AstFile) {
+fn chk_alias_preds(mut c: Chk, f: AstFile) {
     for ad in f.aliases {
         // resolve every alias (reports cycles even in unused ones)
         let n = c.errs.len();
@@ -934,9 +936,9 @@ fn chk_pred_term(c: Chk, e: AstExpr) -> Bool {
 // chk_tparams creates the params of a generic item. The caller resolves
 // their bounds (chk_resolve_bounds) once they are in scope; structs and
 // enums take no bounds.
-fn chk_tparams(c: Chk, gs: Vec<AstGeneric>, allow_bounds: Bool) -> Vec<TyParam> {
-    let out = Vec::new();
-    let seen: HashMap<String, Bool> = HashMap::new();
+fn chk_tparams(mut c: Chk, gs: Vec<AstGeneric>, allow_bounds: Bool) -> Vec<TyParam> {
+    let mut out = Vec::new();
+    let mut seen: HashMap<String, Bool> = HashMap::new();
     for g in gs {
         if seen.contains_key(g.name) {
             chk_errorf(
@@ -965,7 +967,7 @@ fn chk_tparams(c: Chk, gs: Vec<AstGeneric>, allow_bounds: Bool) -> Vec<TyParam> 
 }
 
 fn chk_param_scope(ps: Vec<TyParam>) -> HashMap<String, Ty> {
-    let m: HashMap<String, Ty> = HashMap::new();
+    let mut m: HashMap<String, Ty> = HashMap::new();
     for p in ps {
         m.insert(p.name, Ty::Param(p));
     }
@@ -973,7 +975,7 @@ fn chk_param_scope(ps: Vec<TyParam>) -> HashMap<String, Ty> {
 }
 
 fn chk_copy_scope(s: HashMap<String, Ty>) -> HashMap<String, Ty> {
-    let m: HashMap<String, Ty> = HashMap::new();
+    let mut m: HashMap<String, Ty> = HashMap::new();
     for (k, t) in s.iter() {
         m.insert(k, t);
     }
@@ -999,7 +1001,7 @@ fn chk_impl_type_name(c: Chk, t: Ty, lib: Bool) -> String {
     }
 }
 
-fn chk_declare_impl(c: Chk, im: AstImplDecl) {
+fn chk_declare_impl(mut c: Chk, im: AstImplDecl) {
     for a in im.assoc {
         chk_errorf(c, a.pos, "associated types are only allowed in trait impls");
     }
@@ -1043,10 +1045,10 @@ fn chk_declare_impl(c: Chk, im: AstImplDecl) {
             );
             continue;
         }
-        let sc = chk_param_scope(ips);
+        let mut sc = chk_param_scope(ips);
         sc.insert("Self", target);
         match chk_declare_func(c, fd, key, ips, sc) {
-            Some(fun) => {
+            Some(mut fun) => {
                 for w in iwheres {
                     fun.wheres.push(w);
                 }
@@ -1063,7 +1065,7 @@ fn chk_ty_params_in(t: Ty) -> HashMap<Int, Bool> {
     m
 }
 
-fn chk_collect_params(t0: Ty, m: HashMap<Int, Bool>) {
+fn chk_collect_params(t0: Ty, mut m: HashMap<Int, Bool>) {
     match ty_prune(t0) {
         Ty::Param(p) => {
             m.insert(p.id, true);
@@ -1103,17 +1105,17 @@ fn chk_collect_params(t0: Ty, m: HashMap<Int, Bool>) {
 // the params of the enclosing impl (empty for functions) and scope the
 // type names it brings into scope.
 fn chk_declare_func(
-    c: Chk,
+    mut c: Chk,
     fd: AstFuncDecl,
     name: String,
     outer: Vec<TyParam>,
     scope: HashMap<String, Ty>,
 ) -> Option<ChkFunc> {
-    let tparams = Vec::new();
+    let mut tparams = Vec::new();
     for p in outer {
         tparams.push(p);
     }
-    let sc = chk_copy_scope(scope);
+    let mut sc = chk_copy_scope(scope);
     let own = chk_tparams(c, fd.generics, true);
     for p in own {
         if sc.contains_key(p.name) && p.name != "Self" {
@@ -1139,7 +1141,7 @@ fn chk_declare_func(
             "refinement predicates are not supported on trait method declarations",
         );
     }
-    let fun = ChkFunc {
+    let mut fun = ChkFunc {
         name: name,
         decl: fd,
         tparams: tparams,
@@ -1164,7 +1166,7 @@ fn chk_declare_func(
         }
         chk_check_attr(c, a);
     }
-    let seen: HashMap<String, Bool> = HashMap::new();
+    let mut seen: HashMap<String, Bool> = HashMap::new();
     for p in fd.params {
         if p.name != "_" && seen.contains_key(p.name) {
             chk_errorf(c, p.pos, "duplicate parameter `" + p.name + "`");
@@ -1201,7 +1203,7 @@ fn chk_declare_func(
             }
             _ => {}
         }
-        let b = chk_new_binding(c, p.name, t, p.pos);
+        let mut b = chk_new_binding(c, p.name, t, p.pos);
         b.param = true;
         fun.params.push(b);
     }
@@ -1230,7 +1232,7 @@ fn chk_declare_func(
     Some(fun)
 }
 
-fn chk_main_sig(c: Chk, fun: ChkFunc) {
+fn chk_main_sig(mut c: Chk, fun: ChkFunc) {
     match c.info.handler {
         Some(h) => {
             chk_errorf(
@@ -1288,7 +1290,7 @@ fn chk_main_sig(c: Chk, fun: ChkFunc) {
     }
 }
 
-fn chk_handler_sig(c: Chk, fun: ChkFunc) {
+fn chk_handler_sig(mut c: Chk, fun: ChkFunc) {
     match c.info.handler {
         Some(h) => {
             chk_errorf(
@@ -1413,7 +1415,7 @@ fn chk_type_args(c: Chk, te: AstNamedType, n: Int) -> Vec<Ty> {
                 + te.args.len().to_string(),
         );
     }
-    let out = Vec::new();
+    let mut out = Vec::new();
     for i in 0..n {
         match te.args.get(i) {
             Some(a) => out.push(chk_resolve_type(c, a, false)),
@@ -1429,11 +1431,11 @@ fn chk_ty_at(v: Vec<Ty>, i: Int) -> Ty {
 
 // chk_resolve_type converts a syntactic type. Capability types are
 // accepted only when allow_cap is set (function parameters).
-fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
+fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
     match te0 {
         AstType::Unit(_) => ty_unit(),
         AstType::Fn(ft) => {
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for a in ft.params {
                 ps.push(chk_resolve_type(c, a, false));
             }
@@ -1444,7 +1446,7 @@ fn chk_resolve_type(c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
             Ty::Fn(ps, r)
         }
         AstType::Tuple(te) => {
-            let ts = Vec::new();
+            let mut ts = Vec::new();
             for el in te.elems {
                 ts.push(chk_resolve_type(c, el, false));
             }
@@ -1607,11 +1609,11 @@ fn chk_expect(c: Chk, pos: AstPos, got: Ty, want: Ty, what: String) {
 
 // ---- functions ----
 
-fn chk_push(c: Chk, tx_boundary: Bool) {
+fn chk_push(mut c: Chk, tx_boundary: Bool) {
     c.scopes.push(ChkScope { vars: HashMap::new(), tx_boundary: tx_boundary, lambda: 0 });
 }
 
-fn chk_pop(c: Chk) {
+fn chk_pop(mut c: Chk) {
     c.scopes.pop();
 }
 
@@ -1620,14 +1622,14 @@ fn chk_bind(c: Chk, b: ChkBinding) {
         return;
     }
     match c.scopes.get(c.scopes.len() - 1) {
-        Some(s) => {
+        Some(mut s) => {
             s.vars.insert(b.name, b);
         }
         None => {}
     }
 }
 
-fn chk_func(c: Chk, fun: ChkFunc) {
+fn chk_func(mut c: Chk, fun: ChkFunc) {
     c.cur = fun;
     c.tscope = fun.tscope;
     c.info.wheres = fun.wheres;
@@ -1661,9 +1663,9 @@ fn chk_tail_pos(b: AstBlock) -> AstPos {
 
 // chk_lookup resolves a name; it reports masked irrevocable capabilities
 // used inside a transaction.
-fn chk_lookup(c: Chk, name: String, pos: AstPos) -> Option<ChkBinding> {
+fn chk_lookup(mut c: Chk, name: String, pos: AstPos) -> Option<ChkBinding> {
     let mut crossed = false;
-    let lambdas = Vec::new();
+    let mut lambdas = Vec::new();
     c.captured = false;
     let mut i = c.scopes.len() - 1;
     while i >= 0 {
@@ -1709,7 +1711,7 @@ fn chk_lookup(c: Chk, name: String, pos: AstPos) -> Option<ChkBinding> {
 }
 
 // chk_capture records that the closures lambdas capture b.
-fn chk_capture(c: Chk, lambdas: Vec<Int>, b: ChkBinding, pos: AstPos) {
+fn chk_capture(mut c: Chk, lambdas: Vec<Int>, b: ChkBinding, pos: AstPos) {
     c.captured = true;
     if ty_is_cap(b.ty) {
         chk_errorf(
@@ -1723,7 +1725,7 @@ fn chk_capture(c: Chk, lambdas: Vec<Int>, b: ChkBinding, pos: AstPos) {
     }
     for id in lambdas {
         match c.info.lambdas.get(id) {
-            Some(li) => {
+            Some(mut li) => {
                 let mut seen = false;
                 for x in li.captures {
                     if x.id == b.id {
@@ -1739,7 +1741,7 @@ fn chk_capture(c: Chk, lambdas: Vec<Int>, b: ChkBinding, pos: AstPos) {
     }
 }
 
-fn chk_record(c: Chk, id: Int, t: Ty) -> Ty {
+fn chk_record(mut c: Chk, id: Int, t: Ty) -> Ty {
     c.info.types.insert(id, t);
     t
 }
@@ -1769,7 +1771,7 @@ fn chk_block(c: Chk, b: AstBlock) -> Ty {
 }
 
 // chk_stmt checks a statement and reports whether it diverges.
-fn chk_stmt(c: Chk, s0: AstStmt) -> Bool {
+fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
     match s0 {
         AstStmt::Let(s) => {
             let mut t = ty_unit();
@@ -1794,7 +1796,7 @@ fn chk_stmt(c: Chk, s0: AstStmt) -> Bool {
                 }
                 None => {}
             }
-            let b = chk_new_binding(c, s.name, t, s.pos);
+            let mut b = chk_new_binding(c, s.name, t, s.pos);
             b.mutable = s.mutable;
             c.info.lets.insert(s.id, b);
             chk_bind(c, b);
@@ -1984,7 +1986,7 @@ fn chk_let_pattern(c: Chk, pat: AstPattern, t: Ty) {
 // value of t, and binds its variables in the current scope.
 fn chk_irrefutable(c: Chk, pat: AstPattern, t: Ty, what: String) {
     chk_pattern(c, pat, t);
-    let rows: Vec<Vec<AstPattern>> = Vec::new();
+    let mut rows: Vec<Vec<AstPattern>> = Vec::new();
     rows.push(chk_pats1(pat));
     if !chk_exhaustive(c.info, rows, chk_tys1(t)) {
         chk_errorf(
@@ -1996,14 +1998,14 @@ fn chk_irrefutable(c: Chk, pat: AstPattern, t: Ty, what: String) {
 }
 
 fn chk_pats1(p: AstPattern) -> Vec<AstPattern> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(p);
     v
 }
 
 // chk_for_iter checks `for x in e` over an Iterator (or IntoIterator) e of
 // type it and returns the element type.
-fn chk_for_iter(c: Chk, s: AstForStmt, it: Ty) -> Ty {
+fn chk_for_iter(mut c: Chk, s: AstForStmt, it: Ty) -> Ty {
     let t = ty_prune(it);
     if ty_is_prim(t, "<invalid>") {
         return ty_invalid();
@@ -2068,7 +2070,7 @@ fn chk_expr(c: Chk, e: AstExpr) -> Ty {
 // chk_expr_cap checks an expression. Capability-typed identifiers are
 // only permitted when allow_cap is set (method receivers and capability
 // arguments).
-fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
+fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
     match e0 {
         AstExpr::IntLit(e) => chk_record(c, e.id, ty_int()),
         AstExpr::BoolLit(e) => chk_record(c, e.id, ty_bool()),
@@ -2096,7 +2098,7 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     chk_errorf(c, e.pos, "cannot find value `" + e.name + "` in this scope");
                     chk_record(c, e.id, ty_invalid())
                 }
-                Some(b) => {
+                Some(mut b) => {
                     b.uses = b.uses + 1;
                     c.info.uses.insert(e.id, b);
                     if ty_is_cap(b.ty) && !allow_cap {
@@ -2252,7 +2254,7 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                         Ty::Struct(_, a) => a,
                         _ => Vec::new(),
                     };
-                    let seen: HashMap<String, Bool> = HashMap::new();
+                    let mut seen: HashMap<String, Bool> = HashMap::new();
                     for f in e.fields {
                         let t = chk_expr(c, f.value);
                         match chk_struct_field(st, f.name) {
@@ -2305,7 +2307,7 @@ fn chk_expr_cap(c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
         }
         AstExpr::Closure(e) => chk_closure(c, e, None),
         AstExpr::Tuple(e) => {
-            let ts = Vec::new();
+            let mut ts = Vec::new();
             for el in e.elems {
                 ts.push(chk_expr(c, el));
             }
@@ -2379,7 +2381,7 @@ fn chk_call_info(kind: String, t: Ty) -> ChkCallInfo {
 
 // chk_instantiate returns fresh inference variables for params ps.
 fn chk_instantiate(c: Chk, ps: Vec<TyParam>) -> Vec<Ty> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in ps {
         out.push(chk_new_var(c));
     }
@@ -2472,7 +2474,7 @@ fn chk_oblige_bounds(c: Chk, pos: AstPos, fun: ChkFunc, targs: Vec<Ty>) {
 // chk_param_types returns the parameter types of fun instantiated with
 // targs.
 fn chk_param_types(fun: ChkFunc, targs: Vec<Ty>) -> Vec<Ty> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in fun.params {
         out.push(ty_subst(p.ty, fun.tparams, targs));
     }
@@ -2482,7 +2484,7 @@ fn chk_param_types(fun: ChkFunc, targs: Vec<Ty>) -> Vec<Ty> {
 // chk_call_func checks a call of a user function (or method called by
 // path) with already instantiated type arguments.
 fn chk_call_func(
-    c: Chk,
+    mut c: Chk,
     id: Int,
     pos: AstPos,
     fun: ChkFunc,
@@ -2500,7 +2502,7 @@ fn chk_call_func(
             args,
             Vec::new(),
         );
-        let ci = chk_call_info("trait", mi.recv_ty);
+        let mut ci = chk_call_info("trait", mi.recv_ty);
         ci.func = mi.func;
         ci.targs = mi.targs;
         ci.op = mi.op;
@@ -2511,7 +2513,7 @@ fn chk_call_func(
         chk_errorf(c, pos, "the entry point `" + fun.name + "` cannot be called directly");
     }
     chk_fn_bounds(c, fun.tparams, targs);
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for t in chk_param_types(fun, targs) {
         ps.push(chk_norm(c.info, t));
     }
@@ -2519,7 +2521,7 @@ fn chk_call_func(
     chk_oblige_bounds(c, pos, fun, targs);
     chk_note_call(c, fun, pos);
     let result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
-    let ci = chk_call_info("func", result);
+    let mut ci = chk_call_info("func", result);
     ci.func = Some(fun);
     ci.targs = targs;
     c.info.calls.insert(id, ci);
@@ -2605,7 +2607,7 @@ fn chk_builtin_eq(t: Ty) -> Bool {
 
 // chk_binop_trait records the binary operator e as a call of trait method
 // tr::m on operands of type t.
-fn chk_binop_trait(c: Chk, e: AstBinary, tr: String, m: String, t: Ty) {
+fn chk_binop_trait(mut c: Chk, e: AstBinary, tr: String, m: String, t: Ty) {
     match c.info.funcs.get(tr + "::" + m) {
         Some(tf) => {
             chk_oblige(c, e.pos, tr, t, "binary operation `" + e.op + "`");
@@ -2726,7 +2728,7 @@ fn chk_fn_sig(t: Ty) -> Option<Ty> {
 }
 
 // chk_closure checks a closure expression; want is the expected type.
-fn chk_closure(c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
+fn chk_closure(mut c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
     let mut exp_ps = Vec::new();
     let mut exp_r = None;
     match want {
@@ -2739,16 +2741,16 @@ fn chk_closure(c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
         },
         None => {}
     }
-    let li = ChkLambdaInfo { id: e.id, params: Vec::new(), captures: Vec::new(), ty: ty_unit() };
+    let mut li = ChkLambdaInfo { id: e.id, params: Vec::new(), captures: Vec::new(), ty: ty_unit() };
     c.info.lambdas.insert(e.id, li);
     chk_push(c, false);
     match c.scopes.get(c.scopes.len() - 1) {
-        Some(s) => {
+        Some(mut s) => {
             s.lambda = e.id;
         }
         None => {}
     }
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     let mut i = 0;
     for p in e.params {
         let mut t = match exp_ps.get(i) {
@@ -2776,7 +2778,7 @@ fn chk_closure(c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
         if ty_is_cap(t) {
             chk_errorf(c, p.pos, "a closure cannot take a capability parameter");
         }
-        let b = chk_new_binding(c, p.name, t, p.pos);
+        let mut b = chk_new_binding(c, p.name, t, p.pos);
         b.param = true;
         li.params.push(b);
         chk_bind(c, b);
@@ -2835,13 +2837,13 @@ fn chk_closure(c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
 }
 
 // chk_fn_item is the value of a named function `f` (a function pointer).
-fn chk_fn_item(c: Chk, e: AstIdent, fun: ChkFunc) -> Ty {
+fn chk_fn_item(mut c: Chk, e: AstIdent, fun: ChkFunc) -> Ty {
     if fun.handler || fun.main || fun.test {
         chk_errorf(c, e.pos, "the entry point `" + fun.name + "` cannot be used as a value");
     }
     let targs = chk_instantiate(c, fun.tparams);
     chk_turbofish(c, e.pos, fun, targs, e.targs);
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for t in chk_param_types(fun, targs) {
         if ty_is_cap(t) {
             chk_errorf(
@@ -2857,7 +2859,7 @@ fn chk_fn_item(c: Chk, e: AstIdent, fun: ChkFunc) -> Ty {
     chk_fn_bounds(c, fun.tparams, targs);
     chk_oblige_bounds(c, e.pos, fun, targs);
     chk_note_call(c, fun, e.pos);
-    let ci = chk_call_info("fnitem", ty_unit());
+    let mut ci = chk_call_info("fnitem", ty_unit());
     ci.func = Some(fun);
     ci.targs = targs;
     c.info.calls.insert(e.id, ci);
@@ -2891,7 +2893,7 @@ fn chk_fn_bounds(c: Chk, ps: Vec<TyParam>, targs: Vec<Ty>) {
 }
 
 // chk_value_call checks `f(args)` where f is a value (a closure).
-fn chk_value_call(c: Chk, e: AstCall, ft: Ty) -> Ty {
+fn chk_value_call(mut c: Chk, e: AstCall, ft: Ty) -> Ty {
     match chk_fn_sig(ft) {
         Some(Ty::Fn(ps, r)) => {
             chk_args(c, e.pos, "closure", e.args, ps);
@@ -2931,7 +2933,7 @@ fn chk_exprs(c: Chk, args: Vec<AstExpr>) {
     }
 }
 
-fn chk_call(c: Chk, e: AstCall) -> Ty {
+fn chk_call(mut c: Chk, e: AstCall) -> Ty {
     match e.func {
         AstExpr::Ident(f) => {
             if f.name == "Ok" || f.name == "Err" || f.name == "Some" {
@@ -2989,7 +2991,7 @@ fn chk_call(c: Chk, e: AstCall) -> Ty {
 }
 
 // chk_path checks `Type::Name` (call is Some when applied to args).
-fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
+fn chk_path(mut c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
     let mut key = p.id;
     let mut args = Vec::new();
     let mut pos = p.pos;
@@ -3022,7 +3024,7 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
             }
         }
     }
-    let ty_args = Vec::new();
+    let mut ty_args = Vec::new();
     for a in p.ty_args {
         ty_args.push(chk_resolve_type(c, a, false));
     }
@@ -3073,7 +3075,7 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
                         args,
                         ty_variant_fields(en, eargs, v),
                     );
-                    let ci = chk_call_info("variant", ety);
+                    let mut ci = chk_call_info("variant", ety);
                     ci.enm = Some(en);
                     ci.tag = tag;
                     c.info.calls.insert(key, ci);
@@ -3155,7 +3157,7 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
                             );
                         }
                         let mi = chk_trait_call(c, pos, tf, pt, false, args, p.targs);
-                        let ci = chk_call_info("trait", mi.recv_ty);
+                        let mut ci = chk_call_info("trait", mi.recv_ty);
                         ci.func = mi.func;
                         ci.targs = mi.targs;
                         ci.op = mi.op;
@@ -3181,7 +3183,7 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
                 chk_errorf(c, p.pos, "`Vec` takes 1 generic argument(s)");
             }
         }
-        let ci = chk_call_info("collection", t);
+        let mut ci = chk_call_info("collection", t);
         ci.op = chk_lower_first(p.ty) + ".new";
         c.info.calls.insert(key, ci);
         return t;
@@ -3196,7 +3198,7 @@ fn chk_path(c: Chk, p: AstPathExpr, call: Option<AstCall>) -> Ty {
                 );
             }
             chk_args(c, pos, "`" + p.ty + "::" + p.name + "`", args, b.params);
-            let ci = chk_call_info("static", b.result);
+            let mut ci = chk_call_info("static", b.result);
             ci.builtin = Some(b);
             c.info.calls.insert(key, ci);
             return b.result;
@@ -3269,7 +3271,7 @@ fn chk_recv_name(t: Ty) -> String {
     }
 }
 
-fn chk_method(c: Chk, e: AstMethodCall) -> Ty {
+fn chk_method(mut c: Chk, e: AstMethodCall) -> Ty {
     let rt = ty_prune(chk_expr_cap(c, e.recv, true));
     if ty_is_prim(rt, "<invalid>") {
         chk_exprs(c, e.args);
@@ -3382,11 +3384,11 @@ fn chk_method(c: Chk, e: AstMethodCall) -> Ty {
 }
 
 // chk_user_method checks a call of a method defined in an `impl`.
-fn chk_user_method(c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
+fn chk_user_method(mut c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
     let targs = chk_instantiate(c, fun.tparams);
     chk_turbofish(c, e.pos, fun, targs, e.targs);
     chk_fn_bounds(c, fun.tparams, targs);
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for t in chk_param_types(fun, targs) {
         ps.push(chk_norm(c.info, t));
     }
@@ -3404,7 +3406,7 @@ fn chk_user_method(c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
                 + "`)",
         );
     }
-    let rest = Vec::new();
+    let mut rest = Vec::new();
     for i in 1..ps.len() {
         rest.push(ps.get(i).unwrap_or(ty_unit()));
     }
@@ -3425,7 +3427,7 @@ fn chk_user_method(c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
 
 // chk_trait_method checks `recv.m(args)` resolved through a trait (rt
 // implements it). Returns None when no trait has such a method.
-fn chk_trait_method(c: Chk, e: AstMethodCall, rt: Ty) -> Option<Ty> {
+fn chk_trait_method(mut c: Chk, e: AstMethodCall, rt: Ty) -> Option<Ty> {
     let ts = chk_traits_with_method(c, rt, e.name);
     if ts.len() == 0 {
         return None;
@@ -3457,16 +3459,16 @@ fn chk_trait_method(c: Chk, e: AstMethodCall, rt: Ty) -> Option<Ty> {
                 + "(...)`",
         );
     }
-    let mi = chk_trait_call(c, e.pos, tf, rt, true, e.args, e.targs);
+    let mut mi = chk_trait_call(c, e.pos, tf, rt, true, e.args, e.targs);
     let result = mi.recv_ty;
     mi.recv_ty = rt;
     c.info.methods.insert(e.id, mi);
     Some(result)
 }
 
-fn chk_generic_method(c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
+fn chk_generic_method(mut c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
     chk_no_turbofish(c, e.pos, "`" + e.name + "`", e.targs);
-    let mi = ChkMethodInfo {
+    let mut mi = ChkMethodInfo {
         kind: "generic",
         builtin: None,
         op: e.name,
@@ -3552,7 +3554,7 @@ fn chk_generic_method(c: Chk, e: AstMethodCall, rt: Ty) -> Ty {
     result
 }
 
-fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
+fn chk_transaction(mut c: Chk, e: AstMethodCall) -> Ty {
     if !c.cur.effects.contains_key("db.transaction") {
         c.cur.effect_pos.insert("db.transaction", e.pos);
     }
@@ -3642,7 +3644,7 @@ fn chk_transaction(c: Chk, e: AstMethodCall) -> Ty {
     }
 }
 
-fn chk_try(c: Chk, e: AstTry) -> Ty {
+fn chk_try(mut c: Chk, e: AstTry) -> Ty {
     let t = ty_prune(chk_expr(c, e.x));
     if ty_is_prim(t, "<invalid>") {
         return ty_invalid();
@@ -3721,7 +3723,7 @@ fn chk_try(c: Chk, e: AstTry) -> Ty {
 // functions implementing it (`<T as Tr>::m`, `<T as Tr<A>>::m`); the core
 // library's are left out (they take no capabilities).
 fn chk_trait_impl_index(c: Chk) -> HashMap<String, Vec<ChkFunc>> {
-    let idx: HashMap<String, Vec<ChkFunc>> = HashMap::new();
+    let mut idx: HashMap<String, Vec<ChkFunc>> = HashMap::new();
     for fun in c.info.func_list {
         if !fun.name.starts_with("<") || chk_is_lib(fun) {
             continue;
@@ -3748,9 +3750,9 @@ fn chk_trait_impl_index(c: Chk) -> HashMap<String, Vec<ChkFunc>> {
         }
         let key = tr + "::" + fun.name.slice(close + 3, fun.name.len());
         match idx.get(key) {
-            Some(v) => v.push(fun),
+            Some(mut v) => v.push(fun),
             None => {
-                let v = Vec::new();
+                let mut v = Vec::new();
                 v.push(fun);
                 idx.insert(key, v);
             }
@@ -3762,7 +3764,7 @@ fn chk_trait_impl_index(c: Chk) -> HashMap<String, Vec<ChkFunc>> {
 // chk_note_trait_call records a call through trait method tf: any of the
 // program's implementations of it may run, so all are callees (for async,
 // effects, idempotency and `kek caps`).
-fn chk_note_trait_call(c: Chk, tf: ChkFunc, pos: AstPos) {
+fn chk_note_trait_call(mut c: Chk, tf: ChkFunc, pos: AstPos) {
     chk_note_call(c, tf, pos);
     let idx = match c.impl_idx {
         Some(m) => m,
@@ -3778,14 +3780,14 @@ fn chk_note_trait_call(c: Chk, tf: ChkFunc, pos: AstPos) {
 }
 
 fn chk_compute_async(c: Chk) {
-    let async_ops: HashMap<String, Bool> = HashMap::new();
+    let mut async_ops: HashMap<String, Bool> = HashMap::new();
     async_ops.insert("db.transaction", true);
     for b in c.builtins.all {
         if b.async {
             async_ops.insert(b.op, true);
         }
     }
-    for fun in c.info.func_list {
+    for mut fun in c.info.func_list {
         // Entry points are state machines driven by the host.
         fun.async = fun.handler || fun.main;
         for op in fun.effects.keys() {
@@ -3797,7 +3799,7 @@ fn chk_compute_async(c: Chk) {
     let mut changed = true;
     while changed {
         changed = false;
-        for fun in c.info.func_list {
+        for mut fun in c.info.func_list {
             if fun.async {
                 continue;
             }

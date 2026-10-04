@@ -80,7 +80,7 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             return 2;
         }
     };
-    let opts = SimOpts {
+    let mut opts = SimOpts {
         threshold: tool_flag_int(
             fl,
             "threshold",
@@ -125,7 +125,7 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     };
     let base = tool_flag_str(fl, "base", "");
-    let old: HashMap<String, Bool> = HashMap::new();
+    let mut old: HashMap<String, Bool> = HashMap::new();
     if base != "" {
         match dh_load(base, fs, log) {
             Some(b) => {
@@ -144,7 +144,7 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if plan_dir != "" {
         return sim_semantic_plan(l, defs, frontend_clean_dir(plan_dir), fs, log);
     }
-    let found = Vec::new();
+    let mut found = Vec::new();
     for f in sim_exact(defs) {
         found.push(f);
     }
@@ -155,14 +155,14 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         found.push(f);
     }
     // keep findings with a new member; split off #[allow(similar)]
-    let findings = Vec::new();
-    let allowed = Vec::new();
+    let mut findings = Vec::new();
+    let mut allowed = Vec::new();
     for f in found {
         let any_new = f.members.iter().any(|m| m.fresh);
         if !any_new {
             continue;
         }
-        let rest = Vec::new();
+        let mut rest = Vec::new();
         for m in f.members {
             if m.allow.is_none() {
                 rest.push(m);
@@ -184,14 +184,14 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let findings = sim_sort(findings);
     let allowed = sim_sort(allowed);
     if tool_flag_bool(fl, "json") {
-        let fs_json = Vec::new();
+        let mut fs_json = Vec::new();
         for f in findings {
             fs_json.push(irjson_val(sim_finding_json(f)));
         }
-        let al_json = Vec::new();
+        let mut al_json = Vec::new();
         for f in allowed {
             let o = sim_finding_json(f);
-            let by = Vec::new();
+            let mut by = Vec::new();
             for m in f.members {
                 match m.allow {
                     Some(a) => {
@@ -247,7 +247,7 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
 fn sim_defs(l: DhLoaded, opts: SimOpts, old: HashMap<String, Bool>) -> Vec<SimDef> {
     // derived implementations are parsed with every position at the
     // `#[derive]` attribute
-    let derived: HashMap<String, Bool> = HashMap::new();
+    let mut derived: HashMap<String, Bool> = HashMap::new();
     for s in l.file.structs {
         for a in s.attrs {
             if a.name == "derive" {
@@ -263,7 +263,7 @@ fn sim_defs(l: DhLoaded, opts: SimOpts, old: HashMap<String, Bool>) -> Vec<SimDe
         }
     }
     let intern = SimIntern { ids: HashMap::new() };
-    let out = Vec::new();
+    let mut out = Vec::new();
     for d in l.prog.defs {
         let decl = d.fun.decl;
         if !decl.has_body || (d.fun.test && !opts.tests) {
@@ -319,7 +319,7 @@ fn sim_finding_with(f: SimFinding, members: Vec<SimDef>) -> Option<SimFinding> {
 
 // sim_exact groups by hash (duplicate) and by hash_lits (literals).
 fn sim_exact(defs: Vec<SimDef>) -> Vec<SimFinding> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let by_hash: HashMap<String, Vec<SimDef>> = HashMap::new();
     let by_lits: HashMap<String, Vec<SimDef>> = HashMap::new();
     for d in defs {
@@ -351,7 +351,7 @@ fn sim_exact(defs: Vec<SimDef>) -> Vec<SimFinding> {
 // sim_literals is the literals finding of members with equal hash_lits,
 // if they have at least two different hashes.
 fn sim_literals(ms: Vec<SimDef>) -> Option<SimFinding> {
-    let hashes: HashSet<String> = HashSet::new();
+    let mut hashes: HashSet<String> = HashSet::new();
     let mut size = 1;
     for m in ms {
         hashes.insert(m.d.hash);
@@ -372,11 +372,11 @@ fn sim_literals(ms: Vec<SimDef>) -> Option<SimFinding> {
     })
 }
 
-fn sim_group_add(m: HashMap<String, Vec<SimDef>>, k: String, d: SimDef) {
+fn sim_group_add(mut m: HashMap<String, Vec<SimDef>>, k: String, d: SimDef) {
     match m.get(k) {
-        Some(v) => v.push(d),
+        Some(mut v) => v.push(d),
         None => {
-            let v = Vec::new();
+            let mut v = Vec::new();
             v.push(d);
             m.insert(k, v);
         }
@@ -386,7 +386,7 @@ fn sim_group_add(m: HashMap<String, Vec<SimDef>>, k: String, d: SimDef) {
 // sim_lit_diffs lists the literals that differ between members whose
 // labels align (equal hash_lits).
 fn sim_lit_diffs(ms: Vec<SimDef>) -> Vec<SimLitDiff> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let first = match ms.get(0) {
         Some(f) => f,
         None => {
@@ -395,8 +395,8 @@ fn sim_lit_diffs(ms: Vec<SimDef>) -> Vec<SimLitDiff> {
     };
     let mut k = 0;
     for lit in first.d.lits {
-        let values = Vec::new();
-        let poss = Vec::new();
+        let mut values = Vec::new();
+        let mut poss = Vec::new();
         let mut differ = false;
         let v0 = first.d.labels.get(lit.index).unwrap_or("");
         for m in ms {
@@ -436,7 +436,7 @@ fn sim_lit_text(l: String) -> String {
 // (the others are reported as duplicate / literals) among the candidate
 // pairs that share a band of their sketches.
 fn sim_structural(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
-    let rep: HashMap<String, SimDef> = HashMap::new();
+    let mut rep: HashMap<String, SimDef> = HashMap::new();
     for d in defs {
         let better = match rep.get(d.d.hash_lits) {
             Some(r) => sim_rep_rank(d) > sim_rep_rank(r),
@@ -448,13 +448,13 @@ fn sim_structural(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
     }
     let reps: Vec<SimDef> = rep.values().collect();
     let n = reps.len();
-    let buckets: HashMap<String, Vec<Int>> = HashMap::new();
+    let mut buckets: HashMap<String, Vec<Int>> = HashMap::new();
     for (i, d) in reps.iter().enumerate() {
         let mut key = "";
         if !opts.all {
             key = d.d.sig;
         }
-        let keys = Vec::new();
+        let mut keys = Vec::new();
         if opts.exhaustive {
             // every pair with the same key
             keys.push(key);
@@ -465,18 +465,18 @@ fn sim_structural(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
         }
         for k in keys {
             match buckets.get(k) {
-                Some(v) => {
+                Some(mut v) => {
                     v.push(i);
                 }
                 None => {
-                    let v = Vec::new();
+                    let mut v = Vec::new();
                     v.push(i);
                     buckets.insert(k, v);
                 }
             }
         }
     }
-    let pairs: HashSet<Int> = HashSet::new();
+    let mut pairs: HashSet<Int> = HashSet::new();
     for (_, v) in buckets.iter() {
         let m = v.len();
         for a in 0..m {
@@ -490,7 +490,7 @@ fn sim_structural(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
             }
         }
     }
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in pairs.iter() {
         match (reps.get(p / n), reps.get(p % n)) {
             (Some(a), Some(b)) => match sim_compare(a, b, opts) {
@@ -538,7 +538,7 @@ fn sim_compare(a: SimDef, b: SimDef, opts: SimOpts) -> Option<SimFinding> {
     if dist > bound {
         return None;
     }
-    let ms = Vec::new();
+    let mut ms = Vec::new();
     ms.push(a);
     ms.push(b);
     Some(SimFinding {
@@ -558,13 +558,13 @@ fn sim_compare(a: SimDef, b: SimDef, opts: SimOpts) -> Option<SimFinding> {
 // property tests of `kek test`); the pairs whose outputs agreed on every
 // input arrive in opts.equiv. Proving equivalence with SMT is future work.
 fn sim_semantic(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     if opts.equiv.len() == 0 {
         return out;
     }
     for pr in sim_semantic_pairs(defs, opts) {
         if opts.equiv.contains_key(pr.0.d.name + "\t" + pr.1.d.name) {
-            let ms = Vec::new();
+            let mut ms = Vec::new();
             ms.push(pr.0);
             ms.push(pr.1);
             out.push(SimFinding {
@@ -611,7 +611,7 @@ fn sim_semantic_type_str(s: String) -> Bool {
 
 // sim_split_top splits a type list at the commas outside brackets.
 fn sim_split_top(s: String) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut depth = 0;
     let mut start = 0;
     for i in 0..s.len() {
@@ -654,8 +654,8 @@ fn sim_semantic_ok(d: SimDef) -> Bool {
 // code (up to literals; equal code is reported as duplicate/literals
 // already), in a deterministic order, at most 500.
 fn sim_semantic_pairs(defs: Vec<SimDef>, opts: SimOpts) -> Vec<(SimDef, SimDef)> {
-    let groups: HashMap<String, Vec<SimDef>> = HashMap::new();
-    let keys = Vec::new();
+    let mut groups: HashMap<String, Vec<SimDef>> = HashMap::new();
+    let mut keys = Vec::new();
     for d in defs {
         if !sim_semantic_ok(d) {
             continue;
@@ -667,7 +667,7 @@ fn sim_semantic_pairs(defs: Vec<SimDef>, opts: SimOpts) -> Vec<(SimDef, SimDef)>
         groups.get(d.d.sig).unwrap_or(Vec::new()).push(d);
     }
     chk_sort_strings(keys);
-    let out = Vec::new();
+    let mut out = Vec::new();
     for k in keys {
         let ms = groups.get(k).unwrap_or(Vec::new());
         sim_sort_members(ms);
@@ -703,15 +703,15 @@ fn sim_semantic_plan(l: DhLoaded, defs: Vec<SimDef>, dir: String, fs: &Fs, log: 
         equiv: HashMap::new(),
     };
     let pairs = sim_semantic_pairs(defs, opts);
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     let mut src = "// synthesized by kek similar -semantic\n";
     let mut i = 0;
     for pr in pairs {
         let a = pr.0.d;
         let b = pr.1.d;
         lines.push(i.to_string() + "\t" + a.name + "\t" + b.name + "\n");
-        let ps = Vec::new();
-        let args = Vec::new();
+        let mut ps = Vec::new();
+        let mut args = Vec::new();
         let mut k = 0;
         for p in a.fun.params {
             ps.push("p" + k.to_string() + ": " + ty_str(ty_prune(p.ty)));
@@ -783,7 +783,7 @@ fn sim_def_less(a: SimDef, b: SimDef) -> Bool {
 }
 
 // sim_sort_members sorts by position (insertion sort; groups are small).
-fn sim_sort_members(v: Vec<SimDef>) {
+fn sim_sort_members(mut v: Vec<SimDef>) {
     let n = v.len();
     for i in 1..n {
         let mut j = i;
@@ -835,7 +835,7 @@ fn sim_finding_less(a: SimFinding, b: SimFinding) -> Bool {
 // sim_sort sorts the members of each finding, fills in the hints and
 // sorts the findings (merge sort).
 fn sim_sort(xs: Vec<SimFinding>) -> Vec<SimFinding> {
-    let fixed = Vec::new();
+    let mut fixed = Vec::new();
     for f in xs {
         sim_sort_members(f.members);
         let g = SimFinding {
@@ -866,8 +866,8 @@ fn sim_merge_sort(xs: Vec<SimFinding>) -> Vec<SimFinding> {
     if n <= 1 {
         return xs;
     }
-    let left = Vec::new();
-    let right = Vec::new();
+    let mut left = Vec::new();
+    let mut right = Vec::new();
     let mut i = 0;
     for x in xs {
         if i < n / 2 {
@@ -879,7 +879,7 @@ fn sim_merge_sort(xs: Vec<SimFinding>) -> Vec<SimFinding> {
     }
     let l = sim_merge_sort(left);
     let r = sim_merge_sort(right);
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut a = 0;
     let mut b = 0;
     while a < l.len() || b < r.len() {
@@ -908,7 +908,7 @@ fn sim_merge_sort(xs: Vec<SimFinding>) -> Vec<SimFinding> {
 }
 
 fn sim_hint(kind: String, ms: Vec<SimDef>, lits: Vec<SimLitDiff>) -> String {
-    let names = Vec::new();
+    let mut names = Vec::new();
     for m in ms {
         names.push(m.d.name);
     }
@@ -917,12 +917,12 @@ fn sim_hint(kind: String, ms: Vec<SimDef>, lits: Vec<SimLitDiff>) -> String {
         return "identical up to names: keep `" + first + "` and call it from the others";
     }
     if kind == "literals" {
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         let mut k = 0;
         for lit in lits {
             if k < 3 {
-                let vs: HashSet<String> = HashSet::new();
-                let shown = Vec::new();
+                let mut vs: HashSet<String> = HashSet::new();
+                let mut shown = Vec::new();
                 for v in lit.values {
                     if vs.insert(v) {
                         shown.push(v);
@@ -972,7 +972,7 @@ fn sim_finding_json(f: SimFinding) -> IrjObj {
     let o = irjson_obj();
     irjson_set(o, "kind", IrjVal::Str(f.kind));
     irjson_set(o, "similarity", irjson_int(f.similarity));
-    let ms = Vec::new();
+    let mut ms = Vec::new();
     for m in f.members {
         let mo = irjson_obj();
         irjson_set(mo, "name", IrjVal::Str(m.d.name));
@@ -991,11 +991,11 @@ fn sim_finding_json(f: SimFinding) -> IrjObj {
         irjson_set(o, "approx", irjson_bool(f.approx));
     }
     if f.kind == "literals" {
-        let ls = Vec::new();
+        let mut ls = Vec::new();
         for d in f.lits {
             let lo = irjson_obj();
             irjson_set(lo, "values", irjson_strs(d.values));
-            let ps = Vec::new();
+            let mut ps = Vec::new();
             for p in d.poss {
                 ps.push(sim_pos_json(p));
             }
@@ -1009,8 +1009,8 @@ fn sim_finding_json(f: SimFinding) -> IrjObj {
 }
 
 fn sim_text(findings: Vec<SimFinding>, allowed: Vec<SimFinding>) -> String {
-    let lines = Vec::new();
-    let counts: HashMap<String, Int> = HashMap::new();
+    let mut lines = Vec::new();
+    let mut counts: HashMap<String, Int> = HashMap::new();
     for f in findings {
         counts.insert(f.kind, counts.get_or(f.kind, 0) + 1);
         let mut extra = "";
@@ -1045,7 +1045,7 @@ fn sim_text(findings: Vec<SimFinding>, allowed: Vec<SimFinding>) -> String {
             );
         }
         for d in f.lits {
-            let at = Vec::new();
+            let mut at = Vec::new();
             let mut i = 0;
             for v in d.values {
                 match d.poss.get(i) {
@@ -1062,7 +1062,7 @@ fn sim_text(findings: Vec<SimFinding>, allowed: Vec<SimFinding>) -> String {
     if findings.len() == 0 {
         lines.push("no similar definitions");
     } else {
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         for k in "duplicate literals structural semantic".split(" ") {
             let c = counts.get_or(k, 0);
             if c > 0 {

@@ -12,7 +12,7 @@
 // ---- Pii ----
 
 // chk_note_call records that the current function calls fun (at pos).
-fn chk_note_call(c: Chk, fun: ChkFunc, pos: AstPos) {
+fn chk_note_call(mut c: Chk, fun: ChkFunc, pos: AstPos) {
     c.cur.calls.insert(fun.name, true);
     let k = chk_declass_kind(fun);
     if k != "" && !chk_is_lib(c.cur) {
@@ -97,8 +97,8 @@ struct ChkIdemPath {
 // method cannot use a capability that it is not given, and today a trait
 // method that takes one cannot be compiled).
 fn chk_idem_violation(info: ChkInfo, fun: ChkFunc) -> Option<ChkIdemPath> {
-    let parent: HashMap<String, String> = HashMap::new();
-    let work = Vec::new();
+    let mut parent: HashMap<String, String> = HashMap::new();
+    let mut work = Vec::new();
     work.push(fun);
     parent.insert(fun.name, "");
     let mut i = 0;
@@ -109,13 +109,13 @@ fn chk_idem_violation(info: ChkInfo, fun: ChkFunc) -> Option<ChkIdemPath> {
         chk_sort_strings(ops);
         for op in ops {
             if !chk_idempotent_op(op) {
-                let path = Vec::new();
+                let mut path = Vec::new();
                 let mut n = f.name;
                 while n != "" {
                     path.push(n);
                     n = parent.get(n).unwrap_or("");
                 }
-                let rev = Vec::new();
+                let mut rev = Vec::new();
                 let mut k = path.len() - 1;
                 while k >= 0 {
                     rev.push(path.get(k).unwrap_or(""));
@@ -168,7 +168,7 @@ fn chk_check_idempotent(c: Chk) {
                 let mut via = "";
                 if v.path.len() > 1 {
                     how = "reaches";
-                    let mids = Vec::new();
+                    let mut mids = Vec::new();
                     for k in 1..v.path.len() {
                         mids.push("`" + v.path.get(k).unwrap_or("") + "`");
                     }

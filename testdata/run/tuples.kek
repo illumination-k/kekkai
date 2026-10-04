@@ -23,7 +23,7 @@ fn main(log: &Log) -> Int {
     log.info(t.0.to_string() + t.1);
     let nested = ((1, 2), (3,));
     log.info((nested.0.1 + nested.1.0).to_string());
-    let v: Vec<(String, Int)> = Vec::new();
+    let mut v: Vec<(String, Int)> = Vec::new();
     v.push(("x", 1));
     v.push(("y", 2));
     let mut total = 0;

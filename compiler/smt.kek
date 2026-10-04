@@ -157,13 +157,13 @@ fn smt_ctx_new() -> SmtCtx {
     }
 }
 
-fn smt_fail(x: SmtCtx, why: String) {
+fn smt_fail(mut x: SmtCtx, why: String) {
     if x.fail == "" {
         x.fail = why;
     }
 }
 
-fn smt_atom(x: SmtCtx, name: String) -> Int {
+fn smt_atom(mut x: SmtCtx, name: String) -> Int {
     match x.atom_ids.get(name) {
         Some(i) => i,
         None => {
@@ -175,7 +175,7 @@ fn smt_atom(x: SmtCtx, name: String) -> Int {
     }
 }
 
-fn smt_label_bit(x: SmtCtx, name: String) -> Int {
+fn smt_label_bit(mut x: SmtCtx, name: String) -> Int {
     let id = match x.label_ids.get(name) {
         Some(i) => i,
         None => {
@@ -191,7 +191,7 @@ fn smt_label_bit(x: SmtCtx, name: String) -> Int {
 
 // smt_core lists the labels of a deps mask, in order of appearance.
 fn smt_core(x: SmtCtx, deps: Int) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let one = 1;
     for i in 0..x.labels.len() {
         if deps.bit_and(one.shl(i.min(62))) != 0 {
@@ -207,7 +207,7 @@ fn smt_int_min() -> Int {
     -9223372036854775807 - 1
 }
 
-fn smt_add(x: SmtCtx, a: Int, b: Int) -> Int {
+fn smt_add(mut x: SmtCtx, a: Int, b: Int) -> Int {
     let r = a + b;
     if (a >= 0 && b >= 0 && r < 0) || (a < 0 && b < 0 && r >= 0) {
         x.overflow = true;
@@ -216,7 +216,7 @@ fn smt_add(x: SmtCtx, a: Int, b: Int) -> Int {
     r
 }
 
-fn smt_neg(x: SmtCtx, a: Int) -> Int {
+fn smt_neg(mut x: SmtCtx, a: Int) -> Int {
     if a == smt_int_min() {
         x.overflow = true;
         return 0;
@@ -224,7 +224,7 @@ fn smt_neg(x: SmtCtx, a: Int) -> Int {
     0 - a
 }
 
-fn smt_mul(x: SmtCtx, a: Int, b: Int) -> Int {
+fn smt_mul(mut x: SmtCtx, a: Int, b: Int) -> Int {
     if a == 0 || b == 0 {
         return 0;
     }
@@ -282,7 +282,7 @@ fn smt_co(c: SmtCons, i: Int) -> Int {
 }
 
 fn smt_zeros(n: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     for _ in 0..n {
         v.push(0);
     }
@@ -312,7 +312,7 @@ fn smt_norm(x: SmtCtx, c: SmtCons, nv: Int) -> SmtNorm {
     if g == 1 && c.a.len() == nv {
         return SmtNorm::Keep(c);
     }
-    let a = Vec::new();
+    let mut a = Vec::new();
     for i in 0..nv {
         a.push(smt_co(c, i) / g);
     }
@@ -326,7 +326,7 @@ fn smt_norm(x: SmtCtx, c: SmtCons, nv: Int) -> SmtNorm {
 }
 
 // smt_omega decides a conjunction of constraints over nv variables.
-fn smt_omega(x: SmtCtx, cs0: Vec<SmtCons>, nv: Int) -> SmtT {
+fn smt_omega(mut x: SmtCtx, cs0: Vec<SmtCons>, nv: Int) -> SmtT {
     x.steps = x.steps + 1;
     if x.steps > smt_max_steps() {
         smt_fail(x, "budget: more than " + smt_max_steps().to_string() + " theory steps");
@@ -334,7 +334,7 @@ fn smt_omega(x: SmtCtx, cs0: Vec<SmtCons>, nv: Int) -> SmtT {
     if x.overflow || x.fail != "" {
         return SmtT::Unk;
     }
-    let cs = Vec::new();
+    let mut cs = Vec::new();
     let mut has_eq = false;
     for c in cs0 {
         match smt_norm(x, c, nv) {
@@ -374,10 +374,10 @@ fn smt_omega(x: SmtCtx, cs0: Vec<SmtCons>, nv: Int) -> SmtT {
     }
     // per variable: lower / upper bound counts, and whether all lower
     // (upper) coefficients are 1 (then the elimination is exact)
-    let nlo = smt_zeros(nv);
-    let nup = smt_zeros(nv);
-    let lo_unit = Vec::new();
-    let up_unit = Vec::new();
+    let mut nlo = smt_zeros(nv);
+    let mut nup = smt_zeros(nv);
+    let mut lo_unit = Vec::new();
+    let mut up_unit = Vec::new();
     for _ in 0..nv {
         lo_unit.push(true);
         up_unit.push(true);
@@ -470,7 +470,7 @@ fn smt_elim_eq(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtT {
     let e = cs.get(ei).unwrap_or(SmtCons { a: Vec::new(), k: 0, eq: true, deps: 0 });
     let unit = j >= 0;
     let mut nv2 = nv;
-    let d = Vec::new();
+    let mut d = Vec::new();
     let mut dk = 0;
     if unit {
         // x_j = -s * (sum_{i != j} a_i x_i + k), s = a_j = +-1
@@ -510,7 +510,7 @@ fn smt_elim_eq(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtT {
     if x.overflow {
         return SmtT::Unk;
     }
-    let next = Vec::new();
+    let mut next = Vec::new();
     for i in 0..cs.len() {
         if unit && i == ei {
             continue;
@@ -519,7 +519,7 @@ fn smt_elim_eq(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtT {
         next.push(smt_subst(x, c, j, d, dk, e.deps, nv2));
     }
     match smt_omega(x, next, nv2) {
-        SmtT::Sat(m) => {
+        SmtT::Sat(mut m) => {
             let mut val = dk;
             for i in 0..nv2 {
                 let di = d.get(i).unwrap_or(0);
@@ -540,7 +540,7 @@ fn smt_subst(x: SmtCtx, c: SmtCons, j: Int, d: Vec<Int>, dk: Int, edeps: Int, nv
     if cj == 0 {
         return c;
     }
-    let a = Vec::new();
+    let mut a = Vec::new();
     for i in 0..nv {
         if i == j {
             a.push(0);
@@ -576,7 +576,7 @@ fn smt_vec_rel(a: Vec<Int>, b: Vec<Int>, nv: Int) -> Int {
 // when k1 + k2 > 0 and are the equality a.x + k1 == 0 when k1 + k2 == 0.
 fn smt_combine(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtComb {
     let n = cs.len();
-    let dead = Vec::new();
+    let mut dead = Vec::new();
     for _ in 0..n {
         dead.push(false);
     }
@@ -601,7 +601,7 @@ fn smt_combine(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtComb {
                         return SmtComb::Conflict(deps);
                     }
                     if s == 0 {
-                        let next = Vec::new();
+                        let mut next = Vec::new();
                         for t in 0..n {
                             if t != i && t != j && !dead.get(t).unwrap_or(false) {
                                 next.push(cs.get(t).unwrap_or(dummy));
@@ -615,7 +615,7 @@ fn smt_combine(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtComb {
             j = j + 1;
         }
     }
-    let out = Vec::new();
+    let mut out = Vec::new();
     for i in 0..n {
         if !dead.get(i).unwrap_or(false) {
             out.push(cs.get(i).unwrap_or(dummy));
@@ -627,8 +627,8 @@ fn smt_combine(x: SmtCtx, cs: Vec<SmtCons>, nv: Int) -> SmtComb {
 // smt_drop_var: v has bounds on one side only, so its constraints can
 // always be met; decide the rest and choose v afterwards.
 fn smt_drop_var(x: SmtCtx, cs: Vec<SmtCons>, v: Int, nv: Int) -> SmtT {
-    let rest = Vec::new();
-    let mine = Vec::new();
+    let mut rest = Vec::new();
+    let mut mine = Vec::new();
     for c in cs {
         if smt_co(c, v) != 0 {
             mine.push(c);
@@ -650,7 +650,7 @@ fn smt_drop_var(x: SmtCtx, cs: Vec<SmtCons>, v: Int, nv: Int) -> SmtT {
 
 // smt_pick sets m[v] to an integer satisfying cs given the other values of
 // m (the one closest to 0), or reports that there is none.
-fn smt_pick(x: SmtCtx, cs: Vec<SmtCons>, v: Int, m: Vec<Int>) -> Bool {
+fn smt_pick(x: SmtCtx, cs: Vec<SmtCons>, v: Int, mut m: Vec<Int>) -> Bool {
     let mut has_l = false;
     let mut has_u = false;
     let mut l = 0;
@@ -719,7 +719,7 @@ fn smt_pick(x: SmtCtx, cs: Vec<SmtCons>, v: Int, m: Vec<Int>) -> Bool {
 fn smt_fm_pair(x: SmtCtx, l: SmtCons, u: SmtCons, v: Int, nv: Int, dark: Bool) -> SmtCons {
     let b = smt_neg(x, smt_co(l, v));
     let a = smt_co(u, v);
-    let co = Vec::new();
+    let mut co = Vec::new();
     for i in 0..nv {
         if i == v {
             co.push(0);
@@ -743,7 +743,7 @@ fn smt_shadow(
     nv: Int,
     dark: Bool,
 ) -> Vec<SmtCons> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for c in rest {
         out.push(c);
     }
@@ -758,10 +758,10 @@ fn smt_shadow(
 // smt_fm eliminates v by Fourier–Motzkin: exact, or real shadow / dark
 // shadow / splinters.
 fn smt_fm(x: SmtCtx, cs: Vec<SmtCons>, v: Int, nv: Int, exact: Bool) -> SmtT {
-    let rest = Vec::new();
-    let los = Vec::new();
-    let ups = Vec::new();
-    let mine = Vec::new();
+    let mut rest = Vec::new();
+    let mut los = Vec::new();
+    let mut ups = Vec::new();
+    let mut mine = Vec::new();
     for c in cs {
         let a = smt_co(c, v);
         if a > 0 {
@@ -839,7 +839,7 @@ fn smt_fm(x: SmtCtx, cs: Vec<SmtCons>, v: Int, nv: Int, exact: Bool) -> SmtT {
         }
         let mut i = 0;
         while i <= top {
-            let next = Vec::new();
+            let mut next = Vec::new();
             for c in cs {
                 next.push(c);
             }
@@ -868,7 +868,7 @@ fn smt_lin_cons(x: SmtCtx, l: SmtLin, eq: Bool, deps: Int) -> SmtCons {
     for t in l.terms {
         smt_atom(x, t.atom);
     }
-    let a = smt_zeros(x.atoms.len());
+    let mut a = smt_zeros(x.atoms.len());
     for t in l.terms {
         let i = smt_atom(x, t.atom);
         a.set(i, smt_add(x, a.get(i).unwrap_or(0), t.coef));
@@ -881,8 +881,8 @@ fn smt_lin_cons(x: SmtCtx, l: SmtLin, eq: Bool, deps: Int) -> SmtCons {
 // lowered to MAX: a weaker literal (in negation normal form every literal
 // occurs positively), so `valid` stays sound; a model is still checked
 // against the original formula.
-fn smt_flip(x: SmtCtx, c: SmtCons, s: Int) -> SmtCons {
-    let a = Vec::new();
+fn smt_flip(mut x: SmtCtx, c: SmtCons, s: Int) -> SmtCons {
+    let mut a = Vec::new();
     for v in c.a {
         a.push(smt_mul(x, s, v));
     }
@@ -915,7 +915,7 @@ fn smt_lit(c: SmtCons) -> SmtN {
 }
 
 fn smt_mk_and(parts: Vec<SmtN>) -> SmtN {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in parts {
         match p {
             SmtN::Tru => {}
@@ -942,7 +942,7 @@ fn smt_mk_and(parts: Vec<SmtN>) -> SmtN {
 }
 
 fn smt_mk_or(parts: Vec<SmtN>) -> SmtN {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut deps = 0;
     for p in parts {
         match p {
@@ -989,7 +989,7 @@ fn smt_nnf(x: SmtCtx, f: SmtF, neg: Bool, deps: Int) -> SmtN {
             let c = smt_lin_cons(x, l, true, deps);
             if neg {
                 // lin <= -1 || lin >= 1
-                let parts = Vec::new();
+                let mut parts = Vec::new();
                 parts.push(smt_lit(smt_flip(x, c, 1)));
                 parts.push(smt_lit(smt_flip(x, c, -1)));
                 smt_mk_or(parts)
@@ -999,7 +999,7 @@ fn smt_nnf(x: SmtCtx, f: SmtF, neg: Bool, deps: Int) -> SmtN {
         }
         SmtF::Not(g) => smt_nnf(x, g, !neg, deps),
         SmtF::And(gs) => {
-            let parts = Vec::new();
+            let mut parts = Vec::new();
             for g in gs {
                 parts.push(smt_nnf(x, g, neg, deps));
             }
@@ -1010,7 +1010,7 @@ fn smt_nnf(x: SmtCtx, f: SmtF, neg: Bool, deps: Int) -> SmtN {
             }
         }
         SmtF::Or(gs) => {
-            let parts = Vec::new();
+            let mut parts = Vec::new();
             for g in gs {
                 parts.push(smt_nnf(x, g, neg, deps));
             }
@@ -1025,7 +1025,7 @@ fn smt_nnf(x: SmtCtx, f: SmtF, neg: Bool, deps: Int) -> SmtN {
 }
 
 // smt_flatten adds a conjunct to units / ors: -1, or the deps of a False.
-fn smt_flatten(n: SmtN, units: Vec<SmtCons>, ors: Vec<SmtN>) -> Int {
+fn smt_flatten(n: SmtN, mut units: Vec<SmtCons>, mut ors: Vec<SmtN>) -> Int {
     match n {
         SmtN::Lit(c) => {
             units.push(c);
@@ -1051,7 +1051,7 @@ fn smt_flatten(n: SmtN, units: Vec<SmtCons>, ors: Vec<SmtN>) -> Int {
 
 // smt_eval_n evaluates n under the model m (a heuristic: an overflow makes
 // a literal false).
-fn smt_eval_n(x: SmtCtx, n: SmtN, m: Vec<Int>) -> Bool {
+fn smt_eval_n(mut x: SmtCtx, n: SmtN, m: Vec<Int>) -> Bool {
     match n {
         SmtN::Lit(c) => {
             let saved = x.overflow;
@@ -1100,7 +1100,7 @@ fn smt_or_size(n: SmtN) -> Int {
 
 // smt_search: DPLL over the disjunctions ors, with the theory checking the
 // units at every node.
-fn smt_search(x: SmtCtx, units: Vec<SmtCons>, ors: Vec<SmtN>, nv: Int) -> SmtT {
+fn smt_search(mut x: SmtCtx, units: Vec<SmtCons>, ors: Vec<SmtN>, nv: Int) -> SmtT {
     x.branches = x.branches + 1;
     if x.branches > smt_max_branches() {
         smt_fail(x, "budget: more than " + smt_max_branches().to_string() + " case splits");
@@ -1131,18 +1131,18 @@ fn smt_search(x: SmtCtx, units: Vec<SmtCons>, ors: Vec<SmtN>, nv: Int) -> SmtT {
     let children = match ors.get(bi).unwrap_or(SmtN::Tru) {
         SmtN::Or(ps) => ps,
         o => {
-            let v = Vec::new();
+            let mut v = Vec::new();
             v.push(o);
             v
         }
     };
     let mut deps = 0;
     for ch in children {
-        let u2 = Vec::new();
+        let mut u2 = Vec::new();
         for c in units {
             u2.push(c);
         }
-        let o2 = Vec::new();
+        let mut o2 = Vec::new();
         for i in 0..ors.len() {
             if i != bi {
                 o2.push(ors.get(i).unwrap_or(SmtN::Tru));
@@ -1215,7 +1215,7 @@ fn smt_eval(x: SmtCtx, f: SmtF, env: HashMap<String, Int>) -> Bool {
 // integers.
 fn smt_prove(hyps: Vec<SmtF>, goal: SmtF) -> SmtResult {
     let x = smt_ctx_new();
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for h in hyps {
         parts.push(smt_nnf(x, h, false, 0));
     }
@@ -1242,8 +1242,8 @@ fn smt_prove(hyps: Vec<SmtF>, goal: SmtF) -> SmtResult {
         SmtT::Unsat(d) => SmtResult::Valid(smt_core(x, d)),
         SmtT::Unk => SmtResult::Unknown("unknown"),
         SmtT::Sat(m) => {
-            let env: HashMap<String, Int> = HashMap::new();
-            let bs = Vec::new();
+            let mut env: HashMap<String, Int> = HashMap::new();
+            let mut bs = Vec::new();
             for i in 0..nv {
                 let name = x.atoms.get(i).unwrap_or("");
                 let val = m.get(i).unwrap_or(0);

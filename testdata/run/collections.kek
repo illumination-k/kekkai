@@ -14,7 +14,7 @@ fn is_alpha(c: Int) -> Bool {
 
 // A tiny lexer: the kind of code the self-hosted compiler needs.
 fn lex(src: String) -> Vec<Tok> {
-    let toks = Vec::new();
+    let mut toks = Vec::new();
     let mut i = 0;
     let n = src.len();
     while i < n {
@@ -42,7 +42,7 @@ fn lex(src: String) -> Vec<Tok> {
     toks
 }
 
-fn leb128(v: Int, out: Vec<Int>) {
+fn leb128(v: Int, mut out: Vec<Int>) {
     let mut x = v;
     let mut more = true;
     while more {
@@ -60,13 +60,13 @@ fn leb128(v: Int, out: Vec<Int>) {
 #[main]
 fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let toks = lex("let x1 = 42 + foo;");
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for t in toks {
         parts.push(t.kind + ":" + t.text);
     }
     log.info(parts.join(" "));
 
-    let counts: HashMap<String, Int> = HashMap::new();
+    let mut counts: HashMap<String, Int> = HashMap::new();
     for t in toks {
         let c = counts.get(t.kind).unwrap_or(0);
         counts.insert(t.kind, c + 1);
@@ -78,10 +78,10 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     log.info(summary);
 
-    let nested: HashMap<Int, Vec<String>> = HashMap::new();
+    let mut nested: HashMap<Int, Vec<String>> = HashMap::new();
     nested.insert(1, Vec::new());
     match nested.get(1) {
-        Some(v) => {
+        Some(mut v) => {
             v.push("a");
             v.push("b");
         }
@@ -89,9 +89,9 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     log.info(nested.get(1).unwrap_or(Vec::new()).join(","));
 
-    let bytes = Vec::new();
+    let mut bytes = Vec::new();
     leb128(624485, bytes);
-    let hex = Vec::new();
+    let mut hex = Vec::new();
     for b in bytes {
         hex.push(b.to_string());
     }

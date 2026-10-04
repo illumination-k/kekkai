@@ -6,7 +6,7 @@
 // counterexample. Every run gets fresh mocks.
 
 fn reverse(xs: Vec<Int>) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut i = xs.len() - 1;
     while i >= 0 {
         out.push(xs.get(i).unwrap_or(0));
@@ -31,7 +31,7 @@ fn same(a: Vec<Int>, b: Vec<Int>) -> Bool {
 fn sort_dedup(xs: Vec<Int>) -> Vec<Int> {
     let mut out: Vec<Int> = Vec::new();
     for x in xs {
-        let next = Vec::new();
+        let mut next = Vec::new();
         let mut placed = false;
         for y in out {
             if !placed && x <= y {

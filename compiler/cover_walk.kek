@@ -79,7 +79,7 @@ fn cov_new_walk(mode: String) -> CovW {
 
 // ---- building nodes ----
 
-fn cov_id(w: CovW) -> Int {
+fn cov_id(mut w: CovW) -> Int {
     w.ids.next = w.ids.next + 1;
     w.ids.next
 }
@@ -98,7 +98,7 @@ fn cov_call(w: CovW, pos: AstPos, name: String, args: Vec<AstExpr>) -> AstExpr {
 }
 
 fn cov_call1(w: CovW, pos: AstPos, name: String, k: Int) -> AstExpr {
-    let args = Vec::new();
+    let mut args = Vec::new();
     args.push(cov_int(w, pos, k));
     cov_call(w, pos, name, args)
 }
@@ -125,7 +125,7 @@ fn cov_if(w: CovW, pos: AstPos, cond: AstExpr, then: AstBlock, els: AstBlock) ->
 
 // ---- coverage sites ----
 
-fn cov_new_site(w: CovW, pos: AstPos, kind: String, group: Int, arm: Int, dline: Int) -> Int {
+fn cov_new_site(mut w: CovW, pos: AstPos, kind: String, group: Int, arm: Int, dline: Int) -> Int {
     let id = w.sites.len() + 1;
     w.sites.push(CovSite {
         id: id,
@@ -148,7 +148,7 @@ fn cov_line(w: CovW, line: Int) {
         return;
     }
     match w.sites.get(w.cur - 1) {
-        Some(s) => s.lines.push(line),
+        Some(mut s) => s.lines.push(line),
         None => {}
     }
 }
@@ -243,7 +243,7 @@ fn cov_div_expr(e: AstExpr, loops: Int) -> Bool {
 // ---- the walk ----
 
 // cov_walk_func rewrites one function (with a body).
-fn cov_walk_func(w: CovW, fd: AstFuncDecl) -> AstFuncDecl {
+fn cov_walk_func(mut w: CovW, fd: AstFuncDecl) -> AstFuncDecl {
     w.ord = 0;
     w.cur = 0;
     let body = cov_block_k(w, fd.body, "fn", 0, 0, 0, fd.pos.line);
@@ -266,7 +266,7 @@ fn cov_walk_func(w: CovW, fd: AstFuncDecl) -> AstFuncDecl {
 // cov_block_k rewrites a block; in cover mode with a kind, the block
 // starts with a probe of that kind (extra: one more line it covers).
 fn cov_block_k(
-    w: CovW,
+    mut w: CovW,
     b: AstBlock,
     kind: String,
     group: Int,
@@ -276,7 +276,7 @@ fn cov_block_k(
 ) -> AstBlock {
     let cover = w.mode == "cover";
     let saved = w.cur;
-    let stmts = Vec::new();
+    let mut stmts = Vec::new();
     let mut cur = w.cur;
     if cover && kind != "" {
         cur = cov_new_site(w, b.pos, kind, group, arm, dline);
@@ -327,7 +327,7 @@ fn cov_block_k(
 // cov_wrap_probe (cover) puts an expression into a block that starts
 // with a probe of the given kind.
 fn cov_wrap_probe(
-    w: CovW,
+    mut w: CovW,
     e: AstExpr,
     kind: String,
     group: Int,
@@ -343,7 +343,7 @@ fn cov_wrap_probe(
         cov_line(w, extra);
     }
     cov_line(w, pos.line);
-    let stmts = Vec::new();
+    let mut stmts = Vec::new();
     stmts.push(cov_probe(w, k, pos));
     let inner = cov_expr(w, e);
     w.cur = saved;
@@ -423,7 +423,7 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
 }
 
 fn cov_exprs(w: CovW, es: Vec<AstExpr>) -> Vec<AstExpr> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for e in es {
         out.push(cov_expr(w, e));
     }
@@ -467,7 +467,7 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
             name: x.name,
         }),
         AstExpr::StructLit(x) => {
-            let fields = Vec::new();
+            let mut fields = Vec::new();
             for f in x.fields {
                 fields.push(AstFieldInit {
                     id: f.id,
@@ -524,7 +524,7 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
     mut_hook_expr(w, e, e2)
 }
 
-fn cov_if_expr(w: CovW, x: AstIf) -> AstExpr {
+fn cov_if_expr(mut w: CovW, x: AstIf) -> AstExpr {
     let cond = mut_hook_cond(w, x.id, x.pat, x.cond, x.then.pos, cov_expr(w, x.cond));
     let cover = w.mode == "cover";
     let mut g = 0;
@@ -544,7 +544,7 @@ fn cov_if_expr(w: CovW, x: AstIf) -> AstExpr {
         None => if cover {
             // the implicit `else {}`: a branch too
             let k = cov_new_site(w, x.pos, "else", g, 1, dl);
-            let stmts = Vec::new();
+            let mut stmts = Vec::new();
             stmts.push(cov_probe(w, k, x.pos));
             Some(AstExpr::Block(cov_block_of(w, x.pos, stmts, None)))
         } else {
@@ -554,7 +554,7 @@ fn cov_if_expr(w: CovW, x: AstIf) -> AstExpr {
     AstExpr::If(AstIf { id: x.id, pos: x.pos, pat: x.pat, cond: cond, then: then, els: els })
 }
 
-fn cov_match(w: CovW, x: AstMatch) -> AstExpr {
+fn cov_match(mut w: CovW, x: AstMatch) -> AstExpr {
     let scrut = cov_expr(w, x.x);
     let cover = w.mode == "cover";
     let mut g = 0;
@@ -562,7 +562,7 @@ fn cov_match(w: CovW, x: AstMatch) -> AstExpr {
         w.groups = w.groups + 1;
         g = w.groups;
     }
-    let arms = Vec::new();
+    let mut arms = Vec::new();
     let mut i = 0;
     for a in x.arms {
         let body = match a.body {

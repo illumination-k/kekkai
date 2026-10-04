@@ -126,7 +126,7 @@ fn mut_overloaded(w: CovW, id: Int) -> Bool {
 // mut_add registers a candidate (collect mode); its mutated snippet is set
 // by mut_snip.
 fn mut_add(
-    w: CovW,
+    mut w: CovW,
     node: Int,
     kind: String,
     pos: AstPos,
@@ -136,7 +136,7 @@ fn mut_add(
     risky: Bool,
 ) -> MutCand {
     w.ord = w.ord + 1;
-    let keyparts = Vec::new();
+    let mut keyparts = Vec::new();
     keyparts.push(w.fkey);
     keyparts.push(w.func);
     keyparts.push(w.ord.to_string());
@@ -190,7 +190,7 @@ fn mut_snip(w: CovW, c: MutCand, col: Int, len: Int, repl: String) -> MutCand {
 }
 
 // mut_set_last replaces the last candidate (after mut_snip).
-fn mut_set_last(w: CovW, c: MutCand) {
+fn mut_set_last(mut w: CovW, c: MutCand) {
     w.cands.set(w.cands.len() - 1, c);
 }
 
@@ -402,7 +402,7 @@ fn mut_active(w: CovW, node: Int) -> Vec<MutCand> {
 }
 
 fn mut_call(w: CovW, pos: AstPos, name: String, k: Int, rest: Vec<AstExpr>) -> AstExpr {
-    let args = Vec::new();
+    let mut args = Vec::new();
     args.push(cov_int(w, pos, k));
     for a in rest {
         args.push(a);
@@ -411,7 +411,7 @@ fn mut_call(w: CovW, pos: AstPos, name: String, k: Int, rest: Vec<AstExpr>) -> A
 }
 
 fn mut_one(e: AstExpr) -> Vec<AstExpr> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(e);
     v
 }
@@ -465,7 +465,7 @@ fn mut_apply_expr(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
                 cov_if(w, p, cond, ob, yb)
             };
         }
-        let rest = Vec::new();
+        let mut rest = Vec::new();
         rest.push(b.x);
         rest.push(b.y);
         rest.push(cov_int(w, p, mut_op_code(c.op)));
@@ -508,7 +508,7 @@ fn mut_apply_expr(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
         if w.real {
             return cov_int(w, p, v);
         }
-        let rest = Vec::new();
+        let mut rest = Vec::new();
         rest.push(e);
         rest.push(cov_int(w, p, v));
         return mut_call(w, p, "__mut_int", c.id, rest);
@@ -592,7 +592,7 @@ fn mut_hook_stmt(w: CovW, s: AstStmt, s2: AstStmt) -> AstStmt {
             out = cov_expr_stmt(w, p, AstExpr::UnitLit(AstUnitLit { id: cov_id(w), pos: p }), true);
         } else {
             // if __mut_on(k) {} else { s }
-            let stmts = Vec::new();
+            let mut stmts = Vec::new();
             stmts.push(out);
             let e = cov_if(
                 w,

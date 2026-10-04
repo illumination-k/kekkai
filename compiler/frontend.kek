@@ -18,7 +18,7 @@ fn frontend_print(log: &Log, lines: Vec<String>) {
 }
 
 fn frontend_print_errors(log: &Log, errs: Vec<AstError>) {
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     for e in errs {
         lines.push(ast_error_string(e));
     }
@@ -43,8 +43,8 @@ fn frontend_clean_dir(d: String) -> String {
 // frontend_read_sources reads a .kek file, or every .kek file of a
 // directory sorted by name. Errors are reported.
 fn frontend_read_sources(path: String, fs: &Fs, log: &Log) -> Option<Vec<FeSource>> {
-    let srcs = Vec::new();
-    let names = Vec::new();
+    let mut srcs = Vec::new();
+    let mut names = Vec::new();
     match fs.list(path) {
         Ok(entries) => {
             let dir = frontend_clean_dir(path);
@@ -79,7 +79,7 @@ fn frontend_read_sources(path: String, fs: &Fs, log: &Log) -> Option<Vec<FeSourc
 // frontend_parse_all parses the files of one program into a single AstFile.
 fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
     let ids = AstIds { next: 0 };
-    let out = AstFile {
+    let mut out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
         funcs: Vec::new(),
@@ -87,7 +87,7 @@ fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
         traits: Vec::new(),
         aliases: Vec::new(),
     };
-    let errs = Vec::new();
+    let mut errs = Vec::new();
     for s in srcs {
         let pr = parse_file(s.name, s.text, ids);
         for e in pr.errs {
@@ -138,7 +138,7 @@ fn frontend_load_v(
             return None;
         }
     };
-    let cfg = match ref_config_load(fs, log) {
+    let mut cfg = match ref_config_load(fs, log) {
         Some(c) => c,
         None => {
             return None;
@@ -165,8 +165,8 @@ fn frontend_report(log: &Log, res: ChkResult, warn: Bool, verbose: Bool) -> Bool
     if res.errs.len() == 0 && (!warn || res.refine.diags.len() == 0) {
         return true;
     }
-    let facts: HashMap<String, Vec<RefFactUse>> = HashMap::new();
-    let all = Vec::new();
+    let mut facts: HashMap<String, Vec<RefFactUse>> = HashMap::new();
+    let mut all = Vec::new();
     for e in res.errs {
         all.push(e);
     }
@@ -186,8 +186,8 @@ fn frontend_report(log: &Log, res: ChkResult, warn: Bool, verbose: Bool) -> Bool
             facts.insert(key, d.facts);
         }
     }
-    let errs = Vec::new();
-    let notes = Vec::new();
+    let mut errs = Vec::new();
+    let mut notes = Vec::new();
     for e in ast_sort_errors(all) {
         let line = ast_error_string(e);
         let mut more = "";
@@ -216,7 +216,7 @@ fn frontend_report(log: &Log, res: ChkResult, warn: Bool, verbose: Bool) -> Bool
 
 // frontend_check_prelude checks srcs together with the runtime prelude.
 fn frontend_check_prelude(srcs: Vec<FeSource>, log: &Log) -> Option<ChkResult> {
-    let all = Vec::new();
+    let mut all = Vec::new();
     for s in srcs {
         all.push(s);
     }
@@ -319,7 +319,7 @@ fn frontend_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "ast" {
         let pr = parse_file("", src, AstIds { next: 0 });
         if pr.errs.len() > 0 {
-            let lines = Vec::new();
+            let mut lines = Vec::new();
             for e in pr.errs {
                 lines.push(ast_error_string(e));
             }
@@ -362,7 +362,7 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
                 return 1;
             }
         };
-        let all = Vec::new();
+        let mut all = Vec::new();
         for s in srcs {
             all.push(s);
         }
@@ -396,7 +396,7 @@ fn frontend_build(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             None => Vec::new(),
         };
         {
-            let parts = Vec::new();
+            let mut parts = Vec::new();
             parts.push("build-2");
             parts.push(dh.hash);
             parts.push(entry);
@@ -499,7 +499,7 @@ fn frontend_emit_glue(
 
 // frontend_meta_json renders the program metadata for the JS runtime.
 fn frontend_meta_json(params: Vec<IrHandlerParam>) -> String {
-    let items = Vec::new();
+    let mut items = Vec::new();
     for p in params {
         items.push(
             "\n    {\n      \"kind\": "
@@ -516,7 +516,7 @@ fn frontend_meta_json(params: Vec<IrHandlerParam>) -> String {
 // output is written), for profiling the compiler.
 fn frontend_timings(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
     let path = args.get(1).unwrap_or("");
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     let mut t = clock.now_ms();
     let srcs = match frontend_read_sources(path, fs, log) {
         Some(s) => s,
@@ -524,7 +524,7 @@ fn frontend_timings(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int
             return 1;
         }
     };
-    let all = Vec::new();
+    let mut all = Vec::new();
     for s in srcs {
         all.push(s);
     }
@@ -608,7 +608,7 @@ fn fe_cache_new() -> FeCache {
 
 // frontend_parse_cached is frontend_parse_all with the parses of unchanged
 // files taken from the cache.
-fn frontend_parse_cached(c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
+fn frontend_parse_cached(mut c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
     let out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
@@ -617,7 +617,7 @@ fn frontend_parse_cached(c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
         traits: Vec::new(),
         aliases: Vec::new(),
     };
-    let errs = Vec::new();
+    let mut errs = Vec::new();
     for s in srcs {
         let mut pr = parse_file_dummy();
         let mut found = false;
@@ -679,7 +679,7 @@ fn frontend_build_c(c: FeCache, args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             return 1;
         }
     };
-    let all = Vec::new();
+    let mut all = Vec::new();
     for s in srcs {
         all.push(s);
     }
@@ -713,7 +713,7 @@ fn frontend_build_c(c: FeCache, args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     };
     let mut key = "";
     if cache_dir != "" {
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         parts.push("build-2");
         parts.push(dh.hash);
         parts.push(entry);

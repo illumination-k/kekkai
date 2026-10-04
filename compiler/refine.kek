@@ -53,8 +53,8 @@ fn ref_config_default() -> RefConfig {
 }
 
 fn ref_config_parse(cfg: ToolJson) -> Result<RefConfig, String> {
-    let rc = ref_config_default();
-    let keys = Vec::new();
+    let mut rc = ref_config_default();
+    let mut keys = Vec::new();
     keys.push("overflow");
     keys.push("division");
     for k in keys {
@@ -303,14 +303,14 @@ fn ref_lc(k: Int) -> SmtLin {
 }
 
 fn ref_la(a: String) -> SmtLin {
-    let t = Vec::new();
+    let mut t = Vec::new();
     t.push(SmtMono { coef: 1, atom: a });
     SmtLin { terms: t, k: 0 }
 }
 
 // ref_ladd is a + s * b (s is 1 or -1); None on overflow.
 fn ref_ladd(a: SmtLin, b: SmtLin, s: Int) -> Option<SmtLin> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for m in a.terms {
         out.push(SmtMono { coef: m.coef, atom: m.atom });
     }
@@ -355,7 +355,7 @@ fn ref_ladd(a: SmtLin, b: SmtLin, s: Int) -> Option<SmtLin> {
             return None;
         }
     };
-    let terms = Vec::new();
+    let mut terms = Vec::new();
     for m in out {
         if m.coef != 0 {
             terms.push(m);
@@ -365,7 +365,7 @@ fn ref_ladd(a: SmtLin, b: SmtLin, s: Int) -> Option<SmtLin> {
 }
 
 fn ref_lscale(a: SmtLin, c: Int) -> Option<SmtLin> {
-    let terms = Vec::new();
+    let mut terms = Vec::new();
     for m in a.terms {
         match ref_cmul(m.coef, c) {
             Some(x) => {
@@ -431,14 +431,14 @@ fn ref_eq(a: SmtLin, b: SmtLin) -> SmtF {
 }
 
 fn ref_and2(a: SmtF, b: SmtF) -> SmtF {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     SmtF::And(v)
 }
 
 fn ref_or2(a: SmtF, b: SmtF) -> SmtF {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     SmtF::Or(v)
@@ -465,7 +465,7 @@ fn ref_atoms_into(f: SmtF, seen: HashMap<String, Bool>, out: Vec<String>) {
     }
 }
 
-fn ref_lin_atoms(l: SmtLin, seen: HashMap<String, Bool>, out: Vec<String>) {
+fn ref_lin_atoms(l: SmtLin, mut seen: HashMap<String, Bool>, mut out: Vec<String>) {
     for m in l.terms {
         if !seen.contains_key(m.atom) {
             seen.insert(m.atom, true);
@@ -574,7 +574,7 @@ fn ref_show_sub(e: AstExpr, paren: Bool, from: String, to: String) -> String {
 }
 
 fn ref_show_args(args: Vec<AstExpr>, from: String, to: String) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for a in args {
         parts.push(ref_show_r(a, from, to));
     }
@@ -628,7 +628,7 @@ fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
 // ref_alias_pred_text is the predicate of a refined alias as source text
 // over the variable v ("" for an alias without one).
 fn ref_alias_pred_text(info: ChkInfo, alias: String, v: String) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for p in ref_alias_preds(info, alias) {
         parts.push("(" + ref_show_r(p, "self", v) + ")");
     }
@@ -690,7 +690,7 @@ fn ref_alias_range(info: ChkInfo, alias: String, g: String) -> String {
     ""
 }
 
-fn ref_bounds_of(e: AstExpr, lo: Vec<Int>, hi: Vec<Int>) {
+fn ref_bounds_of(e: AstExpr, mut lo: Vec<Int>, mut hi: Vec<Int>) {
     match e {
         AstExpr::Binary(b) => {
             if b.op == "&&" {
@@ -752,7 +752,7 @@ fn ref_is_self(e: AstExpr) -> Bool {
 // the program with the core library, for the struct declarations).
 fn ref_program(info: ChkInfo, cfg: RefConfig, f: AstFile) -> RefReport {
     let report = ref_report_empty();
-    let field_alias: HashMap<String, String> = HashMap::new();
+    let mut field_alias: HashMap<String, String> = HashMap::new();
     for sd in f.structs {
         for fl in sd.fields {
             let a = ref_alias_of(info, fl.ty);
@@ -825,7 +825,7 @@ fn ref_alias_of(info: ChkInfo, t: AstType) -> String {
 // ref_alias_preds returns the predicates of an alias and of the aliases it
 // is defined with (`type B = A where ...`).
 fn ref_alias_preds(info: ChkInfo, name: String) -> Vec<AstExpr> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut cur = name;
     let mut depth = 0;
     while depth < 16 {
@@ -901,10 +901,10 @@ fn ref_func(
     info: ChkInfo,
     cfg: RefConfig,
     field_alias: HashMap<String, String>,
-    report: RefReport,
+    mut report: RefReport,
     fun: ChkFunc,
 ) {
-    let cx = RefCtx {
+    let mut cx = RefCtx {
         info: info,
         cfg: cfg,
         field_alias: field_alias,
@@ -1004,7 +1004,7 @@ fn ref_scan_new() -> RefScan {
 fn ref_scan_touch(cx: RefCtx, sc: RefScan, key: String) {
     for id in sc.loops {
         match cx.loop_touch.get(id) {
-            Some(m) => {
+            Some(mut m) => {
                 m.insert(key, true);
             }
             None => {}
@@ -1060,7 +1060,7 @@ fn ref_is_vec_new(e: AstExpr) -> Bool {
     }
 }
 
-fn ref_scan_stmt(cx: RefCtx, sc: RefScan, s0: AstStmt) {
+fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
     match s0 {
         AstStmt::Let(s) => {
             ref_scan_expr(cx, sc, s.init, false);
@@ -1142,7 +1142,7 @@ fn ref_scan_exprs(cx: RefCtx, sc: RefScan, es: Vec<AstExpr>) {
 
 // ref_scan_call records a call that may mutate any Vec reachable from its
 // arguments.
-fn ref_scan_call(cx: RefCtx, sc: RefScan, args: Vec<AstExpr>, func: Option<ChkFunc>) {
+fn ref_scan_call(cx: RefCtx, mut sc: RefScan, args: Vec<AstExpr>, func: Option<ChkFunc>) {
     let mut reach = false;
     for a in args {
         if !ref_prim(ref_ty_of(cx, a)) {
@@ -1168,7 +1168,7 @@ fn ref_scan_call(cx: RefCtx, sc: RefScan, args: Vec<AstExpr>, func: Option<ChkFu
 // ref_scan_expr scans an expression; recv is set when its value is only
 // read in place (a method receiver, an index base, a `for` iterable), so a
 // Vec variable there does not escape.
-fn ref_scan_expr(cx: RefCtx, sc: RefScan, e: AstExpr, recv: Bool) {
+fn ref_scan_expr(cx: RefCtx, mut sc: RefScan, e: AstExpr, recv: Bool) {
     match e {
         AstExpr::Ident(x) => {
             match cx.info.uses.get(x.id) {
@@ -1219,7 +1219,7 @@ fn ref_scan_expr(cx: RefCtx, sc: RefScan, e: AstExpr, recv: Bool) {
             match cx.info.methods.get(m.id) {
                 Some(mi) => {
                     if mi.kind == "func" || (mi.kind == "generic" && !ref_is_vec(rt)) {
-                        let all = Vec::new();
+                        let mut all = Vec::new();
                         all.push(m.recv);
                         for a in m.args {
                             all.push(a);
@@ -1275,7 +1275,7 @@ fn ref_scan_expr(cx: RefCtx, sc: RefScan, e: AstExpr, recv: Bool) {
         AstExpr::Try(t) => ref_scan_expr(cx, sc, t.x, false),
         AstExpr::Closure(c) => {
             sc.closure = sc.closure + 1;
-            let saved = Vec::new();
+            let mut saved = Vec::new();
             for l in sc.loops {
                 saved.push(l);
             }
@@ -1306,7 +1306,7 @@ fn ref_scan_expr(cx: RefCtx, sc: RefScan, e: AstExpr, recv: Bool) {
 
 // ref_scan_finish decides the isolated Vec variables and resolves the
 // loop slots ("m<id>": a push / pop on variable id).
-fn ref_scan_finish(cx: RefCtx, sc: RefScan) {
+fn ref_scan_finish(mut cx: RefCtx, sc: RefScan) {
     for id in sc.fresh.keys() {
         if !sc.escaped.contains_key(id) {
             cx.isolated.insert(id, true);
@@ -1314,7 +1314,7 @@ fn ref_scan_finish(cx: RefCtx, sc: RefScan) {
     }
     for lid in cx.loop_touch.keys() {
         let m = cx.loop_touch.get(lid).unwrap_or(HashMap::new());
-        let out: HashMap<String, Bool> = HashMap::new();
+        let mut out: HashMap<String, Bool> = HashMap::new();
         for k in m.keys() {
             if k.starts_with("m") {
                 let id = k.slice(1, k.len()).parse_int().unwrap_or(0);
@@ -1334,18 +1334,18 @@ fn ref_scan_finish(cx: RefCtx, sc: RefScan) {
 // ---- states ----
 
 fn ref_clone(st: RefSt) -> RefSt {
-    let facts = Vec::new();
+    let mut facts = Vec::new();
     for f in st.facts {
         facts.push(f);
     }
-    let env: HashMap<String, String> = HashMap::new();
+    let mut env: HashMap<String, String> = HashMap::new();
     for k in st.env.keys() {
         env.insert(k, st.env.get(k).unwrap_or(""));
     }
     RefSt { facts: facts, env: env, dead: st.dead }
 }
 
-fn ref_atom(cx: RefCtx, base: String, disp: String) -> String {
+fn ref_atom(mut cx: RefCtx, base: String, disp: String) -> String {
     let n = cx.used.get(base).unwrap_or(0);
     cx.used.insert(base, n + 1);
     let a = if n == 0 {
@@ -1357,7 +1357,7 @@ fn ref_atom(cx: RefCtx, base: String, disp: String) -> String {
     a
 }
 
-fn ref_fact(cx: RefCtx, st: RefSt, f: SmtF, pos: AstPos, text: String) {
+fn ref_fact(mut cx: RefCtx, mut st: RefSt, f: SmtF, pos: AstPos, text: String) {
     match f {
         SmtF::True => {
             return;
@@ -1424,7 +1424,7 @@ fn ref_fresh(cx: RefCtx, st: RefSt, t: Ty, disp: String, pos: AstPos) -> RefVal 
 
 // ref_bind_new gives a new variable (a parameter, a `let`, a pattern
 // binding) its slot, without facts beyond `len >= 0`.
-fn ref_bind_new(cx: RefCtx, st: RefSt, b: ChkBinding, pos: AstPos) -> RefVal {
+fn ref_bind_new(mut cx: RefCtx, mut st: RefSt, b: ChkBinding, pos: AstPos) -> RefVal {
     let t = ty_prune(b.ty);
     if ty_is_prim(t, "Int") {
         let a = ref_atom(cx, b.name, b.name);
@@ -1489,7 +1489,7 @@ fn ref_var(cx: RefCtx, st: RefSt, b: ChkBinding, pos: AstPos) -> RefVal {
 // the active loop-invariant candidates on it.
 fn ref_update(
     cx: RefCtx,
-    st: RefSt,
+    mut st: RefSt,
     key: String,
     base: String,
     disp: String,
@@ -1511,7 +1511,7 @@ fn ref_update(
     }
     // every candidate on this slot must survive the update; a candidate
     // that does is a fact from here on
-    for c in cx.cands {
+    for mut c in cx.cands {
         if c.alive && (c.key == key || c.other == key) {
             let goal = ref_cand_goal(c, st.env);
             match smt_prove(ref_hyps(ref_slice(st, goal), false), goal) {
@@ -1527,7 +1527,7 @@ fn ref_update(
 // ref_havoc_vecs forgets the length of every Vec that a call may reach
 // (all but the isolated ones).
 fn ref_havoc_vecs(cx: RefCtx, st: RefSt, pos: AstPos) {
-    let ks = Vec::new();
+    let mut ks = Vec::new();
     for k in st.env.keys() {
         match cx.vec_keys.get(k) {
             Some(iso) => {
@@ -1548,9 +1548,9 @@ fn ref_havoc_vecs(cx: RefCtx, st: RefSt, pos: AstPos) {
 // ref_len_fact bounds a length: 0 <= a <= 2^32 - 1 (Vec and String
 // lengths are 32-bit in the runtime).
 fn ref_len_fact(a: String) -> SmtF {
-    let lo = Vec::new();
+    let mut lo = Vec::new();
     lo.push(SmtMono { coef: -1, atom: a });
-    let hi = Vec::new();
+    let mut hi = Vec::new();
     hi.push(SmtMono { coef: 1, atom: a });
     ref_and2(SmtF::Le(SmtLin { terms: lo, k: 0 }), SmtF::Le(SmtLin { terms: hi, k: -4294967295 }))
 }
@@ -1558,7 +1558,7 @@ fn ref_len_fact(a: String) -> SmtF {
 // ref_keys returns the keys of a map (to update it while going through
 // them).
 fn ref_keys(m: HashMap<String, String>) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for k in m.keys() {
         out.push(k);
     }
@@ -1577,12 +1577,12 @@ fn ref_atom_base(a: String) -> String {
 // ref_slice returns the facts that share atoms with goal (transitively),
 // and those without atoms (contradictions).
 fn ref_slice(st: RefSt, goal: SmtF) -> Vec<RefFact> {
-    let set: HashMap<String, Bool> = HashMap::new();
+    let mut set: HashMap<String, Bool> = HashMap::new();
     for a in ref_atoms(goal) {
         set.insert(a, true);
     }
     let n = st.facts.len();
-    let inc = Vec::new();
+    let mut inc = Vec::new();
     for i in 0..n {
         inc.push(false);
     }
@@ -1616,7 +1616,7 @@ fn ref_slice(st: RefSt, goal: SmtF) -> Vec<RefFact> {
             }
         }
     }
-    let out = Vec::new();
+    let mut out = Vec::new();
     for i in 0..n {
         if inc.get(i).unwrap_or(false) {
             out.push(
@@ -1630,7 +1630,7 @@ fn ref_slice(st: RefSt, goal: SmtF) -> Vec<RefFact> {
 // ref_hyps names the facts for the solver; with ranges, every atom is
 // also in the 64-bit range (overflow VCs).
 fn ref_hyps(fs: Vec<RefFact>, ranges: Bool) -> Vec<SmtF> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for f in fs {
         out.push(SmtF::Named(f.label, f.f));
     }
@@ -1655,7 +1655,7 @@ fn ref_severity(cx: RefCtx, kind: String) -> String {
     "error"
 }
 
-fn ref_count(cx: RefCtx, k: String) {
+fn ref_count(mut cx: RefCtx, k: String) {
     cx.sum.counts.insert(k, cx.sum.counts.get(k).unwrap_or(0) + 1);
 }
 
@@ -1669,7 +1669,7 @@ fn ref_vc(cx: RefCtx, st: RefSt, goal: SmtF, kind: String, pos: AstPos, what: St
 // (definitions of auxiliary atoms) and the atoms shown in a
 // counterexample.
 fn ref_vc_x(
-    cx: RefCtx,
+    mut cx: RefCtx,
     st: RefSt,
     goal: SmtF,
     sf: SmtF,
@@ -1684,7 +1684,7 @@ fn ref_vc_x(
     }
     ref_count(cx, kind);
     let sl = ref_slice(st, sf);
-    let hyps = ref_hyps(sl, false);
+    let mut hyps = ref_hyps(sl, false);
     for h in extra {
         hyps.push(h);
     }
@@ -1694,7 +1694,7 @@ fn ref_vc_x(
     } else {
         "refine"
     };
-    let d = RefDiag {
+    let mut d = RefDiag {
         pos: pos,
         msg: "",
         severity: ref_severity(cx, kind),
@@ -1721,8 +1721,8 @@ fn ref_vc_x(
             return true;
         }
         SmtResult::Invalid(bs) => {
-            let shown = Vec::new();
-            let dseen: HashMap<String, Bool> = HashMap::new();
+            let mut shown = Vec::new();
+            let mut dseen: HashMap<String, Bool> = HashMap::new();
             for a in show {
                 for b in bs {
                     let disp = cx.display.get(a).unwrap_or(a);
@@ -1766,7 +1766,7 @@ fn ref_sub_new() -> RefSub {
 
 // ref_sub_put binds name to a value (bid: the immutable variable holding
 // it, or 0).
-fn ref_sub_put(sub: RefSub, name: String, v: RefVal, bid: Int) {
+fn ref_sub_put(mut sub: RefSub, name: String, v: RefVal, bid: Int) {
     if v.kind == "int" {
         sub.ints.insert(name, v.lin);
     } else if v.kind == "bool" {
@@ -1858,7 +1858,7 @@ fn ref_pred_lin(cx: RefCtx, st: RefSt, e: AstExpr, sub: RefSub) -> SmtLin {
 // ref_field_atom is the atom of the immutable Int field `name.field` of
 // the immutable variable bid.
 fn ref_field_atom(
-    cx: RefCtx,
+    mut cx: RefCtx,
     st: RefSt,
     bid: Int,
     name: String,
@@ -1964,7 +1964,7 @@ fn ref_block(cx: RefCtx, st: RefSt, b: AstBlock) -> RefVal {
     }
 }
 
-fn ref_stmt(cx: RefCtx, st: RefSt, s0: AstStmt) {
+fn ref_stmt(cx: RefCtx, mut st: RefSt, s0: AstStmt) {
     match s0 {
         AstStmt::Let(s) => {
             let v = ref_expr(cx, st, s.init);
@@ -2072,7 +2072,7 @@ fn ref_stmt(cx: RefCtx, st: RefSt, s0: AstStmt) {
 }
 
 // ref_assign_new binds a new variable b to v (`let`): `b == v`.
-fn ref_assign_new(cx: RefCtx, st: RefSt, b: ChkBinding, v: RefVal, pos: AstPos) {
+fn ref_assign_new(mut cx: RefCtx, mut st: RefSt, b: ChkBinding, v: RefVal, pos: AstPos) {
     let t = ty_prune(b.ty);
     if ty_is_prim(t, "Int") && v.kind == "int" {
         let a = ref_atom(cx, b.name, b.name);
@@ -2102,7 +2102,7 @@ fn ref_assign_new(cx: RefCtx, st: RefSt, b: ChkBinding, v: RefVal, pos: AstPos) 
 
 // ref_loop_keys are the slots of st a loop may change.
 fn ref_loop_keys(cx: RefCtx, st: RefSt, id: Int) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let m = cx.loop_touch.get(id).unwrap_or(HashMap::new());
     let all = m.contains_key("*");
     for k in st.env.keys() {
@@ -2133,7 +2133,7 @@ fn ref_loop_head(
     cands: Vec<RefCand>,
     pos: AstPos,
 ) -> RefSt {
-    let h = ref_clone(st);
+    let mut h = ref_clone(st);
     for k in keys {
         let a = h.env.get(k).unwrap_or("");
         let na = ref_atom(cx, ref_atom_base(a), cx.display.get(a).unwrap_or(a));
@@ -2243,7 +2243,7 @@ fn ref_is_incl_range(e: AstExpr) -> Bool {
     }
 }
 
-fn ref_loop(cx: RefCtx, st: RefSt, s0: AstStmt) {
+fn ref_loop(mut cx: RefCtx, mut st: RefSt, s0: AstStmt) {
     let mut id = 0;
     let mut pos = chk_dummy_pos();
     let mut body = AstBlock { id: 0, pos: pos, stmts: Vec::new(), tail: None, end: pos };
@@ -2291,7 +2291,7 @@ fn ref_loop(cx: RefCtx, st: RefSt, s0: AstStmt) {
     }
     // relational candidates `x <= y` (x assigned in the loop, y any Int or
     // length slot) that hold at entry
-    let touched: HashMap<String, Bool> = HashMap::new();
+    let mut touched: HashMap<String, Bool> = HashMap::new();
     for k in keys {
         touched.insert(k, true);
     }
@@ -2304,7 +2304,7 @@ fn ref_loop(cx: RefCtx, st: RefSt, s0: AstStmt) {
             if o == k || !(o.starts_with("v") || o.starts_with("l")) || nrel >= 48 {
                 continue;
             }
-            let pairs = Vec::new();
+            let mut pairs = Vec::new();
             pairs.push(RefCand { key: k, entry: "", other: o, ge: false, alive: true });
             if !touched.contains_key(o) {
                 pairs.push(RefCand { key: o, entry: "", other: k, ge: false, alive: true });
@@ -2338,7 +2338,7 @@ fn ref_loop(cx: RefCtx, st: RefSt, s0: AstStmt) {
             cx.cands.pop();
         }
         cx.emit = saved_emit;
-        let alive = Vec::new();
+        let mut alive = Vec::new();
         for c in cands {
             if c.alive {
                 alive.push(c);
@@ -2375,15 +2375,15 @@ fn ref_loop(cx: RefCtx, st: RefSt, s0: AstStmt) {
 // one disjunction. Returns the value of the whole (type t).
 fn ref_join(
     cx: RefCtx,
-    st: RefSt,
+    mut st: RefSt,
     brs: Vec<RefSt>,
     vals: Vec<RefVal>,
     t: Ty,
     pos: AstPos,
 ) -> RefVal {
     let n0 = st.facts.len();
-    let live = Vec::new();
-    let lvals = Vec::new();
+    let mut live = Vec::new();
+    let mut lvals = Vec::new();
     let mut i = 0;
     for b in brs {
         if !b.dead {
@@ -2411,7 +2411,7 @@ fn ref_join(
         return lvals.get(0).unwrap_or(ref_val_other());
     }
     // slots that differ
-    let changed = Vec::new();
+    let mut changed = Vec::new();
     for k in st.env.keys() {
         let a0 = st.env.get(k).unwrap_or("");
         for b in live {
@@ -2421,17 +2421,17 @@ fn ref_join(
             }
         }
     }
-    let news = Vec::new();
+    let mut news = Vec::new();
     for k in changed {
         let a0 = st.env.get(k).unwrap_or("");
         news.push(ref_atom(cx, ref_atom_base(a0), cx.display.get(a0).unwrap_or(a0)));
     }
     let res = ref_fresh(cx, st, t, "if", pos);
-    let ors = Vec::new();
+    let mut ors = Vec::new();
     let mut any = false;
     let mut bi = 0;
     for b in live {
-        let conj = Vec::new();
+        let mut conj = Vec::new();
         let mut j = 0;
         for f in b.facts {
             if j >= n0 {
@@ -2489,7 +2489,7 @@ fn ref_int_or_fresh(cx: RefCtx, st: RefSt, v: RefVal, e: AstExpr) -> SmtLin {
 }
 
 // ref_ovf checks that r, the exact value of e, fits in 64 bits.
-fn ref_ovf(cx: RefCtx, st: RefSt, r: Option<SmtLin>, e: AstExpr, pos: AstPos) {
+fn ref_ovf(mut cx: RefCtx, st: RefSt, r: Option<SmtLin>, e: AstExpr, pos: AstPos) {
     if cx.ovf == "off" || st.dead || !cx.emit {
         return;
     }
@@ -2538,7 +2538,7 @@ fn ref_ovf(cx: RefCtx, st: RefSt, r: Option<SmtLin>, e: AstExpr, pos: AstPos) {
     }
 }
 
-fn ref_expr(cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
+fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
     match e {
         AstExpr::IntLit(x) => ref_val_int(ref_lc(x.value)),
         AstExpr::BoolLit(x) => ref_val_bool(if x.value { SmtF::True } else { SmtF::False }),
@@ -2621,7 +2621,7 @@ fn ref_expr(cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
             let s2 = ref_clone(st);
             ref_havoc_vecs(cx, s2, c.pos);
             cx.in_closure = cx.in_closure + 1;
-            let saved = Vec::new();
+            let mut saved = Vec::new();
             for x in cx.cands {
                 saved.push(x);
             }
@@ -2662,7 +2662,7 @@ fn ref_field_immutable(cx: RefCtx, f: AstFieldExpr) -> Bool {
     }
 }
 
-fn ref_binary(cx: RefCtx, st: RefSt, b: AstBinary, e: AstExpr) -> RefVal {
+fn ref_binary(cx: RefCtx, mut st: RefSt, b: AstBinary, e: AstExpr) -> RefVal {
     if b.op == "&&" || b.op == "||" {
         let fa = ref_cond(cx, st, b.x);
         let s2 = ref_clone(st);
@@ -2837,12 +2837,12 @@ fn ref_divc(
         return;
     }
     // x >= 0 && c*q <= x && x - c*q - (c - 1) <= 0
-    let pos_side = Vec::new();
+    let mut pos_side = Vec::new();
     pos_side.push(SmtF::Le(nxv));
     pos_side.push(SmtF::Le(a));
     pos_side.push(SmtF::Le(SmtLin { terms: d.terms, k: dk.unwrap_or(0) }));
     // x + 1 <= 0 && c*q - x - (c - 1) <= 0 && x - c*q <= 0
-    let neg_side = Vec::new();
+    let mut neg_side = Vec::new();
     neg_side.push(SmtF::Le(SmtLin { terms: x.terms, k: x1.unwrap_or(0) }));
     neg_side.push(SmtF::Le(SmtLin { terms: a.terms, k: ak.unwrap_or(0) }));
     neg_side.push(SmtF::Le(d));
@@ -2862,8 +2862,8 @@ fn ref_divc(
 
 fn ref_if(cx: RefCtx, st: RefSt, x: AstIf, e: AstExpr) -> RefVal {
     let t = ref_ty_of(cx, e);
-    let brs = Vec::new();
-    let vals = Vec::new();
+    let mut brs = Vec::new();
+    let mut vals = Vec::new();
     match x.pat {
         Some(_) => {
             ref_expr(cx, st, x.cond);
@@ -2904,9 +2904,9 @@ fn ref_if(cx: RefCtx, st: RefSt, x: AstIf, e: AstExpr) -> RefVal {
 fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
     let sv = ref_expr(cx, st, m.x);
     let t = ref_ty_of(cx, e);
-    let brs = Vec::new();
-    let vals = Vec::new();
-    let prev = Vec::new();
+    let mut brs = Vec::new();
+    let mut vals = Vec::new();
+    let mut prev = Vec::new();
     for arm in m.arms {
         let s = ref_clone(st);
         let p = arm.pat;
@@ -3131,7 +3131,7 @@ fn ref_call_expr(cx: RefCtx, st: RefSt, c: AstCall, e: AstExpr) -> RefVal {
     if ci.kind == "closure" {
         ref_expr(cx, st, c.func);
     }
-    let args = Vec::new();
+    let mut args = Vec::new();
     for a in c.args {
         args.push(ref_expr(cx, st, a));
     }
@@ -3155,7 +3155,7 @@ fn ref_call_expr(cx: RefCtx, st: RefSt, c: AstCall, e: AstExpr) -> RefVal {
 fn ref_method(cx: RefCtx, st: RefSt, m: AstMethodCall, e: AstExpr) -> RefVal {
     let rv = ref_expr(cx, st, m.recv);
     let rt = ref_ty_of(cx, m.recv);
-    let args = Vec::new();
+    let mut args = Vec::new();
     for a in m.args {
         args.push(ref_expr(cx, st, a));
     }
@@ -3221,12 +3221,12 @@ fn ref_method(cx: RefCtx, st: RefSt, m: AstMethodCall, e: AstExpr) -> RefVal {
     match mi {
         Some(info) => {
             if info.kind == "func" || (info.kind == "generic" && !ref_is_vec(rt)) {
-                let all = Vec::new();
+                let mut all = Vec::new();
                 all.push(rv);
                 for a in args {
                     all.push(a);
                 }
-                let exprs = Vec::new();
+                let mut exprs = Vec::new();
                 exprs.push(m.recv);
                 for a in m.args {
                     exprs.push(a);

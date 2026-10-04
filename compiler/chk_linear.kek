@@ -26,7 +26,7 @@ fn lin_clone(s: Option<LinState>) -> Option<LinState> {
 }
 
 fn lin_copy(st: LinState) -> LinState {
-    let out = lin_new_state();
+    let mut out = lin_new_state();
     for k in st.m.keys() {
         out.m.insert(k, st.m.get(k).unwrap_or(false));
         out.names.insert(k, st.names.get(k).unwrap_or(""));
@@ -39,7 +39,7 @@ fn lin_check(info: ChkInfo, fun: ChkFunc, errs: Vec<AstError>) {
     lin_block(lc, fun.decl.body, Some(lin_new_state()));
 }
 
-fn lin_errorf(lc: LinChecker, pos: AstPos, msg: String) {
+fn lin_errorf(mut lc: LinChecker, pos: AstPos, msg: String) {
     lc.errs.push(AstError { pos: pos, msg: msg });
 }
 
@@ -60,7 +60,7 @@ fn lin_merge(
         Some(sa) => match b {
             None => a,
             Some(sb) => {
-                let out = lin_new_state();
+                let mut out = lin_new_state();
                 for k in sa.m.keys() {
                     let va = sa.m.get(k).unwrap_or(false);
                     match sb.m.get(k) {
@@ -110,7 +110,7 @@ fn lin_block(lc: LinChecker, b: AstBlock, s0: Option<LinState>) -> Option<LinSta
 }
 
 // lin_loop_check reports linear bindings whose state changed in a loop body.
-fn lin_loop_body(lc: LinChecker, pos: AstPos, body: AstBlock, s: LinState) {
+fn lin_loop_body(mut lc: LinChecker, pos: AstPos, body: AstBlock, s: LinState) {
     lc.loops.push(lin_copy(s));
     let after = lin_block(lc, body, Some(lin_copy(s)));
     lc.loops.pop();
@@ -364,7 +364,7 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
                 None => {
                     return None;
                 }
-                Some(ss) => {
+                Some(mut ss) => {
                     match mi {
                         Some(m) => match m.builtin {
                             Some(b) => {
@@ -417,7 +417,7 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
 }
 
 fn lin_transaction(
-    lc: LinChecker,
+    mut lc: LinChecker,
     e: AstMethodCall,
     mi: ChkMethodInfo,
     s0: Option<LinState>,
@@ -441,7 +441,7 @@ fn lin_transaction(
             return s;
         }
     };
-    let inner = lin_copy(st);
+    let mut inner = lin_copy(st);
     inner.m.insert(tx.id, false);
     inner.names.insert(tx.id, tx.name);
     let saved = lc.loops;

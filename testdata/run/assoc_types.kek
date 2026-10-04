@@ -1,9 +1,9 @@
 trait Container {
     type Item;
 
-    fn first(&self) -> Option<Self::Item>;
+    fn first(self) -> Option<Self::Item>;
 
-    fn first_or(&self, d: Self::Item) -> Self::Item {
+    fn first_or(self, d: Self::Item) -> Self::Item {
         self.first().unwrap_or(d)
     }
 }
@@ -15,7 +15,7 @@ struct Wrap<T> {
 impl<T> Container for Wrap<T> {
     type Item = T;
 
-    fn first(&self) -> Option<T> {
+    fn first(self) -> Option<T> {
         self.v.get(0)
     }
 }
@@ -27,7 +27,7 @@ struct Countdown {
 impl Container for Countdown {
     type Item = Int;
 
-    fn first(&self) -> Option<Self::Item> {
+    fn first(self) -> Option<Self::Item> {
         if self.n > 0 { Some(self.n) } else { None }
     }
 }
@@ -42,7 +42,7 @@ fn plus_one<C: Container<Item = Int>>(c: C) -> Int {
 
 #[main]
 fn main(log: &Log) -> Int {
-    let w = Wrap { v: Vec::new() };
+    let mut w = Wrap { v: Vec::new() };
     w.v.push("x");
     log.info(get_first(w).unwrap_or("none"));
     log.info(

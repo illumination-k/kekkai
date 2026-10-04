@@ -18,7 +18,7 @@ where
 
 #[test]
 fn total_of_three() -> Bool {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(1);
     v.push(2);
     v.push(3);

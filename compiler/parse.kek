@@ -23,7 +23,7 @@ struct ParseResult {
     errs: Vec<AstError>,
 }
 
-fn parse_id(p: ParseState) -> Int {
+fn parse_id(mut p: ParseState) -> Int {
     p.ids.next = p.ids.next + 1;
     p.ids.next
 }
@@ -61,7 +61,7 @@ fn parse_peek_at(p: ParseState, k: String) -> Bool {
     }
 }
 
-fn parse_next(p: ParseState) -> Tok {
+fn parse_next(mut p: ParseState) -> Tok {
     let t = parse_tok(p);
     if t.kind != "EOF" {
         p.pos = p.pos + 1;
@@ -77,7 +77,7 @@ fn parse_accept(p: ParseState, k: String) -> Bool {
     false
 }
 
-fn parse_fail(p: ParseState, pos: AstPos, msg: String) {
+fn parse_fail(mut p: ParseState, pos: AstPos, msg: String) {
     if !p.failed {
         p.errs.push(AstError { pos: pos, msg: msg });
         p.failed = true;
@@ -117,7 +117,7 @@ fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> 
     let lr = lex_file(name, src);
     match at {
         Some(pos) => {
-            for t in lr.toks {
+            for mut t in lr.toks {
                 t.pos = pos;
             }
         }
@@ -141,7 +141,7 @@ fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> 
 }
 
 fn parse_items(p: ParseState) -> AstFile {
-    let f = AstFile {
+    let mut f = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
         funcs: Vec::new(),
@@ -153,19 +153,19 @@ fn parse_items(p: ParseState) -> AstFile {
         let attrs = parse_attrs(p);
         let k = parse_tok(p).kind;
         if k == "fn" {
-            let fd = parse_func(p, false);
+            let mut fd = parse_func(p, false);
             fd.attrs = attrs;
             if !p.failed {
                 f.funcs.push(fd);
             }
         } else if k == "struct" {
-            let sd = parse_struct(p);
+            let mut sd = parse_struct(p);
             sd.attrs = attrs;
             if !p.failed {
                 f.structs.push(sd);
             }
         } else if k == "enum" {
-            let ed = parse_enum(p);
+            let mut ed = parse_enum(p);
             ed.attrs = attrs;
             if !p.failed {
                 f.enums.push(ed);
@@ -205,12 +205,12 @@ fn parse_items(p: ParseState) -> AstFile {
 
 // parse_attrs parses attributes `#[name]` / `#[name(arg, ...)]`.
 fn parse_attrs(p: ParseState) -> Vec<AstAttr> {
-    let attrs = Vec::new();
+    let mut attrs = Vec::new();
     while parse_at(p, "#") {
         let pos = parse_next(p).pos;
         parse_expect(p, "[");
         let name = parse_expect(p, "IDENT");
-        let a = AstAttr { pos: pos, name: name.text, args: Vec::new() };
+        let mut a = AstAttr { pos: pos, name: name.text, args: Vec::new() };
         if parse_accept(p, "(") {
             while !parse_at(p, ")") {
                 // `name` or `name = "text"` / `name = 12`, kept as
@@ -252,7 +252,7 @@ fn parse_type_alias(p: ParseState) -> AstTypeAlias {
     let id = parse_id(p);
     parse_expect(p, "=");
     let ty = parse_type(p);
-    let a = AstTypeAlias { id: id, pos: pos, name: name, ty: ty, pred: None };
+    let mut a = AstTypeAlias { id: id, pos: pos, name: name, ty: ty, pred: None };
     if parse_accept(p, "where") {
         a.pred = Some(parse_expr(p));
     }
@@ -264,7 +264,7 @@ fn parse_type_alias(p: ParseState) -> AstTypeAlias {
 fn parse_assoc_type(p: ParseState) -> AstAssocType {
     let pos = parse_expect(p, "type").pos;
     let name = parse_expect(p, "IDENT").text;
-    let a = AstAssocType { id: parse_id(p), pos: pos, name: name, ty: None };
+    let mut a = AstAssocType { id: parse_id(p), pos: pos, name: name, ty: None };
     if parse_accept(p, "=") {
         a.ty = Some(parse_type(p));
     }
@@ -277,7 +277,7 @@ fn parse_trait(p: ParseState) -> AstTraitDecl {
     let pos = parse_expect(p, "trait").pos;
     let name = parse_expect(p, "IDENT").text;
     let generics = parse_generics(p);
-    let d = AstTraitDecl {
+    let mut d = AstTraitDecl {
         id: parse_id(p),
         pos: pos,
         name: name,
@@ -298,7 +298,7 @@ fn parse_trait(p: ParseState) -> AstTraitDecl {
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
         } else {
-            let fd = parse_func(p, true);
+            let mut fd = parse_func(p, true);
             fd.attrs = attrs;
             d.funcs.push(fd);
         }
@@ -309,13 +309,13 @@ fn parse_trait(p: ParseState) -> AstTraitDecl {
 
 // parse_generics parses `<T, U: Bound + Bound>` (nothing when absent).
 fn parse_generics(p: ParseState) -> Vec<AstGeneric> {
-    let gs = Vec::new();
+    let mut gs = Vec::new();
     if !parse_accept(p, "<") {
         return gs;
     }
     while !parse_at(p, ">") {
         let t = parse_expect(p, "IDENT");
-        let g = AstGeneric { id: parse_id(p), pos: t.pos, name: t.text, bounds: Vec::new() };
+        let mut g = AstGeneric { id: parse_id(p), pos: t.pos, name: t.text, bounds: Vec::new() };
         if parse_accept(p, ":") {
             g.bounds.push(parse_type(p));
             while parse_accept(p, "+") {
@@ -334,8 +334,8 @@ fn parse_generics(p: ParseState) -> Vec<AstGeneric> {
 // parse_wheres parses `where T: A + B, U: C` (nothing when absent). With
 // preds set, items that are not trait bounds are refinement predicates
 // (`0 <= i`, `result <= hi`) and are added to preds.
-fn parse_wheres(p: ParseState, preds: Option<Vec<AstExpr>>) -> Vec<AstWhere> {
-    let ws = Vec::new();
+fn parse_wheres(mut p: ParseState, preds: Option<Vec<AstExpr>>) -> Vec<AstWhere> {
+    let mut ws = Vec::new();
     if !parse_accept(p, "where") {
         return ws;
     }
@@ -343,7 +343,7 @@ fn parse_wheres(p: ParseState, preds: Option<Vec<AstExpr>>) -> Vec<AstWhere> {
         let pos = parse_tok(p).pos;
         if !parse_where_is_bound(p) {
             match preds {
-                Some(ps) => {
+                Some(mut ps) => {
                     let saved = p.no_struct;
                     p.no_struct = true;
                     ps.push(parse_expr(p));
@@ -360,7 +360,7 @@ fn parse_wheres(p: ParseState, preds: Option<Vec<AstExpr>>) -> Vec<AstWhere> {
         }
         let ty = parse_type(p);
         parse_expect(p, ":");
-        let w = AstWhere { id: parse_id(p), pos: pos, ty: ty, bounds: Vec::new() };
+        let mut w = AstWhere { id: parse_id(p), pos: pos, ty: ty, bounds: Vec::new() };
         w.bounds.push(parse_type(p));
         while parse_accept(p, "+") {
             w.bounds.push(parse_type(p));
@@ -414,7 +414,7 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
     let pos = parse_expect(p, "impl").pos;
     let generics = parse_generics(p);
     let first = parse_type(p);
-    let d = AstImplDecl {
+    let mut d = AstImplDecl {
         id: parse_id(p),
         pos: pos,
         generics: generics,
@@ -436,7 +436,7 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
         } else {
-            let fd = parse_func(p, false);
+            let mut fd = parse_func(p, false);
             fd.attrs = attrs;
             d.funcs.push(fd);
         }
@@ -449,7 +449,7 @@ fn parse_struct(p: ParseState) -> AstStructDecl {
     let pos = parse_expect(p, "struct").pos;
     let name = parse_expect(p, "IDENT").text;
     let generics = parse_generics(p);
-    let d = AstStructDecl {
+    let mut d = AstStructDecl {
         id: parse_id(p),
         pos: pos,
         attrs: Vec::new(),
@@ -477,7 +477,7 @@ fn parse_enum(p: ParseState) -> AstEnumDecl {
     let pos = parse_expect(p, "enum").pos;
     let name = parse_expect(p, "IDENT").text;
     let generics = parse_generics(p);
-    let d = AstEnumDecl {
+    let mut d = AstEnumDecl {
         id: parse_id(p),
         pos: pos,
         attrs: Vec::new(),
@@ -489,7 +489,7 @@ fn parse_enum(p: ParseState) -> AstEnumDecl {
     while !parse_at(p, "}") {
         let vp = parse_tok(p).pos;
         let vname = parse_expect(p, "IDENT").text;
-        let v = AstVariant { id: parse_id(p), pos: vp, name: vname, fields: Vec::new() };
+        let mut v = AstVariant { id: parse_id(p), pos: vp, name: vname, fields: Vec::new() };
         if parse_accept(p, "(") {
             while !parse_at(p, ")") {
                 v.fields.push(parse_type(p));
@@ -515,7 +515,7 @@ fn parse_func(p: ParseState, in_trait: Bool) -> AstFuncDecl {
     let name = parse_expect(p, "IDENT").text;
     let id = parse_id(p);
     let generics = parse_generics(p);
-    let params = Vec::new();
+    let mut params = Vec::new();
     let mut self_kind = "";
     parse_expect(p, "(");
     // receiver: `self`, `mut self`, `&self` or `&mut self`
@@ -620,7 +620,7 @@ fn parse_type(p: ParseState) -> AstType {
         if parse_accept(p, ")") {
             return AstType::Unit(AstUnitType { id: parse_id(p), pos: t.pos });
         }
-        let elems = Vec::new();
+        let mut elems = Vec::new();
         let mut trailing = false;
         while !parse_at(p, ")") {
             elems.push(parse_type(p));
@@ -645,7 +645,7 @@ fn parse_type(p: ParseState) -> AstType {
     }
     if t.kind == "IDENT" {
         parse_next(p);
-        let nt = AstNamedType { id: parse_id(p), pos: t.pos, name: t.text, args: Vec::new() };
+        let mut nt = AstNamedType { id: parse_id(p), pos: t.pos, name: t.text, args: Vec::new() };
         if parse_at(p, "::") && parse_peek_at(p, "IDENT") {
             // an associated type `T::Item`
             parse_next(p);
@@ -690,7 +690,13 @@ fn parse_fn_type(p: ParseState) -> AstType {
         }
         kind = prefix + n.text;
     }
-    let ft = AstFnType { id: parse_id(p), pos: t.pos, kind: kind, params: Vec::new(), result: None };
+    let mut ft = AstFnType {
+        id: parse_id(p),
+        pos: t.pos,
+        kind: kind,
+        params: Vec::new(),
+        result: None,
+    };
     parse_expect(p, "(");
     while !parse_at(p, ")") {
         ft.params.push(parse_type(p));
@@ -707,14 +713,14 @@ fn parse_fn_type(p: ParseState) -> AstType {
 
 // parse_type_args parses `<A, B>`.
 fn parse_type_args(p: ParseState) -> Vec<AstType> {
-    let args = Vec::new();
+    let mut args = Vec::new();
     parse_expect(p, "<");
     while !parse_at(p, ">") {
         if parse_at(p, "IDENT") && parse_peek_at(p, "=") {
             // an associated type binding `Item = T` (in a trait bound)
             let t = parse_next(p);
             parse_next(p);
-            let b = AstNamedType {
+            let mut b = AstNamedType {
                 id: parse_id(p),
                 pos: t.pos,
                 name: "=" + t.text,
@@ -742,11 +748,11 @@ fn parse_turbofish(p: ParseState) -> Vec<AstType> {
     Vec::new()
 }
 
-fn parse_block(p: ParseState) -> AstBlock {
+fn parse_block(mut p: ParseState) -> AstBlock {
     let pos = parse_expect(p, "{").pos;
     let saved = p.no_struct;
     p.no_struct = false;
-    let b = AstBlock { id: parse_id(p), pos: pos, stmts: Vec::new(), tail: None, end: pos };
+    let mut b = AstBlock { id: parse_id(p), pos: pos, stmts: Vec::new(), tail: None, end: pos };
     while !parse_at(p, "}") && !parse_at(p, "EOF") {
         let sp = parse_tok(p).pos;
         let k = parse_tok(p).kind;
@@ -1022,11 +1028,11 @@ fn parse_unary(p: ParseState) -> AstExpr {
     parse_postfix(p, e)
 }
 
-fn parse_args(p: ParseState) -> Vec<AstExpr> {
+fn parse_args(mut p: ParseState) -> Vec<AstExpr> {
     parse_expect(p, "(");
     let saved = p.no_struct;
     p.no_struct = false;
-    let args = Vec::new();
+    let mut args = Vec::new();
     while !parse_at(p, ")") {
         args.push(parse_expr(p));
         if !parse_accept(p, ",") {
@@ -1038,7 +1044,7 @@ fn parse_args(p: ParseState) -> Vec<AstExpr> {
     args
 }
 
-fn parse_postfix(p: ParseState, x0: AstExpr) -> AstExpr {
+fn parse_postfix(mut p: ParseState, x0: AstExpr) -> AstExpr {
     let mut x = x0;
     while true {
         let t = parse_tok(p);
@@ -1127,7 +1133,7 @@ fn parse_int_text(s: String) -> Option<Int> {
     Some(v)
 }
 
-fn parse_primary(p: ParseState) -> AstExpr {
+fn parse_primary(mut p: ParseState) -> AstExpr {
     let t = parse_tok(p);
     let k = t.kind;
     if k == "INT" {
@@ -1159,7 +1165,7 @@ fn parse_primary(p: ParseState) -> AstExpr {
         let e = parse_expr(p);
         if parse_at(p, ",") {
             // tuple `(a, b)` or `(a,)`
-            let elems = Vec::new();
+            let mut elems = Vec::new();
             elems.push(e);
             while parse_accept(p, ",") {
                 if parse_at(p, ")") {
@@ -1218,7 +1224,12 @@ fn parse_primary(p: ParseState) -> AstExpr {
 
 fn parse_struct_lit(p: ParseState, name: Tok) -> AstExpr {
     parse_expect(p, "{");
-    let lit = AstStructLit { id: parse_id(p), pos: name.pos, name: name.text, fields: Vec::new() };
+    let mut lit = AstStructLit {
+        id: parse_id(p),
+        pos: name.pos,
+        name: name.text,
+        fields: Vec::new(),
+    };
     while !parse_at(p, "}") {
         let ft = parse_expect(p, "IDENT");
         let mut value = AstExpr::UnitLit(AstUnitLit { id: 0, pos: ft.pos });
@@ -1249,7 +1260,7 @@ fn parse_closure(p: ParseState) -> AstExpr {
         parse_next(p);
     }
     let id = parse_id(p);
-    let params = Vec::new();
+    let mut params = Vec::new();
     if !parse_accept(p, "||") {
         parse_expect(p, "|");
         while !parse_at(p, "|") {
@@ -1292,7 +1303,7 @@ fn parse_closure(p: ParseState) -> AstExpr {
     })
 }
 
-fn parse_if(p: ParseState) -> AstIf {
+fn parse_if(mut p: ParseState) -> AstIf {
     let pos = parse_expect(p, "if").pos;
     let mut pat = None;
     if parse_accept(p, "let") {
@@ -1304,7 +1315,7 @@ fn parse_if(p: ParseState) -> AstIf {
     let cond = parse_expr(p);
     p.no_struct = saved;
     let then = parse_block(p);
-    let e = AstIf { id: parse_id(p), pos: pos, pat: pat, cond: cond, then: then, els: None };
+    let mut e = AstIf { id: parse_id(p), pos: pos, pat: pat, cond: cond, then: then, els: None };
     if parse_accept(p, "else") {
         if parse_at(p, "if") {
             e.els = Some(AstExpr::If(parse_if(p)));
@@ -1315,13 +1326,13 @@ fn parse_if(p: ParseState) -> AstIf {
     e
 }
 
-fn parse_match(p: ParseState) -> AstExpr {
+fn parse_match(mut p: ParseState) -> AstExpr {
     let pos = parse_expect(p, "match").pos;
     let saved = p.no_struct;
     p.no_struct = true;
     let x = parse_expr(p);
     p.no_struct = saved;
-    let m = AstMatch { id: parse_id(p), pos: pos, x: x, arms: Vec::new() };
+    let mut m = AstMatch { id: parse_id(p), pos: pos, x: x, arms: Vec::new() };
     parse_expect(p, "{");
     while !parse_at(p, "}") {
         let ap = parse_tok(p).pos;
@@ -1342,7 +1353,7 @@ fn parse_match(p: ParseState) -> AstExpr {
 
 fn parse_pattern(p: ParseState) -> AstPattern {
     let t = parse_tok(p);
-    let pat = AstPattern {
+    let mut pat = AstPattern {
         id: parse_id(p),
         pos: t.pos,
         wildcard: false,

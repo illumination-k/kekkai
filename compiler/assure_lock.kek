@@ -52,7 +52,7 @@ fn asr_lock_read(fs: &Fs, path: String) -> AsrLockRead {
 }
 
 fn asr_lock_decode(v: ToolJson, path: String) -> AsrLockRead {
-    let st = asr_state_new();
+    let mut st = asr_state_new();
     let ver = tool_json_int(tool_json_get(v, "version"), 0);
     if ver != asr_lock_version() {
         return AsrLockRead {
@@ -70,7 +70,7 @@ fn asr_lock_decode(v: ToolJson, path: String) -> AsrLockRead {
     let defs = tool_json_get(v, "definitions");
     for name in tool_json_keys(defs) {
         let o = tool_json_get(defs, name);
-        let guars = Vec::new();
+        let mut guars = Vec::new();
         let go = tool_json_get(o, "guarantees");
         for g in tool_json_keys(go) {
             let gv = tool_json_get(go, g);
@@ -94,7 +94,7 @@ fn asr_lock_decode(v: ToolJson, path: String) -> AsrLockRead {
                 }
             }
         }
-        let assumes = Vec::new();
+        let mut assumes = Vec::new();
         for a in tool_json_arr(tool_json_get(o, "assumptions")) {
             assumes.push(AsrAssume {
                 kind: tool_json_str(tool_json_get(a, "kind"), ""),
@@ -106,7 +106,7 @@ fn asr_lock_decode(v: ToolJson, path: String) -> AsrLockRead {
                 col: 0,
             });
         }
-        let waivers = Vec::new();
+        let mut waivers = Vec::new();
         for w in tool_json_arr(tool_json_get(o, "waivers")) {
             waivers.push(AsrWaiver {
                 guarantee: tool_json_str(tool_json_get(w, "guarantee"), ""),
@@ -199,7 +199,7 @@ fn asr_guar_before(a: AsrGuar, b: AsrGuar) -> Bool {
 }
 
 fn asr_sorted_guars(gs: Vec<AsrGuar>) -> Vec<AsrGuar> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for g in gs {
         out.push(g);
         let mut i = out.len() - 1;
@@ -227,12 +227,12 @@ fn asr_def_lock_json(d: AsrDef) -> IrjVal {
         irjson_set(go, g.name, asr_guar_json(g));
     }
     irjson_set(o, "guarantees", irjson_val(go));
-    let asm = Vec::new();
+    let mut asm = Vec::new();
     for a in d.assumes {
         asm.push(asr_assume_json(a));
     }
     irjson_set(o, "assumptions", IrjVal::Arr(asm));
-    let ws = Vec::new();
+    let mut ws = Vec::new();
     for w in d.waivers {
         ws.push(asr_waiver_json(w));
     }

@@ -22,6 +22,10 @@ kekkai.assure.lock updated: 9 definitions, 1 change(s) approved
           "value": false,
           "evidence": "test"
         },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        },
         "refine.index_safe": {
           "value": true,
           "evidence": "smt"
@@ -35,7 +39,6 @@ kekkai.assure.lock updated: 9 definitions, 1 change(s) approved
           "evidence": "smt"
         }
       },
-      "assumptions": [],
 
 # an off-by-one loop does not type-check: the index is out of bounds for i == v.len()
 $ kek assure plan app

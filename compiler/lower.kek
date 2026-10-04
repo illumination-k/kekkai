@@ -86,14 +86,14 @@ fn lower_empty_func() -> IrFunc {
 
 // lower_lower translates a type-checked program into IR.
 fn lower_lower(info: ChkInfo) -> IrProgram {
-    let prog = IrProgram {
+    let mut prog = IrProgram {
         types: Vec::new(),
         funcs: Vec::new(),
         handler: "",
         entry: "",
         handler_params: Vec::new(),
     };
-    let l = Lower {
+    let mut l = Lower {
         info: info,
         prog: prog,
         aggs: HashMap::new(),
@@ -169,7 +169,7 @@ fn lower_entry_kind(info: ChkInfo) -> String {
 }
 
 fn lower_handler_params(h: ChkFunc) -> Vec<IrHandlerParam> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in h.params {
         let mut kind = "request";
         match p.ty {
@@ -206,11 +206,11 @@ fn lower_trait_call(
     targs: Vec<Ty>,
     args: Vec<Int>,
 ) -> Int {
-    let conc = Vec::new();
+    let mut conc = Vec::new();
     for t in targs {
         conc.push(lower_conc(l, t));
     }
-    let ins = lower_instr("call");
+    let mut ins = lower_instr("call");
     ins.args = args;
     match chk_dispatch(l.info, tr, tf.decl.name, conc) {
         Some(m) => match m.fun {
@@ -232,7 +232,7 @@ fn lower_trait_call(
 
 // lower_inst returns the IR name of fun instantiated with targs (checked
 // types, made concrete here), requesting the instance on first use.
-fn lower_inst(l: Lower, fun: ChkFunc, targs: Vec<Ty>) -> String {
+fn lower_inst(mut l: Lower, fun: ChkFunc, targs: Vec<Ty>) -> String {
     if fun.tparams.len() == 0 {
         if !l.insts.contains_key(fun.name) {
             l.insts.insert(fun.name, true);
@@ -240,8 +240,8 @@ fn lower_inst(l: Lower, fun: ChkFunc, targs: Vec<Ty>) -> String {
         }
         return fun.name;
     }
-    let conc = Vec::new();
-    let keys = Vec::new();
+    let mut conc = Vec::new();
+    let mut keys = Vec::new();
     for t in targs {
         let ct = lower_conc(l, t);
         conc.push(ct);
@@ -280,7 +280,7 @@ fn lower_ty(l: Lower, t0: Ty) -> IrTy {
     }
 }
 
-fn lower_agg(l: Lower, tc: Ty) -> Int {
+fn lower_agg(mut l: Lower, tc: Ty) -> Int {
     let t0 = lower_conc(l, tc);
     let key = ty_key(t0);
     match l.aggs.get(key) {
@@ -291,7 +291,7 @@ fn lower_agg(l: Lower, tc: Ty) -> Int {
     }
     let t = ty_prune(t0);
     let i = l.prog.types.len();
-    let td = IrTypeDef {
+    let mut td = IrTypeDef {
         name: key,
         is_variant: false,
         fields: Vec::new(),
@@ -310,7 +310,7 @@ fn lower_agg(l: Lower, tc: Ty) -> Int {
         Ty::Enum(en, args) => {
             td.is_variant = true;
             for v in en.variants {
-                let fs = Vec::new();
+                let mut fs = Vec::new();
                 for f in ty_variant_fields(en, args, v) {
                     fs.push(lower_ty(l, f));
                 }
@@ -319,17 +319,17 @@ fn lower_agg(l: Lower, tc: Ty) -> Int {
         }
         Ty::Result(ok, err) => {
             td.is_variant = true;
-            let a = Vec::new();
+            let mut a = Vec::new();
             a.push(lower_ty(l, ok));
             td.variants.push(a);
-            let b = Vec::new();
+            let mut b = Vec::new();
             b.push(lower_ty(l, err));
             td.variants.push(b);
         }
         Ty::Option(el) => {
             td.is_variant = true;
             td.variants.push(Vec::new());
-            let b = Vec::new();
+            let mut b = Vec::new();
             b.push(lower_ty(l, el));
             td.variants.push(b);
         }
@@ -370,17 +370,17 @@ fn lower_apply_name(ft: LowerFnType) -> String {
 
 // lower_closure lowers a closure expression to a variant holding its
 // captured values.
-fn lower_closure(l: Lower, e: AstClosure) -> Int {
+fn lower_closure(mut l: Lower, e: AstClosure) -> Int {
     let li = match l.info.lambdas.get(e.id) {
         Some(x) => x,
         None => {
             return lower_unit(l);
         }
     };
-    let ft = lower_fn_type(l, li.ty);
+    let mut ft = lower_fn_type(l, li.ty);
     let name = l.fun.name + "::{closure#" + e.id.to_string() + "}";
-    let caps = Vec::new();
-    let tys = Vec::new();
+    let mut caps = Vec::new();
+    let mut tys = Vec::new();
     for b in li.captures {
         caps.push(lower_var(l, b));
         tys.push(lower_ty(l, b.ty));
@@ -388,7 +388,7 @@ fn lower_closure(l: Lower, e: AstClosure) -> Int {
     let tag = ft.cases.len();
     ft.cases.push(LowerFnCase { fname: name, ncaps: caps.len() });
     match l.prog.types.get(ft.agg) {
-        Some(td) => td.variants.push(tys),
+        Some(mut td) => td.variants.push(tys),
         None => {}
     }
     l.lambdas.push(LowerLambda {
@@ -403,7 +403,7 @@ fn lower_closure(l: Lower, e: AstClosure) -> Int {
 
 // lower_fn_item lowers a function used as a value.
 fn lower_fn_item(l: Lower, id: Int, ci: ChkCallInfo) -> Int {
-    let ft = lower_fn_type(l, lower_type_of_id(l, id));
+    let mut ft = lower_fn_type(l, lower_type_of_id(l, id));
     let mut fname = "";
     match ci.func {
         Some(f) => {
@@ -423,7 +423,7 @@ fn lower_fn_item(l: Lower, id: Int, ci: ChkCallInfo) -> Int {
         tag = ft.cases.len();
         ft.cases.push(LowerFnCase { fname: fname, ncaps: 0 });
         match l.prog.types.get(ft.agg) {
-            Some(td) => td.variants.push(Vec::new()),
+            Some(mut td) => td.variants.push(Vec::new()),
             None => {}
         }
     }
@@ -433,17 +433,17 @@ fn lower_fn_item(l: Lower, id: Int, ci: ChkCallInfo) -> Int {
 // lower_value_call calls the closure value of `callee` (of type ty).
 fn lower_value_call(l: Lower, t: IrTy, callee: Int, ty: Ty, args: Vec<Int>) -> Int {
     let ft = lower_fn_type(l, ty);
-    let all = lower_args1(callee);
+    let mut all = lower_args1(callee);
     for a in args {
         all.push(a);
     }
-    let ins = lower_instr("call");
+    let mut ins = lower_instr("call");
     ins.name = lower_apply_name(ft);
     ins.args = all;
     lower_emit_to(l, t, ins)
 }
 
-fn lower_lambda(l: Lower, lm: LowerLambda) -> IrFunc {
+fn lower_lambda(mut l: Lower, lm: LowerLambda) -> IrFunc {
     l.subst_ps = lm.ps;
     l.subst_args = lm.args;
     let ret = match ty_prune(lm.lam.ty) {
@@ -476,10 +476,10 @@ fn lower_lambda(l: Lower, lm: LowerLambda) -> IrFunc {
 }
 
 // lower_apply builds the apply function of a fn type.
-fn lower_apply(l: Lower, ft: LowerFnType) -> IrFunc {
+fn lower_apply(mut l: Lower, ft: LowerFnType) -> IrFunc {
     l.subst_ps = Vec::new();
     l.subst_args = Vec::new();
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     let mut ret = ty_unit();
     match ft.ty {
         Ty::Fn(xs, r) => {
@@ -500,18 +500,18 @@ fn lower_apply(l: Lower, ft: LowerFnType) -> IrFunc {
         blocks: Vec::new(),
     };
     let clo = lower_new_local(l, ir_ty_agg(ft.agg), "f");
-    let params = Vec::new();
+    let mut params = Vec::new();
     let mut k = 0;
     for p in ps {
         params.push(lower_new_local(l, lower_ty(l, p), "a" + k.to_string()));
         k = k + 1;
     }
     l.cur = lower_new_block(l);
-    let tg = lower_instr("tag");
+    let mut tg = lower_instr("tag");
     tg.ty = ft.agg;
     tg.args = lower_args1(clo);
     let tag = lower_emit_to(l, ir_ty("int"), tg);
-    let targets = Vec::new();
+    let mut targets = Vec::new();
     for cs in ft.cases {
         targets.push(lower_new_block(l));
     }
@@ -522,13 +522,13 @@ fn lower_apply(l: Lower, ft: LowerFnType) -> IrFunc {
     let mut i = 0;
     for cs in ft.cases {
         lower_set_block(l, targets.get(i).unwrap_or(dflt));
-        let args = Vec::new();
+        let mut args = Vec::new();
         let ftys = match td {
             Some(d) => d.variants.get(i).unwrap_or(Vec::new()),
             None => Vec::new(),
         };
         for j in 0..cs.ncaps {
-            let vf = lower_instr("vfield");
+            let mut vf = lower_instr("vfield");
             vf.ty = ft.agg;
             vf.tag = i;
             vf.index = j;
@@ -538,7 +538,7 @@ fn lower_apply(l: Lower, ft: LowerFnType) -> IrFunc {
         for p in params {
             args.push(p);
         }
-        let call = lower_instr("call");
+        let mut call = lower_instr("call");
         call.name = cs.fname;
         call.args = args;
         let r = lower_emit_to(l, l.fun.result, call);
@@ -567,25 +567,25 @@ fn lower_instr(op: String) -> IrInstr {
 }
 
 fn lower_args1(a: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v
 }
 
 fn lower_args2(a: Int, b: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     v
 }
 
-fn lower_new_local(l: Lower, t: IrTy, name: String) -> Int {
+fn lower_new_local(mut l: Lower, t: IrTy, name: String) -> Int {
     l.fun.locals.push(t);
     l.fun.names.push(name);
     l.fun.locals.len() - 1
 }
 
-fn lower_new_block(l: Lower) -> Int {
+fn lower_new_block(mut l: Lower) -> Int {
     l.fun.blocks.push(IrBlock { instrs: Vec::new(), term: IrTerm {
         op: "",
         args: Vec::new(),
@@ -610,12 +610,12 @@ fn lower_emit(l: Lower, ins: IrInstr) -> Int {
     ins.dst
 }
 
-fn lower_emit_to(l: Lower, t: IrTy, ins: IrInstr) -> Int {
+fn lower_emit_to(l: Lower, t: IrTy, mut ins: IrInstr) -> Int {
     ins.dst = lower_new_local(l, t, "");
     lower_emit(l, ins)
 }
 
-fn lower_terminate(l: Lower, t: IrTerm) {
+fn lower_terminate(mut l: Lower, t: IrTerm) {
     lower_blk(l, l.cur).term = t;
     // Code after a terminator is unreachable; keep emitting into a fresh
     // block so lowering stays simple.
@@ -635,16 +635,16 @@ fn lower_br(l: Lower, c: Int, yes: Int, no: Int) {
     lower_terminate(l, lower_term("br", lower_args1(c), lower_args2(yes, no)));
 }
 
-fn lower_set_block(l: Lower, b: Int) {
+fn lower_set_block(mut l: Lower, b: Int) {
     l.cur = b;
-    let blk = lower_blk(l, b);
+    let mut blk = lower_blk(l, b);
     if blk.term.op == "" {
         blk.term = IrTerm { op: "unreachable", args: Vec::new(), targets: Vec::new() };
     }
 }
 
 fn lower_constant(l: Lower, c: IrConst) -> Int {
-    let ins = lower_instr("const");
+    let mut ins = lower_instr("const");
     ins.cst = c;
     lower_emit_to(l, ir_ty(c.kind), ins)
 }
@@ -658,7 +658,7 @@ fn lower_intc(l: Lower, v: Int) -> Int {
 }
 
 fn lower_copy_to(l: Lower, dst: Int, src: Int) {
-    let ins = lower_instr("copy");
+    let mut ins = lower_instr("copy");
     ins.dst = dst;
     ins.args = lower_args1(src);
     lower_emit(l, ins);
@@ -670,7 +670,7 @@ fn lower_var(l: Lower, b: ChkBinding) -> Int {
 
 // ---- functions ----
 
-fn lower_func(l: Lower, fun: ChkFunc, targs: Vec<Ty>, name: String) -> IrFunc {
+fn lower_func(mut l: Lower, fun: ChkFunc, targs: Vec<Ty>, name: String) -> IrFunc {
     l.subst_ps = fun.tparams;
     l.subst_args = targs;
     l.fun = IrFunc {
@@ -708,7 +708,7 @@ fn lower_top_loop(l: Lower) -> LowerLoop {
     l.loops.get(l.loops.len() - 1).unwrap_or(LowerLoop { cont: 0, exit: 0 })
 }
 
-fn lower_stmt(l: Lower, s0: AstStmt) {
+fn lower_stmt(mut l: Lower, s0: AstStmt) {
     match s0 {
         AstStmt::Let(s) => {
             let v = lower_expr(l, s.init);
@@ -764,7 +764,7 @@ fn lower_stmt(l: Lower, s0: AstStmt) {
         AstStmt::FieldAssign(s) => {
             let obj = lower_expr(l, s.target.x);
             let v = lower_expr(l, s.value);
-            let ins = lower_instr("setfield");
+            let mut ins = lower_instr("setfield");
             ins.ty = lower_agg(l, lower_type_of_id(l, ast_expr_id(s.target.x)));
             ins.index = l.info.fields.get(s.target.id).unwrap_or(0);
             ins.args = lower_args2(obj, v);
@@ -797,7 +797,7 @@ fn lower_type_of(l: Lower, e: AstExpr) -> IrTy {
     lower_ty(l, lower_type_of_id(l, ast_expr_id(e)))
 }
 
-fn lower_for(l: Lower, s: AstForStmt) {
+fn lower_for(mut l: Lower, s: AstForStmt) {
     let int_ty = ir_ty("int");
     let b = l.info.fors.get(s.id).unwrap_or(ChkBinding {
         id: -1,
@@ -839,13 +839,13 @@ fn lower_for(l: Lower, s: AstForStmt) {
     lower_jump(l, head);
     lower_set_block(l, head);
     if !is_range {
-        let ins = lower_instr("host");
+        let mut ins = lower_instr("host");
         ins.name = "vec.len";
         ins.ty = agg;
         ins.args = lower_args1(vec);
         end = lower_emit_to(l, int_ty, ins);
     }
-    let lt = lower_instr("binop");
+    let mut lt = lower_instr("binop");
     lt.name = "lt";
     lt.args = lower_args2(i, end);
     let c = lower_emit_to(l, ir_ty("bool"), lt);
@@ -855,7 +855,7 @@ fn lower_for(l: Lower, s: AstForStmt) {
     if is_range {
         lower_copy_to(l, x, i);
     } else {
-        let at = lower_instr("host");
+        let mut at = lower_instr("host");
         at.name = "vec.at";
         at.dst = x;
         at.ty = agg;
@@ -873,7 +873,7 @@ fn lower_for(l: Lower, s: AstForStmt) {
     l.loops.pop();
     lower_jump(l, inc);
     lower_set_block(l, inc);
-    let add = lower_instr("binop");
+    let mut add = lower_instr("binop");
     add.name = "add";
     let one = lower_intc(l, 1);
     add.args = lower_args2(i, one);
@@ -887,7 +887,7 @@ fn lower_for(l: Lower, s: AstForStmt) {
 //	it = e (or IntoIterator::into_iter(e))
 //	head: r = Iterator::next(it); if r is None goto exit
 //	x = the value of r; body; goto head
-fn lower_for_iter(l: Lower, s: AstForStmt, b: ChkBinding, fi: ChkForIter) {
+fn lower_for_iter(mut l: Lower, s: AstForStmt, b: ChkBinding, fi: ChkForIter) {
     let mut it = lower_expr(l, s.iter);
     match fi.into {
         Some(mi) => match mi.func {
@@ -927,7 +927,7 @@ fn lower_for_iter(l: Lower, s: AstForStmt, b: ChkBinding, fi: ChkForIter) {
         None => {}
     }
     let opt = lower_agg(l, fi.next.recv_ty);
-    let tg = lower_instr("tag");
+    let mut tg = lower_instr("tag");
     tg.ty = opt;
     tg.args = lower_args1(r);
     let tag = lower_emit_to(l, ir_ty("int"), tg);
@@ -935,7 +935,7 @@ fn lower_for_iter(l: Lower, s: AstForStmt, b: ChkBinding, fi: ChkForIter) {
     lower_br(l, lower_eq(l, tag, one), body, exit);
     lower_set_block(l, body);
     let x = lower_new_local(l, lower_ty(l, b.ty), b.name);
-    let vf = lower_instr("vfield");
+    let mut vf = lower_instr("vfield");
     vf.dst = x;
     vf.ty = opt;
     vf.tag = 1;
@@ -980,7 +980,7 @@ fn lower_ret(l: Lower, ci: Option<ChkClosureInfo>, v: Int) {
 // ---- expressions ----
 
 fn lower_exprs(l: Lower, es: Vec<AstExpr>) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for e in es {
         out.push(lower_expr(l, e));
     }
@@ -988,7 +988,7 @@ fn lower_exprs(l: Lower, es: Vec<AstExpr>) -> Vec<Int> {
 }
 
 fn lower_variant(l: Lower, t: IrTy, agg: Int, tag: Int, args: Vec<Int>) -> Int {
-    let ins = lower_instr("variant");
+    let mut ins = lower_instr("variant");
     ins.ty = agg;
     ins.tag = tag;
     ins.args = args;
@@ -1039,7 +1039,7 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
             if e.op == "&" || e.op == "&mut " || e.op == "*" {
                 return x;
             }
-            let ins = lower_instr("unop");
+            let mut ins = lower_instr("unop");
             ins.name = if e.op == "!" { "not" } else { "neg" };
             ins.args = lower_args1(x);
             lower_emit_to(l, lower_type_of(l, e0), ins)
@@ -1064,7 +1064,7 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
         AstExpr::Method(e) => lower_method(l, e, e0),
         AstExpr::Field(e) => {
             let x = lower_expr(l, e.x);
-            let ins = lower_instr("field");
+            let mut ins = lower_instr("field");
             ins.ty = lower_agg(l, lower_type_of_id(l, ast_expr_id(e.x)));
             ins.index = l.info.fields.get(e.id).unwrap_or(0);
             ins.args = lower_args1(x);
@@ -1076,15 +1076,15 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
                 params: Vec::new(),
                 fields: Vec::new(),
             });
-            let vals: HashMap<String, Int> = HashMap::new();
+            let mut vals: HashMap<String, Int> = HashMap::new();
             for f in e.fields {
                 vals.insert(f.name, lower_expr(l, f.value));
             }
-            let args = Vec::new();
+            let mut args = Vec::new();
             for f in st.fields {
                 args.push(vals.get(f.name).unwrap_or(0));
             }
-            let ins = lower_instr("struct");
+            let mut ins = lower_instr("struct");
             ins.ty = lower_agg(l, lower_type_of_id(l, e.id));
             ins.args = args;
             lower_emit_to(l, lower_type_of(l, e0), ins)
@@ -1093,13 +1093,13 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
         AstExpr::Closure(e) => lower_closure(l, e),
         AstExpr::Index(e) => lower_index(l, e, e0),
         AstExpr::Range(e) => {
-            let ins = lower_instr("struct");
+            let mut ins = lower_instr("struct");
             ins.ty = lower_agg(l, lower_type_of_id(l, e.id));
             ins.args = lower_args2(lower_expr(l, e.start), lower_expr(l, e.end));
             lower_emit_to(l, lower_type_of(l, e0), ins)
         }
         AstExpr::Tuple(e) => {
-            let ins = lower_instr("struct");
+            let mut ins = lower_instr("struct");
             ins.ty = lower_agg(l, lower_type_of_id(l, e.id));
             ins.args = lower_exprs(l, e.elems);
             lower_emit_to(l, lower_type_of(l, e0), ins)
@@ -1123,12 +1123,12 @@ fn lower_index(l: Lower, e: AstIndex, e0: AstExpr) -> Int {
     let v = lower_expr(l, e.x);
     let i = lower_expr(l, e.index);
     let agg = lower_agg(l, lower_type_of_id(l, ast_expr_id(e.x)));
-    let ln = lower_instr("host");
+    let mut ln = lower_instr("host");
     ln.name = "vec.len";
     ln.ty = agg;
     ln.args = lower_args1(v);
     let n = lower_emit_to(l, int_ty, ln);
-    let lt = lower_instr("binop");
+    let mut lt = lower_instr("binop");
     lt.name = "lt";
     lt.args = lower_args2(i, n);
     let c1 = lower_emit_to(l, bool_ty, lt);
@@ -1137,7 +1137,7 @@ fn lower_index(l: Lower, e: AstIndex, e0: AstExpr) -> Int {
     let ok = lower_new_block(l);
     lower_br(l, c1, c2b, trap);
     lower_set_block(l, c2b);
-    let ge = lower_instr("binop");
+    let mut ge = lower_instr("binop");
     ge.name = "le";
     ge.args = lower_args2(lower_intc(l, 0), i);
     let c2 = lower_emit_to(l, bool_ty, ge);
@@ -1145,7 +1145,7 @@ fn lower_index(l: Lower, e: AstIndex, e0: AstExpr) -> Int {
     lower_set_block(l, trap);
     lower_terminate(l, lower_term("unreachable", Vec::new(), Vec::new()));
     lower_set_block(l, ok);
-    let at = lower_instr("host");
+    let mut at = lower_instr("host");
     at.name = "vec.at";
     at.ty = agg;
     at.args = lower_args2(v, i);
@@ -1228,7 +1228,7 @@ fn lower_binary(l: Lower, e: AstBinary, e0: AstExpr) -> Int {
                         if e.op != "!=" {
                             return r;
                         }
-                        let ins = lower_instr("unop");
+                        let mut ins = lower_instr("unop");
                         ins.name = "not";
                         ins.args = lower_args1(r);
                         return lower_emit_to(l, t, ins);
@@ -1239,7 +1239,7 @@ fn lower_binary(l: Lower, e: AstBinary, e0: AstExpr) -> Int {
         }
         None => {}
     }
-    let ins = lower_instr("binop");
+    let mut ins = lower_instr("binop");
     ins.name = lower_binop_name(e.op);
     if e.op == "+" && t.kind == "string" {
         ins.name = "concat";
@@ -1306,7 +1306,7 @@ fn lower_call(l: Lower, e: AstExpr, ci: ChkCallInfo, arg_exprs: Vec<AstExpr>) ->
         }
     }
     if k == "func" {
-        let ins = lower_instr("call");
+        let mut ins = lower_instr("call");
         match ci.func {
             Some(f) => {
                 ins.name = lower_inst(l, f, ci.targs);
@@ -1335,14 +1335,14 @@ fn lower_call(l: Lower, e: AstExpr, ci: ChkCallInfo, arg_exprs: Vec<AstExpr>) ->
         }
     }
     // collection
-    let ins = lower_instr("host");
+    let mut ins = lower_instr("host");
     ins.name = ci.op;
     ins.ty = lower_agg(l, ci.ty);
     lower_emit_to(l, t, ins)
 }
 
 fn lower_host(l: Lower, t: IrTy, b: ChkBuiltin, args: Vec<Int>) -> Int {
-    let ins = lower_instr(if b.async { "await" } else { "host" });
+    let mut ins = lower_instr(if b.async { "await" } else { "host" });
     ins.name = b.op;
     ins.args = args;
     lower_emit_to(l, t, ins)
@@ -1368,7 +1368,7 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
         }
     }
     if mi.kind == "trait" {
-        let args = lower_args1(lower_expr(l, e.recv));
+        let mut args = lower_args1(lower_expr(l, e.recv));
         for a in lower_exprs(l, e.args) {
             args.push(a);
         }
@@ -1380,11 +1380,11 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
         }
     }
     if mi.kind == "func" {
-        let args = lower_args1(lower_expr(l, e.recv));
+        let mut args = lower_args1(lower_expr(l, e.recv));
         for a in lower_exprs(l, e.args) {
             args.push(a);
         }
-        let ins = lower_instr("call");
+        let mut ins = lower_instr("call");
         match mi.func {
             Some(f) => {
                 ins.name = lower_inst(l, f, mi.targs);
@@ -1395,7 +1395,7 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
         return lower_emit_to(l, t, ins);
     }
     if mi.kind == "builtin" {
-        let args = lower_args1(lower_expr(l, e.recv));
+        let mut args = lower_args1(lower_expr(l, e.recv));
         for a in lower_exprs(l, e.args) {
             args.push(a);
         }
@@ -1421,18 +1421,18 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
         _ => {}
     }
     if is_coll {
-        let args = lower_args1(recv);
+        let mut args = lower_args1(recv);
         for a in lower_exprs(l, e.args) {
             args.push(a);
         }
-        let ins = lower_instr("host");
+        let mut ins = lower_instr("host");
         ins.name = mi.op;
         ins.ty = agg;
         ins.args = args;
         return lower_emit_to(l, t, ins);
     }
     // compiler-implemented Result/Option methods
-    let ti = lower_instr("tag");
+    let mut ti = lower_instr("tag");
     ti.ty = agg;
     ti.args = lower_args1(recv);
     let tag = lower_emit_to(l, ir_ty("int"), ti);
@@ -1443,7 +1443,7 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
         } else {
             1
         };
-        let ins = lower_instr("binop");
+        let mut ins = lower_instr("binop");
         ins.name = "eq";
         let k = lower_intc(l, want);
         ins.args = lower_args2(tag, k);
@@ -1456,7 +1456,7 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
     );
     let res = lower_new_local(l, t, "");
     let ok_tag = if is_opt { 1 } else { 0 };
-    let eq = lower_instr("binop");
+    let mut eq = lower_instr("binop");
     eq.name = "eq";
     let k = lower_intc(l, ok_tag);
     eq.args = lower_args2(tag, k);
@@ -1466,7 +1466,7 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
     let join = lower_new_block(l);
     lower_br(l, is_ok, yes, no);
     lower_set_block(l, yes);
-    let vf = lower_instr("vfield");
+    let mut vf = lower_instr("vfield");
     vf.ty = agg;
     vf.tag = ok_tag;
     vf.index = 0;
@@ -1486,10 +1486,10 @@ fn lower_method(l: Lower, e: AstMethodCall, e0: AstExpr) -> Int {
 //	r  = body            // `?` and `return` inside jump to exit with r set
 //	exit: await tx.finish(tx)   // rolls back if still open
 //	value = r
-fn lower_transaction(l: Lower, e: AstMethodCall, ci: ChkClosureInfo) -> Int {
+fn lower_transaction(mut l: Lower, e: AstMethodCall, ci: ChkClosureInfo) -> Int {
     let db = lower_expr(l, e.recv);
     let tx_ty = IrTy { kind: "ext", agg: 0, ext: "Tx" };
-    let bi = lower_instr("await");
+    let mut bi = lower_instr("await");
     bi.name = "db.begin";
     bi.args = lower_args1(db);
     let tx = lower_emit_to(l, tx_ty, bi);
@@ -1510,7 +1510,7 @@ fn lower_transaction(l: Lower, e: AstMethodCall, ci: ChkClosureInfo) -> Int {
     lower_jump(l, ex.block);
     l.exits.pop();
     lower_set_block(l, ex.block);
-    let fi = lower_instr("await");
+    let mut fi = lower_instr("await");
     fi.name = "tx.finish";
     fi.args = lower_args1(tx);
     lower_emit_to(l, ir_ty("unit"), fi);
@@ -1523,7 +1523,7 @@ fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
     let agg = lower_agg(l, xt);
     let ti = l.info.tries.get(e.id).unwrap_or(ChkTryInfo { closure: None, target: ty_unit() });
     let target = lower_conc(l, ti.target);
-    let tg = lower_instr("tag");
+    let mut tg = lower_instr("tag");
     tg.ty = agg;
     tg.args = lower_args1(x);
     let tag = lower_emit_to(l, ir_ty("int"), tg);
@@ -1540,7 +1540,7 @@ fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
         }
         _ => {}
     }
-    let eq = lower_instr("binop");
+    let mut eq = lower_instr("binop");
     eq.name = "eq";
     let k = lower_intc(l, ok_tag);
     eq.args = lower_args2(tag, k);
@@ -1552,7 +1552,7 @@ fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
     if ok_tag == 1 {
         out = lower_variant(l, lower_ty(l, target), lower_agg(l, target), 0, Vec::new());
     } else {
-        let vf = lower_instr("vfield");
+        let mut vf = lower_instr("vfield");
         vf.ty = agg;
         vf.tag = 1;
         vf.index = 0;
@@ -1563,7 +1563,7 @@ fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
     lower_ret(l, ti.closure, out);
 
     lower_set_block(l, cont);
-    let r = lower_instr("vfield");
+    let mut r = lower_instr("vfield");
     r.ty = agg;
     r.tag = ok_tag;
     r.index = 0;
@@ -1597,7 +1597,7 @@ fn lower_test(l: Lower, cond: Int, fail: Int) {
 }
 
 fn lower_eq(l: Lower, a: Int, b: Int) -> Int {
-    let ins = lower_instr("binop");
+    let mut ins = lower_instr("binop");
     ins.name = "eq";
     ins.args = lower_args2(a, b);
     lower_emit_to(l, ir_ty("bool"), ins)
@@ -1612,7 +1612,7 @@ fn lower_irrefutable(l: Lower, x: Int, p: AstPattern) {
 
 // lower_pattern emits code testing local x against p; on mismatch control
 // goes to fail, otherwise it continues with p's variables bound.
-fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
+fn lower_pattern(mut l: Lower, x: Int, p: AstPattern, fail: Int) {
     let pi = match l.info.patterns.get(p.id) {
         Some(pi) => pi,
         None => {
@@ -1644,7 +1644,7 @@ fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
         if p.bool_lit.unwrap_or(false) {
             lower_test(l, x, fail);
         } else {
-            let ins = lower_instr("unop");
+            let mut ins = lower_instr("unop");
             ins.name = "not";
             ins.args = lower_args1(x);
             lower_test(l, lower_emit_to(l, ir_ty("bool"), ins), fail);
@@ -1656,7 +1656,7 @@ fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
             match l.info.patterns.get(sub.id) {
                 Some(spi) => {
                     if spi.kind != "wild" {
-                        let f = lower_instr("field");
+                        let mut f = lower_instr("field");
                         f.ty = agg;
                         f.index = i;
                         f.args = lower_args1(x);
@@ -1671,7 +1671,7 @@ fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
     } else if k == "ctor" {
         let st = lower_conc(l, pi.ty);
         let agg = lower_agg(l, st);
-        let tg = lower_instr("tag");
+        let mut tg = lower_instr("tag");
         tg.ty = agg;
         tg.args = lower_args1(x);
         let tag = lower_emit_to(l, ir_ty("int"), tg);
@@ -1682,7 +1682,7 @@ fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
             match l.info.patterns.get(sub.id) {
                 Some(spi) => {
                     if spi.kind != "wild" {
-                        let vf = lower_instr("vfield");
+                        let mut vf = lower_instr("vfield");
                         vf.ty = agg;
                         vf.tag = pi.tag;
                         vf.index = i;
@@ -1699,13 +1699,13 @@ fn lower_pattern(l: Lower, x: Int, p: AstPattern, fail: Int) {
 }
 
 // lower_prune removes unreachable blocks and renumbers the rest.
-fn lower_prune(f: IrFunc) {
+fn lower_prune(mut f: IrFunc) {
     let order = Vec::new();
     let index: HashMap<Int, Int> = HashMap::new();
     lower_visit(f, 0, order, index);
-    let blocks = Vec::new();
+    let mut blocks = Vec::new();
     for b in order {
-        let blk = match f.blocks.get(b) {
+        let mut blk = match f.blocks.get(b) {
             Some(x) => x,
             None => IrBlock { instrs: Vec::new(), term: IrTerm {
                 op: "",
@@ -1723,7 +1723,7 @@ fn lower_prune(f: IrFunc) {
     f.blocks = blocks;
 }
 
-fn lower_visit(f: IrFunc, b: Int, order: Vec<Int>, index: HashMap<Int, Int>) {
+fn lower_visit(f: IrFunc, b: Int, mut order: Vec<Int>, mut index: HashMap<Int, Int>) {
     if index.contains_key(b) {
         return;
     }

@@ -91,7 +91,7 @@ fn lex_peek(lx: LexState, n: Int) -> Int {
     lx.bytes.get(lx.off + n).unwrap_or(0)
 }
 
-fn lex_advance(lx: LexState) -> Int {
+fn lex_advance(mut lx: LexState) -> Int {
     let c = lx.bytes.get(lx.off).unwrap_or(0);
     lx.off = lx.off + 1;
     if c < 128 || c >= 240 {
@@ -112,11 +112,11 @@ fn lex_pos(lx: LexState) -> AstPos {
     AstPos { file: lx.file, line: lx.line, col: lx.col }
 }
 
-fn lex_emit(lx: LexState, k: String, text: String, pos: AstPos) {
+fn lex_emit(mut lx: LexState, k: String, text: String, pos: AstPos) {
     lx.toks.push(Tok { kind: k, text: text, pos: pos });
 }
 
-fn lex_error(lx: LexState, pos: AstPos, msg: String) {
+fn lex_error(mut lx: LexState, pos: AstPos, msg: String) {
     lx.errs.push(AstError { pos: pos, msg: msg });
 }
 
@@ -277,7 +277,7 @@ fn lex_file_comments(file: String, src: String) -> LexCommentsResult {
     LexCommentsResult { toks: lx.toks, comments: lx.comments, errs: lx.errs }
 }
 
-fn lex_comment(lx: LexState, pos: AstPos, ustart: Int) {
+fn lex_comment(mut lx: LexState, pos: AstPos, ustart: Int) {
     if lx.keep_comments {
         let mut end = lx.uoff;
         while end > ustart && lx.src.char_at(end - 1).unwrap_or(0) == 13 {
@@ -375,7 +375,7 @@ fn lex_run(lx: LexState) {
 
 fn lex_string(lx: LexState, pos: AstPos) {
     lex_advance(lx); // opening quote
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut seg = lx.uoff;
     while true {
         if lx.off >= lx.n || lex_peek(lx, 0) == 10 {

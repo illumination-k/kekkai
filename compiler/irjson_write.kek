@@ -22,7 +22,7 @@ fn irjson_obj() -> IrjObj {
     IrjObj { keys: Vec::new(), vals: Vec::new() }
 }
 
-fn irjson_set(o: IrjObj, k: String, v: IrjVal) {
+fn irjson_set(mut o: IrjObj, k: String, v: IrjVal) {
     o.keys.push(k);
     o.vals.push(v);
 }
@@ -40,7 +40,7 @@ fn irjson_bool(b: Bool) -> IrjVal {
 }
 
 fn irjson_strs(xs: Vec<String>) -> IrjVal {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in xs {
         out.push(IrjVal::Str(x));
     }
@@ -48,7 +48,7 @@ fn irjson_strs(xs: Vec<String>) -> IrjVal {
 }
 
 fn irjson_ints(xs: Vec<Int>) -> IrjVal {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in xs {
         out.push(irjson_int(x));
     }
@@ -61,7 +61,7 @@ fn irjson_quote(s: String, html: Bool) -> String {
     if html {
         return json_quote(s);
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push("\"");
     let n = s.len();
     let mut start = 0;
@@ -109,7 +109,7 @@ fn irjson_quote(s: String, html: Bool) -> String {
     parts.join("")
 }
 
-fn irjson_write(parts: Vec<String>, v: IrjVal, indent: String, html: Bool) {
+fn irjson_write(mut parts: Vec<String>, v: IrjVal, indent: String, html: Bool) {
     match v {
         IrjVal::Null => parts.push("null"),
         IrjVal::Raw(s) => parts.push(s),
@@ -179,7 +179,7 @@ fn irjson_ty(t: IrTy) -> IrjVal {
 }
 
 fn irjson_tys(ts: Vec<IrTy>) -> IrjVal {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for t in ts {
         out.push(irjson_ty(t));
     }
@@ -197,7 +197,7 @@ fn irjson_typedef(td: IrTypeDef) -> IrjVal {
         // A variant without fields is null for enums, and an empty list
         // ([]) for Option's None.
         let option = td.name.starts_with("Option<");
-        let vs = Vec::new();
+        let mut vs = Vec::new();
         for v in td.variants {
             if v.len() == 0 && !option {
                 vs.push(IrjVal::Null);
@@ -264,13 +264,13 @@ fn irjson_func(f: IrFunc) -> IrjVal {
     }
     irjson_set(o, "result", irjson_ty(f.result));
     irjson_set(o, "async", irjson_bool(f.is_async));
-    let blocks = Vec::new();
+    let mut blocks = Vec::new();
     for b in f.blocks {
         let bo = irjson_obj();
         if b.instrs.len() == 0 {
             irjson_set(bo, "instrs", IrjVal::Null);
         } else {
-            let is = Vec::new();
+            let mut is = Vec::new();
             for ins in b.instrs {
                 is.push(irjson_instr(ins));
             }
@@ -296,7 +296,7 @@ fn irjson_program(p: IrProgram) -> IrjVal {
     if p.types.len() == 0 {
         irjson_set(o, "types", IrjVal::Null);
     } else {
-        let ts = Vec::new();
+        let mut ts = Vec::new();
         for td in p.types {
             ts.push(irjson_typedef(td));
         }
@@ -305,7 +305,7 @@ fn irjson_program(p: IrProgram) -> IrjVal {
     if p.funcs.len() == 0 {
         irjson_set(o, "funcs", IrjVal::Null);
     } else {
-        let fs = Vec::new();
+        let mut fs = Vec::new();
         for f in p.funcs {
             fs.push(irjson_func(f));
         }
@@ -318,7 +318,7 @@ fn irjson_program(p: IrProgram) -> IrjVal {
         irjson_set(o, "entry", IrjVal::Str(p.entry));
     }
     if p.handler_params.len() > 0 {
-        let hs = Vec::new();
+        let mut hs = Vec::new();
         for hp in p.handler_params {
             let h = irjson_obj();
             irjson_set(h, "kind", IrjVal::Str(hp.kind));

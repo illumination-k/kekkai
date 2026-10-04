@@ -2,7 +2,7 @@
 // String literals that need escaping in JSON (IR and program metadata).
 #[main]
 fn main(log: &Log) -> Int {
-    let xs = Vec::new();
+    let mut xs = Vec::new();
     xs.push("<tag> & \"quoted\" \\ back");
     xs.push("tab\tnl\ncr\rnul\0end");
     xs.push("café 漢字 😀");

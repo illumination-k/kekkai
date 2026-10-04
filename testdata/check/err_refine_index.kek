@@ -27,7 +27,7 @@ fn last(v: Vec<Int>) -> Int {
     v[n - 1]
 }
 
-fn after_push(v: Vec<Int>) -> Int {
+fn after_push(mut v: Vec<Int>) -> Int {
     let n = v.len();
     v.push(1);
     v[n]
@@ -42,7 +42,7 @@ fn stale_length(v: Vec<Int>, w: Vec<Int>) -> Int {
     v[0] // ERROR "cannot prove the index is in bounds"
 }
 
-fn clear_all(w: Vec<Int>) {
+fn clear_all(mut w: Vec<Int>) {
     while w.len() > 0 {
         w.pop();
     }

@@ -22,14 +22,14 @@ fn chk_match(c: Chk, e: AstMatch) -> Ty {
         return ty_invalid();
     }
     let mut result = ty_never();
-    let rows: Vec<Vec<AstPattern>> = Vec::new();
+    let mut rows: Vec<Vec<AstPattern>> = Vec::new();
     for arm in e.arms {
         chk_push(c, false);
         chk_pattern(c, arm.pat, st);
         if rows.len() > 0 && chk_exhaustive(c.info, rows, chk_tys1(st)) {
             chk_errorf(c, arm.pos, "unreachable pattern");
         }
-        let row = Vec::new();
+        let mut row = Vec::new();
         row.push(arm.pat);
         rows.push(row);
         let at = chk_expr(c, arm.body);
@@ -62,7 +62,7 @@ fn chk_match(c: Chk, e: AstMatch) -> Ty {
 // chk_ctors returns the constructor names and field types of a finite
 // type (finite is false for Int, String, ...).
 fn chk_ctors(t: Ty) -> ChkCtors {
-    let out = ChkCtors { finite: true, names: Vec::new(), fields: Vec::new() };
+    let mut out = ChkCtors { finite: true, names: Vec::new(), fields: Vec::new() };
     match ty_prune(t) {
         Ty::Result(ok, err) => {
             out.names.push("Ok(_)");
@@ -155,7 +155,7 @@ fn chk_pat_at(r: Vec<AstPattern>, i: Int) -> AstPattern {
 }
 
 // chk_append_rest returns out ++ r[1:].
-fn chk_append_rest(out: Vec<AstPattern>, r: Vec<AstPattern>) -> Vec<AstPattern> {
+fn chk_append_rest(mut out: Vec<AstPattern>, r: Vec<AstPattern>) -> Vec<AstPattern> {
     for i in 1..r.len() {
         out.push(chk_pat_at(r, i));
     }
@@ -190,13 +190,13 @@ fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bo
         }
     }
     let t0 = chk_ty_at(tys, 0);
-    let rest_tys = Vec::new();
+    let mut rest_tys = Vec::new();
     for i in 1..tys.len() {
         rest_tys.push(chk_ty_at(tys, i));
     }
     let cs = chk_ctors(t0);
     if !cs.finite {
-        let def: Vec<Vec<AstPattern>> = Vec::new();
+        let mut def: Vec<Vec<AstPattern>> = Vec::new();
         for r in rows {
             if !chk_pat_tag(info, chk_pat_at(r, 0)).refutable {
                 def.push(chk_append_rest(Vec::new(), r));
@@ -206,11 +206,11 @@ fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bo
     }
     for tag in 0..cs.names.len() {
         let fields = cs.fields.get(tag).unwrap_or(Vec::new());
-        let spec: Vec<Vec<AstPattern>> = Vec::new();
+        let mut spec: Vec<Vec<AstPattern>> = Vec::new();
         for r in rows {
             let pt = chk_pat_tag(info, chk_pat_at(r, 0));
             if !pt.refutable {
-                let row = Vec::new();
+                let mut row = Vec::new();
                 for f in fields {
                     row.push(chk_wild_pat());
                 }
@@ -218,7 +218,7 @@ fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bo
             } else if pt.tag == tag {
                 let args = chk_pat_args(info, chk_pat_at(r, 0));
                 if args.len() == fields.len() {
-                    let row = Vec::new();
+                    let mut row = Vec::new();
                     for a in args {
                         row.push(a);
                     }
@@ -226,7 +226,7 @@ fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bo
                 }
             }
         }
-        let tys2 = Vec::new();
+        let mut tys2 = Vec::new();
         for f in fields {
             tys2.push(f);
         }
@@ -246,14 +246,14 @@ fn chk_missing(info: ChkInfo, rows: Vec<Vec<AstPattern>>, t: Ty) -> String {
     if !cs.finite {
         return ": add a `_` arm";
     }
-    let miss = Vec::new();
+    let mut miss = Vec::new();
     for tag in 0..cs.names.len() {
         let fields = cs.fields.get(tag).unwrap_or(Vec::new());
-        let spec: Vec<Vec<AstPattern>> = Vec::new();
+        let mut spec: Vec<Vec<AstPattern>> = Vec::new();
         for r in rows {
             let pt = chk_pat_tag(info, chk_pat_at(r, 0));
             if !pt.refutable {
-                let row = Vec::new();
+                let mut row = Vec::new();
                 for f in fields {
                     row.push(chk_wild_pat());
                 }
@@ -274,7 +274,7 @@ fn chk_missing(info: ChkInfo, rows: Vec<Vec<AstPattern>>, t: Ty) -> String {
 }
 
 // chk_sort_strings sorts in place (insertion sort; the lists are short).
-fn chk_sort_strings(v: Vec<String>) {
+fn chk_sort_strings(mut v: Vec<String>) {
     let n = v.len();
     for i in 1..n {
         let mut j = i;
@@ -287,7 +287,7 @@ fn chk_sort_strings(v: Vec<String>) {
     }
 }
 
-fn chk_subpatterns(c: Chk, p: AstPattern, pi: ChkPatInfo, fields: Vec<Ty>) {
+fn chk_subpatterns(c: Chk, p: AstPattern, mut pi: ChkPatInfo, fields: Vec<Ty>) {
     if p.args.len() != fields.len() {
         chk_errorf(
             c,
@@ -312,9 +312,9 @@ fn chk_subpatterns(c: Chk, p: AstPattern, pi: ChkPatInfo, fields: Vec<Ty>) {
     }
 }
 
-fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
+fn chk_pattern(mut c: Chk, p: AstPattern, st0: Ty) {
     let st = ty_prune(st0);
-    let pi = ChkPatInfo { kind: "wild", ty: st, tag: 0, bind: None, args: Vec::new() };
+    let mut pi = ChkPatInfo { kind: "wild", ty: st, tag: 0, bind: None, args: Vec::new() };
     c.info.patterns.insert(p.id, pi);
     if p.wildcard {
         pi.kind = "wild";
@@ -415,7 +415,7 @@ fn chk_pattern(c: Chk, p: AstPattern, st0: Ty) {
         return;
     }
     pi.kind = "bind";
-    let b = chk_new_binding(c, p.bind, st, p.pos);
+    let mut b = chk_new_binding(c, p.bind, st, p.pos);
     b.mutable = p.mutable;
     chk_bind(c, b);
     pi.bind = Some(b);
@@ -430,7 +430,7 @@ fn chk_self_is(c: Chk, name: String) -> Bool {
 }
 
 // chk_tuple_pattern checks `(p, q, ...)` (`()` matches the unit value).
-fn chk_tuple_pattern(c: Chk, p: AstPattern, pi: ChkPatInfo, st: Ty) {
+fn chk_tuple_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
     if p.args.len() == 0 {
         if !ty_unify(st, ty_unit()) {
             chk_errorf(c, p.pos, "pattern `()` does not match type `" + ty_str(st) + "`");
@@ -439,7 +439,7 @@ fn chk_tuple_pattern(c: Chk, p: AstPattern, pi: ChkPatInfo, st: Ty) {
         return;
     }
     if ty_is_var(st) {
-        let ts = Vec::new();
+        let mut ts = Vec::new();
         for a in p.args {
             ts.push(chk_new_var(c));
         }

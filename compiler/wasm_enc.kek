@@ -25,7 +25,7 @@ fn wasm_struct_t() -> Int {
     -107
 }
 
-fn wasm_u32(b: Vec<Int>, v: Int) {
+fn wasm_u32(mut b: Vec<Int>, v: Int) {
     let mut x = v;
     while true {
         let c = x.bit_and(127);
@@ -39,7 +39,7 @@ fn wasm_u32(b: Vec<Int>, v: Int) {
     }
 }
 
-fn wasm_s64(b: Vec<Int>, v: Int) {
+fn wasm_s64(mut b: Vec<Int>, v: Int) {
     let mut x = v;
     while true {
         let c = x.bit_and(127);
@@ -53,7 +53,7 @@ fn wasm_s64(b: Vec<Int>, v: Int) {
     }
 }
 
-fn wasm_append(b: Vec<Int>, src: Vec<Int>) {
+fn wasm_append(mut b: Vec<Int>, src: Vec<Int>) {
     for x in src {
         b.push(x);
     }
@@ -66,13 +66,13 @@ fn wasm_name(b: Vec<Int>, s: String) {
     wasm_append(b, bytes);
 }
 
-fn wasm_section(b: Vec<Int>, id: Int, contents: Vec<Int>) {
+fn wasm_section(mut b: Vec<Int>, id: Int, contents: Vec<Int>) {
     b.push(id);
     wasm_u32(b, contents.len());
     wasm_append(b, contents);
 }
 
-fn wasm_valtype(b: Vec<Int>, t: Int) {
+fn wasm_valtype(mut b: Vec<Int>, t: Int) {
     if t >= 0 {
         b.push(99); // 0x63 ref null
         wasm_s64(b, t);
@@ -83,66 +83,66 @@ fn wasm_valtype(b: Vec<Int>, t: Int) {
 
 // ---- function bodies ----
 
-fn cg_op(c: Vec<Int>, o: Int) {
+fn cg_op(mut c: Vec<Int>, o: Int) {
     c.push(o);
 }
 
-fn cg_i32(c: Vec<Int>, x: Int) {
+fn cg_i32(mut c: Vec<Int>, x: Int) {
     c.push(65); // i32.const
     wasm_s64(c, x);
 }
 
-fn cg_i64(c: Vec<Int>, x: Int) {
+fn cg_i64(mut c: Vec<Int>, x: Int) {
     c.push(66); // i64.const
     wasm_s64(c, x);
 }
 
-fn cg_get(c: Vec<Int>, l: Int) {
+fn cg_get(mut c: Vec<Int>, l: Int) {
     c.push(32); // local.get
     wasm_u32(c, l);
 }
 
-fn cg_set(c: Vec<Int>, l: Int) {
+fn cg_set(mut c: Vec<Int>, l: Int) {
     c.push(33); // local.set
     wasm_u32(c, l);
 }
 
-fn cg_tee(c: Vec<Int>, l: Int) {
+fn cg_tee(mut c: Vec<Int>, l: Int) {
     c.push(34); // local.tee
     wasm_u32(c, l);
 }
 
-fn cg_global_get(c: Vec<Int>, g: Int) {
+fn cg_global_get(mut c: Vec<Int>, g: Int) {
     c.push(35);
     wasm_u32(c, g);
 }
 
-fn cg_global_set(c: Vec<Int>, g: Int) {
+fn cg_global_set(mut c: Vec<Int>, g: Int) {
     c.push(36);
     wasm_u32(c, g);
 }
 
-fn cg_call(c: Vec<Int>, f: Int) {
+fn cg_call(mut c: Vec<Int>, f: Int) {
     c.push(16); // call
     wasm_u32(c, f);
 }
 
-fn cg_br(c: Vec<Int>, depth: Int) {
+fn cg_br(mut c: Vec<Int>, depth: Int) {
     c.push(12); // br
     wasm_u32(c, depth);
 }
 
-fn cg_end(c: Vec<Int>) {
+fn cg_end(mut c: Vec<Int>) {
     c.push(11);
 }
 
 // cg_block_void opens a block/loop/if (opcode o) with an empty block type.
-fn cg_open(c: Vec<Int>, o: Int) {
+fn cg_open(mut c: Vec<Int>, o: Int) {
     c.push(o);
     c.push(64); // 0x40 void
 }
 
-fn cg_gc(c: Vec<Int>, sub: Int) {
+fn cg_gc(mut c: Vec<Int>, sub: Int) {
     c.push(251); // 0xfb
     wasm_u32(c, sub);
 }
@@ -169,12 +169,12 @@ fn cg_cast_null(c: Vec<Int>, t: Int) {
     wasm_s64(c, t);
 }
 
-fn cg_ref_null(c: Vec<Int>, heap: Int) {
+fn cg_ref_null(mut c: Vec<Int>, heap: Int) {
     c.push(208); // ref.null
     c.push(heap);
 }
 
-fn cg_ref_null_idx(c: Vec<Int>, t: Int) {
+fn cg_ref_null_idx(mut c: Vec<Int>, t: Int) {
     c.push(208);
     wasm_s64(c, t);
 }
@@ -199,20 +199,20 @@ fn wasm_v0() -> Vec<Int> {
 }
 
 fn wasm_v1(a: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v
 }
 
 fn wasm_v2(a: Int, b: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     v
 }
 
 fn wasm_v3(a: Int, b: Int, c: Int) -> Vec<Int> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     v.push(c);

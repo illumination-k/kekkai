@@ -25,7 +25,7 @@ fn chk_lower_first(s: String) -> String {
 }
 
 fn chk_def(
-    bs: ChkBuiltins,
+    mut bs: ChkBuiltins,
     recv: String,
     name: String,
     params: Vec<Ty>,
@@ -68,13 +68,13 @@ fn chk_tys0() -> Vec<Ty> {
 }
 
 fn chk_tys1(a: Ty) -> Vec<Ty> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v
 }
 
 fn chk_tys2(a: Ty, b: Ty) -> Vec<Ty> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(a);
     v.push(b);
     v
@@ -183,13 +183,13 @@ fn chk_new_builtins() -> ChkBuiltins {
 // host operation that the code generator emits inline.
 
 fn chk_tys3(a: Ty, b: Ty, c: Ty) -> Vec<Ty> {
-    let v = chk_tys2(a, b);
+    let mut v = chk_tys2(a, b);
     v.push(c);
     v
 }
 
 fn chk_ints(n: Int) -> Vec<Ty> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     for k in 0..n {
         v.push(ty_int());
     }
@@ -219,7 +219,7 @@ fn chk_add_intrinsics(c: Chk) {
     chk_m(bs, "__Chars", "len", chk_tys0(), i);
     chk_m(bs, "__Chars", "get", chk_tys1(i), i);
     chk_m(bs, "__Chars", "set", chk_tys2(i, i), u);
-    let cp = chk_tys2(i, chars);
+    let mut cp = chk_tys2(i, chars);
     cp.push(i);
     cp.push(i);
     chk_m(bs, "__Chars", "copy", cp, u);

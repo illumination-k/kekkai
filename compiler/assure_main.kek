@@ -99,7 +99,7 @@ fn asr_cmd_check(r: AsrRun, log: &Log) -> Int {
     if asr_plan_ok(pl) {
         return 0;
     }
-    let why = Vec::new();
+    let mut why = Vec::new();
     if !pl.lock_found {
         why.push("no lock file " + pl.lock + " (run kek assure apply)");
     }
@@ -130,7 +130,7 @@ fn asr_cmd_check(r: AsrRun, log: &Log) -> Int {
 // asr_meta reads -reason/-owner/-expires and checks the required ones.
 // Returns "" when they are fine, or the error.
 fn asr_meta_error(r: AsrRun, what: String) -> String {
-    let missing = Vec::new();
+    let mut missing = Vec::new();
     for k in asr_require(r.pol) {
         if tool_flag_str(r.fl, k, "") == "" {
             missing.push("-" + k);
@@ -188,7 +188,7 @@ fn asr_cmd_apply(r: AsrRun, fs: &Fs, log: &Log) -> Int {
         );
         return 1;
     }
-    let escalated = Vec::new();
+    let mut escalated = Vec::new();
     for c in pl.changes {
         if c.review && c.escalate != "" {
             escalated.push(c);
@@ -213,11 +213,11 @@ fn asr_cmd_apply(r: AsrRun, fs: &Fs, log: &Log) -> Int {
     }
     // the new lock: the current guarantees, the policy hash, the waivers
     // that still apply and the new ones
-    let st = pl.cur;
+    let mut st = pl.cur;
     st.config = pl.config;
     let mut renewed = 0;
-    for d in st.defs {
-        let ws = Vec::new();
+    for mut d in st.defs {
+        let mut ws = Vec::new();
         match pl.old.by_name.get(d.name) {
             Some(o) => {
                 for w in o.waivers {
@@ -238,7 +238,7 @@ fn asr_cmd_apply(r: AsrRun, fs: &Fs, log: &Log) -> Int {
     }
     for c in escalated {
         match st.by_name.get(c.def) {
-            Some(d) => d.waivers.push(asr_new_waiver(r, c.guarantee, c.added)),
+            Some(mut d) => d.waivers.push(asr_new_waiver(r, c.guarantee, c.added)),
             None => {}
         }
     }

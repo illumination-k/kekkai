@@ -1,7 +1,7 @@
 // Text form of IR programs (printed by `kek ir`).
 
 fn lower_hex(v: Int, digits: Int) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = digits - 1;
     while i >= 0 {
         let d = v.shr(i * 4).bit_and(15);
@@ -13,7 +13,7 @@ fn lower_hex(v: Int, digits: Int) -> String {
 
 // lower_quote quotes a string literal for the IR text dump.
 fn lower_quote(s: String) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push("\"");
     let n = s.len();
     let mut i = 0;
@@ -83,7 +83,7 @@ fn lower_ty_str(t: IrTy) -> String {
 }
 
 fn lower_tys_str(ts: Vec<IrTy>) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for t in ts {
         parts.push(lower_ty_str(t));
     }
@@ -91,7 +91,7 @@ fn lower_tys_str(ts: Vec<IrTy>) -> String {
 }
 
 fn lower_args_str(xs: Vec<Int>) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     for x in xs {
         parts.push("%" + x.to_string());
     }
@@ -159,7 +159,7 @@ fn lower_term_str(t: IrTerm) -> String {
             + t.targets.get(1).unwrap_or(0).to_string();
     }
     if op == "switch" {
-        let ts = Vec::new();
+        let mut ts = Vec::new();
         for x in t.targets {
             ts.push("b" + x.to_string());
         }
@@ -173,11 +173,11 @@ fn lower_term_str(t: IrTerm) -> String {
 
 // lower_program_text renders the program like `kek ir`.
 fn lower_program_text(p: IrProgram) -> String {
-    let b = Vec::new();
+    let mut b = Vec::new();
     let mut i = 0;
     for t in p.types {
         if t.is_variant {
-            let vs = Vec::new();
+            let mut vs = Vec::new();
             for v in t.variants {
                 vs.push(lower_tys_str(v));
             }

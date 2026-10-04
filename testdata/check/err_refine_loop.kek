@@ -52,7 +52,7 @@ fn backwards(v: Vec<Int>) -> Int {
 }
 
 // the loop may grow v: its length is forgotten at the head
-fn growing(v: Vec<Int>) -> Int {
+fn growing(mut v: Vec<Int>) -> Int {
     let n = v.len();
     let mut i = 0;
     while i < n {
@@ -64,7 +64,7 @@ fn growing(v: Vec<Int>) -> Int {
 
 // pushing to a local vector does not change the input's length
 fn doubled(v: Vec<Int>) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for i in 0..v.len() {
         out.push(v[i] * 2); // WARN "cannot prove `v[i] * 2` does not overflow"
     }

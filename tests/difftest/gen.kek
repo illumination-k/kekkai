@@ -22,6 +22,8 @@
 // aliases. Function i may only call functions j < i, loops are bounded
 // (`while` and `for` over ranges with small constant trip counts; `for`
 // over a Vec never pushes in its body), so every program terminates.
+// Collections and structs are always bound with `let mut` (any alias may
+// be mutated later; docs/mutability.md).
 
 // Variable types.
 fn t_int() -> Int {
@@ -69,7 +71,7 @@ struct Gen {
 
 // ---- random source ----
 
-fn next_u64(g: Gen) -> Int {
+fn next_u64(mut g: Gen) -> Int {
     g.state = g.state + -7046029254386353131;
     let mut z = g.state;
     z = z.bit_xor(z.ushr(30)) * -4658895280553007687;
@@ -106,31 +108,31 @@ fn new_gen(seed: Int) -> Gen {
 
 // ---- output and scopes ----
 
-fn w(g: Gen, s: String) {
+fn w(mut g: Gen, s: String) {
     g.out.push(s);
 }
 
-fn ln(g: Gen, s: String) {
+fn ln(mut g: Gen, s: String) {
     g.out.push(s + "\n");
 }
 
-fn fresh(g: Gen, prefix: String) -> String {
+fn fresh(mut g: Gen, prefix: String) -> String {
     g.fresh = g.fresh + 1;
     prefix + g.fresh.to_string()
 }
 
-fn declare(g: Gen, ty: Int, prefix: String, mutable: Bool) -> String {
+fn declare(mut g: Gen, ty: Int, prefix: String, mutable: Bool) -> String {
     let v = fresh(g, prefix);
     g.vars.push(Var { name: v, ty: ty, mutable: mutable });
     v
 }
 
-fn add_var(g: Gen, name: String, ty: Int, mutable: Bool) {
+fn add_var(mut g: Gen, name: String, ty: Int, mutable: Bool) {
     g.vars.push(Var { name: name, ty: ty, mutable: mutable });
 }
 
 // truncate drops the variables declared after the first n.
-fn truncate(g: Gen, n: Int) {
+fn truncate(mut g: Gen, n: Int) {
     while g.vars.len() > n {
         g.vars.pop();
     }
@@ -200,7 +202,7 @@ fn prelude(g: Gen) {
     ln(g, "}");
     ln(g, "");
     ln(g, "// mutates its argument: visible through every alias of acc");
-    ln(g, "fn bump(acc: Acc, x: Int) {");
+    ln(g, "fn bump(mut acc: Acc, x: Int) {");
     ln(g, "    acc.total = acc.total + x;");
     ln(g, "    acc.hits = acc.hits + 1;");
     ln(g, "    acc.log.push(x);");
@@ -256,7 +258,7 @@ fn str_lit(g: Gen) -> String {
 
 // ---- functions and statements ----
 
-fn gen_fn(g: Gen, idx: Int) {
+fn gen_fn(mut g: Gen, idx: Int) {
     truncate(g, 0);
     add_var(g, "a", t_int(), false);
     add_var(g, "b", t_int(), false);
@@ -510,7 +512,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
     if k == 0 {
         // new Vec, optionally prefilled
         let v = fresh(g, "v");
-        ln(g, ind + "let " + v + ": Vec<Int> = Vec::new();");
+        ln(g, ind + "let mut " + v + ": Vec<Int> = Vec::new();");
         let n = intn(g, 4);
         for i in 0..n {
             ln(g, ind + v + ".push(" + int_expr(g, idx, 2) + ");");
@@ -541,7 +543,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
         } else {
             // alias
             let a = declare(g, t_vec(), "w", false);
-            ln(g, ind + "let " + a + " = " + v + ";");
+            ln(g, ind + "let mut " + a + " = " + v + ";");
         }
     } else if k == 2 {
         // new Map
@@ -552,7 +554,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
             prefix = "n";
         }
         let m = declare(g, ty, prefix, false);
-        ln(g, ind + "let " + m + ": " + map_type(ty) + " = HashMap::new();");
+        ln(g, ind + "let mut " + m + ": " + map_type(ty) + " = HashMap::new();");
         let n = intn(g, 4);
         for i in 0..n {
             let key = map_key(g, idx, ty);
@@ -577,13 +579,13 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
             ln(g, ind + m + ".remove(&" + key + ");");
         } else {
             let a = declare(g, ty, "alias", false);
-            ln(g, ind + "let " + a + " = " + m + ";");
+            ln(g, ind + "let mut " + a + " = " + m + ";");
         }
     } else if k == 4 {
         // struct
         let e = int_expr(g, idx, 2);
         let a = declare(g, t_acc(), "s", false);
-        ln(g, ind + "let " + a + " = Acc { total: " + e + ", hits: 0, log: Vec::new() };");
+        ln(g, ind + "let mut " + a + " = Acc { total: " + e + ", hits: 0, log: Vec::new() };");
     } else if k == 5 {
         // struct mutation through an alias or a call
         let a = pick_var(g, t_acc(), false);
@@ -602,7 +604,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
             }
         } else if op == 2 {
             let t = declare(g, t_acc(), "t", false);
-            ln(g, ind + "let " + t + " = " + a + ";");
+            ln(g, ind + "let mut " + t + " = " + a + ";");
         } else if g.no_push {
             ln(g, ind + a + ".total = " + a + ".total - " + a + ".log.len();");
         } else {
@@ -630,7 +632,7 @@ fn coll_stmt(g: Gen, idx: Int, ind: String, k: Int) {
     }
 }
 
-fn for_loop(g: Gen, idx: Int, ind: String) {
+fn for_loop(mut g: Gen, idx: Int, ind: String) {
     let init = int_expr(g, idx, 1);
     let acc = fresh(g, "acc");
     ln(g, ind + "let mut " + acc + " = " + init + ";");
@@ -815,7 +817,7 @@ struct Program {
 // arg_sets: the arguments every generated function is called with, as
 // "a b c" (JSON values); `min` stands for the smallest Int.
 fn arg_sets() -> Vec<String> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push("0 0 false");
     v.push("1 -1 true");
     v.push("7 3 true");
@@ -845,8 +847,8 @@ fn generate(seed: Int) -> Program {
     }
     let prog = g.out.join("");
 
-    let main = Vec::new();
-    let calls = Vec::new();
+    let mut main = Vec::new();
+    let mut calls = Vec::new();
     main.push("// Driver of the generated program prog.kek (seed " + seed.to_string() + ").\n");
     main.push("#[main]\n");
     main.push("fn main(args: Vec<String>, log: &Log) -> Int {\n");

@@ -25,7 +25,7 @@ fn pbt_why(info: ChkInfo, t: Ty) -> String {
         + " (a test takes capabilities and generatable values: Int, Bool, String, (), Vec, Option, Result, tuples, and structs and enums of these)"
 }
 
-fn pbt_why_in(info: ChkInfo, t0: Ty, seen: HashMap<String, Bool>) -> String {
+fn pbt_why_in(info: ChkInfo, t0: Ty, mut seen: HashMap<String, Bool>) -> String {
     let t = ty_resolve(t0);
     match t {
         Ty::Prim(n) => if n == "Int" || n == "Bool" || n == "String" || n == "()" {
@@ -106,7 +106,7 @@ fn pbt_why_all(info: ChkInfo, ts: Vec<Ty>, seen: HashMap<String, Bool>) -> Strin
 // pbt_reaches reports whether every value of t contains a value of the
 // type whose key is target (Vec and Option can be empty; a Result needs
 // only one of its sides).
-fn pbt_reaches(t0: Ty, target: String, seen: HashMap<String, Bool>) -> Bool {
+fn pbt_reaches(t0: Ty, target: String, mut seen: HashMap<String, Bool>) -> Bool {
     let t = ty_resolve(t0);
     match t {
         Ty::Result(a, b) => pbt_reaches(a, target, seen) && pbt_reaches(b, target, seen),
@@ -181,7 +181,7 @@ fn pbt_new() -> PbtGen {
 
 // pbt_ty returns the number of type t, emitting its functions the first
 // time.
-fn pbt_ty(g: PbtGen, t0: Ty) -> String {
+fn pbt_ty(mut g: PbtGen, t0: Ty) -> String {
     let t = ty_resolve(t0);
     let k = ty_key(t);
     match g.ids.get(k) {
@@ -197,7 +197,7 @@ fn pbt_ty(g: PbtGen, t0: Ty) -> String {
     id.to_string()
 }
 
-fn pbt_fn(g: PbtGen, head: String, body: String) {
+fn pbt_fn(mut g: PbtGen, head: String, body: String) {
     g.out.push("fn " + head + " {\n" + body + "}\n");
 }
 
@@ -262,23 +262,23 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
             zero = "Ok(__kz_" + a + "())";
         }
         Ty::Tuple(ts0) => {
-            let ids = Vec::new();
+            let mut ids = Vec::new();
             for x in ts0 {
                 ids.push(pbt_ty(g, x));
             }
-            let gs = Vec::new();
-            let ws = Vec::new();
-            let cs = Vec::new();
-            let zs = Vec::new();
+            let mut gs = Vec::new();
+            let mut ws = Vec::new();
+            let mut cs = Vec::new();
+            let mut zs = Vec::new();
             let mut i = 0;
-            let mut s = "    let __out: Vec<" + ts + "> = Vec::new();\n";
+            let mut s = "    let mut __out: Vec<" + ts + "> = Vec::new();\n";
             for a in ids {
                 let f = "__x." + i.to_string();
                 gs.push("__kg_" + a + "(__g, __d + 1)");
                 ws.push("__kw_" + a + "(" + f + ")");
                 cs.push("__kc_" + a + "(" + f + ")");
                 zs.push("__kz_" + a + "()");
-                let parts = Vec::new();
+                let mut parts = Vec::new();
                 for j in 0..ids.len() {
                     parts.push(if j == i {
                         "__c"
@@ -308,19 +308,19 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
         }
         Ty::Struct(st, args) => {
             let fts = ty_struct_fields(st, args);
-            let ids = Vec::new();
+            let mut ids = Vec::new();
             for x in fts {
                 ids.push(pbt_ty(g, x));
             }
-            let names = Vec::new();
+            let mut names = Vec::new();
             for f in st.fields {
                 names.push(f.name);
             }
-            let gs = Vec::new();
-            let ws = Vec::new();
-            let cs = Vec::new();
-            let zs = Vec::new();
-            let mut s = "    let __out: Vec<" + ts + "> = Vec::new();\n";
+            let mut gs = Vec::new();
+            let mut ws = Vec::new();
+            let mut cs = Vec::new();
+            let mut zs = Vec::new();
+            let mut s = "    let mut __out: Vec<" + ts + "> = Vec::new();\n";
             let mut i = 0;
             for a in ids {
                 let fname = names.get(i).unwrap_or("");
@@ -329,7 +329,7 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                 ws.push(fname + ": \" + __kw_" + a + "(" + f + ")");
                 cs.push("__kc_" + a + "(" + f + ")");
                 zs.push("__kz_" + a + "()");
-                let parts = Vec::new();
+                let mut parts = Vec::new();
                 for j in 0..names.len() {
                     parts.push(if j == i {
                         "__c"
@@ -366,24 +366,24 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                 + ", "
                 + mask.to_string()
                 + ");\n";
-            let mut ss = "    let __out: Vec<" + ts + "> = Vec::new();\n    match __x {\n";
+            let mut ss = "    let mut __out: Vec<" + ts + "> = Vec::new();\n    match __x {\n";
             let mut ws = "    match __x {\n";
             let mut cs = "    match __x {\n";
             // minimal values of the variants without recursion
-            let zeros = Vec::new();
+            let mut zeros = Vec::new();
             let mut vi = 0;
             for v in en.variants {
                 let fts = ty_variant_fields(en, args, v);
-                let ids = Vec::new();
+                let mut ids = Vec::new();
                 for x in fts {
                     ids.push(pbt_ty(g, x));
                 }
                 let ctor = en.name + "::" + v.name;
-                let binds = Vec::new();
-                let gargs = Vec::new();
-                let cargs = Vec::new();
-                let wargs = Vec::new();
-                let zargs = Vec::new();
+                let mut binds = Vec::new();
+                let mut gargs = Vec::new();
+                let mut cargs = Vec::new();
+                let mut wargs = Vec::new();
+                let mut zargs = Vec::new();
                 let mut i = 0;
                 for a in ids {
                     let f = "__f" + i.to_string();
@@ -446,7 +446,7 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                 }
                 let mut fi = 0;
                 for a in ids {
-                    let parts = Vec::new();
+                    let mut parts = Vec::new();
                     for q in 0..ids.len() {
                         parts.push(if q == fi {
                             "__c"
@@ -508,7 +508,7 @@ fn pbt_struct(name: String, fields: Vec<String>, vals: Vec<String>) -> String {
     if fields.len() == 0 {
         return name + " {}";
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 0;
     for f in fields {
         parts.push(f + ": " + vals.get(i).unwrap_or(""));
@@ -526,7 +526,7 @@ fn pbt_call(ctor: String, args: Vec<String>) -> String {
 
 // pbt_join_shows joins `name: " + shown` parts of a struct rendering.
 fn pbt_join_shows(ws: Vec<String>) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 0;
     for w in ws {
         if i == 0 {

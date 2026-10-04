@@ -7,7 +7,7 @@ fn json_hex_digit(d: Int) -> String {
 // json_quote renders a JSON string literal
 // (HTML-safe: <, > and & are escaped; U+2028/U+2029 are escaped).
 fn json_quote(s: String) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     parts.push("\"");
     let n = s.len();
     let mut start = 0;

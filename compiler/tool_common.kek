@@ -13,7 +13,7 @@ struct ToolFlags {
 // names: `json` is a boolean, `base=` takes a string and `limit#` an
 // integer. Flags stop at the first non-flag argument or `--`.
 fn tool_flags(args: Vec<String>, start: Int, spec: String) -> ToolFlags {
-    let kinds: HashMap<String, String> = HashMap::new();
+    let mut kinds: HashMap<String, String> = HashMap::new();
     for s in spec.split(" ") {
         if s == "" {
             continue;
@@ -26,7 +26,7 @@ fn tool_flags(args: Vec<String>, start: Int, spec: String) -> ToolFlags {
             kinds.insert(s, "bool");
         }
     }
-    let fl = ToolFlags { vals: HashMap::new(), rest: Vec::new(), err: "" };
+    let mut fl = ToolFlags { vals: HashMap::new(), rest: Vec::new(), err: "" };
     let mut i = start;
     while i < args.len() {
         let a = args.get(i).unwrap_or("");
@@ -156,7 +156,7 @@ struct ToolJsonParser {
 // tool_json_parse parses a JSON document; Err is the message with the
 // offset.
 fn tool_json_parse(s: String) -> Result<ToolJson, String> {
-    let p = ToolJsonParser { s: s, i: 0, err: "" };
+    let mut p = ToolJsonParser { s: s, i: 0, err: "" };
     let v = tool_json_value(p);
     tool_json_ws(p);
     if p.err == "" && p.i < p.s.len() {
@@ -168,7 +168,7 @@ fn tool_json_parse(s: String) -> Result<ToolJson, String> {
     Ok(v)
 }
 
-fn tool_json_ws(p: ToolJsonParser) {
+fn tool_json_ws(mut p: ToolJsonParser) {
     while p.i < p.s.len() {
         let c = p.s.char_at(p.i).unwrap_or(0);
         if c == 32 || c == 9 || c == 10 || c == 13 {
@@ -179,14 +179,14 @@ fn tool_json_ws(p: ToolJsonParser) {
     }
 }
 
-fn tool_json_fail(p: ToolJsonParser, msg: String) -> ToolJson {
+fn tool_json_fail(mut p: ToolJsonParser, msg: String) -> ToolJson {
     if p.err == "" {
         p.err = msg;
     }
     ToolJson::Null
 }
 
-fn tool_json_lit(p: ToolJsonParser, word: String, v: ToolJson) -> ToolJson {
+fn tool_json_lit(mut p: ToolJsonParser, word: String, v: ToolJson) -> ToolJson {
     if p.s.slice(p.i, p.i + word.len()) == word {
         p.i = p.i + word.len();
         return v;
@@ -194,7 +194,7 @@ fn tool_json_lit(p: ToolJsonParser, word: String, v: ToolJson) -> ToolJson {
     tool_json_fail(p, "invalid literal")
 }
 
-fn tool_json_value(p: ToolJsonParser) -> ToolJson {
+fn tool_json_value(mut p: ToolJsonParser) -> ToolJson {
     tool_json_ws(p);
     if p.err != "" {
         return ToolJson::Null;
@@ -210,7 +210,7 @@ fn tool_json_value(p: ToolJsonParser) -> ToolJson {
     }
     if c == 91 {
         p.i = p.i + 1;
-        let items = Vec::new();
+        let mut items = Vec::new();
         tool_json_ws(p);
         if p.s.char_at(p.i).unwrap_or(0) == 93 {
             p.i = p.i + 1;
@@ -272,9 +272,9 @@ fn tool_json_value(p: ToolJsonParser) -> ToolJson {
     tool_json_fail(p, "unexpected character")
 }
 
-fn tool_json_object(p: ToolJsonParser) -> ToolJson {
+fn tool_json_object(mut p: ToolJsonParser) -> ToolJson {
     p.i = p.i + 1;
-    let o = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+    let mut o = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
     tool_json_ws(p);
     if p.s.char_at(p.i).unwrap_or(0) == 125 {
         p.i = p.i + 1;
@@ -324,9 +324,9 @@ fn tool_json_hex(c: Int) -> Int {
 
 // tool_json_string reads a string literal at p.i (UTF-16 code units, so
 // \u escapes of surrogate pairs come out as the pair).
-fn tool_json_string(p: ToolJsonParser) -> Option<String> {
+fn tool_json_string(mut p: ToolJsonParser) -> Option<String> {
     p.i = p.i + 1;
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut start = p.i;
     while p.i < p.s.len() {
         let c = p.s.char_at(p.i).unwrap_or(0);
@@ -418,7 +418,7 @@ fn tool_json_arr(v: ToolJson) -> Vec<ToolJson> {
 }
 
 fn tool_json_strs(v: ToolJson) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in tool_json_arr(v) {
         match x {
             ToolJson::Str(s) => out.push(s),
@@ -501,7 +501,7 @@ fn tool_toml_parse(text: String) -> Result<ToolJson, String> {
     Ok(ToolJson::Obj(root))
 }
 
-fn tool_toml_put(o: ToolJsonObj, k: String, v: ToolJson) {
+fn tool_toml_put(mut o: ToolJsonObj, k: String, v: ToolJson) {
     if !o.vals.contains_key(k) {
         o.keys.push(k);
     }
@@ -583,7 +583,7 @@ fn tool_json_to_irj(v: ToolJson) -> IrjVal {
         ToolJson::Num(n) => irjson_int(n),
         ToolJson::Str(s) => IrjVal::Str(s),
         ToolJson::Arr(xs) => {
-            let out = Vec::new();
+            let mut out = Vec::new();
             for x in xs {
                 out.push(tool_json_to_irj(x));
             }

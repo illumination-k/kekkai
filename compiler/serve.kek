@@ -16,7 +16,7 @@ fn serve_unesc(s: String) -> String {
     if s.index_of("\\").is_none() {
         return s;
     }
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 0;
     let mut start = 0;
     while i < s.len() {
@@ -57,13 +57,13 @@ fn serve_main(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
         if line == "" {
             continue;
         }
-        let parts = Vec::new();
+        let mut parts = Vec::new();
         for p in line.split("\t") {
             parts.push(serve_unesc(p));
         }
         let seq = parts.get(0).unwrap_or("0");
         fs.set_cwd(parts.get(1).unwrap_or("/"));
-        let a = Vec::new();
+        let mut a = Vec::new();
         let mut i = 2;
         while i < parts.len() {
             a.push(parts.get(i).unwrap_or(""));

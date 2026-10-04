@@ -24,7 +24,7 @@
 // plain code) and returns the first error ("" when it checks).
 fn mut_check_one(p: CovProg, sel: HashMap<Int, Bool>, c: MutCand) -> String {
     let prog = frontend_parse_all(p.srcs);
-    let w = cov_new_walk("apply");
+    let mut w = cov_new_walk("apply");
     w.real = true;
     w.active.insert(c.node, mut_one_cand(c));
     cov_rewrite_file(w, prog.file, p, sel);
@@ -40,7 +40,7 @@ fn mut_check_one(p: CovProg, sel: HashMap<Int, Bool>, c: MutCand) -> String {
 // error ("" when it checks).
 fn mut_check_set(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) -> String {
     let prog = frontend_parse_all(p.srcs);
-    let w = cov_new_walk("apply");
+    let mut w = cov_new_walk("apply");
     w.real = true;
     for c in cs {
         w.active.insert(c.node, mut_one_cand(c));
@@ -62,7 +62,7 @@ fn mut_bisect(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) {
     if cs.len() == 0 {
         return;
     }
-    let nodes: HashSet<Int> = HashSet::new();
+    let mut nodes: HashSet<Int> = HashSet::new();
     let mut distinct = true;
     for c in cs {
         if !nodes.insert(c.node) {
@@ -75,14 +75,14 @@ fn mut_bisect(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) {
             return;
         }
         if cs.len() == 1 {
-            let c = cs.get(0).unwrap_or(mut_dummy(cs));
+            let mut c = cs.get(0).unwrap_or(mut_dummy(cs));
             c.status = "types";
             c.msg = msg;
             return;
         }
     }
-    let left = Vec::new();
-    let right = Vec::new();
+    let mut left = Vec::new();
+    let mut right = Vec::new();
     let mut i = 0;
     for c in cs {
         if i < cs.len() / 2 {
@@ -104,7 +104,7 @@ fn mut_dummy(cs: Vec<MutCand>) -> MutCand {
 }
 
 fn mut_one_cand(c: MutCand) -> Vec<MutCand> {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(c);
     v
 }
@@ -113,13 +113,13 @@ fn mut_one_cand(c: MutCand) -> Vec<MutCand> {
 // well-typed mutant is in it, and checks it with the prelude.
 fn mut_schema(p: CovProg, sel: HashMap<Int, Bool>, cands: Vec<MutCand>) -> ChkResult {
     let prog = cov_with_harness(p);
-    let w = cov_new_walk("apply");
+    let mut w = cov_new_walk("apply");
     for c in cands {
         if c.status != "" {
             continue;
         }
         match w.active.get(c.node) {
-            Some(v) => v.push(c),
+            Some(mut v) => v.push(c),
             None => {
                 w.active.insert(c.node, mut_one_cand(c));
             }
@@ -131,7 +131,7 @@ fn mut_schema(p: CovProg, sel: HashMap<Int, Bool>, cands: Vec<MutCand>) -> ChkRe
     }
     // the schema hides what a mutant computes behind prelude calls: its
     // refinements are checked per mutant, as plain code, before
-    let cfg = ref_config_default();
+    let mut cfg = ref_config_default();
     cfg.off = true;
     chk_check_cfg(prog.file, true, chk_parse_core(), cfg)
 }
@@ -161,7 +161,7 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let path = args.get(1).unwrap_or("");
     let out_dir = frontend_clean_dir(args.get(2).unwrap_or(""));
-    let p = match cov_load(path, fs, log) {
+    let mut p = match cov_load(path, fs, log) {
         Some(p) => p,
         None => {
             return 1;
@@ -169,7 +169,7 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     };
     p.main = main;
     // definitions changed since the base
-    let base_hash: HashMap<String, String> = HashMap::new();
+    let mut base_hash: HashMap<String, String> = HashMap::new();
     if base != "" {
         let bp = match cov_load(base, fs, log) {
             Some(b) => b,
@@ -182,9 +182,9 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             base_hash.insert(d.name, d.hash);
         }
     }
-    let sel: HashMap<Int, Bool> = HashMap::new();
-    let funcs = Vec::new();
-    let unchanged = Vec::new();
+    let mut sel: HashMap<Int, Bool> = HashMap::new();
+    let mut funcs = Vec::new();
+    let mut unchanged = Vec::new();
     for fd in cov_all_funcs(p.file) {
         if p.istest.get(fd.id).unwrap_or(false) || p.rare.get(fd.id).unwrap_or(false) {
             continue;
@@ -197,7 +197,7 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         sel.insert(fd.id, true);
         funcs.push(name);
     }
-    let w = cov_new_walk("collect");
+    let mut w = cov_new_walk("collect");
     w.info = Some(p.info);
     for s in p.srcs {
         w.lines.insert(s.name, cov_split_lines(s.text));
@@ -207,7 +207,7 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     // in a function with refinement VCs, any mutant may break a proof
     // (`i < v.len()` -> `i <= v.len()`): such mutants are checked too, and
     // the ones that fail are killed by types
-    for c in cands {
+    for mut c in cands {
         match p.info.funcs.get(c.func) {
             Some(f) => {
                 if ref_fun_uses(p.info, f) {
@@ -220,8 +220,8 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     // candidates that can be ill-typed: group testing per kind (a deleted
     // statement and a replaced result in one function could hide each
     // other's errors)
-    let by_kind: HashMap<String, Vec<MutCand>> = HashMap::new();
-    let kinds = Vec::new();
+    let mut by_kind: HashMap<String, Vec<MutCand>> = HashMap::new();
+    let mut kinds = Vec::new();
     for c in cands {
         if c.risky {
             if !by_kind.contains_key(c.kind) {
@@ -240,7 +240,7 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut res = mut_schema(p, sel, cands);
     if res.errs.len() > 0 {
         // a candidate assumed well-typed is not: check every one
-        for c in cands {
+        for mut c in cands {
             if c.status == "" {
                 let msg = mut_check_one(p, sel, c);
                 if msg != "" {
@@ -256,8 +256,8 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             return 1;
         }
     }
-    let runnable = Vec::new();
-    let all = Vec::new();
+    let mut runnable = Vec::new();
+    let mut all = Vec::new();
     for c in cands {
         if c.status == "" {
             runnable.push(c.id.to_string() + "\t" + c.key + "\n");
@@ -356,8 +356,8 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     };
     let min_score = tool_json_int(tool_config_get(cfg, "mutate", "min_score"), -1);
-    let status: HashMap<Int, String> = HashMap::new();
-    let killer: HashMap<Int, String> = HashMap::new();
+    let mut status: HashMap<Int, String> = HashMap::new();
+    let mut killer: HashMap<Int, String> = HashMap::new();
     for l in cov_read_lines(fs, dir + "/results.txt") {
         let parts = l.split("\t");
         match parts.get(0).unwrap_or("").parse_int() {
@@ -369,8 +369,8 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             None => {}
         }
     }
-    let tests = Vec::new();
-    let failing = Vec::new();
+    let mut tests = Vec::new();
+    let mut failing = Vec::new();
     for l in cov_read_lines(fs, dir + "/baseline.txt") {
         let parts = l.split("\t");
         let t = irjson_obj();
@@ -392,8 +392,8 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut n_nocov = 0;
     // mutants of other shards (`kek mutate -shard i/n`)
     let mut n_skipped = 0;
-    let objs = Vec::new();
-    let rows: HashMap<String, Vec<String>> = HashMap::new();
+    let mut objs = Vec::new();
+    let mut rows: HashMap<String, Vec<String>> = HashMap::new();
     let muts = tool_json_arr(tool_json_get(table, "mutants"));
     for m in muts {
         let id = tool_json_int(tool_json_get(m, "id"), 0);
@@ -460,9 +460,9 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             row = row + "\n      " + msg;
         }
         match rows.get(st) {
-            Some(v) => v.push(row),
+            Some(mut v) => v.push(row),
             None => {
-                let v = Vec::new();
+                let mut v = Vec::new();
                 v.push(row);
                 rows.insert(st, v);
             }
@@ -505,7 +505,7 @@ fn mut_report_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.info(irjson_encode(irjson_val(o), false));
         return if below { 1 } else { 0 };
     }
-    let out = Vec::new();
+    let mut out = Vec::new();
     out.push(
         "mutation testing of "
             + path

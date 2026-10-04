@@ -68,7 +68,7 @@ fn last(v: Vec<Int>) -> Int {
 }
 
 fn reversed(v: Vec<Int>) -> Vec<Int> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let mut i = v.len();
     while i > 0 {
         i = i - 1;
@@ -92,7 +92,7 @@ fn describe(s: Server) -> String {
 
 #[main]
 fn main(args: Vec<String>, log: &Log) -> Int {
-    let v = Vec::new();
+    let mut v = Vec::new();
     for x in 0..10 {
         v.push(x * 3);
     }

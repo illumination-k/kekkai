@@ -120,10 +120,10 @@ fn asr_lock_path(p: AsrPolicy) -> String {
 
 // ---- reading ----
 
-fn asr_cfg_strs(p: AsrPolicy, v: ToolJson, what: String) -> Vec<String> {
+fn asr_cfg_strs(mut p: AsrPolicy, v: ToolJson, what: String) -> Vec<String> {
     match v {
         ToolJson::Arr(xs) => {
-            let out = Vec::new();
+            let mut out = Vec::new();
             for x in xs {
                 match x {
                     ToolJson::Str(s) => out.push(s),
@@ -142,7 +142,7 @@ fn asr_cfg_strs(p: AsrPolicy, v: ToolJson, what: String) -> Vec<String> {
     }
 }
 
-fn asr_cfg_str(p: AsrPolicy, v: ToolJson, what: String) -> String {
+fn asr_cfg_str(mut p: AsrPolicy, v: ToolJson, what: String) -> String {
     match v {
         ToolJson::Str(s) => s,
         _ => {
@@ -163,7 +163,7 @@ fn asr_unquote(s: String) -> String {
 // asr_policy_raw reads the assure sections of one parsed configuration
 // file (no defaults, no inheritance). Other sections are ignored.
 fn asr_policy_raw(cfg: ToolJson, src: String) -> AsrPolicy {
-    let p = asr_policy_empty();
+    let mut p = asr_policy_empty();
     for sec in tool_json_keys(cfg) {
         let body = tool_json_get(cfg, sec);
         let at = src + " [" + sec + "]";
@@ -252,7 +252,7 @@ fn asr_policy_raw(cfg: ToolJson, src: String) -> AsrPolicy {
             }
         } else if sec.starts_with("module.") {
             let path = asr_clean_file(asr_unquote(sec.slice(7, sec.len())));
-            let m = AsrModule {
+            let mut m = AsrModule {
                 path: path,
                 has_hosts: false,
                 hosts: Vec::new(),
@@ -284,7 +284,7 @@ fn asr_policy_raw(cfg: ToolJson, src: String) -> AsrPolicy {
 }
 
 fn asr_lower_all(xs: Vec<String>) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in xs {
         out.push(x.to_lower());
     }
@@ -292,7 +292,7 @@ fn asr_lower_all(xs: Vec<String>) -> Vec<String> {
 }
 
 fn asr_union(a: Vec<String>, b: Vec<String>) -> Vec<String> {
-    let all = Vec::new();
+    let mut all = Vec::new();
     for x in a {
         all.push(x);
     }
@@ -305,7 +305,7 @@ fn asr_union(a: Vec<String>, b: Vec<String>) -> Vec<String> {
 // asr_policy_merge applies child on top of parent (its `extends`): the
 // child may only tighten.
 fn asr_policy_merge(parent: AsrPolicy, child: AsrPolicy, child_src: String) -> AsrPolicy {
-    let p = asr_policy_empty();
+    let mut p = asr_policy_empty();
     for e in parent.errors {
         p.errors.push(e);
     }
@@ -391,7 +391,7 @@ fn asr_policy_file(fs: &Fs, path: String, optional: Bool, depth: Int) -> AsrPoli
     let text = match fs.read(path) {
         Ok(t) => t,
         Err(e) => {
-            let p = asr_policy_empty();
+            let mut p = asr_policy_empty();
             if !optional {
                 p.errors.push(path + ": " + e.message());
             }
@@ -401,12 +401,12 @@ fn asr_policy_file(fs: &Fs, path: String, optional: Bool, depth: Int) -> AsrPoli
     let cfg = match tool_toml_parse(text) {
         Ok(c) => c,
         Err(e) => {
-            let p = asr_policy_empty();
+            let mut p = asr_policy_empty();
             p.errors.push(path + ": " + e);
             return p;
         }
     };
-    let child = asr_policy_raw(cfg, path);
+    let mut child = asr_policy_raw(cfg, path);
     if child.extends == "" {
         return child;
     }
@@ -421,7 +421,7 @@ fn asr_policy_file(fs: &Fs, path: String, optional: Bool, depth: Int) -> AsrPoli
 // asr_policy_load reads the policy (path "" = ./kekkai.toml, which may be
 // absent), validates it and computes its hash.
 fn asr_policy_load(fs: &Fs, path: String) -> AsrPolicy {
-    let p = if path == "" {
+    let mut p = if path == "" {
         asr_policy_file(fs, "kekkai.toml", true, 0)
     } else {
         asr_policy_file(fs, path, false, 0)
@@ -444,7 +444,7 @@ fn asr_path_under(file: String, path: String) -> Bool {
     file.starts_with(path + "/")
 }
 
-fn asr_check_caps(p: AsrPolicy, caps: Vec<String>, what: String) {
+fn asr_check_caps(mut p: AsrPolicy, caps: Vec<String>, what: String) {
     for c in caps {
         if !asr_has(asr_cap_names(), c) {
             p.errors.push(
@@ -459,7 +459,7 @@ fn asr_check_caps(p: AsrPolicy, caps: Vec<String>, what: String) {
     }
 }
 
-fn asr_policy_validate(p: AsrPolicy) {
+fn asr_policy_validate(mut p: AsrPolicy) {
     asr_check_caps(p, p.forbid, "[effects] forbid");
     for r in asr_require(p) {
         if !asr_has(asr_meta_names(), r) {
@@ -557,7 +557,7 @@ fn asr_policy_validate(p: AsrPolicy) {
 
 // asr_policy_hash fingerprints the effective policy (not its formatting).
 fn asr_policy_hash(p: AsrPolicy) -> String {
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     if p.has_hosts {
         parts.push("hosts=" + asr_sorted_set(p.hosts).join(","));
     } else {
@@ -576,7 +576,7 @@ fn asr_policy_hash(p: AsrPolicy) -> String {
     if p.declass_requires.len() > 0 {
         parts.push("pii.declassify_requires=" + asr_sorted_set(p.declass_requires).join(","));
     }
-    let ms = Vec::new();
+    let mut ms = Vec::new();
     for m in p.modules {
         let mut h = "-";
         if m.has_hosts {
@@ -612,18 +612,18 @@ struct AsrScope {
 fn asr_scope(p: AsrPolicy, file: String) -> AsrScope {
     let mut has_hosts = p.has_hosts;
     let mut hosts = p.hosts;
-    let forbid = Vec::new();
+    let mut forbid = Vec::new();
     for c in p.forbid {
         forbid.push(c);
     }
-    let review = Vec::new();
+    let mut review = Vec::new();
     for m in p.modules {
         if !asr_path_under(file, m.path) {
             continue;
         }
         if m.has_hosts {
             if has_hosts {
-                let keep = Vec::new();
+                let mut keep = Vec::new();
                 for h in hosts {
                     if asr_has(m.hosts, h) {
                         keep.push(h);

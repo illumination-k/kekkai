@@ -17,12 +17,12 @@ fn wasm_is_vec(m: WasmMod, t: IrTy) -> Bool {
 // emits the body and calls wasm_helper_end.
 fn wasm_helper_begin(m: WasmMod, name: String, s: WasmSig, locals: Vec<Int>) -> WasmFunc {
     wasm_reserve(m, name, s);
-    let d = wasm_def(m, name);
+    let mut d = wasm_def(m, name);
     d.locals = locals;
     d
 }
 
-fn wasm_helper_end(m: WasmMod, d: WasmFunc) -> Int {
+fn wasm_helper_end(m: WasmMod, mut d: WasmFunc) -> Int {
     cg_end(d.body);
     d.built = true;
     wasm_lookup(m.func_idx, d.name)

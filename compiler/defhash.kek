@@ -78,8 +78,8 @@ struct DhWalk {
 // dh_hash_strs hashes a sequence of strings into 32 hex digits (two
 // independent 64-bit FNV-1a lanes).
 fn dh_hash_strs(xs: Vec<String>) -> String {
-    let a = DefaultHasher::new();
-    let b = DefaultHasher::new();
+    let mut a = DefaultHasher::new();
+    let mut b = DefaultHasher::new();
     b.write_i64(-7046029254386353131);
     for s in xs {
         a.write_str(s);
@@ -90,7 +90,7 @@ fn dh_hash_strs(xs: Vec<String>) -> String {
 }
 
 fn dh_hash_str(s: String) -> String {
-    let v = Vec::new();
+    let mut v = Vec::new();
     v.push(s);
     dh_hash_strs(v)
 }
@@ -104,7 +104,7 @@ fn dh_mix(h: Int) -> Int {
 // dh_hex renders 64 bits as 16 hex digits.
 fn dh_hex(h: Int) -> String {
     let digits = "0123456789abcdef";
-    let parts = Vec::new();
+    let mut parts = Vec::new();
     let mut i = 60;
     while i >= 0 {
         let d = h.ushr(i).bit_and(15);
@@ -121,7 +121,7 @@ fn dh_short(h: String) -> String {
 
 // ---- labels ----
 
-fn dh_emit(w: DhWalk, l: String) {
+fn dh_emit(mut w: DhWalk, l: String) {
     w.labels.push(l);
     w.depths.push(w.depth);
     if w.node {
@@ -130,24 +130,24 @@ fn dh_emit(w: DhWalk, l: String) {
     }
 }
 
-fn dh_lit(w: DhWalk, pos: AstPos, l: String) {
+fn dh_lit(mut w: DhWalk, pos: AstPos, l: String) {
     w.lits.push(DhLit { index: w.labels.len(), pos: pos });
     dh_emit(w, l);
 }
 
 // dh_enter starts a syntax node: its first label is at the current depth
 // and the following ones below it until dh_leave.
-fn dh_enter(w: DhWalk) -> Int {
+fn dh_enter(mut w: DhWalk) -> Int {
     w.node = true;
     w.depth
 }
 
-fn dh_leave(w: DhWalk, d: Int) {
+fn dh_leave(mut w: DhWalk, d: Int) {
     w.depth = d;
     w.node = false;
 }
 
-fn dh_declare(w: DhWalk, name: String) {
+fn dh_declare(mut w: DhWalk, name: String) {
     w.scope_names.push(name);
     w.scope_nums.push(w.next_local);
     dh_emit(w, "bind#" + w.next_local.to_string());
@@ -158,7 +158,7 @@ fn dh_scope_mark(w: DhWalk) -> Int {
     w.scope_names.len()
 }
 
-fn dh_scope_reset(w: DhWalk, mark: Int) {
+fn dh_scope_reset(mut w: DhWalk, mark: Int) {
     while w.scope_names.len() > mark {
         w.scope_names.pop();
         w.scope_nums.pop();
@@ -176,7 +176,7 @@ fn dh_lookup(w: DhWalk, name: String) -> Int {
     -1
 }
 
-fn dh_dep(w: DhWalk, name: String) {
+fn dh_dep(mut w: DhWalk, name: String) {
     if name != w.self_name {
         w.deps.insert(name, true);
     }
@@ -196,7 +196,7 @@ fn dh_type(t: AstType) -> String {
             if n.args.len() == 0 {
                 return n.name;
             }
-            let xs = Vec::new();
+            let mut xs = Vec::new();
             for a in n.args {
                 xs.push(dh_type(a));
             }
@@ -210,14 +210,14 @@ fn dh_type(t: AstType) -> String {
         }
         AstType::Unit(_) => "()",
         AstType::Tuple(t) => {
-            let xs = Vec::new();
+            let mut xs = Vec::new();
             for e in t.elems {
                 xs.push(dh_type(e));
             }
             "(" + xs.join(",") + ",)"
         }
         AstType::Fn(f) => {
-            let xs = Vec::new();
+            let mut xs = Vec::new();
             for p in f.params {
                 xs.push(dh_type(p));
             }
@@ -408,7 +408,7 @@ fn dh_targs(w: DhWalk, ts: Vec<AstType>) {
     if ts.len() == 0 {
         return;
     }
-    let xs = Vec::new();
+    let mut xs = Vec::new();
     for t in ts {
         xs.push(dh_type(t));
     }
@@ -455,7 +455,7 @@ fn dh_trait_impls(w: DhWalk, name: String) {
 // implementations (`<T as Trait>::m`), so that a call through a trait does
 // not scan every function.
 fn dh_impl_index(info: ChkInfo) -> HashMap<String, Vec<String>> {
-    let idx: HashMap<String, Vec<String>> = HashMap::new();
+    let mut idx: HashMap<String, Vec<String>> = HashMap::new();
     for fun in info.func_list {
         if chk_is_lib(fun) || !fun.name.starts_with("<") {
             continue;
@@ -477,9 +477,9 @@ fn dh_impl_index(info: ChkInfo) -> HashMap<String, Vec<String>> {
         }
         let key = tr + "::" + fun.name.slice(close + 3, fun.name.len());
         match idx.get(key) {
-            Some(v) => v.push(fun.name),
+            Some(mut v) => v.push(fun.name),
             None => {
-                let v = Vec::new();
+                let mut v = Vec::new();
                 v.push(fun.name);
                 idx.insert(key, v);
             }
@@ -632,7 +632,7 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
 
 // dh_abstract_lits drops the values of literal labels.
 fn dh_abstract_lits(labels: Vec<String>) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for l in labels {
         if l.starts_with("lit:") {
             match l.index_of("=") {
@@ -648,7 +648,7 @@ fn dh_abstract_lits(labels: Vec<String>) -> Vec<String> {
 
 // dh_sig renders a signature without names: "(Int, &Log) -> String".
 fn dh_sig(fun: ChkFunc) -> String {
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for p in fun.params {
         ps.push(ty_str(p.ty));
     }
@@ -656,7 +656,7 @@ fn dh_sig(fun: ChkFunc) -> String {
 }
 
 fn dh_caps(fun: ChkFunc) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for p in fun.params {
         match p.ty {
             Ty::Cap(k, _) => out.push(k),
@@ -683,9 +683,9 @@ fn dh_def(info: ChkInfo, impls: HashMap<String, Vec<String>>, fun: ChkFunc) -> D
         deps: HashMap::new(),
     };
     let d = fun.decl;
-    let gs = Vec::new();
+    let mut gs = Vec::new();
     for g in d.generics {
-        let bs = Vec::new();
+        let mut bs = Vec::new();
         for b in g.bounds {
             bs.push(dh_type(b));
         }
@@ -693,7 +693,7 @@ fn dh_def(info: ChkInfo, impls: HashMap<String, Vec<String>>, fun: ChkFunc) -> D
     }
     dh_emit(w, "fn<" + gs.join(",") + ">");
     for wh in d.wheres {
-        let bs = Vec::new();
+        let mut bs = Vec::new();
         for b in wh.bounds {
             bs.push(dh_type(b));
         }
@@ -739,12 +739,12 @@ fn dh_def(info: ChkInfo, impls: HashMap<String, Vec<String>>, fun: ChkFunc) -> D
 // dh_types_hash hashes the user type declarations (structs, enums, traits
 // and impl headers). A change to any of them changes every trans hash.
 fn dh_types_hash(f: AstFile) -> String {
-    let xs = Vec::new();
+    let mut xs = Vec::new();
     for s in f.structs {
         if dh_is_lib_pos(s.pos) {
             continue;
         }
-        let fs = Vec::new();
+        let mut fs = Vec::new();
         for fld in s.fields {
             let mut m = "";
             if fld.mutable {
@@ -752,7 +752,7 @@ fn dh_types_hash(f: AstFile) -> String {
             }
             fs.push(m + fld.name + ":" + dh_type(fld.ty));
         }
-        let attrs = Vec::new();
+        let mut attrs = Vec::new();
         for a in s.attrs {
             attrs.push(a.name + "(" + a.args.join(",") + ")");
         }
@@ -772,15 +772,15 @@ fn dh_types_hash(f: AstFile) -> String {
         if dh_is_lib_pos(e.pos) {
             continue;
         }
-        let vs = Vec::new();
+        let mut vs = Vec::new();
         for v in e.variants {
-            let ts = Vec::new();
+            let mut ts = Vec::new();
             for t in v.fields {
                 ts.push(dh_type(t));
             }
             vs.push(v.name + "(" + ts.join(",") + ")");
         }
-        let attrs = Vec::new();
+        let mut attrs = Vec::new();
         for a in e.attrs {
             attrs.push(a.name + "(" + a.args.join(",") + ")");
         }
@@ -800,11 +800,11 @@ fn dh_types_hash(f: AstFile) -> String {
         if dh_is_lib_pos(t.pos) {
             continue;
         }
-        let ss = Vec::new();
+        let mut ss = Vec::new();
         for s in t.supers {
             ss.push(dh_type(s));
         }
-        let assoc = Vec::new();
+        let mut assoc = Vec::new();
         for a in t.assoc {
             assoc.push(a.name);
         }
@@ -814,7 +814,7 @@ fn dh_types_hash(f: AstFile) -> String {
         if dh_is_lib_pos(im.pos) {
             continue;
         }
-        let assoc = Vec::new();
+        let mut assoc = Vec::new();
         for a in im.assoc {
             assoc.push(a.name + "=" + dh_opt_type(a.ty));
         }
@@ -848,8 +848,8 @@ fn dh_is_lib_pos(p: AstPos) -> Bool {
 
 // dh_program hashes every user function of a checked program.
 fn dh_program(file: AstFile, info: ChkInfo) -> DhProgram {
-    let defs = Vec::new();
-    let by_name: HashMap<String, DhDef> = HashMap::new();
+    let mut defs = Vec::new();
+    let mut by_name: HashMap<String, DhDef> = HashMap::new();
     let impls = dh_impl_index(info);
     for fun in info.func_list {
         if chk_is_lib(fun) {
@@ -861,7 +861,7 @@ fn dh_program(file: AstFile, info: ChkInfo) -> DhProgram {
     }
     let th = dh_types_hash(file);
     dh_trans(defs, by_name, th);
-    let all = Vec::new();
+    let mut all = Vec::new();
     for d in defs {
         all.push(d.name + "=" + d.trans);
     }
@@ -878,19 +878,19 @@ fn dh_program(file: AstFile, info: ChkInfo) -> DhProgram {
 // traversal per definition.
 fn dh_trans(defs: Vec<DhDef>, by_name: HashMap<String, DhDef>, th: String) {
     let n = defs.len();
-    let index_of: HashMap<String, Int> = HashMap::new();
+    let mut index_of: HashMap<String, Int> = HashMap::new();
     let mut k = 0;
     for d in defs {
         index_of.insert(d.name, k);
         k = k + 1;
     }
-    let adj: Vec<Vec<Int>> = Vec::new();
-    let idx = Vec::new();
-    let low = Vec::new();
-    let on = Vec::new();
-    let comp = Vec::new();
+    let mut adj: Vec<Vec<Int>> = Vec::new();
+    let mut idx = Vec::new();
+    let mut low = Vec::new();
+    let mut on = Vec::new();
+    let mut comp = Vec::new();
     for d in defs {
-        let es = Vec::new();
+        let mut es = Vec::new();
         for dep in d.deps {
             match index_of.get(dep) {
                 Some(j) => es.push(j),
@@ -903,10 +903,10 @@ fn dh_trans(defs: Vec<DhDef>, by_name: HashMap<String, DhDef>, th: String) {
         on.push(false);
         comp.push(-1);
     }
-    let comp_hash: Vec<String> = Vec::new();
-    let stack = Vec::new();
-    let fv = Vec::new();
-    let fi = Vec::new();
+    let mut comp_hash: Vec<String> = Vec::new();
+    let mut stack = Vec::new();
+    let mut fv = Vec::new();
+    let mut fi = Vec::new();
     let mut counter = 0;
     for root in 0..n {
         if idx.get(root).unwrap_or(0) != -1 {
@@ -943,7 +943,7 @@ fn dh_trans(defs: Vec<DhDef>, by_name: HashMap<String, DhDef>, th: String) {
             if low.get(v).unwrap_or(0) == idx.get(v).unwrap_or(0) {
                 // v roots a component: its callees' components are done
                 let c = comp_hash.len();
-                let members = Vec::new();
+                let mut members = Vec::new();
                 let mut more = true;
                 while more {
                     let x = stack.pop().unwrap_or(v);
@@ -952,8 +952,8 @@ fn dh_trans(defs: Vec<DhDef>, by_name: HashMap<String, DhDef>, th: String) {
                     members.push(x);
                     more = x != v;
                 }
-                let parts = Vec::new();
-                let ext: HashSet<String> = HashSet::new();
+                let mut parts = Vec::new();
+                let mut ext: HashSet<String> = HashSet::new();
                 for x in members {
                     match defs.get(x) {
                         Some(d) => parts.push(d.name + "=" + d.hash),
@@ -983,8 +983,8 @@ fn dh_trans(defs: Vec<DhDef>, by_name: HashMap<String, DhDef>, th: String) {
         }
     }
     let mut j = 0;
-    for d in defs {
-        let parts = Vec::new();
+    for mut d in defs {
+        let mut parts = Vec::new();
         parts.push("self=" + d.name + "=" + d.hash);
         parts.push("scc=" + comp_hash.get(comp.get(j).unwrap_or(0)).unwrap_or(""));
         parts.push("types=" + th);
@@ -1040,7 +1040,7 @@ fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     };
     if tool_flag_bool(fl, "json") {
-        let fns = Vec::new();
+        let mut fns = Vec::new();
         for d in l.prog.defs {
             let o = irjson_obj();
             irjson_set(o, "name", IrjVal::Str(d.name));
@@ -1062,7 +1062,7 @@ fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         log.info(irjson_encode(irjson_val(o), false));
         return 0;
     }
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     lines.push("program " + l.prog.hash);
     for d in l.prog.defs {
         lines.push(dh_short(d.hash) + " " + dh_short(d.trans) + " " + d.name);

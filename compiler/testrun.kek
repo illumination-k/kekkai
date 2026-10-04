@@ -47,13 +47,13 @@ fn testrun_main_name() -> String {
 
 // testrun_discover lists the #[test] functions of a checked program.
 fn testrun_discover(info: ChkInfo) -> Vec<TestrunTest> {
-    let tests = Vec::new();
+    let mut tests = Vec::new();
     for fun in info.func_list {
         if !fun.test || chk_is_lib(fun) {
             continue;
         }
-        let caps = Vec::new();
-        let args = Vec::new();
+        let mut caps = Vec::new();
+        let mut args = Vec::new();
         let mut pi = 0;
         for p in fun.params {
             match p.ty {
@@ -118,7 +118,7 @@ fn testrun_discover(info: ChkInfo) -> Vec<TestrunTest> {
 // testrun_params returns the generated parameters of a test (none for an
 // ordinary test).
 fn testrun_params(t: TestrunTest) -> Vec<TestrunArg> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for a in t.args {
         if a.cap == "" {
             out.push(a);
@@ -130,7 +130,7 @@ fn testrun_params(t: TestrunTest) -> Vec<TestrunArg> {
 // testrun_hash sets the definition hash (trans) of every test.
 fn testrun_hash(tests: Vec<TestrunTest>, file: AstFile, info: ChkInfo) {
     let dh = dh_program(file, info);
-    for t in tests {
+    for mut t in tests {
         match dh.by_name.get(t.name) {
             Some(d) => {
                 t.hash = d.trans;
@@ -141,7 +141,7 @@ fn testrun_hash(tests: Vec<TestrunTest>, file: AstFile, info: ChkInfo) {
 }
 
 fn testrun_tests_tsv(tests: Vec<TestrunTest>) -> String {
-    let lines = Vec::new();
+    let mut lines = Vec::new();
     for t in tests {
         lines.push(
             t.name
@@ -160,14 +160,14 @@ fn testrun_tests_tsv(tests: Vec<TestrunTest>) -> String {
 }
 
 fn testrun_tests_json(tests: Vec<TestrunTest>) -> String {
-    let items = Vec::new();
+    let mut items = Vec::new();
     for t in tests {
-        let caps = Vec::new();
+        let mut caps = Vec::new();
         for c in t.caps {
             caps.push(json_quote(c));
         }
         let pure = if t.caps.len() == 0 { "true" } else { "false" };
-        let params = Vec::new();
+        let mut params = Vec::new();
         for p in testrun_params(t) {
             params.push(
                 "{\"name\":" + json_quote(p.name) + ",\"type\":" + json_quote(ty_str(p.ty)) + "}",
@@ -208,7 +208,7 @@ fn testrun_kind(t: TestrunTest) -> String {
 
 // testrun_harness returns the source of the synthesized #[main].
 fn testrun_harness(tests: Vec<TestrunTest>) -> String {
-    let used: HashMap<String, Bool> = HashMap::new();
+    let mut used: HashMap<String, Bool> = HashMap::new();
     for t in tests {
         for c in t.caps {
             used.insert(c, true);
@@ -232,7 +232,7 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
         }
     }
     b = b + ") -> Int {\n    let __name = __args.get(0).unwrap_or(\"\");\n";
-    let pg = pbt_new();
+    let mut pg = pbt_new();
     let mut ti = 0;
     b = b + "    if __name == \"--batch\" {\n        return __kek_batch(0" + cargs + ");\n    }\n";
     b = b + "    if !__test_begin(__name) {\n        return 1;\n    }\n";
@@ -257,7 +257,7 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
         + "        if __m != 0 {\n            __batch_result(__m, __by);\n        }\n    }\n    0\n}\n\n";
     b = b + "fn __kek_run_one(__name: String" + cdecl + ") -> Int {\n";
     for t in tests {
-        let args = Vec::new();
+        let mut args = Vec::new();
         for c in t.caps {
             args.push("__" + c.to_lower());
         }
@@ -295,15 +295,15 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
 // passes, else why it failed), __kd_n renders a call, __kt_n generates
 // the cases and shrinks the first failure.
 fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
-    let caps_decl = Vec::new();
-    let caps_args = Vec::new();
+    let mut caps_decl = Vec::new();
+    let mut caps_args = Vec::new();
     for c in t.caps {
         caps_decl.push("__" + c.to_lower() + ": &" + c);
         caps_args.push("__" + c.to_lower());
     }
     let ps = testrun_params(t);
-    let ids = Vec::new();
-    let vdecl = Vec::new();
+    let mut ids = Vec::new();
+    let mut vdecl = Vec::new();
     let mut k = 0;
     for p in ps {
         let id = pbt_ty(pg, p.ty);
@@ -312,7 +312,7 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
         k = k + 1;
     }
     // the call of the test, its parameters in declaration order
-    let call_args = Vec::new();
+    let mut call_args = Vec::new();
     k = 0;
     for a in t.args {
         if a.cap != "" {
@@ -323,7 +323,7 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
         }
     }
     let call = t.name + "(" + call_args.join(", ") + ")";
-    let all_decl = Vec::new();
+    let mut all_decl = Vec::new();
     for d in caps_decl {
         all_decl.push(d);
     }
@@ -362,7 +362,7 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
     }
     b = b + "}\n\n";
     // __kd_n: `name(x = 1, ys = [])`
-    let shows = Vec::new();
+    let mut shows = Vec::new();
     k = 0;
     for p in ps {
         shows.push(
@@ -379,8 +379,8 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
     b = b + json_quote(t.name + "(") + " + " + shows.join(" + \", \" + ") + " + \")\"\n}\n\n";
     // __kt_n
     let who = json_quote(t.name) + ", " + json_quote(testrun_kind(t));
-    let gen_args = Vec::new();
-    let cur_args = Vec::new();
+    let mut gen_args = Vec::new();
+    let mut cur_args = Vec::new();
     k = 0;
     for p in ps {
         gen_args.push("__a" + k.to_string());
@@ -457,7 +457,7 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
         + "            let mut __more = true;\n            while __more {\n                __more = false;\n";
     k = 0;
     for id in ids {
-        let cand = Vec::new();
+        let mut cand = Vec::new();
         let mut q = 0;
         for x in cur_args {
             cand.push(if q == k { "__c" } else { x });
@@ -517,7 +517,7 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
 }
 
 fn testrun_join2(a: Vec<String>, b: Vec<String>) -> String {
-    let all = Vec::new();
+    let mut all = Vec::new();
     for x in a {
         all.push(x);
     }
@@ -573,7 +573,7 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if !testrun_write(fs, log, out_dir + "/tests.tsv", testrun_tests_tsv(all)) {
         return 1;
     }
-    let names = Vec::new();
+    let mut names = Vec::new();
     for t in all {
         names.push(t.name + "\n");
     }
@@ -585,7 +585,7 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let mut tests = all;
     if mode == "-run" {
-        let want: HashMap<String, Bool> = HashMap::new();
+        let mut want: HashMap<String, Bool> = HashMap::new();
         let mut i = 4;
         while i < args.len() {
             want.insert(args.get(i).unwrap_or(""), true);
@@ -613,7 +613,7 @@ fn testrun_build(
     fs: &Fs,
     log: &Log,
 ) -> Int {
-    let all = Vec::new();
+    let mut all = Vec::new();
     for s in srcs {
         all.push(s);
     }
@@ -627,11 +627,11 @@ fn testrun_build(
         frontend_print_errors(log, prog.errs);
         return 1;
     }
-    for fd in prog.file.funcs {
+    for mut fd in prog.file.funcs {
         if fd.name == testrun_main_name() {
             continue;
         }
-        let attrs = Vec::new();
+        let mut attrs = Vec::new();
         for a in fd.attrs {
             if a.name != "handler" && a.name != "main" {
                 attrs.push(a);

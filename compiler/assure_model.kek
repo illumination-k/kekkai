@@ -77,7 +77,7 @@ fn asr_state_new() -> AsrState {
 }
 
 // asr_state_add inserts a definition (keeping defs sorted by name).
-fn asr_state_add(s: AsrState, d: AsrDef) {
+fn asr_state_add(mut s: AsrState, d: AsrDef) {
     s.by_name.insert(d.name, d);
     s.defs.push(d);
     let mut i = s.defs.len() - 1;
@@ -114,7 +114,7 @@ fn asr_has(xs: Vec<String>, x: String) -> Bool {
 
 // asr_sorted_set sorts and removes duplicates.
 fn asr_sorted_set(xs: Vec<String>) -> Vec<String> {
-    let m: HashMap<String, Bool> = HashMap::new();
+    let mut m: HashMap<String, Bool> = HashMap::new();
     for x in xs {
         m.insert(x, true);
     }
@@ -125,7 +125,7 @@ fn asr_sorted_set(xs: Vec<String>) -> Vec<String> {
 
 // asr_minus is xs without the items of ys (order kept).
 fn asr_minus(xs: Vec<String>, ys: Vec<String>) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for x in xs {
         if !asr_has(ys, x) {
             out.push(x);
@@ -280,7 +280,7 @@ fn asr_w_exprs(w: AsrWalk, es: Vec<AstExpr>) {
     }
 }
 
-fn asr_w_expr(w: AsrWalk, e: AstExpr) {
+fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
     match e {
         AstExpr::IntLit(_) => {}
         AstExpr::BoolLit(_) => {}
@@ -365,8 +365,8 @@ fn asr_direct_hosts(info: ChkInfo, fun: ChkFunc) -> Vec<String> {
 // asr_reach is the set of user definitions reachable from name (itself
 // included) through dh deps.
 fn asr_reach(p: DhProgram, name: String) -> Vec<String> {
-    let seen: HashMap<String, Bool> = HashMap::new();
-    let work = Vec::new();
+    let mut seen: HashMap<String, Bool> = HashMap::new();
+    let mut work = Vec::new();
     work.push(name);
     seen.insert(name, true);
     let mut i = 0;
@@ -390,7 +390,7 @@ fn asr_reach(p: DhProgram, name: String) -> Vec<String> {
 // ---- assumptions ----
 
 fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for a in fun.decl.attrs {
         if a.name == "allow" && ast_attr_has(a, "similar") {
             out.push(AsrAssume {
@@ -467,12 +467,12 @@ fn asr_model(l: DhLoaded) -> AsrState {
     let p = l.prog;
     let info = l.res.info;
     // hosts contacted directly
-    let direct: HashMap<String, Vec<String>> = HashMap::new();
+    let mut direct: HashMap<String, Vec<String>> = HashMap::new();
     for d in p.defs {
         direct.insert(d.name, asr_direct_hosts(info, d.fun));
     }
     // definitions reached by some #[test]
-    let tested: HashMap<String, Bool> = HashMap::new();
+    let mut tested: HashMap<String, Bool> = HashMap::new();
     for d in p.defs {
         if d.fun.test {
             for n in asr_reach(p, d.name) {
@@ -483,15 +483,16 @@ fn asr_model(l: DhLoaded) -> AsrState {
         }
     }
     // refinement proofs: every VC kind in every function (as lints)
-    let rcfg = ref_config_default();
+    let mut rcfg = ref_config_default();
     rcfg.all = true;
     let rr = ref_program(info, rcfg, l.file);
     let st = asr_state_new();
+    let ro = mu_readonly(info, l.file);
     for d in p.defs {
         let fun = d.fun;
-        let guars = Vec::new();
+        let mut guars = Vec::new();
         guars.push(asr_set_guar("effects", asr_sorted_set(d.caps), "type"));
-        let hosts = Vec::new();
+        let mut hosts = Vec::new();
         for n in asr_reach(p, d.name) {
             for h in direct.get(n).unwrap_or(Vec::new()) {
                 hosts.push(h);
@@ -508,6 +509,10 @@ fn asr_model(l: DhLoaded) -> AsrState {
         if d.caps.len() > 0 && chk_idem_violation(info, fun).is_none() {
             guars.push(asr_bool_guar("idempotent", true, "type"));
         }
+        // it takes values with mutable state and mutates none of them
+        if ro.get(d.name).unwrap_or(0) == 2 {
+            guars.push(asr_bool_guar("readonly", true, "type"));
+        }
         if !fun.test {
             guars.push(asr_bool_guar("tested", tested.contains_key(d.name), "test"));
         }
@@ -515,11 +520,11 @@ fn asr_model(l: DhLoaded) -> AsrState {
         // for functions that have some)
         match ref_sum_find(rr, d.name) {
             Some(sum) => {
-                let kinds = Vec::new();
+                let mut kinds = Vec::new();
                 kinds.push("index");
                 kinds.push("div");
                 kinds.push("overflow");
-                let names = Vec::new();
+                let mut names = Vec::new();
                 names.push("refine.index_safe");
                 names.push("refine.no_div_zero");
                 names.push("refine.no_overflow");

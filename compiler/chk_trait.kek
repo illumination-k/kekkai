@@ -42,13 +42,13 @@ struct ChkWhere {
 // chk_resolve_wheres resolves `where` clauses (in c.tscope): a bound on a
 // param is added to the param; the others are returned.
 fn chk_resolve_wheres(c: Chk, ws: Vec<AstWhere>) -> Vec<ChkWhere> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for w in ws {
         let t = chk_resolve_type(c, w.ty, false);
         for b in w.bounds {
             match chk_resolve_bound(c, b) {
                 Some(tb) => match ty_prune(t) {
-                    Ty::Param(p) => p.bounds.push(tb),
+                    Ty::Param(mut p) => p.bounds.push(tb),
                     _ => out.push(ChkWhere { ty: t, bound: tb }),
                 },
                 None => {}
@@ -82,7 +82,7 @@ fn chk_bounds_of(info: ChkInfo, t: Ty) -> Vec<TyBound> {
     match ty_prune(t) {
         Ty::Param(p) => p.bounds,
         _ => {
-            let out = Vec::new();
+            let mut out = Vec::new();
             for w in info.wheres {
                 if ty_identical(w.ty, t) {
                     out.push(w.bound);
@@ -117,7 +117,7 @@ struct ChkObl {
 
 // ---- declarations ----
 
-fn chk_declare_traits(c: Chk, f: AstFile) {
+fn chk_declare_traits(mut c: Chk, f: AstFile) {
     for td in f.traits {
         if chk_reserved(td.name)
             || c.info.structs.contains_key(td.name)
@@ -127,14 +127,14 @@ fn chk_declare_traits(c: Chk, f: AstFile) {
             continue;
         }
         c.next_id = c.next_id + 1;
-        let sp = TyParam { id: c.next_id, name: "Self", bounds: Vec::new() };
+        let mut sp = TyParam { id: c.next_id, name: "Self", bounds: Vec::new() };
         let ps = chk_tparams(c, td.generics, false);
-        let b = chk_bound(td.name);
+        let mut b = chk_bound(td.name);
         for p in ps {
             b.args.push(Ty::Param(p));
         }
         sp.bounds.push(b);
-        let tr = ChkTrait {
+        let mut tr = ChkTrait {
             name: td.name,
             decl: td,
             self_param: sp,
@@ -153,7 +153,7 @@ fn chk_declare_traits(c: Chk, f: AstFile) {
     }
     for td in f.traits {
         match c.info.traits.get(td.name) {
-            Some(tr) => {
+            Some(mut tr) => {
                 if tr.decl.id != td.id {
                     continue;
                 }
@@ -204,7 +204,7 @@ fn chk_resolve_bound(c: Chk, te0: AstType) -> Option<TyBound> {
             }
             // `Fn(A) -> R`: the signature is kept as the bound's only
             // associated type
-            let b = chk_bound("Fn");
+            let mut b = chk_bound("Fn");
             b.assoc_names.push("sig");
             b.assoc_tys.push(chk_resolve_type(c, te0, false));
             Some(b)
@@ -212,7 +212,7 @@ fn chk_resolve_bound(c: Chk, te0: AstType) -> Option<TyBound> {
         AstType::Named(te) => {
             match c.info.traits.get(te.name) {
                 Some(tr) => {
-                    let b = chk_bound(tr.name);
+                    let mut b = chk_bound(tr.name);
                     for a in te.args {
                         match a {
                             AstType::Named(an) => {
@@ -275,7 +275,7 @@ fn chk_resolve_bounds(c: Chk, gs: Vec<AstGeneric>, ps: Vec<TyParam>) {
     let mut i = 0;
     for g in gs {
         match ps.get(i) {
-            Some(p) => {
+            Some(mut p) => {
                 for b in g.bounds {
                     match chk_resolve_bound(c, b) {
                         Some(tb) => p.bounds.push(tb),
@@ -313,7 +313,12 @@ fn chk_trait_closure(info: ChkInfo, tr: String) -> Vec<String> {
     out
 }
 
-fn chk_add_closure(info: ChkInfo, tr: String, out: Vec<String>, seen: HashMap<String, Bool>) {
+fn chk_add_closure(
+    info: ChkInfo,
+    tr: String,
+    mut out: Vec<String>,
+    mut seen: HashMap<String, Bool>,
+) {
     if seen.contains_key(tr) {
         return;
     }
@@ -363,23 +368,23 @@ fn chk_bounds_have(info: ChkInfo, bounds: Vec<TyBound>, tr: String, args: Vec<Ty
 fn chk_declare_trait_methods(c: Chk) {
     for name in c.info.traits.keys() {
         match c.info.traits.get(name) {
-            Some(tr) => {
-                let seen: HashMap<String, Bool> = HashMap::new();
+            Some(mut tr) => {
+                let mut seen: HashMap<String, Bool> = HashMap::new();
                 for fd in tr.decl.funcs {
                     if seen.contains_key(fd.name) {
                         chk_errorf(c, fd.pos, "duplicate definitions with name `" + fd.name + "`");
                         continue;
                     }
                     seen.insert(fd.name, true);
-                    let sc = chk_param_scope(tr.params);
+                    let mut sc = chk_param_scope(tr.params);
                     sc.insert("Self", Ty::Param(tr.self_param));
-                    let outer = Vec::new();
+                    let mut outer = Vec::new();
                     outer.push(tr.self_param);
                     for p in tr.params {
                         outer.push(p);
                     }
                     match chk_declare_func(c, fd, tr.name + "::" + fd.name, outer, sc) {
-                        Some(fun) => {
+                        Some(mut fun) => {
                             fun.trait_name = tr.name;
                             tr.methods.push(fd.name);
                         }
@@ -394,7 +399,7 @@ fn chk_declare_trait_methods(c: Chk) {
 
 // chk_declare_trait_impl registers `impl Trait for Target` (its methods
 // are declared by chk_declare_impl_methods once every impl is known).
-fn chk_declare_trait_impl(c: Chk, im: AstImplDecl, tt: AstType) {
+fn chk_declare_trait_impl(mut c: Chk, im: AstImplDecl, tt: AstType) {
     let ips = chk_tparams(c, im.generics, true);
     c.tscope = chk_param_scope(ips);
     chk_resolve_bounds(c, im.generics, ips);
@@ -460,7 +465,7 @@ fn chk_declare_trait_impl(c: Chk, im: AstImplDecl, tt: AstType) {
         }
     }
     let tstr = b.trait_name + ty_args_str(b.args);
-    let ci = ChkImpl {
+    let mut ci = ChkImpl {
         trait_name: b.trait_name,
         pos: im.pos,
         decl: im,
@@ -532,9 +537,9 @@ fn chk_declare_trait_impl(c: Chk, im: AstImplDecl, tt: AstType) {
         None => {}
     }
     match c.info.impls.get(b.trait_name) {
-        Some(v) => v.push(ci),
+        Some(mut v) => v.push(ci),
         None => {
-            let v = Vec::new();
+            let mut v = Vec::new();
             v.push(ci);
             c.info.impls.insert(b.trait_name, v);
         }
@@ -630,7 +635,7 @@ fn chk_declare_impl_methods(c: Chk) {
                 continue;
             }
         };
-        for ci in chk_impls_of(c.info, trn) {
+        for mut ci in chk_impls_of(c.info, trn) {
             for fd in ci.decl.funcs {
                 if !chk_has_name(tr.methods, fd.name) {
                     chk_errorf(
@@ -644,7 +649,7 @@ fn chk_declare_impl_methods(c: Chk) {
                     chk_errorf(c, fd.pos, "duplicate definitions with name `" + fd.name + "`");
                     continue;
                 }
-                let sc = chk_param_scope(ci.tparams);
+                let mut sc = chk_param_scope(ci.tparams);
                 sc.insert("Self", ci.target);
                 match chk_declare_func(c, fd, ci.tname + "::" + fd.name, ci.tparams, sc) {
                     Some(fun) => {
@@ -711,7 +716,7 @@ fn chk_compare_sig(c: Chk, ci: ChkImpl, fun: ChkFunc, tf: ChkFunc) {
     }
     // the trait's params: Self, the trait's, then the method's own; the
     // impl's: the impl's, then its own (mapped to the trait's)
-    let targs = Vec::new();
+    let mut targs = Vec::new();
     targs.push(ci.target);
     for a in ci.trait_args {
         targs.push(a);
@@ -815,8 +820,8 @@ fn chk_find_impl(
         return None;
     }
     for im in chk_impls_of(info, tr) {
-        let binds = Vec::new();
-        let bound = Vec::new();
+        let mut binds = Vec::new();
+        let mut bound = Vec::new();
         for p in im.tparams {
             binds.push(ty_unit());
             bound.push(false);
@@ -873,7 +878,13 @@ fn chk_find_impl(
 
 // chk_match_ty matches pattern pat (mentioning params ps) against t,
 // binding the params.
-fn chk_match_ty(pat0: Ty, t0: Ty, ps: Vec<TyParam>, binds: Vec<Ty>, bound: Vec<Bool>) -> Bool {
+fn chk_match_ty(
+    pat0: Ty,
+    t0: Ty,
+    ps: Vec<TyParam>,
+    mut binds: Vec<Ty>,
+    mut bound: Vec<Bool>,
+) -> Bool {
     let pat = ty_prune(pat0);
     let t = ty_prune(t0);
     match pat {
@@ -1051,7 +1062,7 @@ fn chk_norm(info: ChkInfo, t0: Ty) -> Ty {
 }
 
 fn chk_norm_all(info: ChkInfo, ts: Vec<Ty>) -> Vec<Ty> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     for t in ts {
         out.push(chk_norm(info, t));
     }
@@ -1074,7 +1085,7 @@ fn chk_assoc_type(c: Chk, te: AstNamedType) -> Ty {
         Ty::Param(p) => chk_param_traits(c.info, p),
         _ => {
             // a concrete `Self`: the traits it implements
-            let out = Vec::new();
+            let mut out = Vec::new();
             for tn in c.info.traits.keys() {
                 if chk_find_impl(c.info, tn, base, Vec::new(), 0).is_some() {
                     out.push(tn);
@@ -1083,7 +1094,7 @@ fn chk_assoc_type(c: Chk, te: AstNamedType) -> Ty {
             out
         }
     };
-    let found = Vec::new();
+    let mut found = Vec::new();
     for tn in traits {
         match c.info.traits.get(tn) {
             Some(tr) => {
@@ -1109,7 +1120,7 @@ fn chk_assoc_type(c: Chk, te: AstNamedType) -> Ty {
 // chk_traits_with_method lists the traits declaring method m that t
 // implements (all such traits when t is still unknown).
 fn chk_traits_with_method(c: Chk, t: Ty, m: String) -> Vec<String> {
-    let out = Vec::new();
+    let mut out = Vec::new();
     let cands = match ty_prune(t) {
         Ty::Param(p) => chk_param_traits(c.info, p),
         Ty::Assoc(_, _, _) => {
@@ -1148,7 +1159,7 @@ fn chk_trait_call(
     args: Vec<AstExpr>,
     given: Vec<AstType>,
 ) -> ChkMethodInfo {
-    let targs = Vec::new();
+    let mut targs = Vec::new();
     targs.push(self_t);
     for i in 1..tf.tparams.len() {
         targs.push(chk_new_var(c));
@@ -1160,11 +1171,11 @@ fn chk_trait_call(
         Some(tr) => tr.params.len(),
         None => 0,
     };
-    let ps = Vec::new();
+    let mut ps = Vec::new();
     for t in chk_param_types(tf, targs) {
         ps.push(chk_norm(c.info, t));
     }
-    let rest = Vec::new();
+    let mut rest = Vec::new();
     let start = if recv { 1 } else { 0 };
     for i in start..ps.len() {
         rest.push(ps.get(i).unwrap_or(ty_unit()));
@@ -1172,7 +1183,7 @@ fn chk_trait_call(
     chk_args(c, pos, "`" + tf.name + "`", args, rest);
     // obligations: Self implements the trait (with its arguments), and the
     // bounds of the method's own params
-    let trait_args = Vec::new();
+    let mut trait_args = Vec::new();
     for i in 0..ntrait {
         trait_args.push(targs.get(1 + i).unwrap_or(ty_unit()));
     }
@@ -1232,7 +1243,7 @@ fn chk_oblige(c: Chk, pos: AstPos, tr: String, t: Ty, msg: String) {
     chk_oblige_args(c, pos, tr, Vec::new(), t, msg);
 }
 
-fn chk_oblige_args(c: Chk, pos: AstPos, tr: String, args: Vec<Ty>, t: Ty, msg: String) {
+fn chk_oblige_args(mut c: Chk, pos: AstPos, tr: String, args: Vec<Ty>, t: Ty, msg: String) {
     c.obls.push(ChkObl {
         pos: pos,
         trait_name: tr,
@@ -1246,7 +1257,7 @@ fn chk_oblige_args(c: Chk, pos: AstPos, tr: String, args: Vec<Ty>, t: Ty, msg: S
 
 // chk_assoc_eq requires `<t as tr>::n == want`: now when the associated
 // type can be resolved, otherwise (if defer) at the end of the function.
-fn chk_assoc_eq(c: Chk, pos: AstPos, t: Ty, tr: String, n: String, want0: Ty, defer: Bool) {
+fn chk_assoc_eq(mut c: Chk, pos: AstPos, t: Ty, tr: String, n: String, want0: Ty, defer: Bool) {
     let got = chk_norm(c.info, Ty::Assoc(t, tr, n));
     let want = chk_norm(c.info, want0);
     match got {
@@ -1286,14 +1297,14 @@ fn chk_assoc_eq(c: Chk, pos: AstPos, t: Ty, tr: String, n: String, want0: Ty, de
 }
 
 // chk_check_obls checks the pending obligations (at the end of a function).
-fn chk_check_obls(c: Chk) {
+fn chk_check_obls(mut c: Chk) {
     for o in c.obls {
         if o.assoc != "" {
             chk_assoc_eq(c, o.pos, o.ty, o.trait_name, o.assoc, o.want, false);
             continue;
         }
         let t = chk_norm(c.info, ty_resolve(o.ty));
-        let args = Vec::new();
+        let mut args = Vec::new();
         for a in o.args {
             args.push(chk_norm(c.info, ty_resolve(a)));
         }
@@ -1326,11 +1337,11 @@ fn chk_dispatch(info: ChkInfo, tr: String, m: String, targs: Vec<Ty>) -> Option<
         None => 0,
     };
     let self_t = targs.get(0).unwrap_or(ty_unit());
-    let trait_args = Vec::new();
+    let mut trait_args = Vec::new();
     for i in 0..ntrait {
         trait_args.push(targs.get(1 + i).unwrap_or(ty_unit()));
     }
-    let own = Vec::new();
+    let mut own = Vec::new();
     for i in 1 + ntrait..targs.len() {
         own.push(targs.get(i).unwrap_or(ty_unit()));
     }
@@ -1338,7 +1349,7 @@ fn chk_dispatch(info: ChkInfo, tr: String, m: String, targs: Vec<Ty>) -> Option<
         Some(found) => {
             match found.im.methods.get(m) {
                 Some(f) => {
-                    let fargs = Vec::new();
+                    let mut fargs = Vec::new();
                     for t in found.targs {
                         fargs.push(t);
                     }

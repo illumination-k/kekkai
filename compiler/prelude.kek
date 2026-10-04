@@ -5,11 +5,11 @@
 //   kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
 //   kek embed-prelude lib/core compiler/core_src.kek -as core [-check]
 
-fn prelude_file(v: Vec<FeSource>, name: String, text: String) {
+fn prelude_file(mut v: Vec<FeSource>, name: String, text: String) {
     v.push(FeSource { name: "<prelude>/" + name, text: text });
 }
 
-fn core_file(v: Vec<FeSource>, name: String, text: String) {
+fn core_file(mut v: Vec<FeSource>, name: String, text: String) {
     v.push(FeSource { name: "<core>/" + name, text: text });
 }
 

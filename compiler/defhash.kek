@@ -1,0 +1,847 @@
+// Definition hashes (prefix dh_ / Dh*): the identity of every user
+// function, shared by `kek hash`, `similar`, the test and build caches,
+// `cover`, `mutate` and `assure`.
+//
+// A definition is walked into a sequence of labels (its normalized syntax
+// tree in preorder). Local variables are numbered in declaration order, so
+// the hash does not depend on their names (alpha-equivalence); a
+// definition's own name is replaced by "self" so that renamed recursive
+// functions also hash alike.
+//
+//   hash        the labels and the signature types
+//   hash_lits   the same with the values of literals abstracted
+//               (definitions that differ only in constants share it)
+//   trans       hash plus the hashes of every user definition it can reach
+//               (calls, methods, trait implementations) and of the type
+//               declarations: equal trans means equal behaviour, so it keys
+//               the caches
+
+struct DhDef {
+    name: String,
+    fun: ChkFunc,
+    pos: AstPos,
+    // the signature without parameter names: "(Int, &Log) -> String"
+    sig: String,
+    caps: Vec<String>,
+    labels: Vec<String>,
+    hash: String,
+    hash_lits: String,
+    // user definitions referenced directly (sorted, no duplicates)
+    deps: Vec<String>,
+    mut trans: String,
+}
+
+struct DhProgram {
+    defs: Vec<DhDef>,
+    by_name: HashMap<String, DhDef>,
+    types_hash: String,
+    // hash of the whole program (every definition's trans hash)
+    hash: String,
+}
+
+// Walker state of one definition.
+struct DhWalk {
+    info: ChkInfo,
+    self_name: String,
+    labels: Vec<String>,
+    // in-scope locals: name -> declaration number (stack, innermost last)
+    scope_names: Vec<String>,
+    scope_nums: Vec<Int>,
+    mut next_local: Int,
+    deps: HashMap<String, Bool>,
+}
+
+// ---- hashing ----
+
+// dh_hash_strs hashes a sequence of strings into 32 hex digits (two
+// independent 64-bit FNV-1a lanes).
+fn dh_hash_strs(xs: Vec<String>) -> String {
+    let a = DefaultHasher::new();
+    let b = DefaultHasher::new();
+    b.write_i64(-7046029254386353131);
+    for s in xs {
+        a.write_str(s);
+        b.write_str(s);
+        b.write_i64(7);
+    }
+    dh_hex(dh_mix(a.finish())) + dh_hex(dh_mix(b.finish()))
+}
+
+fn dh_hash_str(s: String) -> String {
+    let v = Vec::new();
+    v.push(s);
+    dh_hash_strs(v)
+}
+
+fn dh_mix(h: Int) -> Int {
+    let h2 = h.bit_xor(h.ushr(33)) * -49064778989728563;
+    let h3 = h2.bit_xor(h2.ushr(33)) * -4265267296055464877;
+    h3.bit_xor(h3.ushr(33))
+}
+
+// dh_hex renders 64 bits as 16 hex digits.
+fn dh_hex(h: Int) -> String {
+    let digits = "0123456789abcdef";
+    let parts = Vec::new();
+    let mut i = 60;
+    while i >= 0 {
+        let d = h.ushr(i).bit_and(15);
+        parts.push(digits.slice(d, d + 1));
+        i = i - 4;
+    }
+    parts.join("")
+}
+
+// dh_short is the abbreviated form of a hash for human-readable output.
+fn dh_short(h: String) -> String {
+    h.slice(0, 12)
+}
+
+// ---- labels ----
+
+fn dh_emit(w: DhWalk, l: String) {
+    w.labels.push(l);
+}
+
+fn dh_declare(w: DhWalk, name: String) {
+    w.scope_names.push(name);
+    w.scope_nums.push(w.next_local);
+    dh_emit(w, "bind#" + w.next_local.to_string());
+    w.next_local = w.next_local + 1;
+}
+
+fn dh_scope_mark(w: DhWalk) -> Int {
+    w.scope_names.len()
+}
+
+fn dh_scope_reset(w: DhWalk, mark: Int) {
+    while w.scope_names.len() > mark {
+        w.scope_names.pop();
+        w.scope_nums.pop();
+    }
+}
+
+fn dh_lookup(w: DhWalk, name: String) -> Int {
+    let mut i = w.scope_names.len() - 1;
+    while i >= 0 {
+        if w.scope_names.get(i).unwrap_or("") == name {
+            return w.scope_nums.get(i).unwrap_or(-1);
+        }
+        i = i - 1;
+    }
+    -1
+}
+
+fn dh_dep(w: DhWalk, name: String) {
+    if name != w.self_name {
+        w.deps.insert(name, true);
+    }
+}
+
+fn dh_global(w: DhWalk, name: String) -> String {
+    if name == w.self_name {
+        return "self";
+    }
+    name
+}
+
+// dh_type renders a syntactic type (generic parameter names included).
+fn dh_type(t: AstType) -> String {
+    match t {
+        AstType::Named(n) => {
+            if n.args.len() == 0 {
+                return n.name;
+            }
+            let xs = Vec::new();
+            for a in n.args {
+                xs.push(dh_type(a));
+            }
+            n.name + "<" + xs.join(",") + ">"
+        }
+        AstType::Ref(r) => {
+            if r.mutable {
+                return "&mut " + dh_type(r.elem);
+            }
+            "&" + dh_type(r.elem)
+        }
+        AstType::Unit(_) => "()",
+        AstType::Tuple(t) => {
+            let xs = Vec::new();
+            for e in t.elems {
+                xs.push(dh_type(e));
+            }
+            "(" + xs.join(",") + ",)"
+        }
+        AstType::Fn(f) => {
+            let xs = Vec::new();
+            for p in f.params {
+                xs.push(dh_type(p));
+            }
+            let r = match f.result {
+                Some(t) => dh_type(t),
+                None => "()",
+            };
+            f.kind + "(" + xs.join(",") + ")->" + r
+        }
+    }
+}
+
+fn dh_opt_type(t: Option<AstType>) -> String {
+    match t {
+        Some(x) => dh_type(x),
+        None => "_",
+    }
+}
+
+fn dh_pattern(w: DhWalk, p: AstPattern) {
+    if p.wildcard {
+        dh_emit(w, "p_");
+        return;
+    }
+    if p.tuple {
+        dh_emit(w, "ptuple/" + p.args.len().to_string());
+        for a in p.args {
+            dh_pattern(w, a);
+        }
+        return;
+    }
+    match p.int_value {
+        Some(n) => {
+            dh_emit(w, "lit:int=" + n.to_string());
+            return;
+        }
+        None => {}
+    }
+    match p.bool_lit {
+        Some(b) => {
+            dh_emit(w, "lit:bool=" + b.to_string());
+            return;
+        }
+        None => {}
+    }
+    match p.str_value {
+        Some(s) => {
+            dh_emit(w, "lit:str=" + s);
+            return;
+        }
+        None => {}
+    }
+    if p.ctor != "" {
+        let mut c = p.ctor;
+        if p.ty != "" {
+            c = p.ty + "::" + p.ctor;
+        }
+        dh_emit(w, "pctor:" + c + "/" + p.args.len().to_string());
+        for a in p.args {
+            dh_pattern(w, a);
+        }
+        return;
+    }
+    if p.bind != "" {
+        dh_declare(w, p.bind);
+        return;
+    }
+    dh_emit(w, "p?");
+}
+
+fn dh_block(w: DhWalk, b: AstBlock) {
+    let mark = dh_scope_mark(w);
+    dh_emit(w, "{" + b.stmts.len().to_string());
+    for s in b.stmts {
+        dh_stmt(w, s);
+    }
+    match b.tail {
+        Some(e) => {
+            dh_emit(w, "tail");
+            dh_expr(w, e);
+        }
+        None => {}
+    }
+    dh_emit(w, "}");
+    dh_scope_reset(w, mark);
+}
+
+fn dh_stmt(w: DhWalk, s: AstStmt) {
+    match s {
+        AstStmt::Let(l) => {
+            dh_emit(w, "let:" + dh_opt_type(l.ty));
+            // the initializer sees the outer scope
+            dh_expr(w, l.init);
+            match l.pat {
+                Some(p) => dh_pattern(w, p),
+                None => dh_declare(w, l.name),
+            }
+        }
+        AstStmt::Assign(a) => {
+            dh_emit(w, "assign");
+            dh_ident(w, a.name, a.id);
+            dh_expr(w, a.value);
+        }
+        AstStmt::FieldAssign(a) => {
+            dh_emit(w, "setfield:" + a.target.name);
+            dh_expr(w, a.target.x);
+            dh_expr(w, a.value);
+        }
+        AstStmt::Break(_) => dh_emit(w, "break"),
+        AstStmt::Continue(_) => dh_emit(w, "continue"),
+        AstStmt::While(s) => {
+            let mark = dh_scope_mark(w);
+            dh_emit(w, "while");
+            dh_expr(w, s.cond);
+            match s.pat {
+                Some(p) => {
+                    dh_emit(w, "let");
+                    dh_pattern(w, p);
+                }
+                None => {}
+            }
+            dh_block(w, s.body);
+            dh_scope_reset(w, mark);
+        }
+        AstStmt::For(s) => {
+            let mark = dh_scope_mark(w);
+            dh_emit(w, "for");
+            dh_expr(w, s.iter);
+            match s.end {
+                Some(e) => {
+                    dh_emit(w, "..");
+                    dh_expr(w, e);
+                }
+                None => {}
+            }
+            match s.pat {
+                Some(p) => dh_pattern(w, p),
+                None => dh_declare(w, s.var),
+            }
+            dh_block(w, s.body);
+            dh_scope_reset(w, mark);
+        }
+        AstStmt::Return(r) => {
+            dh_emit(w, "return");
+            match r.value {
+                Some(e) => dh_expr(w, e),
+                None => {}
+            }
+        }
+        AstStmt::Expr(e) => {
+            dh_emit(w, if e.semi { "stmt;" } else { "stmt" });
+            dh_expr(w, e.x);
+        }
+    }
+}
+
+fn dh_ident(w: DhWalk, name: String, id: Int) {
+    let n = dh_lookup(w, name);
+    if n >= 0 {
+        dh_emit(w, "local#" + n.to_string());
+        return;
+    }
+    if w.info.funcs.contains_key(name) {
+        dh_dep(w, name);
+    }
+    dh_emit(w, "g:" + dh_global(w, name));
+}
+
+fn dh_targs(w: DhWalk, ts: Vec<AstType>) {
+    if ts.len() == 0 {
+        return;
+    }
+    let xs = Vec::new();
+    for t in ts {
+        xs.push(dh_type(t));
+    }
+    dh_emit(w, "targs:" + xs.join(","));
+}
+
+fn dh_func_dep(w: DhWalk, f: Option<ChkFunc>) {
+    match f {
+        Some(fun) => {
+            if !chk_is_lib(fun) {
+                dh_dep(w, fun.name);
+            }
+            // a call through a trait reaches every implementation
+            dh_trait_impls(w, fun.name);
+        }
+        None => {}
+    }
+}
+
+// dh_trait_impls adds the implementations of the trait method name
+// (`Trait::m`) as dependencies.
+fn dh_trait_impls(w: DhWalk, name: String) {
+    let sep = match name.index_of("::") {
+        Some(i) => i,
+        None => {
+            return;
+        }
+    };
+    let tr = name.slice(0, sep);
+    if !w.info.traits.contains_key(tr) {
+        return;
+    }
+    let suffix = " as " + tr + ">::" + name.slice(sep + 2, name.len());
+    for fun in w.info.func_list {
+        if fun.name.ends_with(suffix) && !chk_is_lib(fun) {
+            dh_dep(w, fun.name);
+        }
+    }
+}
+
+fn dh_expr(w: DhWalk, e: AstExpr) {
+    match e {
+        AstExpr::IntLit(x) => dh_emit(w, "lit:int=" + x.value.to_string()),
+        AstExpr::BoolLit(x) => dh_emit(w, "lit:bool=" + x.value.to_string()),
+        AstExpr::StrLit(x) => dh_emit(w, "lit:str=" + x.value),
+        AstExpr::UnitLit(_) => dh_emit(w, "()"),
+        AstExpr::Ident(x) => {
+            dh_ident(w, x.name, x.id);
+            dh_targs(w, x.targs);
+        }
+        AstExpr::Binary(x) => {
+            dh_emit(w, "bin:" + x.op);
+            match w.info.binops.get(x.id) {
+                Some(m) => dh_func_dep(w, m.func),
+                None => {}
+            }
+            dh_expr(w, x.x);
+            dh_expr(w, x.y);
+        }
+        AstExpr::Unary(x) => {
+            // `&`, `&mut ` and `*` do nothing
+            if x.op == "-" || x.op == "!" {
+                dh_emit(w, "un:" + x.op);
+            }
+            dh_expr(w, x.x);
+        }
+        AstExpr::Call(x) => {
+            dh_emit(w, "call/" + x.args.len().to_string());
+            match w.info.calls.get(x.id) {
+                Some(ci) => dh_func_dep(w, ci.func),
+                None => {}
+            }
+            dh_expr(w, x.func);
+            for a in x.args {
+                dh_expr(w, a);
+            }
+        }
+        AstExpr::Method(x) => {
+            dh_emit(w, "method:" + x.name + "/" + x.args.len().to_string());
+            match w.info.methods.get(x.id) {
+                Some(m) => dh_func_dep(w, m.func),
+                None => {}
+            }
+            dh_targs(w, x.targs);
+            dh_expr(w, x.recv);
+            for a in x.args {
+                dh_expr(w, a);
+            }
+        }
+        AstExpr::Field(x) => {
+            dh_emit(w, "field:" + x.name);
+            dh_expr(w, x.x);
+        }
+        AstExpr::Path(x) => {
+            let full = x.ty + "::" + x.name;
+            if w.info.funcs.contains_key(full) {
+                dh_dep(w, full);
+                dh_trait_impls(w, full);
+            }
+            dh_emit(w, "path:" + dh_global(w, full));
+            dh_targs(w, x.ty_args);
+            dh_targs(w, x.targs);
+        }
+        AstExpr::StructLit(x) => {
+            dh_emit(w, "struct:" + x.name + "/" + x.fields.len().to_string());
+            for f in x.fields {
+                dh_emit(w, "init:" + f.name);
+                dh_expr(w, f.value);
+            }
+        }
+        AstExpr::If(x) => {
+            let mark = dh_scope_mark(w);
+            dh_emit(w, "if");
+            dh_expr(w, x.cond);
+            match x.pat {
+                Some(p) => {
+                    dh_emit(w, "let");
+                    dh_pattern(w, p);
+                }
+                None => {}
+            }
+            dh_block(w, x.then);
+            dh_scope_reset(w, mark);
+            match x.els {
+                Some(e) => {
+                    dh_emit(w, "else");
+                    dh_expr(w, e);
+                }
+                None => {}
+            }
+        }
+        AstExpr::Match(x) => {
+            dh_emit(w, "match/" + x.arms.len().to_string());
+            dh_expr(w, x.x);
+            for arm in x.arms {
+                let mark = dh_scope_mark(w);
+                dh_emit(w, "arm");
+                dh_pattern(w, arm.pat);
+                dh_expr(w, arm.body);
+                dh_scope_reset(w, mark);
+            }
+        }
+        AstExpr::Block(b) => dh_block(w, b),
+        AstExpr::Try(x) => {
+            dh_emit(w, "try");
+            dh_expr(w, x.x);
+        }
+        AstExpr::Closure(x) => {
+            let mark = dh_scope_mark(w);
+            dh_emit(w, "closure/" + x.params.len().to_string() + ":" + dh_opt_type(x.result));
+            for p in x.params {
+                dh_emit(w, "param:" + dh_opt_type(p.ty));
+                dh_declare(w, p.name);
+            }
+            dh_expr(w, x.body);
+            dh_scope_reset(w, mark);
+        }
+        AstExpr::Tuple(x) => {
+            dh_emit(w, "tuple/" + x.elems.len().to_string());
+            for a in x.elems {
+                dh_expr(w, a);
+            }
+        }
+        AstExpr::Range(x) => {
+            dh_emit(w, if x.inclusive { "range=" } else { "range" });
+            dh_expr(w, x.start);
+            dh_expr(w, x.end);
+        }
+    }
+}
+
+// dh_abstract_lits drops the values of literal labels.
+fn dh_abstract_lits(labels: Vec<String>) -> Vec<String> {
+    let out = Vec::new();
+    for l in labels {
+        if l.starts_with("lit:") {
+            match l.index_of("=") {
+                Some(i) => out.push(l.slice(0, i)),
+                None => out.push(l),
+            }
+        } else {
+            out.push(l);
+        }
+    }
+    out
+}
+
+// dh_sig renders a signature without names: "(Int, &Log) -> String".
+fn dh_sig(fun: ChkFunc) -> String {
+    let ps = Vec::new();
+    for p in fun.params {
+        ps.push(ty_str(p.ty));
+    }
+    "(" + ps.join(", ") + ") -> " + ty_str(ty_prune(fun.result))
+}
+
+fn dh_caps(fun: ChkFunc) -> Vec<String> {
+    let out = Vec::new();
+    for p in fun.params {
+        match p.ty {
+            Ty::Cap(k, _) => out.push(k),
+            _ => {}
+        }
+    }
+    out
+}
+
+// dh_def walks one function.
+fn dh_def(info: ChkInfo, fun: ChkFunc) -> DhDef {
+    let w = DhWalk {
+        info: info,
+        self_name: fun.name,
+        labels: Vec::new(),
+        scope_names: Vec::new(),
+        scope_nums: Vec::new(),
+        next_local: 0,
+        deps: HashMap::new(),
+    };
+    let d = fun.decl;
+    let gs = Vec::new();
+    for g in d.generics {
+        let bs = Vec::new();
+        for b in g.bounds {
+            bs.push(dh_type(b));
+        }
+        gs.push(g.name + ":" + bs.join("+"));
+    }
+    dh_emit(w, "fn<" + gs.join(",") + ">");
+    for wh in d.wheres {
+        let bs = Vec::new();
+        for b in wh.bounds {
+            bs.push(dh_type(b));
+        }
+        dh_emit(w, "where:" + dh_type(wh.ty) + ":" + bs.join("+"));
+    }
+    for p in d.params {
+        dh_emit(w, "param:" + dh_opt_type(p.ty));
+        dh_declare(w, p.name);
+    }
+    dh_emit(w, "result:" + dh_opt_type(d.result));
+    for a in d.attrs {
+        if a.name == "handler" || a.name == "main" || a.name == "test" {
+            dh_emit(w, "attr:" + a.name + "(" + a.args.join(",") + ")");
+        }
+    }
+    if d.has_body {
+        dh_block(w, d.body);
+    } else {
+        dh_emit(w, "nobody");
+    }
+    let deps: Vec<String> = w.deps.keys().collect();
+    chk_sort_strings(deps);
+    DhDef {
+        name: fun.name,
+        fun: fun,
+        pos: d.pos,
+        sig: dh_sig(fun),
+        caps: dh_caps(fun),
+        labels: w.labels,
+        hash: dh_hash_strs(w.labels),
+        hash_lits: dh_hash_strs(dh_abstract_lits(w.labels)),
+        deps: deps,
+        trans: "",
+    }
+}
+
+// dh_types_hash hashes the user type declarations (structs, enums, traits
+// and impl headers). A change to any of them changes every trans hash.
+fn dh_types_hash(f: AstFile) -> String {
+    let xs = Vec::new();
+    for s in f.structs {
+        if dh_is_lib_pos(s.pos) {
+            continue;
+        }
+        let fs = Vec::new();
+        for fld in s.fields {
+            let mut m = "";
+            if fld.mutable {
+                m = "mut ";
+            }
+            fs.push(m + fld.name + ":" + dh_type(fld.ty));
+        }
+        let attrs = Vec::new();
+        for a in s.attrs {
+            attrs.push(a.name + "(" + a.args.join(",") + ")");
+        }
+        xs.push(
+            "struct "
+                + s.name
+                + "/"
+                + s.generics.len().to_string()
+                + "["
+                + attrs.join(",")
+                + "]{"
+                + fs.join(",")
+                + "}",
+        );
+    }
+    for e in f.enums {
+        if dh_is_lib_pos(e.pos) {
+            continue;
+        }
+        let vs = Vec::new();
+        for v in e.variants {
+            let ts = Vec::new();
+            for t in v.fields {
+                ts.push(dh_type(t));
+            }
+            vs.push(v.name + "(" + ts.join(",") + ")");
+        }
+        let attrs = Vec::new();
+        for a in e.attrs {
+            attrs.push(a.name + "(" + a.args.join(",") + ")");
+        }
+        xs.push(
+            "enum "
+                + e.name
+                + "/"
+                + e.generics.len().to_string()
+                + "["
+                + attrs.join(",")
+                + "]{"
+                + vs.join(",")
+                + "}",
+        );
+    }
+    for t in f.traits {
+        if dh_is_lib_pos(t.pos) {
+            continue;
+        }
+        let ss = Vec::new();
+        for s in t.supers {
+            ss.push(dh_type(s));
+        }
+        let assoc = Vec::new();
+        for a in t.assoc {
+            assoc.push(a.name);
+        }
+        xs.push("trait " + t.name + ":" + ss.join("+") + "{" + assoc.join(",") + "}");
+    }
+    for im in f.impls {
+        if dh_is_lib_pos(im.pos) {
+            continue;
+        }
+        let assoc = Vec::new();
+        for a in im.assoc {
+            assoc.push(a.name + "=" + dh_opt_type(a.ty));
+        }
+        xs.push(
+            "impl "
+                + dh_opt_type(im.trait_ty)
+                + " for "
+                + dh_type(im.target)
+                + "{"
+                + assoc.join(",")
+                + "}",
+        );
+    }
+    chk_sort_strings(xs);
+    dh_hash_strs(xs)
+}
+
+fn dh_is_lib_pos(p: AstPos) -> Bool {
+    p.file.starts_with("<core>/") || p.file.starts_with("<prelude>/")
+}
+
+// dh_program hashes every user function of a checked program.
+fn dh_program(file: AstFile, info: ChkInfo) -> DhProgram {
+    let defs = Vec::new();
+    let by_name: HashMap<String, DhDef> = HashMap::new();
+    for fun in info.func_list {
+        if chk_is_lib(fun) {
+            continue;
+        }
+        let d = dh_def(info, fun);
+        defs.push(d);
+        by_name.insert(d.name, d);
+    }
+    let th = dh_types_hash(file);
+    // trans: own hash + the sorted (name, hash) of the reachable closure
+    for d in defs {
+        let seen: HashMap<String, Bool> = HashMap::new();
+        let work = Vec::new();
+        work.push(d.name);
+        seen.insert(d.name, true);
+        let mut i = 0;
+        while i < work.len() {
+            match by_name.get(work.get(i).unwrap_or("")) {
+                Some(x) => {
+                    for dep in x.deps {
+                        if !seen.contains_key(dep) {
+                            seen.insert(dep, true);
+                            work.push(dep);
+                        }
+                    }
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+        let parts = Vec::new();
+        for n in work {
+            match by_name.get(n) {
+                Some(x) => parts.push(n + "=" + x.hash),
+                None => {}
+            }
+        }
+        chk_sort_strings(parts);
+        parts.push("types=" + th);
+        parts.push("self=" + d.hash);
+        d.trans = dh_hash_strs(parts);
+    }
+    let all = Vec::new();
+    for d in defs {
+        all.push(d.name + "=" + d.trans);
+    }
+    chk_sort_strings(all);
+    all.push("types=" + th);
+    DhProgram { defs: defs, by_name: by_name, types_hash: th, hash: dh_hash_strs(all) }
+}
+
+// dh_load parses and checks a program (diagnostics are printed) and
+// hashes it.
+fn dh_load(path: String, fs: &Fs, log: &Log) -> Option<DhLoaded> {
+    let srcs = match frontend_read_sources(path, fs, log) {
+        Some(s) => s,
+        None => {
+            return None;
+        }
+    };
+    let prog = frontend_parse_all(srcs);
+    if prog.errs.len() > 0 {
+        frontend_print_errors(log, prog.errs);
+        return None;
+    }
+    let res = chk_check(prog.file);
+    if res.errs.len() > 0 {
+        frontend_print_errors(log, res.errs);
+        return None;
+    }
+    Some(DhLoaded { srcs: srcs, file: prog.file, res: res, prog: dh_program(prog.file, res.info) })
+}
+
+struct DhLoaded {
+    srcs: Vec<FeSource>,
+    file: AstFile,
+    res: ChkResult,
+    prog: DhProgram,
+}
+
+// `hash [-json] <file|dir>`: the definition hashes of a program.
+fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = tool_flags(args, 1, "json");
+    if fl.err != "" {
+        return tool_flag_error(fl, "hash [-json] <file|dir>", log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek hash [-json] <file|dir>");
+        return 2;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let l = match dh_load(path, fs, log) {
+        Some(l) => l,
+        None => {
+            return 1;
+        }
+    };
+    if tool_flag_bool(fl, "json") {
+        let fns = Vec::new();
+        for d in l.prog.defs {
+            let o = irjson_obj();
+            irjson_set(o, "name", IrjVal::Str(d.name));
+            irjson_set(o, "file", IrjVal::Str(d.pos.file));
+            irjson_set(o, "line", irjson_int(d.pos.line));
+            irjson_set(o, "sig", IrjVal::Str(d.sig));
+            irjson_set(o, "caps", irjson_strs(d.caps));
+            irjson_set(o, "hash", IrjVal::Str(d.hash));
+            irjson_set(o, "hash_lits", IrjVal::Str(d.hash_lits));
+            irjson_set(o, "trans", IrjVal::Str(d.trans));
+            irjson_set(o, "deps", irjson_strs(d.deps));
+            fns.push(irjson_val(o));
+        }
+        let o = irjson_obj();
+        irjson_set(o, "path", IrjVal::Str(path));
+        irjson_set(o, "hash", IrjVal::Str(l.prog.hash));
+        irjson_set(o, "types", IrjVal::Str(l.prog.types_hash));
+        irjson_set(o, "functions", IrjVal::Arr(fns));
+        log.info(irjson_encode(irjson_val(o), false));
+        return 0;
+    }
+    let lines = Vec::new();
+    lines.push("program " + l.prog.hash);
+    for d in l.prog.defs {
+        lines.push(dh_short(d.hash) + " " + dh_short(d.trans) + " " + d.name);
+    }
+    frontend_print(log, lines);
+    0
+}

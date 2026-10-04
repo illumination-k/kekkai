@@ -1,0 +1,611 @@
+// Shared helpers of the ecosystem commands (prefix tool_ / Tool*): flag
+// parsing in the style of Go's flag package, and a JSON reader.
+
+struct ToolFlags {
+    // flag name -> value ("true"/"false" for booleans)
+    vals: HashMap<String, String>,
+    rest: Vec<String>,
+    // the error message, or "help" for -h / -help
+    mut err: String,
+}
+
+// tool_flags parses args[start..]. spec is a space-separated list of flag
+// names: `json` is a boolean, `base=` takes a string and `limit#` an
+// integer. Flags stop at the first non-flag argument or `--`.
+fn tool_flags(args: Vec<String>, start: Int, spec: String) -> ToolFlags {
+    let kinds: HashMap<String, String> = HashMap::new();
+    for s in spec.split(" ") {
+        if s == "" {
+            continue;
+        }
+        if s.ends_with("=") {
+            kinds.insert(s.slice(0, s.len() - 1), "str");
+        } else if s.ends_with("#") {
+            kinds.insert(s.slice(0, s.len() - 1), "int");
+        } else {
+            kinds.insert(s, "bool");
+        }
+    }
+    let fl = ToolFlags { vals: HashMap::new(), rest: Vec::new(), err: "" };
+    let mut i = start;
+    while i < args.len() {
+        let a = args.get(i).unwrap_or("");
+        if !a.starts_with("-") || a == "-" {
+            break;
+        }
+        i = i + 1;
+        if a == "--" {
+            break;
+        }
+        let mut name = a.slice(1, a.len());
+        if name.starts_with("-") {
+            name = name.slice(1, name.len());
+        }
+        if name == "" || name.starts_with("-") || name.starts_with("=") {
+            fl.err = "bad flag syntax: " + a;
+            return fl;
+        }
+        let mut value = "";
+        let mut has_value = false;
+        match name.index_of("=") {
+            Some(eq) => {
+                value = name.slice(eq + 1, name.len());
+                name = name.slice(0, eq);
+                has_value = true;
+            }
+            None => {}
+        }
+        if name == "h" || name == "help" {
+            fl.err = "help";
+            return fl;
+        }
+        let kind = kinds.get(name).unwrap_or("");
+        if kind == "" {
+            fl.err = "flag provided but not defined: -" + name;
+            return fl;
+        }
+        if kind == "bool" {
+            if !has_value {
+                value = "true";
+            }
+            match diag_parse_bool(value) {
+                Some(b) => {
+                    fl.vals.insert(name, if b { "true" } else { "false" });
+                }
+                None => {
+                    fl.err = "invalid boolean value \""
+                        + value
+                        + "\" for -"
+                        + name
+                        + ": parse error";
+                    return fl;
+                }
+            }
+            continue;
+        }
+        if !has_value {
+            if i >= args.len() {
+                fl.err = "flag needs an argument: -" + name;
+                return fl;
+            }
+            value = args.get(i).unwrap_or("");
+            i = i + 1;
+        }
+        if kind == "int" && value.parse_int().is_none() {
+            fl.err = "invalid value \"" + value + "\" for flag -" + name + ": parse error";
+            return fl;
+        }
+        fl.vals.insert(name, value);
+    }
+    while i < args.len() {
+        fl.rest.push(args.get(i).unwrap_or(""));
+        i = i + 1;
+    }
+    fl
+}
+
+// tool_flag_error reports a flag error (status 2, or 0 for -h).
+fn tool_flag_error(fl: ToolFlags, usage: String, log: &Log) -> Int {
+    if fl.err == "help" {
+        log.error("usage: kek " + usage);
+        return 0;
+    }
+    log.error(fl.err + "\nusage: kek " + usage);
+    2
+}
+
+fn tool_flag_bool(fl: ToolFlags, name: String) -> Bool {
+    fl.vals.get(name).unwrap_or("false") == "true"
+}
+
+fn tool_flag_str(fl: ToolFlags, name: String, d: String) -> String {
+    fl.vals.get(name).unwrap_or(d)
+}
+
+fn tool_flag_int(fl: ToolFlags, name: String, d: Int) -> Int {
+    match fl.vals.get(name) {
+        Some(v) => v.parse_int().unwrap_or(d),
+        None => d,
+    }
+}
+
+// ---- JSON reader ----
+
+// ToolJson is a parsed JSON value. Numbers are integers (fractions are
+// truncated); object keys keep their order.
+enum ToolJson {
+    Null,
+    Bool(Bool),
+    Num(Int),
+    Str(String),
+    Arr(Vec<ToolJson>),
+    Obj(ToolJsonObj),
+}
+
+struct ToolJsonObj {
+    keys: Vec<String>,
+    vals: HashMap<String, ToolJson>,
+}
+
+struct ToolJsonParser {
+    s: String,
+    mut i: Int,
+    mut err: String,
+}
+
+// tool_json_parse parses a JSON document; Err is the message with the
+// offset.
+fn tool_json_parse(s: String) -> Result<ToolJson, String> {
+    let p = ToolJsonParser { s: s, i: 0, err: "" };
+    let v = tool_json_value(p);
+    tool_json_ws(p);
+    if p.err == "" && p.i < p.s.len() {
+        p.err = "unexpected trailing data";
+    }
+    if p.err != "" {
+        return Err("JSON offset " + p.i.to_string() + ": " + p.err);
+    }
+    Ok(v)
+}
+
+fn tool_json_ws(p: ToolJsonParser) {
+    while p.i < p.s.len() {
+        let c = p.s.char_at(p.i).unwrap_or(0);
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            p.i = p.i + 1;
+        } else {
+            return;
+        }
+    }
+}
+
+fn tool_json_fail(p: ToolJsonParser, msg: String) -> ToolJson {
+    if p.err == "" {
+        p.err = msg;
+    }
+    ToolJson::Null
+}
+
+fn tool_json_lit(p: ToolJsonParser, word: String, v: ToolJson) -> ToolJson {
+    if p.s.slice(p.i, p.i + word.len()) == word {
+        p.i = p.i + word.len();
+        return v;
+    }
+    tool_json_fail(p, "invalid literal")
+}
+
+fn tool_json_value(p: ToolJsonParser) -> ToolJson {
+    tool_json_ws(p);
+    if p.err != "" {
+        return ToolJson::Null;
+    }
+    let c = match p.s.char_at(p.i) {
+        Some(c) => c,
+        None => {
+            return tool_json_fail(p, "unexpected end of input");
+        }
+    };
+    if c == 123 {
+        return tool_json_object(p);
+    }
+    if c == 91 {
+        p.i = p.i + 1;
+        let items = Vec::new();
+        tool_json_ws(p);
+        if p.s.char_at(p.i).unwrap_or(0) == 93 {
+            p.i = p.i + 1;
+            return ToolJson::Arr(items);
+        }
+        while p.err == "" {
+            items.push(tool_json_value(p));
+            tool_json_ws(p);
+            let d = p.s.char_at(p.i).unwrap_or(0);
+            p.i = p.i + 1;
+            if d == 93 {
+                return ToolJson::Arr(items);
+            }
+            if d != 44 {
+                return tool_json_fail(p, "expected , or ]");
+            }
+        }
+        return ToolJson::Null;
+    }
+    if c == 34 {
+        return match tool_json_string(p) {
+            Some(s) => ToolJson::Str(s),
+            None => ToolJson::Null,
+        };
+    }
+    if c == 116 {
+        return tool_json_lit(p, "true", ToolJson::Bool(true));
+    }
+    if c == 102 {
+        return tool_json_lit(p, "false", ToolJson::Bool(false));
+    }
+    if c == 110 {
+        return tool_json_lit(p, "null", ToolJson::Null);
+    }
+    if c == 45 || (c >= 48 && c <= 57) {
+        let start = p.i;
+        p.i = p.i + 1;
+        while p.i < p.s.len() {
+            let d = p.s.char_at(p.i).unwrap_or(0);
+            if (d >= 48 && d <= 57) || d == 46 || d == 101 || d == 69 || d == 43 || d == 45 {
+                p.i = p.i + 1;
+            } else {
+                break;
+            }
+        }
+        let text = p.s.slice(start, p.i);
+        let mut int_part = text;
+        match text.index_of(".") {
+            Some(k) => {
+                int_part = text.slice(0, k);
+            }
+            None => {}
+        }
+        return match int_part.parse_int() {
+            Some(n) => ToolJson::Num(n),
+            None => tool_json_fail(p, "invalid number"),
+        };
+    }
+    tool_json_fail(p, "unexpected character")
+}
+
+fn tool_json_object(p: ToolJsonParser) -> ToolJson {
+    p.i = p.i + 1;
+    let o = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+    tool_json_ws(p);
+    if p.s.char_at(p.i).unwrap_or(0) == 125 {
+        p.i = p.i + 1;
+        return ToolJson::Obj(o);
+    }
+    while p.err == "" {
+        tool_json_ws(p);
+        if p.s.char_at(p.i).unwrap_or(0) != 34 {
+            return tool_json_fail(p, "expected a string key");
+        }
+        let k = tool_json_string(p).unwrap_or("");
+        tool_json_ws(p);
+        if p.s.char_at(p.i).unwrap_or(0) != 58 {
+            return tool_json_fail(p, "expected :");
+        }
+        p.i = p.i + 1;
+        let v = tool_json_value(p);
+        if !o.vals.contains_key(k) {
+            o.keys.push(k);
+        }
+        o.vals.insert(k, v);
+        tool_json_ws(p);
+        let d = p.s.char_at(p.i).unwrap_or(0);
+        p.i = p.i + 1;
+        if d == 125 {
+            return ToolJson::Obj(o);
+        }
+        if d != 44 {
+            return tool_json_fail(p, "expected , or }");
+        }
+    }
+    ToolJson::Null
+}
+
+fn tool_json_hex(c: Int) -> Int {
+    if c >= 48 && c <= 57 {
+        return c - 48;
+    }
+    if c >= 97 && c <= 102 {
+        return c - 87;
+    }
+    if c >= 65 && c <= 70 {
+        return c - 55;
+    }
+    -1
+}
+
+// tool_json_string reads a string literal at p.i (UTF-16 code units, so
+// \u escapes of surrogate pairs come out as the pair).
+fn tool_json_string(p: ToolJsonParser) -> Option<String> {
+    p.i = p.i + 1;
+    let parts = Vec::new();
+    let mut start = p.i;
+    while p.i < p.s.len() {
+        let c = p.s.char_at(p.i).unwrap_or(0);
+        if c == 34 {
+            parts.push(p.s.slice(start, p.i));
+            p.i = p.i + 1;
+            return Some(parts.join(""));
+        }
+        if c == 92 {
+            parts.push(p.s.slice(start, p.i));
+            let e = p.s.char_at(p.i + 1).unwrap_or(0);
+            p.i = p.i + 2;
+            if e == 110 {
+                parts.push("\n");
+            } else if e == 116 {
+                parts.push("\t");
+            } else if e == 114 {
+                parts.push("\r");
+            } else if e == 98 {
+                parts.push(String::from_char(8));
+            } else if e == 102 {
+                parts.push(String::from_char(12));
+            } else if e == 117 {
+                let mut v = 0;
+                for k in 0..4 {
+                    let h = tool_json_hex(p.s.char_at(p.i + k).unwrap_or(0));
+                    if h < 0 {
+                        tool_json_fail(p, "invalid \\u escape");
+                        return None;
+                    }
+                    v = v * 16 + h;
+                }
+                p.i = p.i + 4;
+                parts.push(String::from_char(v));
+            } else {
+                parts.push(String::from_char(e));
+            }
+            start = p.i;
+            continue;
+        }
+        p.i = p.i + 1;
+    }
+    tool_json_fail(p, "unterminated string");
+    None
+}
+
+// ---- JSON accessors (missing or mistyped values give the default) ----
+
+fn tool_json_get(v: ToolJson, k: String) -> ToolJson {
+    match v {
+        ToolJson::Obj(o) => o.vals.get(k).unwrap_or(ToolJson::Null),
+        _ => ToolJson::Null,
+    }
+}
+
+fn tool_json_keys(v: ToolJson) -> Vec<String> {
+    match v {
+        ToolJson::Obj(o) => o.keys,
+        _ => Vec::new(),
+    }
+}
+
+fn tool_json_str(v: ToolJson, d: String) -> String {
+    match v {
+        ToolJson::Str(s) => s,
+        _ => d,
+    }
+}
+
+fn tool_json_int(v: ToolJson, d: Int) -> Int {
+    match v {
+        ToolJson::Num(n) => n,
+        _ => d,
+    }
+}
+
+fn tool_json_bool(v: ToolJson, d: Bool) -> Bool {
+    match v {
+        ToolJson::Bool(b) => b,
+        _ => d,
+    }
+}
+
+fn tool_json_arr(v: ToolJson) -> Vec<ToolJson> {
+    match v {
+        ToolJson::Arr(xs) => xs,
+        _ => Vec::new(),
+    }
+}
+
+fn tool_json_strs(v: ToolJson) -> Vec<String> {
+    let out = Vec::new();
+    for x in tool_json_arr(v) {
+        match x {
+            ToolJson::Str(s) => out.push(s),
+            _ => {}
+        }
+    }
+    out
+}
+
+// tool_write writes a file, reporting errors.
+fn tool_write(fs: &Fs, log: &Log, p: String, text: String) -> Bool {
+    match fs.write(p, text) {
+        Ok(_) => true,
+        Err(e) => {
+            log.error(p + ": " + e.message());
+            false
+        }
+    }
+}
+
+// ---- kekkai.toml ----
+//
+// The project configuration is a TOML subset: `[section]` /
+// `[section.sub]` headers, `key = value` with strings, integers, booleans
+// and arrays of those (arrays may span lines), and `#` comments. It is
+// returned as a ToolJson object: section -> {key -> value}; keys before
+// the first header are in the section "".
+
+fn tool_toml_parse(text: String) -> Result<ToolJson, String> {
+    let root = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+    let mut section = "";
+    let mut cur = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+    tool_toml_put(root, "", ToolJson::Obj(cur));
+    let lines = text.split("\n");
+    let mut ln = 0;
+    while ln < lines.len() {
+        let mut line = tool_toml_strip(lines.get(ln).unwrap_or(""));
+        ln = ln + 1;
+        if line == "" {
+            continue;
+        }
+        if line.starts_with("[") {
+            if !line.ends_with("]") {
+                return Err("kekkai.toml:" + ln.to_string() + ": bad section header");
+            }
+            section = line.slice(1, line.len() - 1).trim();
+            cur = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+            match root.vals.get(section) {
+                Some(ToolJson::Obj(o)) => {
+                    cur = o;
+                }
+                _ => tool_toml_put(root, section, ToolJson::Obj(cur)),
+            }
+            continue;
+        }
+        let eq = match line.index_of("=") {
+            Some(i) => i,
+            None => {
+                return Err("kekkai.toml:" + ln.to_string() + ": expected key = value");
+            }
+        };
+        let mut key = line.slice(0, eq).trim();
+        if key.starts_with("\"") && key.ends_with("\"") && key.len() >= 2 {
+            key = key.slice(1, key.len() - 1);
+        }
+        let mut value = line.slice(eq + 1, line.len()).trim();
+        // an array continues until its brackets balance
+        while value.starts_with("[") && !tool_toml_balanced(value) && ln < lines.len() {
+            value = value + " " + tool_toml_strip(lines.get(ln).unwrap_or(""));
+            ln = ln + 1;
+        }
+        let p = ToolJsonParser { s: tool_toml_to_json(value), i: 0, err: "" };
+        let v = tool_json_value(p);
+        tool_json_ws(p);
+        if p.err != "" || p.i < p.s.len() {
+            return Err("kekkai.toml:" + ln.to_string() + ": bad value for " + key);
+        }
+        tool_toml_put(cur, key, v);
+    }
+    Ok(ToolJson::Obj(root))
+}
+
+fn tool_toml_put(o: ToolJsonObj, k: String, v: ToolJson) {
+    if !o.vals.contains_key(k) {
+        o.keys.push(k);
+    }
+    o.vals.insert(k, v);
+}
+
+// tool_toml_strip drops a `#` comment (outside strings) and surrounding
+// blanks.
+fn tool_toml_strip(line: String) -> String {
+    let mut in_str = false;
+    let mut i = 0;
+    while i < line.len() {
+        let c = line.char_at(i).unwrap_or(0);
+        if c == 92 && in_str {
+            i = i + 2;
+            continue;
+        }
+        if c == 34 {
+            in_str = !in_str;
+        } else if c == 35 && !in_str {
+            return line.slice(0, i).trim();
+        }
+        i = i + 1;
+    }
+    line.trim()
+}
+
+fn tool_toml_balanced(s: String) -> Bool {
+    let mut depth = 0;
+    let mut in_str = false;
+    let mut i = 0;
+    while i < s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        if c == 92 && in_str {
+            i = i + 2;
+            continue;
+        }
+        if c == 34 {
+            in_str = !in_str;
+        } else if !in_str && c == 91 {
+            depth = depth + 1;
+        } else if !in_str && c == 93 {
+            depth = depth - 1;
+        }
+        i = i + 1;
+    }
+    depth == 0
+}
+
+// tool_toml_to_json drops a trailing comma inside arrays (`[1, 2,]`).
+fn tool_toml_to_json(v: String) -> String {
+    v.replace(",]", "]").replace(", ]", "]")
+}
+
+// tool_config reads ./kekkai.toml (an empty configuration when absent).
+fn tool_config(fs: &Fs, log: &Log) -> Option<ToolJson> {
+    match fs.read("kekkai.toml") {
+        Ok(text) => match tool_toml_parse(text) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log.error(e);
+                None
+            }
+        },
+        Err(_) => Some(ToolJson::Obj(ToolJsonObj { keys: Vec::new(), vals: HashMap::new() })),
+    }
+}
+
+// tool_config_get is config[section][key].
+fn tool_config_get(cfg: ToolJson, section: String, key: String) -> ToolJson {
+    tool_json_get(tool_json_get(cfg, section), key)
+}
+
+// tool_json_to_irj converts a parsed value for output.
+fn tool_json_to_irj(v: ToolJson) -> IrjVal {
+    match v {
+        ToolJson::Null => IrjVal::Null,
+        ToolJson::Bool(b) => irjson_bool(b),
+        ToolJson::Num(n) => irjson_int(n),
+        ToolJson::Str(s) => IrjVal::Str(s),
+        ToolJson::Arr(xs) => {
+            let out = Vec::new();
+            for x in xs {
+                out.push(tool_json_to_irj(x));
+            }
+            IrjVal::Arr(out)
+        }
+        ToolJson::Obj(o) => {
+            let out = irjson_obj();
+            for k in o.keys {
+                irjson_set(out, k, tool_json_to_irj(o.vals.get(k).unwrap_or(ToolJson::Null)));
+            }
+            irjson_val(out)
+        }
+    }
+}
+
+// `config`: print ./kekkai.toml as JSON (checks its syntax).
+fn tool_config_main(fs: &Fs, log: &Log) -> Int {
+    match tool_config(fs, log) {
+        Some(cfg) => {
+            log.info(irjson_encode(tool_json_to_irj(cfg), false));
+            0
+        }
+        None => 1,
+    }
+}

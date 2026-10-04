@@ -11,6 +11,12 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     if cmd == "search" {
         return search_main(args, fs, log);
     }
+    if cmd == "config" {
+        return tool_config_main(fs, log);
+    }
+    if cmd == "hash" {
+        return dh_main(args, fs, log);
+    }
     if cmd == "prelude-check"
         || cmd == "lex"
         || cmd == "ast"

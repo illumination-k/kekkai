@@ -13,8 +13,8 @@ fn __rt_new() -> __Rt {
         test_name: "",
         clock_ms: 0,
         rand: 0,
-        net: Map::new(),
-        net_err: Map::new(),
+        net: HashMap::new(),
+        net_err: HashMap::new(),
         lines: Vec::new(),
         sent: Vec::new(),
         start_ns: 0,
@@ -142,22 +142,22 @@ struct __Entry {
 }
 
 struct __Store {
-    data: Map<String, __Entry>,
-    clock: Int,
+    data: HashMap<String, __Entry>,
+    mut clock: Int,
 }
 
 struct __Tx {
     // key -> version observed (0 = absent)
-    reads: Map<String, Int>,
+    reads: HashMap<String, Int>,
     // key -> new value (None = delete)
-    writes: Map<String, Option<String>>,
+    mut writes: HashMap<String, Option<String>>,
     // url, body pairs
-    outbox: Vec<String>,
-    open: Bool,
+    mut outbox: Vec<String>,
+    mut open: Bool,
 }
 
 fn __store_new() -> __Store {
-    __Store { data: Map::new(), clock: 0 }
+    __Store { data: HashMap::new(), clock: 0 }
 }
 
 fn __store_put(s: __Store, k: String, v: String) {
@@ -173,7 +173,12 @@ fn __db_get(db: __Any, key: String) -> Result<Option<String>, TxError> {
 }
 
 fn __db_begin(db: __Any) -> __Any {
-    __Tx::to_any(__Tx { reads: Map::new(), writes: Map::new(), outbox: Vec::new(), open: true })
+    __Tx::to_any(__Tx {
+        reads: HashMap::new(),
+        writes: HashMap::new(),
+        outbox: Vec::new(),
+        open: true,
+    })
 }
 
 fn __tx_get(t: __Any, key: String) -> Result<Option<String>, TxError> {
@@ -185,7 +190,7 @@ fn __tx_get(t: __Any, key: String) -> Result<Option<String>, TxError> {
         None => {}
     }
     let e = __Rt::get().store.data.get(key);
-    if !tx.reads.contains(key) {
+    if !tx.reads.contains_key(&key) {
         tx.reads.insert(key, match e {
             Some(x) => x.version,
             None => 0,
@@ -225,15 +230,17 @@ fn __tx_commit(t: __Any) -> Result<(), TxError> {
             None => 0,
         };
         if cur != seen {
-            tx.writes = Map::new();
+            tx.writes = HashMap::new();
             tx.outbox = Vec::new();
             return Err(TxError { message: "conflict on key " + __json_quote(k), retryable: true });
         }
     }
-    for k in tx.writes.keys() {
-        match tx.writes.get(k) {
-            Some(Some(v)) => __store_put(s, k, v),
-            _ => s.data.remove(k),
+    for (k, w) in tx.writes.iter() {
+        match w {
+            Some(v) => __store_put(s, k, v),
+            None => {
+                s.data.remove(&k);
+            }
         }
     }
     // irrevocable effects run only after a successful commit
@@ -254,7 +261,7 @@ fn __tx_commit(t: __Any) -> Result<(), TxError> {
 fn __tx_rollback(t: __Any) {
     let tx = __Tx::from_any(t);
     tx.open = false;
-    tx.writes = Map::new();
+    tx.writes = HashMap::new();
     tx.outbox = Vec::new();
 }
 

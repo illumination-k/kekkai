@@ -102,8 +102,8 @@ fn __test_err(name: String, kind: String, msg: String) -> Int {
 
 struct __Json {
     s: String,
-    i: Int,
-    err: String,
+    mut i: Int,
+    mut err: String,
 }
 
 fn __json_new(s: String) -> __Json {

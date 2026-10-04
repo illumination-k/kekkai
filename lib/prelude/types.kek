@@ -32,30 +32,24 @@ struct IoError {
     message: String,
 }
 
-// ---- boxes for Map values ----
-
-struct __BoxInt {
-    v: Int,
-}
-
 // ---- runtime state ----
 
 // __Rt is created by `__rt_new` the first time `__Rt::get()` runs.
 struct __Rt {
     // capabilities are mocks (`kek test`)
-    test: Bool,
+    mut test: Bool,
     // linear memory scratch area: [base, brk)
     base: Int,
-    brk: Int,
-    cwd: String,
+    mut brk: Int,
+    mut cwd: String,
     store: __Store,
     // test mode
-    test_name: String,
-    clock_ms: Int,
-    rand: Int,
-    net: Map<String, String>,
-    net_err: Map<String, String>,
+    mut test_name: String,
+    mut clock_ms: Int,
+    mut rand: Int,
+    net: HashMap<String, String>,
+    net_err: HashMap<String, String>,
     lines: Vec<String>,
     sent: Vec<String>,
-    start_ns: Int,
+    mut start_ns: Int,
 }

@@ -4,8 +4,8 @@
 // ---- building ----
 
 struct __Sb {
-    buf: __Chars,
-    n: Int,
+    mut buf: __Chars,
+    mut n: Int,
 }
 
 fn __sb_new(cap: Int) -> __Sb {
@@ -463,11 +463,11 @@ fn __string_to_bytes(s: String) -> Vec<Int> {
 // (maximal subparts).
 struct __Utf8Dec {
     sb: __Sb,
-    needed: Int,
-    seen: Int,
-    cp: Int,
-    lower: Int,
-    upper: Int,
+    mut needed: Int,
+    mut seen: Int,
+    mut cp: Int,
+    mut lower: Int,
+    mut upper: Int,
 }
 
 fn __utf8_dec_new(cap: Int) -> __Utf8Dec {
@@ -608,5 +608,35 @@ fn __json_quote(s: String) -> String {
         i = i + 1;
     }
     __sb_char(b, 34);
+    __sb_finish(b)
+}
+
+// String.__hash: FNV-1a steps over the UTF-16 code units, then -1 (the
+// core library's DefaultHasher::write_str).
+fn __string___hash(s: String, state: Int) -> Int {
+    let x = __Chars::of(s);
+    let n = x.len();
+    let mut h = state;
+    let mut i = 0;
+    while i < n {
+        h = h.bit_xor(x.get(i)) * 1099511628211;
+        i = i + 1;
+    }
+    h.bit_xor(-1) * 1099511628211
+}
+
+// Vec<String>.join
+fn __vec_join(v: Vec<String>, sep: String) -> String {
+    let n = v.len();
+    if n == 0 {
+        return "";
+    }
+    let b = __sb_new(16);
+    for i in 0..n {
+        if i > 0 {
+            __sb_str(b, sep);
+        }
+        __sb_str(b, v.get(i).unwrap_or(""));
+    }
     __sb_finish(b)
 }

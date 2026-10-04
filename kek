@@ -1194,6 +1194,9 @@ cmd_mutate() {
 	_bk=$(
 		{
 			echo "$_sk"
+			# the program's path too (the report names its files); the base
+			# only by contents (-diff extracts it to a new directory)
+			echo "path $_file"
 			for _p in "$_file" ${_base:+"$_base"}; do
 				echo "=="
 				if [ -d "$_p" ]; then

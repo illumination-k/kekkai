@@ -272,6 +272,51 @@ fn chk_is_core(p: AstPos) -> Bool {
 
 // chk_is_lib reports whether a function belongs to the core library or the
 // runtime prelude (not to the user's program).
+// chk_check_attr validates a function attribute: #[handler], #[main],
+// #[test] / #[test(cases = N)], #[rare] (a path that is rarely taken; see
+// `kek assure`) and #[allow(similar, reason = "...", owner = "...",
+// expires = "YYYY-MM-DD")].
+fn chk_check_attr(c: Chk, a: AstAttr) {
+    if a.name == "handler" || a.name == "main" || a.name == "rare" {
+        if a.args.len() > 0 {
+            chk_errorf(c, a.pos, "`#[" + a.name + "]` takes no arguments");
+        }
+        return;
+    }
+    if a.name == "test" {
+        for x in a.args {
+            if !x.starts_with("cases = ") || x.slice(8, x.len()).parse_int().is_none() {
+                chk_errorf(
+                    c,
+                    a.pos,
+                    "unknown argument `" + x + "` of `#[test]` (expected `cases = N`)",
+                );
+            }
+        }
+        return;
+    }
+    if a.name == "allow" {
+        if !ast_attr_has(a, "similar") {
+            chk_errorf(c, a.pos, "`#[allow]` supports only `similar`");
+            return;
+        }
+        for x in a.args {
+            if x != "similar"
+                && !x.starts_with("reason = \"")
+                && !x.starts_with("owner = \"")
+                && !x.starts_with("expires = \"") {
+                chk_errorf(
+                    c,
+                    a.pos,
+                    "unknown argument `" + x + "` of `#[allow]` (expected reason, owner, expires)",
+                );
+            }
+        }
+        return;
+    }
+    chk_errorf(c, a.pos, "unknown attribute `#[" + a.name + "]`");
+}
+
 fn chk_is_lib(fun: ChkFunc) -> Bool {
     let f = fun.decl.pos.file;
     f.starts_with("<core>/") || f.starts_with("<prelude>/")
@@ -704,9 +749,7 @@ fn chk_declare_func(
         effects: HashMap::new(),
     };
     for a in fd.attrs {
-        if a.name != "handler" && a.name != "main" && a.name != "test" {
-            chk_errorf(c, a.pos, "unknown attribute `#[" + a.name + "]`");
-        }
+        chk_check_attr(c, a);
     }
     let seen: HashMap<String, Bool> = HashMap::new();
     for p in fd.params {

@@ -559,6 +559,80 @@ fn ast_has_attr(f: AstFuncDecl, name: String) -> Bool {
     false
 }
 
+// ast_find_attr returns the attribute named name.
+fn ast_find_attr(attrs: Vec<AstAttr>, name: String) -> Option<AstAttr> {
+    for a in attrs {
+        if a.name == name {
+            return Some(a);
+        }
+    }
+    None
+}
+
+// ast_attr_has reports whether an attribute has the bare argument arg
+// (`#[allow(similar)]`).
+fn ast_attr_has(a: AstAttr, arg: String) -> Bool {
+    for x in a.args {
+        if x == arg {
+            return true;
+        }
+    }
+    false
+}
+
+// ast_attr_value returns the value of the argument `key = value` of an
+// attribute (a string literal is unquoted).
+fn ast_attr_value(a: AstAttr, key: String) -> Option<String> {
+    let prefix = key + " = ";
+    for x in a.args {
+        if x.starts_with(prefix) {
+            let v = x.slice(prefix.len(), x.len());
+            if v.starts_with("\"") {
+                return Some(ast_unquote(v));
+            }
+            return Some(v);
+        }
+    }
+    None
+}
+
+// ast_unquote reverses ast_quote.
+fn ast_unquote(q: String) -> String {
+    let s = q.slice(1, q.len() - 1);
+    let parts = Vec::new();
+    let mut i = 0;
+    let mut start = 0;
+    while i < s.len() {
+        if s.char_at(i).unwrap_or(0) == 92 {
+            parts.push(s.slice(start, i));
+            let e = s.char_at(i + 1).unwrap_or(0);
+            if e == 110 {
+                parts.push("\n");
+            } else if e == 116 {
+                parts.push("\t");
+            } else if e == 114 {
+                parts.push("\r");
+            } else if e == 120 {
+                let h = s.slice(i + 2, i + 4);
+                let mut v = 0;
+                for k in 0..2 {
+                    v = v * 16 + tool_json_hex(h.char_at(k).unwrap_or(48));
+                }
+                parts.push(String::from_char(v));
+                i = i + 2;
+            } else {
+                parts.push(String::from_char(e));
+            }
+            i = i + 2;
+            start = i;
+            continue;
+        }
+        i = i + 1;
+    }
+    parts.push(s.slice(start, s.len()));
+    parts.join("")
+}
+
 // ast_pos_less orders positions by (file, line, col).
 fn ast_pos_less(a: AstPos, b: AstPos) -> Bool {
     if a.file != b.file {

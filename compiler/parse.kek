@@ -149,7 +149,26 @@ fn parse_items(p: ParseState) -> AstFile {
             let a = AstAttr { pos: pos, name: name.text, args: Vec::new() };
             if parse_accept(p, "(") {
                 while !parse_at(p, ")") {
-                    a.args.push(parse_expect(p, "IDENT").text);
+                    // `name` or `name = "text"` / `name = 12`, kept as
+                    // source text (ast_attr_value reads the value)
+                    let mut arg = parse_expect(p, "IDENT").text;
+                    if parse_accept(p, "=") {
+                        let v = parse_tok(p);
+                        if v.kind == "STRING" {
+                            parse_next(p);
+                            arg = arg + " = " + ast_quote(v.text);
+                        } else if v.kind == "INT" {
+                            parse_next(p);
+                            arg = arg + " = " + v.text;
+                        } else {
+                            parse_fail(
+                                p,
+                                v.pos,
+                                "expected a string or integer literal, found " + parse_describe(v),
+                            );
+                        }
+                    }
+                    a.args.push(arg);
                     if !parse_accept(p, ",") {
                         break;
                     }

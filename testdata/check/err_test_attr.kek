@@ -36,3 +36,24 @@ fn bad_tx(tx: &Tx) { // ERROR "test parameters must be capabilities"
 #[bench] // ERROR "unknown attribute `#[bench]`"
 fn unknown() {
 }
+
+#[test(runs = 3)] // ERROR "unknown argument `runs = 3` of `#[test]`"
+fn bad_test_arg() {
+}
+
+#[allow(dead_code)] // ERROR "`#[allow]` supports only `similar`"
+fn bad_allow() {
+}
+
+#[rare(often)] // ERROR "`#[rare]` takes no arguments"
+fn bad_rare_arg() {
+}
+
+#[test(cases = 10)]
+fn ok_cases() {
+}
+
+#[allow(similar, reason = "kept apart on purpose", owner = "core", expires = "2027-01-01")]
+#[rare]
+fn ok_allow() {
+}

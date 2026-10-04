@@ -59,7 +59,7 @@ wasm() {
 # compile <dir>: precompile <dir>/module.wasm into <dir>/module.cwasm.
 precompile() {
 	# shellcheck disable=SC2086
-	"$wasmtime" compile $wasm_flags "$1/module.wasm" -o "$1/module.cwasm"
+	"$wasmtime" compile $wasm_flags ${compile_extra:-} "$1/module.wasm" -o "$1/module.cwasm"
 }
 
 sources_hash() {
@@ -612,11 +612,16 @@ cmd_test() {
 	if [ "$_nrun" -gt 0 ]; then
 		# shellcheck disable=SC2046
 		compiler test-build "$_file" "$_dir" -run $(cat "$_dir/run.txt") || exit $?
+		# KEK_TEST_TIMEOUT (e.g. 10s) bounds each test process; the
+		# interruption must be compiled in too
+		[ -z "${KEK_TEST_TIMEOUT:-}" ] || compile_extra="-W epoch-interruption=y"
 		precompile "$_dir"
+		compile_extra=
 	fi
 	wasm_extra="--env KEK_TEST=1 --env KEK_TEST_CLOCK=$_clock --env KEK_TEST_SEED=$_seed --env KEK_TEST_CASES=$_cases"
 	[ -z "$_net" ] || wasm_extra="$wasm_extra --env KEK_TEST_NET=$_net"
 	[ -z "$_db" ] || wasm_extra="$wasm_extra --env KEK_TEST_DB=$_db"
+	[ -z "${KEK_TEST_TIMEOUT:-}" ] || wasm_extra="$wasm_extra -W timeout=$KEK_TEST_TIMEOUT"
 	if [ "$_nrun" -gt 0 ] && [ -n "$_net$_db" ]; then
 		wasm "$_dir/module.cwasm" "" || exit 1
 	fi
@@ -711,7 +716,57 @@ cmd_test() {
 # revision rev is extracted into a temporary directory and passed as
 # -base, so that only findings with a new or changed definition are
 # reported (the CI mode for pull requests).
+# similar_semantic <path> [-all] [-tests]: run the candidate pairs of the
+# semantic kind as property tests (each compares the two functions'
+# results on generated inputs) and print the path of the file listing the
+# pairs that agreed on every input. Temporary files go to $_sem_dir.
+similar_semantic() {
+	_sem_dir=$(mktemp -d "${TMPDIR:-/tmp}/kek-semantic-XXXXXX")
+	mkdir -p "$_sem_dir/prog"
+	compiler similar -semantic_plan "$_sem_dir" "$@" || exit 2
+	: >"$_sem_dir/equiv.txt"
+	[ -s "$_sem_dir/pairs.tsv" ] || return 0
+	set +e
+	(KEK_TEST_TIMEOUT=${KEK_TEST_TIMEOUT:-10s} cmd_test -json -run '^kek_sim_eq_[0-9]+$' "$_sem_dir/prog") \
+		>"$_sem_dir/result.json" 2>"$_sem_dir/result.err"
+	set -e
+	_tab=$(printf '\t')
+	while IFS="$_tab" read -r _i _a _b; do
+		if grep -q "\"name\":\"kek_sim_eq_$_i\",\"status\":\"ok\"" "$_sem_dir/result.json"; then
+			printf '%s\t%s\n' "$_a" "$_b" >>"$_sem_dir/equiv.txt"
+		fi
+	done <"$_sem_dir/pairs.tsv"
+}
+
 cmd_similar() {
+	# -semantic: compare outputs on generated inputs first (similar_semantic)
+	_sem=0
+	_sem_flags=
+	_sem_path=
+	_n=$#
+	while [ $_n -gt 0 ]; do
+		_a=$1
+		shift
+		_n=$((_n - 1))
+		case $_a in
+		-semantic | --semantic) _sem=1 ;;
+		*)
+			case $_a in
+			-all | --all | -tests | --tests) _sem_flags="$_sem_flags $_a" ;;
+			-*) ;;
+			*) _sem_path=$_a ;;
+			esac
+			set -- "$@" "$_a"
+			;;
+		esac
+	done
+	if [ $_sem -eq 1 ]; then
+		[ -n "$_sem_path" ] || die "usage: kek similar -semantic [flags] <file|dir>"
+		# shellcheck disable=SC2086
+		similar_semantic $_sem_flags "$_sem_path"
+		set -- -equiv "$_sem_dir/equiv.txt" "$@"
+		trap 'rm -rf "$_sem_dir"' EXIT
+	fi
 	_rev=
 	_has_rev=0
 	_path=
@@ -781,7 +836,7 @@ cmd_similar() {
 		;;
 	esac
 	_base=$(mktemp -d "${TMPDIR:-/tmp}/kek-similar-XXXXXX")
-	trap 'rm -rf "$_base"' EXIT
+	trap 'rm -rf "$_base" ${_sem_dir:+"$_sem_dir"}' EXIT
 	set +e
 	if git -C "$_top" archive --format=tar "$_rev" -- "$_rel" 2>/dev/null | tar -x -C "$_base" 2>/dev/null &&
 		[ -e "$_base/$_rel" ]; then

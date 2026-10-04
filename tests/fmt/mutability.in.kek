@@ -1,0 +1,18 @@
+// mut parameters, receivers and patterns; references in signatures
+struct Stack { items: Vec<Int>, mut n: Int }
+
+impl Stack {
+    fn push( &mut self,x:Int ) { self.items.push(x); }
+    fn with(mut   self, x: Int) -> Stack { self.push(x); self }
+    fn top(&self)->Option<Int>{ self.items.get(self.items.len()-1) }
+}
+
+fn fill(mut v:Vec<Int>,s:&mut Stack, r: & Vec<Int>) -> Vec<Int> {
+    for mut x in r.iter() { x = x + 1; v.push(x); }
+    let f = |mut w: Vec<Int>, y| { w.push(y); w };
+    match v.get(0) { Some(mut z) => { z = z + 1; } None => {} }
+    s.push(1);
+    let t = &mut v;
+    let u = &v;
+    f(v, 2)
+}

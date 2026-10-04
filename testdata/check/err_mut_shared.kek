@@ -1,0 +1,59 @@
+// A shared reference (`&T`, `&self`, `&e`) cannot be mutated through, nor
+// anything reached from it: shared views are deep.
+
+#[derive(Clone)]
+struct Item {
+    mut count: Int,
+    tags: Vec<String>,
+}
+
+struct Shelf {
+    items: Vec<Item>,
+}
+
+impl Shelf {
+    fn len(&self) -> Int {
+        self.items.len()
+    }
+
+    fn add(&self, it: Item) {
+        self.items.push(it); // ERROR "cannot mutate `self.items` through a shared reference `&self` (take `&mut self`)"
+    }
+
+    fn add2(&mut self, it: Item) {
+        self.items.push(it);
+    }
+}
+
+fn tag(xs: &Vec<Int>) {
+    xs.push(1); // ERROR "cannot mutate `xs` through a shared reference `&Vec<Int>` (take `&mut Vec<Int>`)"
+}
+
+fn deep(s: &Shelf) {
+    match s.items.get(0) {
+        Some(it) => {
+            it.count = 1; // ERROR "cannot assign to `it.count`: it is borrowed from the shared reference `s`"
+        }
+        None => {}
+    }
+    let first = s.items.get(0).unwrap_or(Item { count: 0, tags: Vec::new() });
+    first.tags.push("y"); // ERROR "cannot mutate `first.tags`: it is borrowed from the shared reference `s`"
+    // an owned copy can be mutated
+    let mut mine = first.clone();
+    mine.tags.push("z");
+}
+
+fn borrow_expr() {
+    let mut v = Vec::new();
+    let r = &v;
+    r.push(1); // ERROR "cannot mutate `r`: it is borrowed from the shared borrow `&v`"
+    v.push(2);
+}
+
+fn ok_reads(s: &Shelf) -> Int {
+    let mut n = s.len();
+    for it in s.items {
+        n = n + it.count + it.tags.len();
+    }
+    n
+}

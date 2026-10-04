@@ -1,0 +1,15 @@
+--- chain.kek
++++ chain.kek
+@@ -4 +4 @@
+-fn add(v: &Vec<Int>, x: Int) {
++fn add(v: &mut Vec<Int>, x: Int) {
+@@ -8 +8 @@
+-fn add_twice(v: &Vec<Int>, x: Int) {
++fn add_twice(v: &mut Vec<Int>, x: Int) {
+@@ -15 +15 @@
+-    let v = Vec::new();
++    let mut v = Vec::new();
+@@ -16 +16 @@
+-    add_twice(&v, 1);
++    add_twice(&mut v, 1);
+--- exit 0

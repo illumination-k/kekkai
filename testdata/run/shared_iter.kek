@@ -1,0 +1,84 @@
+// Iterators over shared data (docs/mutability.md): the iterator (its
+// cursor) is owned, so `next` and the adapters work through a `&T`; the
+// elements are shared, and a collection collected from them can grow but
+// holds shared elements (`Vec<&T>`).
+
+#[derive(Clone)]
+struct Task {
+    name: String,
+    mut done: Bool,
+    deps: Vec<String>,
+}
+
+fn pending(tasks: &Vec<Task>) -> Vec<&Task> {
+    tasks.iter().filter(|t| !t.done).collect()
+}
+
+fn names(tasks: &Vec<&Task>) -> String {
+    let mut out = Vec::new();
+    for t in tasks {
+        out.push(t.name);
+    }
+    out.join(",")
+}
+
+fn deps_count(tasks: &Vec<Task>) -> Int {
+    let mut it = tasks.iter();
+    let mut n = 0;
+    while let Some(t) = it.next() {
+        n = n + t.deps.len();
+    }
+    n
+}
+
+fn longest(tasks: &Vec<Task>) -> Option<Task> {
+    match tasks.iter().max_by_key(|t| t.deps.len()) {
+        Some(t) => Some(t.clone()),
+        None => None,
+    }
+}
+
+fn index(tasks: &HashMap<String, Task>) -> Vec<String> {
+    let mut ks: Vec<String> = tasks.keys().collect();
+    ks.push("end");
+    ks
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut tasks = Vec::new();
+    for i in 0..4 {
+        let mut deps = Vec::new();
+        for j in 0..i {
+            deps.push("t" + j.to_string());
+        }
+        tasks.push(Task { name: "t" + i.to_string(), done: i % 2 == 0, deps: deps });
+    }
+    let p = pending(&tasks);
+    log.info(names(&p) + " (" + p.len().to_string() + ")");
+    let mut more = pending(&tasks);
+    more.push(Task { name: "extra", done: false, deps: Vec::new() });
+    log.info(names(&more));
+    log.info(deps_count(&tasks).to_string());
+    match longest(&tasks) {
+        Some(mut t) => {
+            t.done = true;
+            log.info(t.name + " " + t.deps.len().to_string());
+        }
+        None => {}
+    }
+    // the copy was changed, not the original
+    let mut all_done = true;
+    for t in tasks.iter() {
+        all_done = all_done && t.done;
+    }
+    log.info(all_done.to_string());
+    let mut m = HashMap::new();
+    for t in tasks {
+        m.insert(t.name, t);
+    }
+    log.info(index(&m).join(" "));
+    let total: Int = tasks.iter().map(|t| t.deps.len()).sum();
+    log.info(total.to_string());
+    0
+}

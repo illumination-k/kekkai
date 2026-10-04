@@ -1,0 +1,9 @@
+--- left.kek
++++ left.kek
+@@ -18 +18 @@
+-fn keep(out: Vec<Item>, it: &Item) {
++fn keep(mut out: Vec<Item>, it: &Item) {
+--- stderr
+left.kek:14:19: cannot mutate `self.tags` through a shared reference `&self` (take `&mut self`) (not changed: it is part of a trait's signature)
+left.kek:19:14: cannot store a borrowed value in `out`: it comes from the shared reference `it` (use `it.clone()`)
+--- exit 1

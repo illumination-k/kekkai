@@ -49,12 +49,12 @@ Kekkai のコンパイラは Kekkai で書かれている（`compiler/`）。コ
 
 - `compiler/` は 1 つのプログラムで、ディレクトリ内の全 `.kek` が 1 つの名前空間を共有する。モジュールがないので、名前にコンポーネントの接頭辞を付ける。
   - フロントエンド：`Tok*`, `Ast*`, `lex_*`, `parse_*`, `ast_*`
-  - 型検査：`Ty*`, `chk_*`
+  - 型検査：`Ty*`, `chk_*`（可変性の検査は `Mu*`, `mu_*`。`mut_` は mutate が使う）
   - lowering：`lower_*`
   - IR：`Ir*`, `ir_*`
   - バックエンド：`Wasm*`, `wasm_*`, `cg_*`
   - JSON：`Json*`, `json_*`
-  - ツール：`fmt_*`, `caps_*`, `search_*`, `diag_*`, `irjson_*`, `glue_*`, `testrun_*`, `prelude_*`
+  - ツール：`fmt_*`, `fix_*`, `caps_*`, `search_*`, `diag_*`, `irjson_*`, `glue_*`, `testrun_*`, `prelude_*`
 - AST のノードは識別用に `id: Int` を持つ。ポインタの同一性がないので、型検査の結果などはノードの id をキーにした `HashMap` に置く。
 - 出力は決定的にする。型・import・関数・ローカル・文字列リテラル表の順序は固定で、不動点の検査がこれに依存する。
 
@@ -70,6 +70,7 @@ Kekkai のコンパイラは Kekkai で書かれている（`compiler/`）。コ
 | `caps [-json] <path>` | 各関数の capability（＝起こしうる副作用） |
 | `search [-json] [-limit n] '<sig>' [path]` | 型によるシグネチャ検索 |
 | `fmt [-w\|-check] <paths>` | 正準フォーマット |
+| `fix [-w] <paths>` | 可変性の規則が求める `mut` を足す（[mutability.md](mutability.md)） |
 | `test-build <path> <outdir> [-list \| -run name...]` | `kek test` のテスト発見とハーネスのビルド |
 | `lex <file>` / `ast <file>` | トークン列と構文木のダンプ |
 | `embed-prelude <dir> <out.kek> [-check]` | prelude をコンパイラに埋め込むソースを生成する |

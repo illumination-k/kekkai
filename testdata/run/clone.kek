@@ -1,0 +1,110 @@
+// clone(): owned deep copies (docs/mutability.md). Mutating a copy does
+// not change the original; values reached through a shared reference are
+// cloned before they are kept or mutated.
+
+#[derive(Clone, PartialEq)]
+struct Item {
+    name: String,
+    mut count: Int,
+    tags: Vec<String>,
+}
+
+#[derive(Clone)]
+enum Shape {
+    Dot,
+    Line(Vec<Int>),
+    Named(String, Item),
+}
+
+#[derive(Clone)]
+struct Inventory {
+    items: Vec<Item>,
+    index: HashMap<String, Int>,
+}
+
+fn tags(it: &Item) -> String {
+    it.tags.join(",")
+}
+
+// keep stores copies of shared items
+fn keep(out: &mut Vec<Item>, it: &Item) {
+    out.push(it.clone());
+}
+
+fn grow(mut inv: Inventory, name: String) {
+    inv.index.insert(name, inv.items.len());
+    inv.items.push(Item { name: name, count: 1, tags: Vec::new() });
+}
+
+fn shape_len(s: &Shape) -> Int {
+    match s {
+        Shape::Dot => 0,
+        Shape::Line(v) => v.len(),
+        Shape::Named(n, it) => n.len() + it.tags.len(),
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut a = Item { name: "a", count: 1, tags: Vec::new() };
+    a.tags.push("x");
+    let mut b = a.clone();
+    b.count = 5;
+    b.tags.push("y");
+    log.info(tags(&a) + " " + a.count.to_string() + " / " + tags(&b) + " " + b.count.to_string());
+    log.info((a == b).to_string() + " " + (a == a.clone()).to_string());
+
+    let mut kept = Vec::new();
+    keep(&mut kept, &a);
+    keep(&mut kept, &b);
+    match kept.get(0) {
+        Some(mut k) => {
+            k.count = 100;
+        }
+        None => {}
+    }
+    log.info(a.count.to_string() + " " + kept.get(0).unwrap_or(a).count.to_string());
+
+    let mut inv = Inventory { items: Vec::new(), index: HashMap::new() };
+    grow(inv, "p");
+    let snapshot = inv.clone();
+    grow(inv, "q");
+    log.info(inv.items.len().to_string() + " " + snapshot.items.len().to_string());
+    log.info(snapshot.index.contains_key(&"q").to_string() + " " + inv.index.contains_key(&"q").to_string());
+
+    let v = (1, a.clone(), Some(b.clone()));
+    let mut w = v.clone();
+    w.1.tags.push("z");
+    log.info(tags(&v.1) + " | " + tags(&w.1));
+
+    let shapes = Vec::new();
+    let mut shapes2 = shapes;
+    shapes2.push(Shape::Dot);
+    shapes2.push(Shape::Line(Vec::new()));
+    shapes2.push(Shape::Named("n", b));
+    let copies = shapes2.clone();
+    let mut total = 0;
+    for s in copies {
+        total = total + shape_len(&s);
+    }
+    log.info(total.to_string());
+
+    let set: HashSet<Int> = (1..4).collect();
+    let mut set2 = set.clone();
+    set2.insert(9);
+    log.info(set.len().to_string() + " " + set2.len().to_string());
+    let r: Result<Vec<Int>, String> = Ok(Vec::new());
+    let r2 = r.clone();
+    match r2 {
+        Ok(mut xs) => {
+            xs.push(1);
+            log.info(xs.len().to_string());
+        }
+        Err(e) => log.info(e),
+    }
+    match r {
+        Ok(xs) => log.info(xs.len().to_string()),
+        Err(e) => log.info(e),
+    }
+    0
+}

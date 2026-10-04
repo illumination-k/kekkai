@@ -1,0 +1,60 @@
+// Closures keep the view and mutability of what they capture: a closure
+// that captures shared data is shared, and cannot be kept in an owning
+// place. A closure passed to a core function over shared data gets its
+// elements shared.
+
+struct Item {
+    mut count: Int,
+    tags: Vec<String>,
+}
+
+struct Holder {
+    f: fn() -> Vec<String>,
+}
+
+fn hold(it: &Item) -> Holder {
+    let f = || it.tags;
+    Holder { f: f } // ERROR "cannot store a borrowed value in field `f` of `Holder`: it comes from the shared reference `it`"
+}
+
+struct Counter {
+    f: fn() -> Int,
+}
+
+// a closure whose results hold no mutable state hands out nothing borrowed
+fn count(it: &Item) -> Counter {
+    Counter { f: || it.count + it.tags.len() }
+}
+
+fn apply<F: Fn(Int) -> Int>(f: F, x: Int) -> Int {
+    f(x)
+}
+
+fn use_apply(it: &Item) -> Int {
+    apply(|x| x + it.count, 1)
+}
+
+fn capture_shared(it: &Item) {
+    let f = || {
+        it.count = 1; // ERROR "cannot assign to `it.count` through a shared reference `&Item` (take `&mut Item`)"
+    };
+    f();
+}
+
+fn over_shared(items: &Vec<Item>) -> Int {
+    items.iter().for_each(|x| {
+        x.count = 0; // ERROR "cannot assign to `x.count`: it is borrowed from the shared reference `items`"
+    });
+    let n = items.iter().map(|mut x| x.count).count(); // ERROR "cannot declare the closure parameter `x` as `mut`"
+    n
+}
+
+fn over_owned(items: Vec<Item>) {
+    items.iter().for_each(|mut x| {
+        x.count = 0;
+    });
+}
+
+fn call_shared(f: fn(Item) -> Int, g: fn(&Item) -> Int, it: &Item) -> Int {
+    g(it) + f(it) // ERROR "cannot pass a borrowed value to `f`, which takes its argument by value"
+}

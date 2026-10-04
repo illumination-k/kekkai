@@ -32,6 +32,8 @@
 #   fmt           kek fmt goldens, -check / -w, and round trips (idempotent,
 #                 same AST, comments and diagnostics) over the sources and
 #                 random programs
+#   fix           kek fix: the `mut` it adds (diff, -w, comments kept, a
+#                 fixed point), what it leaves, usage
 #   difftest      random programs: WasmGC (wasmtime) vs the Lean reference interpreter
 #   e2e           Workers programs (testdata/e2e, examples) and the store adapter
 #                 conformance suite on workerd
@@ -79,7 +81,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar smt refine fmt difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar smt refine fmt fix difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

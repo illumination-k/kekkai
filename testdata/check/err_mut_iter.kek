@@ -1,0 +1,65 @@
+// Iterators carry the view of their elements: over shared data, the
+// iterator itself (the cursor) is owned, so `next` and the adapters work,
+// but its elements are shared.
+
+#[derive(Clone)]
+struct Item {
+    mut count: Int,
+}
+
+fn count_all(items: &Vec<Item>) -> Int {
+    let mut it = items.iter();
+    let mut n = 0;
+    while let Some(x) = it.next() {
+        n = n + x.count;
+        x.count = 0; // ERROR "cannot assign to `x.count`: it is borrowed from the shared reference `items`"
+    }
+    for x in items.iter().filter(|x| x.count > 0) {
+        x.count = 1; // ERROR "cannot assign to `x.count`: it is borrowed from the shared reference `items`"
+    }
+    for (i, x) in items.iter().enumerate() {
+        n = n + i + x.count;
+    }
+    n
+}
+
+fn collected(items: &Vec<Item>) -> Vec<Item> {
+    // a new Vec of borrowed elements: the Vec can grow, its elements are
+    // shared
+    let mut v: Vec<&Item> = items.iter().collect();
+    v.push(Item { count: 1 });
+    match v.get(0) {
+        Some(x) => {
+            x.count = 2; // ERROR "cannot assign to `x.count`: it is borrowed from the shared reference `items`"
+        }
+        None => {}
+    }
+    let owned: Vec<Item> = items.iter().map(|x| x.clone()).collect();
+    let bad: Vec<Item> = items.iter().collect();
+    bad // ERROR "cannot return a borrowed value as `Vec<Item>`"
+}
+
+fn take(x: Item) -> Int {
+    x.count
+}
+
+fn by_value(items: &Vec<Item>) -> Int {
+    items.iter().map(take).sum() // ERROR "cannot pass `take` to `map` over borrowed values"
+}
+
+fn owned(items: Vec<Item>) -> Int {
+    // over owned data the elements are owned
+    for x in items.iter() {
+        let mut y = x;
+        y.count = y.count + 1;
+    }
+    items.iter().map(take).sum()
+}
+
+fn shared_cursor(it: &Range) -> Int {
+    let mut n = 0;
+    for x in it { // ERROR "cannot mutate `it` through a shared reference `&Range` (take `&mut Range`)"
+        n = n + x;
+    }
+    n
+}

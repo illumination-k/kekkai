@@ -1,0 +1,19 @@
+// A mutated `&T` parameter becomes `&mut T`; then its callers need
+// mutable bindings, which the next round adds.
+
+fn add(v: &Vec<Int>, x: Int) {
+    v.push(x);
+}
+
+fn add_twice(v: &Vec<Int>, x: Int) {
+    add(v, x);
+    add(v, x);
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let v = Vec::new();
+    add_twice(&v, 1);
+    log.info(v.len().to_string());
+    0
+}

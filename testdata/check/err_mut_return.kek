@@ -1,0 +1,48 @@
+// A borrowed value cannot be returned as an owned type: return `&T`, or
+// clone it.
+
+#[derive(Clone)]
+struct Shelf {
+    items: Vec<Int>,
+    name: String,
+}
+
+impl Shelf {
+    fn items(&self) -> Vec<Int> {
+        self.items // ERROR "cannot return a borrowed value as `Vec<Int>`: it comes from `&self` (return `&Vec<Int>` or clone it)"
+    }
+
+    fn items_ref(&self) -> &Vec<Int> {
+        self.items
+    }
+
+    fn items_copy(&self) -> Vec<Int> {
+        self.items.clone()
+    }
+
+    // values without mutable state (Int, String, ...) are not borrowed
+    fn name(&self) -> String {
+        self.name
+    }
+}
+
+fn first(v: &Vec<Shelf>) -> Option<Shelf> {
+    if v.len() == 0 {
+        return None;
+    }
+    return v.get(0); // ERROR "cannot return a borrowed value as `Option<Shelf>`: it comes from the shared reference `v`"
+}
+
+fn first_ref(v: &Vec<Shelf>) -> Option<&Shelf> {
+    v.get(0)
+}
+
+fn use_ref(v: &Vec<Shelf>) -> Int {
+    match first_ref(v) {
+        Some(s) => {
+            s.items.push(1); // ERROR "cannot mutate `s.items`: it is borrowed from the result of `first_ref`"
+            s.items.len()
+        }
+        None => 0,
+    }
+}

@@ -1,0 +1,91 @@
+// `&mut T`, `mut x: T` and `&mut self` (docs/mutability.md): a mutable
+// borrow mutates the caller's value; a `mut` parameter takes the value
+// (the caller's binding need not be mutable).
+
+struct Stack {
+    items: Vec<Int>,
+    mut pushes: Int,
+}
+
+impl Stack {
+    fn new() -> Stack {
+        Stack { items: Vec::new(), pushes: 0 }
+    }
+
+    fn push(&mut self, x: Int) {
+        self.items.push(x);
+        self.pushes = self.pushes + 1;
+    }
+
+    fn pop(&mut self) -> Option<Int> {
+        self.items.pop()
+    }
+
+    fn peek(&self) -> Option<Int> {
+        self.items.get(self.items.len() - 1)
+    }
+
+    fn total(&self) -> Int {
+        let mut t = 0;
+        for x in self.items {
+            t = t + x;
+        }
+        t
+    }
+
+    // a builder: takes self and gives it back
+    fn with(mut self, x: Int) -> Stack {
+        self.push(x);
+        self
+    }
+}
+
+fn fill(s: &mut Stack, n: Int) {
+    for i in 0..n {
+        s.push(i * 10);
+    }
+}
+
+fn drain_to(from: &mut Stack, to: &mut Vec<Int>) {
+    while let Some(x) = from.pop() {
+        to.push(x);
+    }
+}
+
+fn append(mut v: Vec<Int>, x: Int) -> Vec<Int> {
+    v.push(x);
+    v
+}
+
+fn count_up(counts: &mut HashMap<String, Int>, words: &Vec<String>) {
+    for w in words {
+        let n = counts.get_or(&w, 0);
+        counts.insert(w, n + 1);
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut s = Stack::new();
+    fill(&mut s, 3);
+    log.info(s.total().to_string() + " " + s.peek().unwrap_or(-1).to_string());
+    let s2 = Stack::new().with(1).with(2);
+    log.info(s2.total().to_string() + " " + s2.pushes.to_string());
+    let mut out = Vec::new();
+    drain_to(&mut s, &mut out);
+    log.info(out.len().to_string() + " " + s.items.len().to_string() + " " + s.pushes.to_string());
+    let base = Vec::new();
+    let more = append(base, 7);
+    log.info(more.len().to_string());
+    let mut counts = HashMap::new();
+    let words = "a b a c a b".split(" ");
+    count_up(&mut counts, &words);
+    log.info(
+        counts.get_or(&"a", 0).to_string()
+            + " "
+            + counts.get_or(&"b", 0).to_string()
+            + " "
+            + counts.get_or(&"c", 0).to_string(),
+    );
+    0
+}

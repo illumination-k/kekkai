@@ -99,11 +99,11 @@ struct MuCx {
     mut ro: Bool,
 }
 
-// mu_enforce reports whether the rules are errors. When false, the pass
-// runs only for `kek fix` (the two-step bootstrap: the compiler accepts
-// `mut` before its sources are migrated).
+// mu_enforce reports whether the rules are errors. It was false while the
+// compiler learned the syntax before its sources used it (the two-step
+// bootstrap, docs/mutability.md); the pass then ran only for `kek fix`.
 fn mu_enforce() -> Bool {
-    false
+    true
 }
 
 fn mu_empty_report() -> MuReport {
@@ -151,7 +151,7 @@ fn mu_program(info: ChkInfo, f: AstFile) -> MuReport {
 fn mu_readonly(info: ChkInfo, f: AstFile) -> HashMap<String, Int> {
     let mut cx = mu_new_cx(info, f);
     cx.ro = true;
-    let out: HashMap<String, Int> = HashMap::new();
+    let mut out: HashMap<String, Int> = HashMap::new();
     for fun in info.func_list {
         if !fun.decl.has_body || chk_is_lib(fun) {
             continue;
@@ -1253,7 +1253,8 @@ fn mu_taint_all(cx: MuCx, es: Vec<AstExpr>) -> MuVal {
 
 // mu_closure checks a closure literal whose parameters take values of
 // view pview (pviews per parameter when known) and returns its value: a
-// closure that captures shared data is shared.
+// closure that captures shared data is shared (when its results can hold
+// mutable state).
 fn mu_closure(mut cx: MuCx, e: AstClosure, pviews: Vec<Int>, pview: Int, psrc: String) -> MuVal {
     let mut out = mu_val(0);
     match cx.info.lambdas.get(e.id) {
@@ -1268,6 +1269,16 @@ fn mu_closure(mut cx: MuCx, e: AstClosure, pviews: Vec<Int>, pview: Int, psrc: S
                     }
                     None => {}
                 }
+            }
+            // a closure can hand out what it captured only through its
+            // result: one whose results have no mutable state is owned
+            match chk_fn_sig(li.ty) {
+                Some(Ty::Fn(_, r)) => {
+                    if !mu_rel(cx, r) {
+                        out.view = 0;
+                    }
+                }
+                _ => {}
             }
             let mut i = 0;
             for cb in li.params {

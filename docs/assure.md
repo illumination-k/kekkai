@@ -117,6 +117,7 @@ kek assure check [-json] <file|dir>
 | `tx.linear` | 真偽 | `type` | `db.transaction` を開く関数。`Tx` の線形性（commit／rollback をちょうど1回）を型検査器が保証している |
 | `refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow` | 真偽 | `smt` | 関数の `v[i]` の範囲・除数（0 でも `MIN / -1` でもない）・`+ - *` のオーバーフローの検証条件が、その種類について 1 つ以上あり、すべて篩型の検査器（`compiler/refine.kek`、ソルバは `compiler/smt.kek`）で証明できた。`kekkai.toml` の `[refine]` にかかわらず全関数で全種類を調べる。検証条件のない種類は省く。成り立たなくなると弱化。推論は数学的な整数で行うので、`refine.no_overflow` のない関数の他の証明はラップアラウンドがないことを前提にする（[refinement.md](refinement.md)） |
 | `idempotent` | 真偽 | `type` | capability を受け取る関数で、呼び出しグラフで到達できる capability の操作がすべて冪等（リトライしても状態が変わらない：読み取り、ログ、時計、`tx.put`・`tx.delete`、トランザクション）。偽なら省く。成り立たなくなると弱化（関数が純粋になった場合は除く）。`#[handler(idempotent)]` はこれを型エラーとして要求する |
+| `readonly` | 真偽 | `type` | 書き換えられる状態を持つ引数（`Vec`・`mut` フィールドのある struct など）を受け取り、そのどれも書き換えない：`mut`・`&mut`・`mut self`・`&mut self` の引数がなく、所有型の引数を共有の参照とみなしても可変性の規則（[mutability.md](mutability.md)）を満たす（書き換えも、可変な場所への移動もしない）。偽なら省く。成り立たなくなると弱化 |
 | `tested` | 真偽 | `test` | いずれかの `#[test]` から呼び出しグラフ（定義ハッシュの依存）で到達できる。`#[test]` 自身には付かない |
 
 保証のほかに次を持つ。

@@ -1,0 +1,62 @@
+// Mutation needs a mutable binding: `let mut`, `mut` parameters, `mut
+// self`, `Some(mut x)`, `for mut x`, `|mut x|` (docs/mutability.md).
+
+struct Counter {
+    mut n: Int,
+    items: Vec<Int>,
+}
+
+impl Counter {
+    fn reset(self) {
+        self.n = 0; // ERROR "cannot assign to `self.n`: `self` is not declared as mutable (write `mut self`)"
+    }
+
+    fn add(mut self, x: Int) {
+        self.items.push(x);
+    }
+}
+
+fn bump(c: Counter) {
+    c.n = c.n + 1; // ERROR "cannot assign to `c.n`: `c` is not declared as mutable (write `mut c: Counter`)"
+}
+
+fn fill(mut c: Counter, n: Int) {
+    for i in 0..n {
+        c.items.push(i);
+    }
+}
+
+fn locals() -> Int {
+    let v = Vec::new();
+    v.push(1); // ERROR "cannot mutate `v`: it is not declared as mutable (write `let mut v`)"
+    let mut w = Vec::new();
+    w.push(2);
+    let mut vs = Vec::new();
+    vs.push(w);
+    match vs.get(0) {
+        Some(x) => x.push(3), // ERROR "cannot mutate `x`: it is not declared as mutable (write `mut x`)"
+        None => {}
+    }
+    match vs.get(0) {
+        Some(mut x) => x.push(3),
+        None => {}
+    }
+    for x in vs {
+        x.pop(); // ERROR "cannot mutate `x`: it is not declared as mutable (write `mut x`)"
+    }
+    for mut x in vs {
+        x.pop();
+    }
+    let c = Counter { n: 0, items: Vec::new() };
+    c.add(1);
+    fill(c, 2);
+    c.n
+}
+
+fn closures() {
+    let out = Vec::new();
+    let f = |x: Int| out.push(x); // ERROR "cannot mutate `out`: it is not declared as mutable (write `let mut out`)"
+    f(1);
+    let g = |v: Vec<Int>| v.push(1); // ERROR "cannot mutate `v`: it is not declared as mutable (write `|mut v|`)"
+    g(Vec::new());
+}

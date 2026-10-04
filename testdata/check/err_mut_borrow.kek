@@ -1,0 +1,36 @@
+// `&mut e` and `&mut T` parameters need a mutable path that is not
+// shared; a function value cannot take `&mut` parameters.
+
+fn add(v: &mut Vec<Int>, x: Int) {
+    v.push(x);
+}
+
+fn calls(shared: &Vec<Int>) {
+    let v = Vec::new();
+    add(&mut v, 1); // ERROR "cannot borrow `v` as mutable: it is not declared as mutable (write `let mut v`)"
+    add(v, 2); // ERROR "cannot borrow `v` as mutable: it is not declared as mutable (write `let mut v`)"
+    let mut w = Vec::new();
+    add(&mut w, 3);
+    add(Vec::new(), 4);
+    add(shared, 5); // ERROR "cannot borrow `shared` as mutable through a shared reference `&Vec<Int>` (take `&mut Vec<Int>`)"
+    let r = &mut shared; // ERROR "cannot borrow `shared` as mutable through a shared reference"
+    let f = add; // ERROR "cannot use `add` as a value: it borrows `v` mutably (wrap the call in a closure)"
+}
+
+struct Acc {
+    mut total: Int,
+}
+
+impl Acc {
+    fn add(&mut self, x: Int) {
+        self.total = self.total + x;
+    }
+}
+
+fn acc() -> Int {
+    let a = Acc { total: 0 };
+    a.add(1); // ERROR "cannot borrow `a` as mutable: it is not declared as mutable (write `let mut a`)"
+    let mut b = Acc { total: 0 };
+    b.add(2);
+    b.total
+}

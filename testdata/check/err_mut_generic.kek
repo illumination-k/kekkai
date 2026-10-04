@@ -1,0 +1,58 @@
+// A value of a type parameter is treated as an aggregate (it may hold
+// mutable state), whatever the type argument.
+
+fn first<T>(v: &Vec<T>) -> Option<T> {
+    v.get(0) // ERROR "cannot return a borrowed value as `Option<T>`: it comes from the shared reference `v`"
+}
+
+fn first_clone<T: Clone>(v: &Vec<T>) -> Option<T> {
+    match v.get(0) {
+        Some(x) => Some(x.clone()),
+        None => None,
+    }
+}
+
+fn keep<T>(out: &mut Vec<T>, x: &T) {
+    out.push(x); // ERROR "cannot store a borrowed value in `out`: it comes from the shared reference `x`"
+}
+
+fn drain<I: Iterator<Item = Int>>(it: I) -> Int {
+    let mut n = 0;
+    while let Some(x) = it.next() { // ERROR "cannot borrow `it` as mutable: it is not declared as mutable (write `mut it: I`)"
+        n = n + x;
+    }
+    n
+}
+
+fn drain2<I: Iterator<Item = Int>>(mut it: I) -> Int {
+    let mut n = 0;
+    while let Some(x) = it.next() {
+        n = n + x;
+    }
+    n
+}
+
+trait Bump {
+    fn bump(&mut self);
+    fn peek(&self) -> Int;
+}
+
+struct Cell {
+    mut n: Int,
+}
+
+impl Bump for Cell {
+    fn bump(&mut self) {
+        self.n = self.n + 1;
+    }
+
+    fn peek(&mut self) -> Int { // ERROR "method `peek` takes `&mut self` but the trait `Bump` borrows it shared"
+        self.n
+    }
+}
+
+fn bump_all<T: Bump>(xs: &Vec<T>) {
+    for x in xs {
+        x.bump(); // ERROR "cannot borrow `x` as mutable: it is borrowed from the shared reference `xs`"
+    }
+}

@@ -1,0 +1,65 @@
+// A borrowed value cannot be kept in an owning place: a struct field, a
+// collection, a `let mut`, a mutable variable, an owned parameter. Taint
+// goes through tuples and enum constructors (`Some(x)`).
+
+#[derive(Clone)]
+struct Item {
+    mut count: Int,
+    tags: Vec<String>,
+}
+
+struct Box1 {
+    item: Item,
+}
+
+struct Pair {
+    items: Vec<Item>,
+}
+
+fn keep(it: &Item) -> Box1 {
+    Box1 { item: it } // ERROR "cannot store a borrowed value in field `item` of `Box1`: it comes from the shared reference `it` (use `it.clone()`)"
+}
+
+fn keep_clone(it: &Item) -> Box1 {
+    Box1 { item: it.clone() }
+}
+
+fn collect(out: &mut Vec<Item>, it: &Item) {
+    out.push(it); // ERROR "cannot store a borrowed value in `out`: it comes from the shared reference `it` (use `it.clone()`)"
+    out.push(it.clone());
+}
+
+fn locals(it: &Item) {
+    let mut a = it; // ERROR "cannot store a borrowed value in `a`: it comes from the shared reference `it`"
+    let b = it;
+    let mut c: &Item = it;
+    let mut d = Item { count: 0, tags: Vec::new() };
+    d = it; // ERROR "cannot store a borrowed value in `d`"
+    let mut best: Option<Item> = None;
+    best = Some(it); // ERROR "cannot store a borrowed value in `best`"
+    let t = (it, 1);
+    let p = Pair { items: Vec::new() };
+    let pairs = Vec::new();
+    let mut pairs2 = pairs;
+    pairs2.push(t); // ERROR "cannot store a borrowed value in `pairs2`"
+}
+
+fn take(x: Item) -> Int {
+    x.count
+}
+
+fn take_ref(x: &Item) -> Int {
+    x.count
+}
+
+fn pass(it: &Item) -> Int {
+    take(it) // ERROR "cannot pass a borrowed value as `x: Item` of `take`: it comes from the shared reference `it` (use `it.clone()`, or take `&Item`)"
+}
+
+fn pass_ok(it: &Item) -> Int {
+    take_ref(it) + take(it.clone())
+}
+
+fn map_insert(m: &mut HashMap<String, Item>, it: &Item) {
+    m.insert("a", it); // ERROR "cannot store a borrowed value in the receiver of `insert`"
+}

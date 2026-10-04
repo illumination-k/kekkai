@@ -1,0 +1,20 @@
+// What kek fix cannot do: a borrowed value kept in an owning place needs
+// clone() or a `&T`, and a trait's signature is not changed.
+
+struct Item {
+    tags: Vec<String>,
+}
+
+trait Tag {
+    fn tag(&self, t: String);
+}
+
+impl Tag for Item {
+    fn tag(&self, t: String) {
+        self.tags.push(t);
+    }
+}
+
+fn keep(out: Vec<Item>, it: &Item) {
+    out.push(it);
+}

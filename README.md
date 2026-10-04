@@ -7,6 +7,7 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 - **個人情報の型**：`Pii<T>` に包んだ値は文字列にできず、ログ・レスポンス・ストアに渡すと型エラーになる。取り出す（格下げ）のは `mask()`・`hash()`・`expose_unchecked()` だけで、その呼び出しは `kek caps` と `kek assure` に記録される
 - **篩型（refinement types）**：`where 0 <= i, i < v.len()` のような線形の事前条件・事後条件（`result`）と、`type Port = Int where 0 < self && self < 65536;` のような述語付きの型の別名。`v[i]` は範囲内であることを証明できなければ型エラーで、反例（`i = 0, v.len() = 0`）を示す。証明は自作の QF\_LIA ソルバ（Omega test、Kekkai で実装）。ゼロ除算・オーバーフローは lint（`kekkai.toml` の `[refine]` でエラーにできる）
 - **冪等なハンドラ**：`#[handler(idempotent)]` のハンドラと、そこから呼ばれる関数は、冪等でない操作（`net.post`、`tx.outbox`、ファイルへの書き込み、乱数）を使えない
+- **可変性の追跡**：Rust と同じく、書き換えには `let mut`・`mut` 引数・`&mut T`・`&mut self` が要る。`&T`・`&self` からたどった値は深く読み取り専用で、保存・所有型での返却もできない（`clone()` で複製する）。足りない `mut` は `kek fix` が足す（[docs/mutability.md](docs/mutability.md)）
 - **コア計算の健全性を Lean で証明**（`lean/`）
 
 設計は [docs/design.md](docs/design.md) を参照してください。
@@ -41,6 +42,7 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力。`module.wasm` はプログラムの定義ハッシュをキーにキャッシュする（コメントや整形だけの変更では再コンパイルしない） |
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
+| `kek fix [-w] <paths>` | 可変性の規則（[docs/mutability.md](docs/mutability.md)）が求める `mut` を足す（`let mut`、`mut` 引数、書き換える `&T` を `&mut T` に、など）。変わらなくなるまで繰り返し、コメントは保持。`-w` なしでは差分を表示。直せない箇所（借用した値の保存など）は一覧にして終了コード 1 |
 | `kek test [-run re] [-j n] [-json] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス、並列）。引数を取るテストはプロパティベーステスト。結果は定義ハッシュでキャッシュし、変更の影響を受けたテストだけを実行する |
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)）。篩型の証明（`refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow`）も記録する |
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
@@ -120,7 +122,7 @@ test shapes_are_small ... FAILED (pure: hermetic, cacheable; 0.4ms)
 
 ### 保証の台帳（`kek assure`）
 
-コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、冪等性、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`・個人情報の格下げ `pii.declassify`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
+コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、冪等性、入力を書き換えないこと（`readonly`）、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`・個人情報の格下げ `pii.declassify`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
 
 ```sh
 ./kek assure plan app       # ロックとの差分（-json が基本の出力、-v で自動承認分も表示）

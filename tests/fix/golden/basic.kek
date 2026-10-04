@@ -1,0 +1,46 @@
+// kek fix adds the `mut` that mutations need (comments are kept).
+
+struct Counter {
+    mut n: Int, // the count
+    log: Vec<Int>,
+}
+
+impl Counter {
+    /* by value, then mutated */
+    fn bump(mut self) -> Counter {
+        self.n = self.n + 1;
+        self
+    }
+
+    fn record(&mut self, x: Int) {
+        self.log.push(x); // through `&self`
+    }
+}
+
+fn fill(mut v: Vec<Int>, n: Int) {
+    for i in 0..n {
+        v.push(i);
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut v = Vec::new(); // a new Vec
+    v.push(1);
+    let mut vs = Vec::new();
+    vs.push(v);
+    for mut w in vs {
+        w.push(2);
+    }
+    match vs.get(0) {
+        Some(mut w) => w.push(3),
+        None => {}
+    }
+    let mut c = Counter { n: 0, log: Vec::new() };
+    c.record(4);
+    let f = |mut x: Vec<Int>| x.pop();
+    f(Vec::new());
+    fill(v, 2);
+    log.info(c.bump().n.to_string() + " " + v.len().to_string());
+    0
+}

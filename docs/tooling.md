@@ -26,6 +26,11 @@ least one error. Warnings do not change the exit status.
 - `phase` is one of:
   - `parse`: syntax errors. When there are any, no type errors are reported.
   - `type`: type, capability and linearity errors.
+  - `mut`: mutability errors (docs/mutability.md): a mutation through a
+    binding that is not declared mutable or through a shared reference
+    (`&T`, `&self`), a borrowed value kept in an owning place or returned
+    as an owned type. They are checked only when there are no type errors;
+    `kek fix` adds the missing `mut` for many of them.
   - `refine`: refinement errors (docs/refinement.md): an index `v[i]` not
     proved in bounds, a precondition not proved at a call, a postcondition
     or a refined alias (`type Port = Int where ...`) not proved. They are
@@ -71,7 +76,7 @@ Prints one entry per function, in declaration order. The file must type-check.
 {"file": "bank.kek", "functions": [
   {"name": "transfer", "signature": "fn transfer(db: &Db, log: &Log, ...) -> Result<Int, TransferError>",
    "line": 25, "col": 4, "handler": false, "pure": false, "async": true,
-   "idempotent": false,
+   "idempotent": false, "readonly": true,
    "caps": [{"name": "db", "type": "&Db", "used": true}, {"name": "log", "type": "&Log", "used": true}],
    "direct_effects": ["db.transaction", "log.info", "tx.commit", "..."],
    "unused_caps": [], "calls": ["balance_key", "read_balance"],
@@ -88,6 +93,15 @@ through the call graph is idempotent (true for pure functions; a
 `#[handler(idempotent)]` must have it, see [language.md](language.md)).
 `declassify` lists the calls of `mask`, `hash` and `expose_unchecked` on
 personal data (`Pii`) in the function's body, at the method name.
+`readonly` means the function mutates none of its inputs: no parameter is
+`mut`, `&mut`, `mut self` or `&mut self`, and the body passes the
+mutability rules with its owned parameters taken as shared (it neither
+mutates them nor moves them into a mutable place; see
+[mutability.md](mutability.md)). `kek assure` records it as the guarantee
+`readonly` for the functions that take values with mutable state.
+
+The `signature` shows the parameter and result types as written:
+`&T` and `&mut T` (`self: &Point` for `&self`), so does `kek search`.
 
 The text form adds, per function with capabilities, `idempotent: true` or
 `idempotent: false (<op> via <callee>)`, a line `declassify: mask (31:40),
@@ -116,6 +130,32 @@ Prints `./kekkai.toml`, the project configuration read by `similar`,
 `cover`, `mutate` and `assure`, as JSON (exit 1 on a syntax error). The
 format is a TOML subset: `[section]` / `[section."sub"]` headers and
 `key = value` with strings, integers, booleans and arrays.
+
+## `kek fix [-w] <paths>`
+
+Adds the `mut` that the mutability rules (docs/mutability.md) ask for.
+Each path is one program, like `kek check` (a file, or a directory of
+`.kek` files; `lib/core` and `lib/prelude` are checked as the core library
+and the prelude). The program is checked, and for every diagnostic of
+phase `mut` that names a binding or parameter the edit is applied:
+`let x` → `let mut x`, `x: T` → `mut x: T`, `self` → `mut self`,
+`Some(x)` → `Some(mut x)`, `for x` → `for mut x`, `|x|` → `|mut x|`, a
+mutated `x: &T` → `x: &mut T` (`&self` → `&mut self`), and an argument
+`&v` given to a `&mut T` parameter → `&mut v`. The program is checked
+again until nothing changes. Edits are insertions into the text, so
+comments and layout are kept (`kek fmt -w` afterwards if a line got too
+long).
+
+- Without `-w` the changes are printed as a diff (`--- file`, `+++ file`,
+  `@@ -L +L @@` and the old and new line); files are not changed. With
+  `-w` the files are rewritten and `kek fix: N change(s)` is printed.
+- A trait method's `&self` / `&T` is part of the trait's signature: it is
+  reported (`not changed: it is part of a trait's signature`), not
+  changed.
+- What it cannot fix (a borrowed value stored in an owning place or
+  returned as an owned type, which needs `clone()` or a `&T`) and other
+  errors (type errors stop the fixing; refinement checks are skipped) are
+  printed to stderr; the exit status is then 1.
 
 ## `kek search [-json] [-limit n] '<signature>' [file.kek]`
 

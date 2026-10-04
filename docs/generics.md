@@ -37,10 +37,12 @@
 
 ## Rust との違い
 
-- 値（struct・enum・`Vec`・`HashMap`）は参照で共有される。所有権・借用はなく、`&T`・`&mut T`・`*x` は書けるが何もしない（capability の `&Log` などは別）。
-- そのため不変性は型ではなくフィールドの `mut` で表し、`Hash` の derive は `mut` フィールドのない struct に限る。
+- 値（struct・enum・`Vec`・`HashMap`）は参照で共有される。所有権・move・ライフタイムはない。`&T`・`&mut T`・`&self`・`&mut self`・`let mut`・`mut` 引数は Rust と同じ意味で書き換えを制限する（[mutability.md](mutability.md)）が、保証は「この参照からは書き換えられない」までで、別の可変な別名からは変わりうる。`let x` の値は `let mut y = x` で移して書き換えられ、元の `x` からも読める。
+- `&mut T` の引数に `&mut v` と書くのは任意（`v` が可変な経路ならよい）。`*x` は何もしない。
+- 共有の参照から借用した値を struct に入れる・所有型で返すことはできない（ライフタイムがないため）。`clone()` するか、`&T`・`Vec<&T>`・`Option<&T>` で受け渡す。利用者の型で借用したデータを回すイテレータは作れない（core のイテレータとアダプタは使える）。
+- 型の不変性はフィールドの `mut` で表し（`mut` のないフィールドには代入できない）、`Hash` の derive は `mut` フィールドのない struct に限る。
 - `HashMap` のキーは `Hash + Eq` に加えて `Ord` が必要（衝突したバケットを木にするため）。反復は挿入順。
-- クロージャは純粋で、変数を値で捕捉する（`FnMut` のように捕捉した変数へは代入できない）。`Fn`・`FnMut`・`FnOnce` の区別はない。
+- クロージャは純粋で、変数を値で捕捉する（`FnMut` のように捕捉した変数へは代入できない。捕捉した `let mut` の値の中身は書き換えられる）。`Fn`・`FnMut`・`FnOnce` の区別はない。
 - trait object（`dyn Trait`）、`impl Trait` の戻り値（`impl Fn` を除く）、ブランケット実装（`impl<T: A> B for T`）、ライフタイムはない。
 - 演算子 `+ - * /` は `Int`（と `String` の `+`）だけで、`Add` などの trait はない。
 - `HashMap` に `entry` API はない（`get_or` を使う）。`HashSet` の集合演算は `Vec` を返す。

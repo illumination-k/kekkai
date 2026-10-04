@@ -1,0 +1,30 @@
+--- basic.kek
++++ basic.kek
+@@ -10 +10 @@
+-    fn bump(self) -> Counter {
++    fn bump(mut self) -> Counter {
+@@ -15 +15 @@
+-    fn record(&self, x: Int) {
++    fn record(&mut self, x: Int) {
+@@ -20 +20 @@
+-fn fill(v: Vec<Int>, n: Int) {
++fn fill(mut v: Vec<Int>, n: Int) {
+@@ -28 +28 @@
+-    let v = Vec::new(); // a new Vec
++    let mut v = Vec::new(); // a new Vec
+@@ -30 +30 @@
+-    let vs = Vec::new();
++    let mut vs = Vec::new();
+@@ -32 +32 @@
+-    for w in vs {
++    for mut w in vs {
+@@ -36 +36 @@
+-        Some(w) => w.push(3),
++        Some(mut w) => w.push(3),
+@@ -39 +39 @@
+-    let c = Counter { n: 0, log: Vec::new() };
++    let mut c = Counter { n: 0, log: Vec::new() };
+@@ -41 +41 @@
+-    let f = |x: Vec<Int>| x.pop();
++    let f = |mut x: Vec<Int>| x.pop();
+--- exit 0

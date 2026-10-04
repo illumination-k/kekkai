@@ -1,0 +1,18 @@
+// `#[fresh]` belongs to the core library and the prelude; methods take no
+// other attributes.
+
+#[fresh] // ERROR "`#[fresh]` is only allowed in the core library and the prelude"
+fn make() -> Vec<Int> {
+    Vec::new()
+}
+
+struct S {
+    n: Int,
+}
+
+impl S {
+    #[rare] // ERROR "attributes are not allowed on methods"
+    fn get(&self) -> Int {
+        self.n
+    }
+}

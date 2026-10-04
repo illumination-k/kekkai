@@ -29,7 +29,7 @@
 | `Request`, `Response`, `TxError`, `NetError`, `IoError` | ホストが提供する不透明なデータ |
 | `&Log`, `&Net`, `&Db`, `&Clock`, `&Random`, `&Fs`, `Tx`, `&Tx` | capability（下記） |
 
-- struct・enum・`Vec`・`HashMap` は参照型で、代入や引数渡しは参照の共有になる。そのため capability 以外の `&T`・`&mut T` は `T` と同じ型として扱い、式の `&x`・`&mut x`・`*x` も何もしない（Rust の書き方をそのまま受け付けるため）。
+- struct・enum・`Vec`・`HashMap` は参照型で、代入や引数渡しは参照の共有になる。capability 以外の `&T`・`&mut T` は型としては `T` と同じで、実行時には何もしないが、どの参照から書き換えられるかを表す（下記「可変性」）。式の `&x`・`&mut x` も同じで、`*x` は何もしない。
 - 型推論は関数本体の中だけで行う（関数のシグネチャは明示）。本体では `_` を型の代わりに書ける（`Vec<_>`）。
 
 ## generics
@@ -56,7 +56,7 @@ fn largest<T: Ord>(v: Vec<T>, d: T) -> T {
 ```
 
 - 関数・struct・enum・`impl` が型パラメータを取れる。型引数は推論され、`f::<Int>(x)`、`Vec::<Int>::new()` のように明示もできる。
-- `impl` ブロックがメソッドを定義する。レシーバは `self`・`&self`・`&mut self`（どれも同じ）。`Self` は `impl` の対象の型。`impl Pair<Int, Int>` のように特定の型引数だけに定義してもよい。
+- `impl` ブロックがメソッドを定義する。レシーバは `self`・`mut self`・`&self`（読み取り専用）・`&mut self`（書き換える）。`Self` は `impl` の対象の型。`impl Pair<Int, Int>` のように特定の型引数だけに定義してもよい。
 - 生成されるコードは型引数ごとに具体化される（単相化）。
 
 ## trait
@@ -83,7 +83,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 - 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Pii` を含む型（フィールドの型に `Pii` が現れる）に導出できるのは `PartialEq` と `Eq` だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Pii` を含む型（フィールドの型に `Pii` が現れる）に導出できるのは `PartialEq`・`Eq`・`Clone` だけ。
 
 ### 演算子と core の trait
 
@@ -93,9 +93,10 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 | `PartialOrd`, `Ord` | `<`・`<=`・`>`・`>=`（`Int` は組み込み）、`cmp -> Ordering`、`max`・`min` |
 | `Hash`, `Hasher` | `x.hash(&mut h)`、`DefaultHasher::new()`、`h.finish()` |
 | `Default` | `default() -> Self` |
+| `Clone` | `clone(&self) -> Self`：所有する深い複製（下記「可変性」） |
 | `Iterator`, `DoubleEndedIterator`, `IntoIterator`, `FromIterator<A>`, `Sum<A>`, `Product<A>` | 下記 |
 
-core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している。
+core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Pii` にも）。
 
 ## クロージャ
 
@@ -108,7 +109,7 @@ fn compose(f: fn(Int) -> Int, g: impl Fn(Int) -> Int) -> fn(Int) -> Int { move |
 ```
 
 - クロージャは純粋な第一級の値で、変数・フィールド・`Vec` に入れられる。名前付きの関数も値として使える（`apply(double, 3)`）。
-- 変数は値で捕捉する（`move` は書いても書かなくてもよい）。捕捉した変数への代入はできない（状態は struct のフィールドに置く）。
+- 変数は値で捕捉する（`move` は書いても書かなくてもよい）。捕捉した変数への代入はできない（状態は struct のフィールドに置く）。捕捉した値は束縛の可変性と view を保つ（`let mut v` を捕捉すれば `v.push(..)` できる。`&T` を捕捉したクロージャは読み取り専用の値）。
 - capability を捕捉したり引数に取ったりはできない（クロージャは I/O をしない）。例外は `db.transaction(|tx| ...)` の本体で、これは第二級のまま。
 - 型の書き方は `fn(A) -> R`、`impl Fn(A) -> R`、境界 `F: Fn(A) -> R`（`FnMut`・`FnOnce` も同じ）。
 
@@ -242,12 +243,75 @@ division = "lint"
 
 - 実行時の整数はラップアラウンドのまま（`x / 0 == 0`）。詳細と未実装のものは [refinement.md](refinement.md)。
 
+## 可変性
+
+参照で共有される値を、どの参照から書き換えられるかを Rust と同じ書き方で追跡する（設計と実装の決定は [mutability.md](mutability.md)）。所有権と move はないので、保証は「この参照からは書き換えられない」まで。
+
+```kek
+#[derive(Clone)]
+struct Item {
+    mut count: Int,
+}
+
+fn add(v: &mut Vec<Int>, x: Int) {
+    v.push(x);
+}
+
+fn total(v: &Vec<Item>) -> Int {
+    let mut n = 0;
+    for it in v.iter() {
+        n = n + it.count;   // 読むのはよい
+        // it.count = 0;    // エラー：`&Vec<Item>` からたどった値は書き換えられない
+    }
+    n
+}
+
+fn reset_copy(v: &Vec<Item>) -> Vec<Item> {
+    let mut copy = v.clone(); // 借用した値を所有するには clone()
+    for mut it in copy.iter() {
+        it.count = 0;
+    }
+    copy
+}
+
+fn main2() -> Int {
+    let mut v = Vec::new();   // 書き換えるので `mut`
+    add(&mut v, 1);
+    v.len()
+}
+```
+
+- **書き換え**（`push`・`set`・`pop`・`insert`・`remove`・`clear`・`retain`・`extend` などの変更する操作、`&mut self` のメソッド、`mut` フィールドへの代入）には、可変な経路が要る：`let mut x`、`mut x: T`・`&mut T` の引数、`mut self`・`&mut self`、パターンの `mut x`（`Some(mut s)`・`for mut x in v`・`|mut x|`）、一時値、それらのフィールド。`let x` の束縛からは書き換えられない（`let mut y = x;` で移せば書き換えられる）。
+- **共有の参照**（`&T` の引数、`&self`、式 `&e`、`-> &T` の結果）からたどった値（フィールド・要素・イテレータの要素・パターンで束縛した値）は深く読み取り専用で、書き換えられず、所有する場所（struct のフィールド、コレクション、`let mut`、所有型の戻り値・引数）に置けない。`x.clone()` で所有する複製を作るか、受け取る側を `&T` にする。タプルや `Some(x)` で包んでも同じ。
+- `Vec<&T>`・`Option<&T>` のように中に `&` を含む型は「入れ物は新しいが中身は共有」を表す：`let mut v: Vec<&Item> = items.iter().collect();` には要素を足せるが、要素は書き換えられない。`-> Option<&T>` で `v.get(i)` を返せる。
+- 書き換えられる状態に届かない型（`Int`・`String`・不変なフィールドだけの struct・`Option<Int>` など）は対象外で、共有の参照から読んだ値も自由に使える。型パラメータの値は書き換えられる値として扱う。
+- 引数：`x: T` と `mut x: T` は共有の値を受け取れない（呼び出し側の束縛は可変でなくてよい）。`x: &T` は何でも受け取る。`x: &mut T` には可変な経路の値か一時値を渡す（`&mut v` と書いても `v` と書いてもよい。`&v` はエラー）。
+- イテレータ：共有のコレクションの `iter()` はイテレータ自体（カーソル）は新しい値なので `next` やアダプタを呼べ、要素は共有になる。`collect` した結果は中身が共有のコレクション。
+- trait の実装のメソッドは、trait の宣言が `&self`・`&T` で受け取るものを `&self`・`&T` で受け取る。
+- core の関数の結果は、共有の引数を受け取ると共有になる（`#[fresh]` を付けた関数は「中身が共有」になる。`#[fresh]` は core と prelude でだけ書ける）。
+- 診断の例：
+
+```
+x.kek:3:5: cannot mutate `v`: it is not declared as mutable (write `let mut v`)
+x.kek:7:9: cannot mutate `xs` through a shared reference `&Vec<Int>` (take `&mut Vec<Int>`)
+x.kek:9:14: cannot store a borrowed value in `out`: it comes from the shared reference `item` (use `item.clone()`)
+x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` (return `&Vec<Int>` or clone it)
+```
+
+### `Clone`
+
+`trait Clone { fn clone(&self) -> Self; }`（core）。`clone()` の結果は所有する深い複製で、共有の参照から得た値もこれで書き換えたり保存したりできる。`#[derive(Clone)]` は全フィールド（enum はペイロード）を複製する。core は `Int`・`Bool`・`String`・`()`・タプル・`Option`・`Result`・`Vec`・`HashMap`・`HashSet`・`Pii`（`T: Clone` のとき）に実装している。
+
+### `kek fix`
+
+`kek fix [-w] <paths>` は、書き換えに足りない `mut` を足す：`let mut`、`mut x: T`、`mut self`、`Some(mut x)`・`for mut x`・`|mut x|`、書き換えている `&T` の引数を `&mut T`（`&self` を `&mut self`）、`&mut T` に渡した `&v` を `&mut v`。直すと検査し直し、変わらなくなるまで繰り返す。編集はテキストへの挿入なのでコメントは保たれる。`-w` なしでは差分を表示する。trait のシグネチャは変えず、直せないエラー（借用した値の保存や返却）は一覧にして終了コード 1 で終わる（`clone()` か `&T` で手で直す）。各パスは 1 つのプログラム（`kek check` と同じ）。
+
 ## 文と式
 
-- `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ）
+- `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ。`s` が可変であること）
 - `if c { } else if d { } else { }`、`if let P = e { } else { }`（式）
 - `match e { pat => e, ... }`（式、網羅性検査あり、ネスト可）
-- `while c { }`, `while let P = e { }`, `for x in a..b { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
+- `while c { }`, `while let P = e { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
 - `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
 - `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
 - 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`

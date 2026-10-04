@@ -40,6 +40,7 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek fmt [-w] [-check] <paths>` | 正準フォーマット（4 スペース、rustfmt 風）。コメントは保持。ディレクトリは `*.kek` を再帰的に探す。`-w` で上書き、`-check` は差分のあるファイルを列挙して終了コード 1 |
 | `kek test [-run re] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス） |
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)） |
+| `kek similar [-json] [-threshold pct] [-all] [-tests] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 
 ### テスト（`kek test`）
 
@@ -91,6 +92,28 @@ Auto-approved (3): strengthen 1, allowed host 2
 ```
 
 ポリシーは `kekkai.toml` の `[net] allowed_hosts`・`[effects] forbid`・`[auto_approve]`・`[escalate]`・`[module."path"]`（厳しくする方向にだけ上書きできる）・`[assure] extends`（組織の設定を継承）で書きます。詳細は [docs/assure.md](docs/assure.md)。
+### 類似コードの検出（`kek similar`）
+
+LLM が既存の実装を探さずに似た関数を書き足すのを防ぐためのコマンドです（設計は [docs/design.md](docs/design.md) の「類似コードの検出」、JSON は [docs/tooling.md](docs/tooling.md)）。定義ハッシュ（`compiler/defhash.kek`）の上で、次の 3 種類を報告します。
+
+| 種類 | 意味 | 検出方法 |
+| --- | --- | --- |
+| `duplicate` | 名前（関数名・変数名）だけが違う | α同値で正規化した定義ハッシュが一致 |
+| `literals` | 定数だけが違う | リテラルを抽象化したハッシュが一致。違うリテラルの位置と値を示し、引数化を提案 |
+| `structural` | 構造が近い | ラベル列の shingle の MinHash で候補を絞り、木の編集距離（Zhang–Shasha）で類似度 = 1 − 距離 / 大きい方のノード数 を求め、閾値（既定 80%）以上を報告 |
+
+```sh
+./kek similar compiler                 # 1 件 1 ブロック：file:line・類似度・ヒント
+./kek similar -json -threshold 90 src  # エージェント向けの JSON
+./kek similar -diff origin/main src    # PR の CI：追加・変更された定義が関わる類似だけ
+```
+
+- 既定ではシグネチャ（capability を含む）が同じ定義どうしだけを比べます。`-all` で型をまたいで比べます。
+- `#[test]` 関数（`-tests` で対象にする）、`#[derive]` が生成した実装、core と prelude は対象外です。小さすぎる定義（構文木のラベルが 16 個未満）も比べません。
+- 意図的な重複は `#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けた定義で抑制でき、JSON の `allowed` に理由とともに残ります。
+- `-base <file|dir>` は基準になる古いプログラムで、同じ定義ハッシュを持つ定義は既存とみなし、新しい定義を含む指摘だけを報告します。`-diff <rev>` では `./kek` が `git archive` でその revision のプログラムを一時ディレクトリに取り出して `-base` に渡します。
+- `kekkai.toml` の `[similar]` で `threshold`（%）・`min_nodes`・`max_nodes`（これより大きい木は木の編集距離の代わりにラベル列の編集距離で近似）を設定できます。フラグが優先します。
+- 書き方は違うが意味が同じコード（生成した入力で出力を比べる）の検出は今後の課題です。
 
 ## 開発
 

@@ -1,0 +1,2 @@
+no similar definitions
+--- exit 0

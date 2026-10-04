@@ -1,0 +1,41 @@
+duplicate (100% similar):
+  testdata/similar/basic.kek:16:1  sum_positive (Vec<Int>) -> Int
+  testdata/similar/basic.kek:26:1  add_up_positive (Vec<Int>) -> Int
+  hint: identical up to names: keep `sum_positive` and call it from the others
+
+literals (86% similar):
+  testdata/similar/basic.kek:37:1  shipping_fee (Int) -> Int
+  testdata/similar/basic.kek:44:1  express_fee (Int) -> Int
+    literal: 1000 at 38:17, 2000 at 45:17
+    literal: 500 at 39:35, 800 at 46:35
+    literal: 500 at 41:5, 800 at 48:5
+  hint: differ only in constants: parameterize the literals 1000 vs 2000, 500 vs 800
+
+structural (96% similar, distance 1):
+  testdata/similar/basic.kek:113:1  test_sum () -> Bool
+  testdata/similar/basic.kek:122:1  test_add_up () -> Bool
+  hint: similar structure: extract the common part of `test_sum` and `test_add_up` into one parameterized definition
+
+structural (91% similar, distance 3):
+  testdata/similar/basic.kek:52:1  describe (Point) -> String
+  testdata/similar/basic.kek:72:1  describe_size (Size) -> String
+  hint: similar structure: extract the common part of `describe` and `describe_size` into one parameterized definition
+
+structural (87% similar, distance 5):
+  testdata/similar/basic.kek:52:1  describe (Point) -> String
+  testdata/similar/basic.kek:61:1  describe_point (Point) -> String
+  hint: similar structure: extract the common part of `describe` and `describe_point` into one parameterized definition
+
+structural (86% similar, distance 4):
+  testdata/similar/basic.kek:16:1  sum_positive (Vec<Int>) -> Int
+  testdata/similar/basic.kek:102:1  tally_even (Vec<Int>) -> Int
+  hint: similar structure: extract the common part of `sum_positive` and `tally_even` into one parameterized definition
+
+structural (80% similar, distance 8):
+  testdata/similar/basic.kek:61:1  describe_point (Point) -> String
+  testdata/similar/basic.kek:72:1  describe_size (Size) -> String
+  hint: similar structure: extract the common part of `describe_point` and `describe_size` into one parameterized definition
+
+7 findings (1 duplicate, 1 literals, 5 structural)
+1 allowed by #[allow(similar)]
+--- exit 1

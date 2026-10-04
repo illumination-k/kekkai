@@ -11,6 +11,9 @@
 //   hash        the labels and the signature types
 //   hash_lits   the same with the values of literals abstracted
 //               (definitions that differ only in constants share it)
+//   depths      the depth of each label in the syntax tree (preorder
+//               labels + depths give the tree, for tree edit distances)
+//   lits        where the literal labels come from
 //   trans       hash plus the hashes of every user definition it can reach
 //               (calls, methods, trait implementations) and of the type
 //               declarations: equal trans means equal behaviour, so it keys
@@ -24,6 +27,11 @@ struct DhDef {
     sig: String,
     caps: Vec<String>,
     labels: Vec<String>,
+    // depth of each label (the root `fn<..>` is 0): labels[i] is a child of
+    // the nearest earlier label with depth depths[i] - 1
+    depths: Vec<Int>,
+    // the literal labels and their source positions
+    lits: Vec<DhLit>,
     hash: String,
     hash_lits: String,
     // user definitions referenced directly (sorted, no duplicates)
@@ -39,11 +47,23 @@ struct DhProgram {
     hash: String,
 }
 
+// A literal label: labels[index] comes from the literal at pos.
+struct DhLit {
+    index: Int,
+    pos: AstPos,
+}
+
 // Walker state of one definition.
 struct DhWalk {
     info: ChkInfo,
     self_name: String,
     labels: Vec<String>,
+    depths: Vec<Int>,
+    lits: Vec<DhLit>,
+    // depth of the next label; node is set when the next label starts a
+    // syntax node (the labels after it are its children)
+    mut depth: Int,
+    mut node: Bool,
     // in-scope locals: name -> declaration number (stack, innermost last)
     scope_names: Vec<String>,
     scope_nums: Vec<Int>,
@@ -101,6 +121,28 @@ fn dh_short(h: String) -> String {
 
 fn dh_emit(w: DhWalk, l: String) {
     w.labels.push(l);
+    w.depths.push(w.depth);
+    if w.node {
+        w.node = false;
+        w.depth = w.depth + 1;
+    }
+}
+
+fn dh_lit(w: DhWalk, pos: AstPos, l: String) {
+    w.lits.push(DhLit { index: w.labels.len(), pos: pos });
+    dh_emit(w, l);
+}
+
+// dh_enter starts a syntax node: its first label is at the current depth
+// and the following ones below it until dh_leave.
+fn dh_enter(w: DhWalk) -> Int {
+    w.node = true;
+    w.depth
+}
+
+fn dh_leave(w: DhWalk, d: Int) {
+    w.depth = d;
+    w.node = false;
 }
 
 fn dh_declare(w: DhWalk, name: String) {
@@ -194,6 +236,12 @@ fn dh_opt_type(t: Option<AstType>) -> String {
 }
 
 fn dh_pattern(w: DhWalk, p: AstPattern) {
+    let d = dh_enter(w);
+    dh_pattern_node(w, p);
+    dh_leave(w, d);
+}
+
+fn dh_pattern_node(w: DhWalk, p: AstPattern) {
     if p.wildcard {
         dh_emit(w, "p_");
         return;
@@ -207,21 +255,21 @@ fn dh_pattern(w: DhWalk, p: AstPattern) {
     }
     match p.int_value {
         Some(n) => {
-            dh_emit(w, "lit:int=" + n.to_string());
+            dh_lit(w, p.pos, "lit:int=" + n.to_string());
             return;
         }
         None => {}
     }
     match p.bool_lit {
         Some(b) => {
-            dh_emit(w, "lit:bool=" + b.to_string());
+            dh_lit(w, p.pos, "lit:bool=" + b.to_string());
             return;
         }
         None => {}
     }
     match p.str_value {
         Some(s) => {
-            dh_emit(w, "lit:str=" + s);
+            dh_lit(w, p.pos, "lit:str=" + s);
             return;
         }
         None => {}
@@ -245,6 +293,12 @@ fn dh_pattern(w: DhWalk, p: AstPattern) {
 }
 
 fn dh_block(w: DhWalk, b: AstBlock) {
+    let d = dh_enter(w);
+    dh_block_node(w, b);
+    dh_leave(w, d);
+}
+
+fn dh_block_node(w: DhWalk, b: AstBlock) {
     let mark = dh_scope_mark(w);
     dh_emit(w, "{" + b.stmts.len().to_string());
     for s in b.stmts {
@@ -262,6 +316,12 @@ fn dh_block(w: DhWalk, b: AstBlock) {
 }
 
 fn dh_stmt(w: DhWalk, s: AstStmt) {
+    let d = dh_enter(w);
+    dh_stmt_node(w, s);
+    dh_leave(w, d);
+}
+
+fn dh_stmt_node(w: DhWalk, s: AstStmt) {
     match s {
         AstStmt::Let(l) => {
             dh_emit(w, "let:" + dh_opt_type(l.ty));
@@ -388,10 +448,16 @@ fn dh_trait_impls(w: DhWalk, name: String) {
 }
 
 fn dh_expr(w: DhWalk, e: AstExpr) {
+    let d = dh_enter(w);
+    dh_expr_node(w, e);
+    dh_leave(w, d);
+}
+
+fn dh_expr_node(w: DhWalk, e: AstExpr) {
     match e {
-        AstExpr::IntLit(x) => dh_emit(w, "lit:int=" + x.value.to_string()),
-        AstExpr::BoolLit(x) => dh_emit(w, "lit:bool=" + x.value.to_string()),
-        AstExpr::StrLit(x) => dh_emit(w, "lit:str=" + x.value),
+        AstExpr::IntLit(x) => dh_lit(w, x.pos, "lit:int=" + x.value.to_string()),
+        AstExpr::BoolLit(x) => dh_lit(w, x.pos, "lit:bool=" + x.value.to_string()),
+        AstExpr::StrLit(x) => dh_lit(w, x.pos, "lit:str=" + x.value),
         AstExpr::UnitLit(_) => dh_emit(w, "()"),
         AstExpr::Ident(x) => {
             dh_ident(w, x.name, x.id);
@@ -560,6 +626,10 @@ fn dh_def(info: ChkInfo, fun: ChkFunc) -> DhDef {
         info: info,
         self_name: fun.name,
         labels: Vec::new(),
+        depths: Vec::new(),
+        lits: Vec::new(),
+        depth: 0,
+        node: true,
         scope_names: Vec::new(),
         scope_nums: Vec::new(),
         next_local: 0,
@@ -606,6 +676,8 @@ fn dh_def(info: ChkInfo, fun: ChkFunc) -> DhDef {
         sig: dh_sig(fun),
         caps: dh_caps(fun),
         labels: w.labels,
+        depths: w.depths,
+        lits: w.lits,
         hash: dh_hash_strs(w.labels),
         hash_lits: dh_hash_strs(dh_abstract_lits(w.labels)),
         deps: deps,

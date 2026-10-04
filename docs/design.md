@@ -273,6 +273,8 @@ LLMが既存の実装を探さずに似た関数を書き足すのを防ぐ。�
 - **差分で検査する**：`kek similar --diff` で、PRで追加された定義と既存の定義の類似だけを報告する。結果は定義ハッシュ単位でキャッシュする。
 - **意図的な重複**は `#[allow(similar)]` で理由とともに明示する。閾値はプロジェクトごとに設定できる。
 
+実装の状況（`compiler/similar_main.kek`・`similar_tree.kek`、使い方は README と [tooling.md](tooling.md)）：上の表の最初の 3 つ（`duplicate`・`literals`・`structural`）、シグネチャによる絞り込み（`-all` で解除）、`#[allow(similar)]`、`kekkai.toml` の `[similar]` による閾値、`-base` と `./kek similar -diff <rev>` は実装済み。構造の比較は、リテラルの値と局所変数の番号を抽象化したラベル列の MinHash で候補を絞り、ラベル列の編集距離（木の編集距離の下界）で枝刈りしてから Zhang–Shasha の木の編集距離で判定する。コンパイラ自身（約 1500 関数）で 10 秒ほど。未実装：意味の等価性（`sim_semantic` が拡張点）、定義ハッシュ単位の結果のキャッシュ、`expires` の期限切れの検査。
+
 ## 実装アーキテクチャ
 
 コンパイラ `kek` はKekkai自身で書き（セルフホスティング）、出力はWasmGCモジュールとする。実行環境は当面Cloudflare Workersに割り切る。

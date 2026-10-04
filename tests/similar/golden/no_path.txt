@@ -1,0 +1,3 @@
+--- stderr
+usage: kek similar [-json] [-threshold pct] [-all] [-tests] [-base <file|dir>] <file|dir>
+--- exit 2

@@ -1,0 +1,3 @@
+--- stderr
+kek similar: the threshold must be between 1 and 100 (percent)
+--- exit 2

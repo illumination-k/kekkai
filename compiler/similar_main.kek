@@ -1,0 +1,844 @@
+// `similar [-json] [-threshold pct] [-all] [-tests] [-base path] <path>`
+// (prefix sim_ / Sim*): duplicate and similar definitions (docs/design.md,
+// 類似コードの検出).
+//
+//   duplicate    equal definition hashes: the same code up to names
+//   literals     equal literal-abstracted hashes: only constants differ
+//   structural   tree edit distance similarity >= threshold, among the
+//                candidates of a MinHash sketch (similar_tree.kek)
+//
+// Only definitions with the same signature are compared unless -all (the
+// signature includes the capabilities). With -base, a finding needs at
+// least one member that is not in the base program (by definition hash):
+// the CI mode for pull requests (`kek similar -diff <rev>` in ./kek).
+
+struct SimOpts {
+    threshold: Int,
+    min_nodes: Int,
+    max_nodes: Int,
+    all: Bool,
+    tests: Bool,
+    // compare every pair instead of the MinHash candidates
+    exhaustive: Bool,
+}
+
+// SimDef is a definition taking part in the comparison.
+struct SimDef {
+    d: DhDef,
+    tree: SimTree,
+    allow: Option<AstAttr>,
+    // not in the base program
+    fresh: Bool,
+}
+
+// SimLitDiff is a literal that differs between the members of a
+// `literals` finding: its value and position in each member.
+struct SimLitDiff {
+    values: Vec<String>,
+    poss: Vec<AstPos>,
+}
+
+struct SimFinding {
+    kind: String,
+    // percent
+    similarity: Int,
+    members: Vec<SimDef>,
+    hint: String,
+    // structural: the tree edit distance (approx when the trees were too
+    // large for the exact distance and the label sequences were compared)
+    distance: Int,
+    approx: Bool,
+    lits: Vec<SimLitDiff>,
+}
+
+fn sim_usage() -> String {
+    "similar [-json] [-threshold pct] [-all] [-tests] [-base <file|dir>] <file|dir>"
+}
+
+fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = tool_flags(args, 1, "json threshold# min_nodes# all tests exhaustive base= base_name=");
+    if fl.err != "" {
+        return tool_flag_error(fl, sim_usage(), log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek " + sim_usage());
+        return 2;
+    }
+    let cfg = match tool_config(fs, log) {
+        Some(c) => c,
+        None => {
+            return 2;
+        }
+    };
+    let opts = SimOpts {
+        threshold: tool_flag_int(
+            fl,
+            "threshold",
+            tool_json_int(tool_config_get(cfg, "similar", "threshold"), 80),
+        ),
+        min_nodes: tool_flag_int(
+            fl,
+            "min_nodes",
+            tool_json_int(tool_config_get(cfg, "similar", "min_nodes"), 16),
+        ),
+        max_nodes: tool_json_int(tool_config_get(cfg, "similar", "max_nodes"), 400),
+        all: tool_flag_bool(fl, "all"),
+        tests: tool_flag_bool(fl, "tests"),
+        exhaustive: tool_flag_bool(fl, "exhaustive"),
+    };
+    if opts.threshold < 1 || opts.threshold > 100 {
+        log.error("kek similar: the threshold must be between 1 and 100 (percent)");
+        return 2;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let l = match dh_load(path, fs, log) {
+        Some(l) => l,
+        None => {
+            return 2;
+        }
+    };
+    let base = tool_flag_str(fl, "base", "");
+    let old: HashMap<String, Bool> = HashMap::new();
+    if base != "" {
+        match dh_load(base, fs, log) {
+            Some(b) => {
+                for d in b.prog.defs {
+                    old.insert(d.hash, true);
+                }
+            }
+            None => {
+                log.error("kek similar: cannot load the base program " + base);
+                return 2;
+            }
+        }
+    }
+    let defs = sim_defs(l, opts, old);
+    let found = Vec::new();
+    for f in sim_exact(defs) {
+        found.push(f);
+    }
+    for f in sim_structural(defs, opts) {
+        found.push(f);
+    }
+    for f in sim_semantic(defs, opts) {
+        found.push(f);
+    }
+    // keep findings with a new member; split off #[allow(similar)]
+    let findings = Vec::new();
+    let allowed = Vec::new();
+    for f in found {
+        let any_new = f.members.iter().any(|m| m.fresh);
+        if !any_new {
+            continue;
+        }
+        let rest = Vec::new();
+        for m in f.members {
+            if m.allow.is_none() {
+                rest.push(m);
+            }
+        }
+        if rest.len() < f.members.len() {
+            allowed.push(f);
+            // the others are still similar to one another
+            if rest.len() >= 2 && f.kind != "structural" && rest.iter().any(|m| m.fresh) {
+                match sim_finding_with(f, rest) {
+                    Some(g) => findings.push(g),
+                    None => {}
+                }
+            }
+        } else {
+            findings.push(f);
+        }
+    }
+    let findings = sim_sort(findings);
+    let allowed = sim_sort(allowed);
+    if tool_flag_bool(fl, "json") {
+        let fs_json = Vec::new();
+        for f in findings {
+            fs_json.push(irjson_val(sim_finding_json(f)));
+        }
+        let al_json = Vec::new();
+        for f in allowed {
+            let o = sim_finding_json(f);
+            let by = Vec::new();
+            for m in f.members {
+                match m.allow {
+                    Some(a) => {
+                        let ao = irjson_obj();
+                        irjson_set(ao, "name", IrjVal::Str(m.d.name));
+                        irjson_set(
+                            ao,
+                            "reason",
+                            IrjVal::Str(ast_attr_value(a, "reason").unwrap_or("")),
+                        );
+                        irjson_set(
+                            ao,
+                            "owner",
+                            IrjVal::Str(ast_attr_value(a, "owner").unwrap_or("")),
+                        );
+                        irjson_set(
+                            ao,
+                            "expires",
+                            IrjVal::Str(ast_attr_value(a, "expires").unwrap_or("")),
+                        );
+                        by.push(irjson_val(ao));
+                    }
+                    None => {}
+                }
+            }
+            irjson_set(o, "allowed_by", IrjVal::Arr(by));
+            al_json.push(irjson_val(o));
+        }
+        let o = irjson_obj();
+        irjson_set(o, "path", IrjVal::Str(path));
+        if base != "" {
+            // `kek similar -diff rev` names the base `git:rev`
+            irjson_set(o, "base", IrjVal::Str(tool_flag_str(fl, "base_name", base)));
+        }
+        irjson_set(o, "threshold", irjson_int(opts.threshold));
+        irjson_set(o, "min_nodes", irjson_int(opts.min_nodes));
+        irjson_set(o, "all", irjson_bool(opts.all));
+        irjson_set(o, "findings", IrjVal::Arr(fs_json));
+        irjson_set(o, "allowed", IrjVal::Arr(al_json));
+        log.info(irjson_encode(irjson_val(o), false));
+    } else {
+        log.info(sim_text(findings, allowed));
+    }
+    if findings.len() > 0 {
+        return 1;
+    }
+    0
+}
+
+// sim_defs selects the definitions to compare: user functions with a
+// body, of at least min_nodes labels, without the #[test] functions
+// (unless -tests) and the #[derive] implementations.
+fn sim_defs(l: DhLoaded, opts: SimOpts, old: HashMap<String, Bool>) -> Vec<SimDef> {
+    // derived implementations are parsed with every position at the
+    // `#[derive]` attribute
+    let derived: HashMap<String, Bool> = HashMap::new();
+    for s in l.file.structs {
+        for a in s.attrs {
+            if a.name == "derive" {
+                derived.insert(sim_pos_key(a.pos), true);
+            }
+        }
+    }
+    for e in l.file.enums {
+        for a in e.attrs {
+            if a.name == "derive" {
+                derived.insert(sim_pos_key(a.pos), true);
+            }
+        }
+    }
+    let intern = SimIntern { ids: HashMap::new() };
+    let out = Vec::new();
+    for d in l.prog.defs {
+        let decl = d.fun.decl;
+        if !decl.has_body || (d.fun.test && !opts.tests) {
+            continue;
+        }
+        if derived.contains_key(sim_pos_key(decl.pos)) {
+            continue;
+        }
+        if d.labels.len() < opts.min_nodes {
+            continue;
+        }
+        let mut allow: Option<AstAttr> = None;
+        match ast_find_attr(decl.attrs, "allow") {
+            Some(a) => {
+                if ast_attr_has(a, "similar") {
+                    allow = Some(a);
+                }
+            }
+            None => {}
+        }
+        out.push(SimDef {
+            d: d,
+            tree: sim_tree(intern, d.labels, d.depths),
+            allow: allow,
+            fresh: !old.contains_key(d.hash),
+        });
+    }
+    out
+}
+
+fn sim_pos_key(p: AstPos) -> String {
+    p.file + ":" + p.line.to_string() + ":" + p.col.to_string()
+}
+
+// sim_finding_with is a duplicate / literals finding restricted to some of
+// its members (None when they no longer form one).
+fn sim_finding_with(f: SimFinding, members: Vec<SimDef>) -> Option<SimFinding> {
+    if f.kind == "duplicate" {
+        return Some(SimFinding {
+            kind: f.kind,
+            similarity: f.similarity,
+            members: members,
+            hint: f.hint,
+            distance: f.distance,
+            approx: f.approx,
+            lits: Vec::new(),
+        });
+    }
+    sim_literals(members)
+}
+
+// ---- duplicate and literals ----
+
+// sim_exact groups by hash (duplicate) and by hash_lits (literals).
+fn sim_exact(defs: Vec<SimDef>) -> Vec<SimFinding> {
+    let out = Vec::new();
+    let by_hash: HashMap<String, Vec<SimDef>> = HashMap::new();
+    let by_lits: HashMap<String, Vec<SimDef>> = HashMap::new();
+    for d in defs {
+        sim_group_add(by_hash, d.d.hash, d);
+        sim_group_add(by_lits, d.d.hash_lits, d);
+    }
+    for (_, ms) in by_hash.iter() {
+        if ms.len() >= 2 {
+            out.push(SimFinding {
+                kind: "duplicate",
+                similarity: 100,
+                members: ms,
+                hint: "",
+                distance: 0,
+                approx: false,
+                lits: Vec::new(),
+            });
+        }
+    }
+    for (_, ms) in by_lits.iter() {
+        match sim_literals(ms) {
+            Some(f) => out.push(f),
+            None => {}
+        }
+    }
+    out
+}
+
+// sim_literals is the literals finding of members with equal hash_lits,
+// if they have at least two different hashes.
+fn sim_literals(ms: Vec<SimDef>) -> Option<SimFinding> {
+    let hashes: HashSet<String> = HashSet::new();
+    let mut size = 1;
+    for m in ms {
+        hashes.insert(m.d.hash);
+        size = m.d.labels.len().max(1);
+    }
+    if hashes.len() < 2 {
+        return None;
+    }
+    let lits = sim_lit_diffs(ms);
+    Some(SimFinding {
+        kind: "literals",
+        similarity: 100 * (size - lits.len()) / size,
+        members: ms,
+        hint: "",
+        distance: lits.len(),
+        approx: false,
+        lits: lits,
+    })
+}
+
+fn sim_group_add(m: HashMap<String, Vec<SimDef>>, k: String, d: SimDef) {
+    match m.get(k) {
+        Some(v) => v.push(d),
+        None => {
+            let v = Vec::new();
+            v.push(d);
+            m.insert(k, v);
+        }
+    }
+}
+
+// sim_lit_diffs lists the literals that differ between members whose
+// labels align (equal hash_lits).
+fn sim_lit_diffs(ms: Vec<SimDef>) -> Vec<SimLitDiff> {
+    let out = Vec::new();
+    let first = match ms.get(0) {
+        Some(f) => f,
+        None => {
+            return out;
+        }
+    };
+    let mut k = 0;
+    for lit in first.d.lits {
+        let values = Vec::new();
+        let poss = Vec::new();
+        let mut differ = false;
+        let v0 = first.d.labels.get(lit.index).unwrap_or("");
+        for m in ms {
+            let v = m.d.labels.get(lit.index).unwrap_or("");
+            if v != v0 {
+                differ = true;
+            }
+            values.push(sim_lit_text(v));
+            poss.push(match m.d.lits.get(k) {
+                Some(x) => x.pos,
+                None => lit.pos,
+            });
+        }
+        if differ {
+            out.push(SimLitDiff { values: values, poss: poss });
+        }
+        k = k + 1;
+    }
+    out
+}
+
+// sim_lit_text renders a literal label as source: `lit:str=a` is "a".
+fn sim_lit_text(l: String) -> String {
+    let v = match l.index_of("=") {
+        Some(i) => l.slice(i + 1, l.len()),
+        None => l,
+    };
+    if l.starts_with("lit:str=") {
+        return irjson_quote(v, false);
+    }
+    v
+}
+
+// ---- structural ----
+
+// sim_structural compares one representative of each hash_lits class
+// (the others are reported as duplicate / literals) among the candidate
+// pairs that share a band of their sketches.
+fn sim_structural(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
+    let rep: HashMap<String, SimDef> = HashMap::new();
+    for d in defs {
+        let better = match rep.get(d.d.hash_lits) {
+            Some(r) => sim_rep_rank(d) > sim_rep_rank(r),
+            None => true,
+        };
+        if better {
+            rep.insert(d.d.hash_lits, d);
+        }
+    }
+    let reps: Vec<SimDef> = rep.values().collect();
+    let n = reps.len();
+    let buckets: HashMap<String, Vec<Int>> = HashMap::new();
+    for (i, d) in reps.iter().enumerate() {
+        let mut key = "";
+        if !opts.all {
+            key = d.d.sig;
+        }
+        let keys = Vec::new();
+        if opts.exhaustive {
+            // every pair with the same key
+            keys.push(key);
+        } else {
+            for b in 0..sim_bands() {
+                keys.push(key + "|" + sim_band_key(d.tree, b));
+            }
+        }
+        for k in keys {
+            match buckets.get(k) {
+                Some(v) => {
+                    v.push(i);
+                }
+                None => {
+                    let v = Vec::new();
+                    v.push(i);
+                    buckets.insert(k, v);
+                }
+            }
+        }
+    }
+    let pairs: HashSet<Int> = HashSet::new();
+    for (_, v) in buckets.iter() {
+        let m = v.len();
+        for a in 0..m {
+            for b in a + 1..m {
+                let x = v.get(a).unwrap_or(0);
+                let y = v.get(b).unwrap_or(0);
+                if x == y {
+                    continue;
+                }
+                pairs.insert(x.min(y) * n + x.max(y));
+            }
+        }
+    }
+    let out = Vec::new();
+    for p in pairs.iter() {
+        match (reps.get(p / n), reps.get(p % n)) {
+            (Some(a), Some(b)) => match sim_compare(a, b, opts) {
+                Some(f) => out.push(f),
+                None => {}
+            },
+            _ => {}
+        }
+    }
+    out
+}
+
+// sim_rep_rank orders the members of a hash_lits class as
+// representatives: without #[allow(similar)] first, then new ones.
+fn sim_rep_rank(d: SimDef) -> Int {
+    let mut r = 0;
+    if d.allow.is_none() {
+        r = r + 2;
+    }
+    if d.fresh {
+        r = r + 1;
+    }
+    r
+}
+
+// sim_compare confirms a candidate pair: a size bound, then the label
+// sequence distance (a lower bound), then the tree edit distance.
+fn sim_compare(a: SimDef, b: SimDef, opts: SimOpts) -> Option<SimFinding> {
+    let big = a.tree.n.max(b.tree.n);
+    // similarity >= threshold  <=>  dist <= big * (100 - threshold) / 100
+    let bound = big * (100 - opts.threshold) / 100;
+    if (a.tree.n - b.tree.n).abs() > bound {
+        return None;
+    }
+    let seq = sim_seq_dist(a.tree, b.tree, bound);
+    if seq > bound {
+        return None;
+    }
+    let mut dist = seq;
+    let mut approx = true;
+    if big <= opts.max_nodes {
+        dist = sim_tree_dist(a.tree, b.tree);
+        approx = false;
+    }
+    if dist > bound {
+        return None;
+    }
+    let ms = Vec::new();
+    ms.push(a);
+    ms.push(b);
+    Some(SimFinding {
+        kind: "structural",
+        similarity: 100 * (big - dist) / big,
+        members: ms,
+        hint: "",
+        distance: dist,
+        approx: approx,
+        lits: Vec::new(),
+    })
+}
+
+// sim_semantic is the hook for the fourth kind of docs/design.md
+// (different code, same behaviour: outputs on generated inputs, SMT for
+// small linear-arithmetic functions). Not implemented yet.
+fn sim_semantic(defs: Vec<SimDef>, opts: SimOpts) -> Vec<SimFinding> {
+    Vec::new()
+}
+
+// ---- output ----
+
+fn sim_kind_rank(k: String) -> Int {
+    if k == "duplicate" {
+        return 0;
+    }
+    if k == "literals" {
+        return 1;
+    }
+    2
+}
+
+fn sim_def_less(a: SimDef, b: SimDef) -> Bool {
+    let pa = a.d.pos;
+    let pb = b.d.pos;
+    if pa.file != pb.file {
+        return ast_str_less(pa.file, pb.file);
+    }
+    if pa.line != pb.line {
+        return pa.line < pb.line;
+    }
+    if pa.col != pb.col {
+        return pa.col < pb.col;
+    }
+    ast_str_less(a.d.name, b.d.name)
+}
+
+// sim_sort_members sorts by position (insertion sort; groups are small).
+fn sim_sort_members(v: Vec<SimDef>) {
+    let n = v.len();
+    for i in 1..n {
+        let mut j = i;
+        while j > 0 {
+            match (v.get(j), v.get(j - 1)) {
+                (Some(a), Some(b)) => {
+                    if !sim_def_less(a, b) {
+                        break;
+                    }
+                    v.set(j, b);
+                    v.set(j - 1, a);
+                }
+                _ => {
+                    break;
+                }
+            }
+            j = j - 1;
+        }
+    }
+}
+
+fn sim_finding_less(a: SimFinding, b: SimFinding) -> Bool {
+    let ra = sim_kind_rank(a.kind);
+    let rb = sim_kind_rank(b.kind);
+    if ra != rb {
+        return ra < rb;
+    }
+    if a.similarity != b.similarity {
+        return a.similarity > b.similarity;
+    }
+    let mut i = 0;
+    while i < a.members.len() && i < b.members.len() {
+        match (a.members.get(i), b.members.get(i)) {
+            (Some(x), Some(y)) => {
+                if sim_def_less(x, y) {
+                    return true;
+                }
+                if sim_def_less(y, x) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        i = i + 1;
+    }
+    a.members.len() < b.members.len()
+}
+
+// sim_sort sorts the members of each finding, fills in the hints and
+// sorts the findings (merge sort).
+fn sim_sort(xs: Vec<SimFinding>) -> Vec<SimFinding> {
+    let fixed = Vec::new();
+    for f in xs {
+        sim_sort_members(f.members);
+        let g = SimFinding {
+            kind: f.kind,
+            similarity: f.similarity,
+            members: f.members,
+            hint: sim_hint(f.kind, f.members, sim_lit_diffs_if(f)),
+            distance: f.distance,
+            approx: f.approx,
+            lits: sim_lit_diffs_if(f),
+        };
+        fixed.push(g);
+    }
+    sim_merge_sort(fixed)
+}
+
+// the literal positions follow the member order, so they are recomputed
+// after sorting
+fn sim_lit_diffs_if(f: SimFinding) -> Vec<SimLitDiff> {
+    if f.kind == "literals" {
+        return sim_lit_diffs(f.members);
+    }
+    Vec::new()
+}
+
+fn sim_merge_sort(xs: Vec<SimFinding>) -> Vec<SimFinding> {
+    let n = xs.len();
+    if n <= 1 {
+        return xs;
+    }
+    let left = Vec::new();
+    let right = Vec::new();
+    let mut i = 0;
+    for x in xs {
+        if i < n / 2 {
+            left.push(x);
+        } else {
+            right.push(x);
+        }
+        i = i + 1;
+    }
+    let l = sim_merge_sort(left);
+    let r = sim_merge_sort(right);
+    let out = Vec::new();
+    let mut a = 0;
+    let mut b = 0;
+    while a < l.len() || b < r.len() {
+        let take_left = match l.get(a) {
+            Some(x) => match r.get(b) {
+                Some(y) => !sim_finding_less(y, x),
+                None => true,
+            },
+            None => false,
+        };
+        if take_left {
+            match l.get(a) {
+                Some(x) => out.push(x),
+                None => {}
+            }
+            a = a + 1;
+        } else {
+            match r.get(b) {
+                Some(y) => out.push(y),
+                None => {}
+            }
+            b = b + 1;
+        }
+    }
+    out
+}
+
+fn sim_hint(kind: String, ms: Vec<SimDef>, lits: Vec<SimLitDiff>) -> String {
+    let names = Vec::new();
+    for m in ms {
+        names.push(m.d.name);
+    }
+    let first = names.get(0).unwrap_or("");
+    if kind == "duplicate" {
+        return "identical up to names: keep `" + first + "` and call it from the others";
+    }
+    if kind == "literals" {
+        let parts = Vec::new();
+        let mut k = 0;
+        for lit in lits {
+            if k < 3 {
+                let vs: HashSet<String> = HashSet::new();
+                let shown = Vec::new();
+                for v in lit.values {
+                    if vs.insert(v) {
+                        shown.push(v);
+                    }
+                }
+                let p = shown.join(" vs ");
+                if !parts.iter().any(|q| q == p) {
+                    parts.push(p);
+                }
+            }
+            k = k + 1;
+        }
+        let mut more = "";
+        if lits.len() > 3 {
+            more = " (+" + (lits.len() - 3).to_string() + " more)";
+        }
+        let what = if lits.len() == 1 {
+            "the literal "
+        } else {
+            "the literals "
+        };
+        return "differ only in constants: parameterize " + what + parts.join(", ") + more;
+    }
+    "similar structure: extract the common part of `"
+        + first
+        + "` and `"
+        + names.get(1).unwrap_or("")
+        + "` into one parameterized definition"
+}
+
+fn sim_pos_json(p: AstPos) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "file", IrjVal::Str(p.file));
+    irjson_set(o, "line", irjson_int(p.line));
+    irjson_set(o, "col", irjson_int(p.col));
+    irjson_val(o)
+}
+
+fn sim_finding_json(f: SimFinding) -> IrjObj {
+    let o = irjson_obj();
+    irjson_set(o, "kind", IrjVal::Str(f.kind));
+    irjson_set(o, "similarity", irjson_int(f.similarity));
+    let ms = Vec::new();
+    for m in f.members {
+        let mo = irjson_obj();
+        irjson_set(mo, "name", IrjVal::Str(m.d.name));
+        irjson_set(mo, "file", IrjVal::Str(m.d.pos.file));
+        irjson_set(mo, "line", irjson_int(m.d.pos.line));
+        irjson_set(mo, "col", irjson_int(m.d.pos.col));
+        irjson_set(mo, "sig", IrjVal::Str(m.d.sig));
+        irjson_set(mo, "hash", IrjVal::Str(m.d.hash));
+        irjson_set(mo, "nodes", irjson_int(m.tree.n));
+        irjson_set(mo, "new", irjson_bool(m.fresh));
+        ms.push(irjson_val(mo));
+    }
+    irjson_set(o, "members", IrjVal::Arr(ms));
+    if f.kind == "structural" {
+        irjson_set(o, "distance", irjson_int(f.distance));
+        irjson_set(o, "approx", irjson_bool(f.approx));
+    }
+    if f.kind == "literals" {
+        let ls = Vec::new();
+        for d in f.lits {
+            let lo = irjson_obj();
+            irjson_set(lo, "values", irjson_strs(d.values));
+            let ps = Vec::new();
+            for p in d.poss {
+                ps.push(sim_pos_json(p));
+            }
+            irjson_set(lo, "positions", IrjVal::Arr(ps));
+            ls.push(irjson_val(lo));
+        }
+        irjson_set(o, "literals", IrjVal::Arr(ls));
+    }
+    irjson_set(o, "hint", IrjVal::Str(f.hint));
+    o
+}
+
+fn sim_text(findings: Vec<SimFinding>, allowed: Vec<SimFinding>) -> String {
+    let lines = Vec::new();
+    let counts: HashMap<String, Int> = HashMap::new();
+    for f in findings {
+        counts.insert(f.kind, counts.get_or(f.kind, 0) + 1);
+        let mut extra = "";
+        if f.kind == "structural" {
+            extra = ", distance " + f.distance.to_string();
+            if f.approx {
+                extra = extra + " (approx.)";
+            }
+        }
+        lines.push(f.kind + " (" + f.similarity.to_string() + "% similar" + extra + "):");
+        for m in f.members {
+            let mut tag = "";
+            if !m.fresh {
+                tag = "  [base]";
+            }
+            lines.push(
+                "  "
+                    + m.d.pos.file
+                    + ":"
+                    + m.d.pos.line.to_string()
+                    + ":"
+                    + m.d.pos.col.to_string()
+                    + "  "
+                    + m.d.name
+                    + " "
+                    + m.d.sig
+                    + tag,
+            );
+        }
+        for d in f.lits {
+            let at = Vec::new();
+            let mut i = 0;
+            for v in d.values {
+                match d.poss.get(i) {
+                    Some(p) => at.push(v + " at " + p.line.to_string() + ":" + p.col.to_string()),
+                    None => at.push(v),
+                }
+                i = i + 1;
+            }
+            lines.push("    literal: " + at.join(", "));
+        }
+        lines.push("  hint: " + f.hint);
+        lines.push("");
+    }
+    if findings.len() == 0 {
+        lines.push("no similar definitions");
+    } else {
+        let parts = Vec::new();
+        for k in "duplicate literals structural".split(" ") {
+            let c = counts.get_or(k, 0);
+            if c > 0 {
+                parts.push(c.to_string() + " " + k);
+            }
+        }
+        let mut s = "s";
+        if findings.len() == 1 {
+            s = "";
+        }
+        lines.push(findings.len().to_string() + " finding" + s + " (" + parts.join(", ") + ")");
+    }
+    if allowed.len() > 0 {
+        lines.push(allowed.len().to_string() + " allowed by #[allow(similar)]");
+    }
+    lines.join("\n")
+}

@@ -13,6 +13,7 @@
 #   run           testdata/run/*.kek: stdout == .out, exit code == `// exit: N`
 #   kek-test      kek test: discovery, mocks, failures, flags
 #   agent-cmds    check -json, ir -json, caps and search against tests/agent_cmds goldens
+#   similar       kek similar (duplicate / similar code) against tests/similar goldens
 #   fmt           kek fmt goldens, -check / -w, and round trips (idempotent,
 #                 same AST, comments and diagnostics) over the sources and
 #                 random programs
@@ -63,7 +64,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test agent-cmds fmt difftest e2e"
+all="bootstrap check bad-examples run kek-test agent-cmds similar fmt difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

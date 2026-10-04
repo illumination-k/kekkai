@@ -1,0 +1,8 @@
+structural (87% similar, distance 5):
+  testdata/similar/basic.kek:52:1  describe (Point) -> String
+  testdata/similar/basic.kek:61:1  describe_point (Point) -> String
+  hint: similar structure: extract the common part of `describe` and `describe_point` into one parameterized definition
+
+1 finding (1 structural)
+1 allowed by #[allow(similar)]
+--- exit 1

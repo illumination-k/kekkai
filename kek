@@ -13,6 +13,7 @@
 #   kek <command> [args...]         run a compiler command (check, ir, build, ...)
 #   kek run <file|dir> [args...]    build a #[main] program and run it
 #   kek test [flags] <file|dir>     run #[test] functions with mock capabilities
+#   kek similar -diff <rev> ...     similar code, only what changed since a git revision
 #   KEK_STAGE=bootstrap kek ...     use the bootstrap compiler directly
 #
 # Maintenance:
@@ -179,6 +180,8 @@ Usage:
   kek caps [-json] <file|dir>     capabilities (side effects) of each function
   kek search [-json] '<sig>' [path]
                                   search functions by type
+  kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>
+                                  duplicate and similar definitions (exit 1 when found)
 
 Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps
@@ -412,6 +415,96 @@ cmd_test() {
 	exit 1
 }
 
+# ---- kek similar -diff <rev> ----
+
+# cmd_similar runs `similar`. With -diff <rev>, the program as of the git
+# revision rev is extracted into a temporary directory and passed as
+# -base, so that only findings with a new or changed definition are
+# reported (the CI mode for pull requests).
+cmd_similar() {
+	_rev=
+	_has_rev=0
+	_path=
+	_skip=0
+	for _a in "$@"; do
+		if [ $_skip -eq 1 ]; then
+			_rev=$_a
+			_skip=0
+			continue
+		fi
+		case $_a in
+		-diff | --diff) _skip=1; _has_rev=1 ;;
+		-diff=* | --diff=*) _rev=${_a#*=}; _has_rev=1 ;;
+		*) _path=$_a ;;
+		esac
+	done
+	if [ $_has_rev -eq 0 ]; then
+		compiler similar "$@"
+		return
+	fi
+	if [ $_skip -eq 1 ] || [ -z "$_rev" ]; then
+		echo "flag needs an argument: -diff" >&2
+		echo "usage: kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>" >&2
+		exit 2
+	fi
+	# drop -diff <rev> from the arguments
+	_skip=0
+	_n=$#
+	while [ $_n -gt 0 ]; do
+		_a=$1
+		shift
+		_n=$((_n - 1))
+		if [ $_skip -eq 1 ]; then
+			_skip=0
+			continue
+		fi
+		case $_a in
+		-diff | --diff) _skip=1 ;;
+		-diff=* | --diff=*) ;;
+		*) set -- "$@" "$_a" ;;
+		esac
+	done
+	if [ -z "$_path" ] || [ ! -e "$_path" ]; then
+		echo "kek similar -diff: no such file or directory: ${_path:-<file|dir>}" >&2
+		exit 2
+	fi
+	_top=$(git rev-parse --show-toplevel 2>/dev/null) || {
+		echo "kek similar -diff: not in a git repository" >&2
+		exit 2
+	}
+	git rev-parse --verify --quiet "$_rev^{commit}" >/dev/null || {
+		echo "kek similar -diff: unknown revision $_rev" >&2
+		exit 2
+	}
+	if [ -d "$_path" ]; then
+		_abs=$(cd "$_path" && pwd -P)
+	else
+		_abs=$(cd "$(dirname "$_path")" && pwd -P)/$(basename "$_path")
+	fi
+	_top=$(cd "$_top" && pwd -P)
+	case $_abs in
+	"$_top") _rel=. ;;
+	"$_top"/*) _rel=${_abs#"$_top"/} ;;
+	*)
+		echo "kek similar -diff: $_path is outside the repository $_top" >&2
+		exit 2
+		;;
+	esac
+	_base=$(mktemp -d "${TMPDIR:-/tmp}/kek-similar-XXXXXX")
+	trap 'rm -rf "$_base"' EXIT
+	set +e
+	if git -C "$_top" archive --format=tar "$_rev" -- "$_rel" 2>/dev/null | tar -x -C "$_base" 2>/dev/null &&
+		[ -e "$_base/$_rel" ]; then
+		compiler similar -base "$_base/$_rel" -base_name "git:$_rev" "$@"
+	else
+		# the path did not exist at rev: every definition is new
+		compiler similar "$@"
+	fi
+	_code=$?
+	set -e
+	exit $_code
+}
+
 cmd=${1:-help}
 [ $# -gt 0 ] && shift
 case $cmd in
@@ -426,6 +519,7 @@ bootstrap-update)
 build) cmd_build "$@" ;;
 run) cmd_run "$@" ;;
 test) cmd_test "$@" ;;
+similar) cmd_similar "$@" ;;
 help | -h | --help) usage ;;
 *) compiler "$cmd" "$@" ;;
 esac

@@ -8,6 +8,8 @@
 //   [effects]       forbid = ["Random"]
 //   [auto_approve]  <rule> = true|false
 //   [escalate]      weaken = "owner", new_assumption = "security"
+//   [pii]           max_declassify_per_module = 2,
+//                   declassify_requires = ["reason", "owner", "expires"]
 //   [module."path"] allowed_hosts, forbid, review   (may only tighten)
 //
 // Configurations inherit: `extends` names a parent file (an organization's
@@ -53,6 +55,11 @@ struct AsrPolicy {
     escalate: HashMap<String, String>,
     mut has_require: Bool,
     mut require: Vec<String>,
+    // [pii]: the most declassifications of personal data per file, and
+    // the fields their function's #[declassify(...)] must give
+    mut has_max_declass: Bool,
+    mut max_declass: Int,
+    mut declass_requires: Vec<String>,
     modules: Vec<AsrModule>,
     errors: Vec<String>,
     mut lock: String,
@@ -71,6 +78,9 @@ fn asr_policy_empty() -> AsrPolicy {
         escalate: HashMap::new(),
         has_require: false,
         require: Vec::new(),
+        has_max_declass: false,
+        max_declass: 0,
+        declass_requires: Vec::new(),
         modules: Vec::new(),
         errors: Vec::new(),
         lock: "",
@@ -218,6 +228,28 @@ fn asr_policy_raw(cfg: ToolJson, src: String) -> AsrPolicy {
                     p.escalate.insert(k, r);
                 }
             }
+        } else if sec == "pii" {
+            for k in tool_json_keys(body) {
+                let v = tool_json_get(body, k);
+                if k == "max_declassify_per_module" {
+                    match v {
+                        ToolJson::Num(n) => {
+                            p.has_max_declass = true;
+                            p.max_declass = n;
+                        }
+                        _ => p.errors.push(at + " " + k + ": expected an integer"),
+                    }
+                } else if k == "declassify_requires" {
+                    p.declass_requires = asr_cfg_strs(p, v, at + " " + k);
+                } else {
+                    p.errors.push(
+                        at
+                            + ": unknown key "
+                            + k
+                            + " (expected max_declassify_per_module, declassify_requires)",
+                    );
+                }
+            }
         } else if sec.starts_with("module.") {
             let path = asr_clean_file(asr_unquote(sec.slice(7, sec.len())));
             let m = AsrModule {
@@ -324,6 +356,25 @@ fn asr_policy_merge(parent: AsrPolicy, child: AsrPolicy, child_src: String) -> A
     }
     p.has_require = parent.has_require || child.has_require;
     p.require = asr_union(asr_require(parent), asr_require(child));
+    p.has_max_declass = parent.has_max_declass || child.has_max_declass;
+    p.max_declass = parent.max_declass;
+    if child.has_max_declass {
+        if parent.has_max_declass && child.max_declass > parent.max_declass {
+            p.errors.push(
+                child_src
+                    + " [pii] max_declassify_per_module = "
+                    + child.max_declass.to_string()
+                    + ": "
+                    + child.extends
+                    + " allows at most "
+                    + parent.max_declass.to_string()
+                    + " (a configuration may only tighten the one it extends)",
+            );
+        } else {
+            p.max_declass = child.max_declass;
+        }
+    }
+    p.declass_requires = asr_union(parent.declass_requires, child.declass_requires);
     for m in parent.modules {
         p.modules.push(m);
     }
@@ -417,6 +468,22 @@ fn asr_policy_validate(p: AsrPolicy) {
             );
         }
     }
+    for r in p.declass_requires {
+        if !asr_has(asr_meta_names(), r) {
+            p.errors.push(
+                "[pii] declassify_requires: unknown field "
+                    + r
+                    + " (expected reason, owner, expires)",
+            );
+        }
+    }
+    if p.has_max_declass && p.max_declass < 0 {
+        p.errors.push(
+            "[pii] max_declassify_per_module = "
+                + p.max_declass.to_string()
+                + ": expected a count (0 or more)",
+        );
+    }
     if asr_auto(p, "weaken") {
         p.errors.push(
             "[auto_approve] weaken = true contradicts [escalate] weaken = \""
@@ -502,6 +569,13 @@ fn asr_policy_hash(p: AsrPolicy) -> String {
         parts.push("escalate." + r + "=" + asr_escalate(p, r));
     }
     parts.push("require=" + asr_sorted_set(asr_require(p)).join(","));
+    // [pii] only when set, so that older policies keep their hash
+    if p.has_max_declass {
+        parts.push("pii.max_declassify_per_module=" + p.max_declass.to_string());
+    }
+    if p.declass_requires.len() > 0 {
+        parts.push("pii.declassify_requires=" + asr_sorted_set(p.declass_requires).join(","));
+    }
     let ms = Vec::new();
     for m in p.modules {
         let mut h = "-";

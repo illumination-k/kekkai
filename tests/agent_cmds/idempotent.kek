@@ -1,0 +1,37 @@
+// An idempotent handler: a retry (the same request again) leaves the same
+// state, so it only reads, overwrites keys and logs. The e-mail address is
+// personal data: it is stored and logged only masked or hashed.
+
+fn profile_key(id: String) -> String {
+    "profile:" + id
+}
+
+fn save_profile(db: &Db, log: &Log, id: String, email: Pii<String>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.put(profile_key(id), email.hash())?;
+        tx.delete(profile_key(id) + ":draft")?;
+        log.info("profile " + id + " " + email.mask());
+        tx.commit()
+    })
+}
+
+fn notify(net: &Net, id: String) -> Result<String, NetError> {
+    net.post("https://hooks.example/profile", id)
+}
+
+#[handler(idempotent)]
+fn handle(req: Request, db: &Db, log: &Log) -> Response {
+    let id = req.segment(0).unwrap_or("");
+    let email = Pii::new(req.query("email").unwrap_or(""));
+    if req.method() == "PUT" {
+        return match save_profile(db, log, id, email) {
+            Ok(_) => Response::no_content(),
+            Err(e) => Response::text(500, e.message()),
+        };
+    }
+    match db.get(profile_key(id)) {
+        Ok(Some(h)) => Response::text(200, h),
+        Ok(None) => Response::not_found(),
+        Err(e) => Response::text(500, e.message()),
+    }
+}

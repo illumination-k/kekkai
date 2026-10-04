@@ -52,6 +52,10 @@
           ],
           "evidence": "type"
         },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
         "tested": {
           "value": false,
           "evidence": "test"
@@ -84,6 +88,10 @@
           "value": [
             "api.rates.example"
           ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
           "evidence": "type"
         },
         "tested": {

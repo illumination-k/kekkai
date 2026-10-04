@@ -1,0 +1,149 @@
+{
+  "file": "testdata/run/pii.kek",
+  "functions": [
+    {
+      "name": "label",
+      "signature": "fn label(c: Customer) -> String",
+      "line": 11,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [
+        "Pii::mask"
+      ],
+      "declassify": [
+        {
+          "call": "mask",
+          "line": 12,
+          "col": 44
+        }
+      ]
+    },
+    {
+      "name": "main",
+      "signature": "fn main(log: &Log) -> Int",
+      "line": 16,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "idempotent": true,
+      "caps": [
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "log.info"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "HashMap::get_or",
+        "HashMap::insert",
+        "HashMap::len",
+        "HashMap::new",
+        "Pii::expose_unchecked",
+        "Pii::hash",
+        "Pii::mask",
+        "Pii::new",
+        "label",
+        "vec_of"
+      ],
+      "declassify": [
+        {
+          "call": "mask",
+          "line": 29,
+          "col": 26
+        },
+        {
+          "call": "hash",
+          "line": 29,
+          "col": 44
+        },
+        {
+          "call": "hash",
+          "line": 36,
+          "col": 17
+        },
+        {
+          "call": "hash",
+          "line": 36,
+          "col": 29
+        },
+        {
+          "call": "hash",
+          "line": 36,
+          "col": 60
+        },
+        {
+          "call": "hash",
+          "line": 36,
+          "col": 72
+        },
+        {
+          "call": "hash",
+          "line": 37,
+          "col": 27
+        },
+        {
+          "call": "hash",
+          "line": 37,
+          "col": 54
+        },
+        {
+          "call": "hash",
+          "line": 37,
+          "col": 81
+        },
+        {
+          "call": "hash",
+          "line": 47,
+          "col": 19
+        },
+        {
+          "call": "expose_unchecked",
+          "line": 51,
+          "col": 25
+        }
+      ]
+    },
+    {
+      "name": "vec_of",
+      "signature": "fn vec_of(a: Pii<String>, b: Pii<String>, c: Pii<String>) -> Vec<Pii<String>>",
+      "line": 56,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [],
+      "declassify": []
+    },
+    {
+      "name": "<Customer as PartialEq>::eq",
+      "signature": "fn <Customer as PartialEq>::eq(self: Customer, other: Customer) -> Bool",
+      "line": 5,
+      "col": 1,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [],
+      "declassify": []
+    }
+  ]
+}
+--- exit 0

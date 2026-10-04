@@ -10,10 +10,15 @@ struct CapsReport {
     handler: Bool,
     pure: Bool,
     async: Bool,
+    // every capability operation it can reach is idempotent (a pure
+    // function trivially); `#[handler(idempotent)]` requires it
+    idempotent: Bool,
     caps: Vec<ChkBinding>,
     direct_effects: Vec<String>,
     unused_caps: Vec<String>,
     calls: Vec<String>,
+    // calls of mask / hash / expose_unchecked on personal data (Pii)
+    declassify: Vec<ChkDeclass>,
 }
 
 // caps_func_signature renders `fn name(p: T, ...) -> R` (FuncSignature).
@@ -58,10 +63,12 @@ fn caps_reports(a: DiagAnalysis) -> Vec<CapsReport> {
             handler: fun.handler,
             pure: caps.len() == 0,
             async: fun.async,
+            idempotent: chk_idem_violation(a.info, fun).is_none(),
             caps: caps,
             direct_effects: caps_sorted_keys(fun.effects),
             unused_caps: unused,
             calls: caps_sorted_keys(fun.calls),
+            declassify: fun.declass,
         });
     }
     out
@@ -76,6 +83,7 @@ fn caps_report_json(r: CapsReport) -> IrjVal {
     irjson_set(o, "handler", irjson_bool(r.handler));
     irjson_set(o, "pure", irjson_bool(r.pure));
     irjson_set(o, "async", irjson_bool(r.async));
+    irjson_set(o, "idempotent", irjson_bool(r.idempotent));
     let cs = Vec::new();
     for c in r.caps {
         let co = irjson_obj();
@@ -88,7 +96,29 @@ fn caps_report_json(r: CapsReport) -> IrjVal {
     irjson_set(o, "direct_effects", irjson_strs(r.direct_effects));
     irjson_set(o, "unused_caps", irjson_strs(r.unused_caps));
     irjson_set(o, "calls", irjson_strs(r.calls));
+    let ds = Vec::new();
+    for d in r.declassify {
+        let dobj = irjson_obj();
+        irjson_set(dobj, "call", IrjVal::Str(d.call));
+        irjson_set(dobj, "line", irjson_int(d.pos.line));
+        irjson_set(dobj, "col", irjson_int(d.pos.col));
+        ds.push(irjson_val(dobj));
+    }
+    irjson_set(o, "declassify", IrjVal::Arr(ds));
     irjson_val(o)
+}
+
+// caps_declassify_line lists the declassifications of personal data
+// (`    declassify: mask (12:9), expose_unchecked (20:5)`).
+fn caps_declassify_line(lines: Vec<String>, fun: ChkFunc) {
+    if fun.declass.len() == 0 {
+        return;
+    }
+    let ds = Vec::new();
+    for d in fun.declass {
+        ds.push(d.call + " (" + d.pos.line.to_string() + ":" + d.pos.col.to_string() + ")");
+    }
+    lines.push("    declassify: " + ds.join(", "));
 }
 
 fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
@@ -141,12 +171,16 @@ fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         let mut tag = "";
         if fun.handler {
             tag = " #[handler]";
+            if chk_idempotent_attr(fun) {
+                tag = " #[handler(idempotent)]";
+            }
         }
         if fun.test {
             tag = " #[test]";
         }
         if caps.len() == 0 {
             lines.push(fun.name + tag + ": pure");
+            caps_declassify_line(lines, fun);
             continue;
         }
         let ops = caps_sorted_keys(fun.effects);
@@ -154,6 +188,17 @@ fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         if ops.len() > 0 {
             lines.push("    direct effects: " + ops.join(", "));
         }
+        match chk_idem_violation(res.info, fun) {
+            None => lines.push("    idempotent: true"),
+            Some(v) => {
+                let mut via = "";
+                if v.path.len() > 1 {
+                    via = " via " + v.path.get(1).unwrap_or("");
+                }
+                lines.push("    idempotent: false (" + v.op + via + ")");
+            }
+        }
+        caps_declassify_line(lines, fun);
         if unused.len() > 0 {
             lines.push("    warning: granted but unused: " + unused.join(", "));
         }

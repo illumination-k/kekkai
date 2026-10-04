@@ -1,0 +1,290 @@
+# notify_rate declassifies personal data twice: new assumptions
+$ kek assure plan app
+Needs review (2):
+  ! new assumption pii.declassify mask() at 24:46   notify_rate
+    -> app/rates.kek:23
+  ! new assumption pii.declassify hash() at 25:30   notify_rate
+    -> app/rates.kek:23
+
+Auto-approved (1): added 1
+--- exit 0
+
+$ kek assure plan -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {
+    "definitions": 9,
+    "changes": 3,
+    "needs_review": 2,
+    "auto_approved": 1,
+    "violations": 0,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [
+    {
+      "definition": "notify_rate",
+      "file": "app/rates.kek",
+      "line": 23,
+      "class": "added",
+      "rule": "added",
+      "guarantee": "definition",
+      "evidence": "",
+      "from": "",
+      "to": "effects: Log",
+      "added": [],
+      "removed": [],
+      "message": "added definition",
+      "review": false,
+      "escalate": ""
+    },
+    {
+      "definition": "notify_rate",
+      "file": "app/rates.kek",
+      "line": 23,
+      "class": "assumption",
+      "rule": "new_assumption",
+      "guarantee": "assumption",
+      "evidence": "assumption",
+      "from": "",
+      "to": "pii.declassify mask() at 24:46",
+      "added": [
+        "pii.declassify(mask)"
+      ],
+      "removed": [],
+      "message": "new assumption pii.declassify mask() at 24:46",
+      "review": true,
+      "escalate": ""
+    },
+    {
+      "definition": "notify_rate",
+      "file": "app/rates.kek",
+      "line": 23,
+      "class": "assumption",
+      "rule": "new_assumption",
+      "guarantee": "assumption",
+      "evidence": "assumption",
+      "from": "",
+      "to": "pii.declassify hash() at 25:30",
+      "added": [
+        "pii.declassify(hash)"
+      ],
+      "removed": [],
+      "message": "new assumption pii.declassify hash() at 25:30",
+      "review": true,
+      "escalate": ""
+    }
+  ],
+  "violations": [],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 0
+
+$ kek assure apply -yes app
+Needs review (2):
+  ! new assumption pii.declassify mask() at 24:46   notify_rate
+    -> app/rates.kek:23
+  ! new assumption pii.declassify hash() at 25:30   notify_rate
+    -> app/rates.kek:23
+
+Auto-approved (1): added 1
+kekkai.assure.lock updated: 9 definitions, 3 change(s) approved
+--- exit 0
+
+# the assumptions in the lock:
+        {
+          "kind": "pii.declassify",
+          "call": "mask",
+          "reason": "",
+          "owner": "",
+          "expires": ""
+--
+        {
+          "kind": "pii.declassify",
+          "call": "hash",
+          "reason": "",
+          "owner": "",
+          "expires": ""
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (9 definitions).
+--- exit 0
+
+# [pii]: at most one declassification per module, approved with a reason and an owner
+$ kek assure plan app
+Needs review (1):
+  ! change policy 39e08b1a536b -> ad43cd23befd   (policy)
+    -> kekkai.toml
+
+Policy violations (2):
+  x pii.declassify (mask(), hash()) needs #[declassify(reason = "...", owner = "...")] ([pii] declassify_requires)   notify_rate
+    -> app/rates.kek:24
+  x app/rates.kek declassifies personal data 2 times ([pii] max_declassify_per_module = 1)   notify_rate
+    -> app/rates.kek:25
+--- exit 1
+
+$ kek assure plan -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "ad43cd23befd326c964c872fed49c33a"
+  },
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {
+    "definitions": 9,
+    "changes": 1,
+    "needs_review": 1,
+    "auto_approved": 0,
+    "violations": 2,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [
+    {
+      "definition": "(policy)",
+      "file": "kekkai.toml",
+      "line": 0,
+      "class": "change",
+      "rule": "config",
+      "guarantee": "config",
+      "evidence": "",
+      "from": "39e08b1a536bf81fa473387097946df7",
+      "to": "ad43cd23befd326c964c872fed49c33a",
+      "added": [],
+      "removed": [],
+      "message": "change policy 39e08b1a536b -> ad43cd23befd",
+      "review": true,
+      "escalate": ""
+    }
+  ],
+  "violations": [
+    {
+      "definition": "notify_rate",
+      "file": "app/rates.kek",
+      "line": 24,
+      "rule": "declassify_requires",
+      "guarantee": "assumption",
+      "items": [
+        "reason",
+        "owner"
+      ],
+      "message": "pii.declassify (mask(), hash()) needs #[declassify(reason = \"...\", owner = \"...\")] ([pii] declassify_requires)"
+    },
+    {
+      "definition": "notify_rate",
+      "file": "app/rates.kek",
+      "line": 25,
+      "rule": "max_declassify_per_module",
+      "guarantee": "assumption",
+      "items": [
+        "pii.declassify"
+      ],
+      "message": "app/rates.kek declassifies personal data 2 times ([pii] max_declassify_per_module = 1)"
+    }
+  ],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 1
+
+$ kek assure check app
+Needs review (1):
+  ! change policy 39e08b1a536b -> ad43cd23befd   (policy)
+    -> kekkai.toml
+
+Policy violations (2):
+  x pii.declassify (mask(), hash()) needs #[declassify(reason = "...", owner = "...")] ([pii] declassify_requires)   notify_rate
+    -> app/rates.kek:24
+  x app/rates.kek declassifies personal data 2 times ([pii] max_declassify_per_module = 1)   notify_rate
+    -> app/rates.kek:25
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 1 change(s), 1 needing review (run kek assure plan, then kek assure apply); 2 policy violation(s)
+--- exit 1
+
+# notify_rate names who approved it and keeps one declassification
+$ kek assure plan app
+Needs review (2):
+  ! change policy 39e08b1a536b -> ad43cd23befd   (policy)
+    -> kekkai.toml
+  ! changed assumption pii.declassify mask() at 25:46 (reason: "support sees the domain", owner: shogo, expires: 2027-06-30)   notify_rate
+    -> app/rates.kek:24
+
+Auto-approved (1): strengthen 1
+--- exit 0
+
+$ kek assure apply -yes app
+Needs review (2):
+  ! change policy 39e08b1a536b -> ad43cd23befd   (policy)
+    -> kekkai.toml
+  ! changed assumption pii.declassify mask() at 25:46 (reason: "support sees the domain", owner: shogo, expires: 2027-06-30)   notify_rate
+    -> app/rates.kek:24
+
+Auto-approved (1): strengthen 1
+kekkai.assure.lock updated: 9 definitions, 3 change(s) approved
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (9 definitions).
+--- exit 0
+
+# it expires
+$ kek assure check app
+Expired (2):
+  x pii.declassify mask() expired 2027-06-30   notify_rate  owner: shogo  reason: "support sees the domain"
+    -> app/rates.kek:25
+  x #[allow(similar)] expired 2027-03-31   rate_key  owner: shogo  reason: "kept apart from price_key"
+    -> app/rates.kek:18
+
+No changes: kekkai.assure.lock matches the program (9 definitions).
+--- stderr
+kek assure check: 2 expired escape hatch(es)
+--- exit 1
+
+# malformed [pii] settings, and loosening the limit of a parent
+$ kek assure plan -config bad.toml app
+Configuration errors (3):
+  x bad.toml [pii] max_declassify_per_module: expected an integer
+  x bad.toml [pii]: unknown key mask (expected max_declassify_per_module, declassify_requires)
+  x [pii] declassify_requires: unknown field signature (expected reason, owner, expires)
+
+Needs review (1):
+  ! change policy ad43cd23befd -> f3efb3719ee4   (policy)
+    -> bad.toml
+
+Expired (2):
+  x pii.declassify mask() expired 2027-06-30   notify_rate  owner: shogo  reason: "support sees the domain"
+    -> app/rates.kek:25
+  x #[allow(similar)] expired 2027-03-31   rate_key  owner: shogo  reason: "kept apart from price_key"
+    -> app/rates.kek:18
+--- exit 1
+
+$ kek assure plan -config child.toml app
+Configuration errors (1):
+  x child.toml [pii] max_declassify_per_module = 3: org.toml allows at most 1 (a configuration may only tighten the one it extends)
+
+Needs review (1):
+  ! change policy ad43cd23befd -> 3f8e02c19f57   (policy)
+    -> child.toml
+
+Expired (2):
+  x pii.declassify mask() expired 2027-06-30   notify_rate  owner: shogo  reason: "support sees the domain"
+    -> app/rates.kek:25
+  x #[allow(similar)] expired 2027-03-31   rate_key  owner: shogo  reason: "kept apart from price_key"
+    -> app/rates.kek:18
+--- exit 1
+

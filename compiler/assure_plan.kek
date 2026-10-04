@@ -107,8 +107,19 @@ fn asr_entry_str(e: String) -> String {
     e
 }
 
+// asr_assume_label names an assumption: `#[rare]`, `pii.declassify mask()`.
+fn asr_assume_label(a: AsrAssume) -> String {
+    if a.call != "" {
+        return a.kind + " " + a.call + "()";
+    }
+    "#[" + a.kind + "]"
+}
+
 fn asr_assume_str(a: AsrAssume) -> String {
-    let mut s = "#[" + a.kind + "]";
+    let mut s = asr_assume_label(a);
+    if a.call != "" && a.line > 0 {
+        s = s + " at " + a.line.to_string() + ":" + a.col.to_string();
+    }
     let meta = Vec::new();
     if a.reason != "" {
         meta.push("reason: \"" + a.reason + "\"");
@@ -168,13 +179,19 @@ fn asr_one(x: String) -> Vec<String> {
     v
 }
 
-fn asr_find_assume(xs: Vec<AsrAssume>, kind: String) -> Option<AsrAssume> {
-    for a in xs {
-        if a.kind == kind {
-            return Some(a);
+// asr_take_assume finds the first assumption of xs with the key of a
+// that is not taken yet, and takes it (-1: none).
+fn asr_take_assume(xs: Vec<AsrAssume>, a: AsrAssume, taken: HashMap<Int, Bool>) -> Int {
+    let k = asr_assume_key(a);
+    let mut i = 0;
+    for x in xs {
+        if !taken.contains_key(i) && asr_assume_key(x) == k {
+            taken.insert(i, true);
+            return i;
         }
+        i = i + 1;
     }
-    None
+    -1
 }
 
 fn asr_diff_guar(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef, name: String) {
@@ -296,10 +313,15 @@ fn asr_diff_guar(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef, name: String
                 asr_none(),
                 "change tx.linear (no transaction any more)",
             );
+        } else if name == "idempotent" && asr_effects_str(n) == "pure" {
+            // pure now: trivially idempotent (the effects strengthen)
         } else {
             let mut msg = "weaken " + name + " (no longer holds)";
             if name == "tested" {
                 msg = "weaken tested (no #[test] reaches it any more)";
+            }
+            if name == "idempotent" {
+                msg = "weaken idempotent (reaches an operation that a retry would repeat)";
             }
             asr_change(pl, n, "weaken", "weaken", name, ev, from, to, asr_none(), asr_none(), msg);
         }
@@ -365,8 +387,11 @@ fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
     for name in names {
         asr_diff_guar(pl, pol, o, n, name);
     }
+    // assumptions are matched by kind (and declassifying call), in order
+    let taken: HashMap<Int, Bool> = HashMap::new();
     for a in n.assumes {
-        match asr_find_assume(o.assumes, a.kind) {
+        let i = asr_take_assume(o.assumes, a, taken);
+        match o.assumes.get(i) {
             None => asr_change(
                 pl,
                 n,
@@ -376,7 +401,7 @@ fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
                 "assumption",
                 "",
                 asr_assume_str(a),
-                asr_one(a.kind),
+                asr_one(asr_assume_key(a)),
                 asr_none(),
                 "new assumption " + asr_assume_str(a),
             ),
@@ -391,7 +416,7 @@ fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
                         "assumption",
                         asr_assume_str(x),
                         asr_assume_str(a),
-                        asr_one(a.kind),
+                        asr_one(asr_assume_key(a)),
                         asr_none(),
                         "changed assumption " + asr_assume_str(a),
                     );
@@ -399,8 +424,11 @@ fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
             }
         }
     }
+    let mut j = 0;
     for a in o.assumes {
-        if asr_find_assume(n.assumes, a.kind).is_none() {
+        let gone = !taken.contains_key(j);
+        j = j + 1;
+        if gone {
             asr_change(
                 pl,
                 n,
@@ -411,8 +439,8 @@ fn asr_diff_def(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef) {
                 asr_assume_str(a),
                 "",
                 asr_none(),
-                asr_one(a.kind),
-                "strengthen: assumption #[" + a.kind + "] removed",
+                asr_one(asr_assume_key(a)),
+                "strengthen: assumption " + asr_assume_label(a) + " removed",
             );
         }
     }
@@ -445,10 +473,13 @@ fn asr_effects_str(d: AsrDef) -> String {
 fn asr_waiver_live(w: AsrWaiver, d: AsrDef) -> Bool {
     if w.guarantee == "assumption" {
         for a in d.assumes {
-            if asr_has(w.items, a.kind) {
+            if asr_has(w.items, asr_assume_key(a)) {
                 return true;
             }
         }
+        return false;
+    }
+    if w.guarantee == "idempotent" && asr_effects_str(d) == "pure" {
         return false;
     }
     match asr_guar_get(d, w.guarantee) {
@@ -666,7 +697,7 @@ fn asr_plan(
                             "assumption",
                             "",
                             asr_assume_str(a),
-                            asr_one(a.kind),
+                            asr_one(asr_assume_key(a)),
                             asr_none(),
                             "new assumption " + asr_assume_str(a),
                         );
@@ -745,8 +776,11 @@ fn asr_plan(
                     a.line,
                     "expires",
                     "assumption",
-                    asr_one(a.kind),
-                    "#[" + a.kind + "] expires = \"" + a.expires + "\" is not a date (YYYY-MM-DD)",
+                    asr_one(asr_assume_key(a)),
+                    asr_assume_label(a)
+                        + " expires = \""
+                        + a.expires
+                        + "\" is not a date (YYYY-MM-DD)",
                 );
             } else if today != "" && a.expires < today {
                 pl.expired.push(AsrExpired {
@@ -754,13 +788,14 @@ fn asr_plan(
                     file: d.file,
                     line: a.line,
                     source: "code",
-                    kind: "#[" + a.kind + "]",
+                    kind: asr_assume_label(a),
                     expires: a.expires,
                     reason: a.reason,
                     owner: a.owner,
                 });
             }
         }
+        asr_declassify_requires(pl, pol, d);
         match old.by_name.get(d.name) {
             Some(o) => {
                 for w in o.waivers {
@@ -781,7 +816,133 @@ fn asr_plan(
             None => {}
         }
     }
+    asr_declassify_limit(pl, pol, cur);
     pl
+}
+
+// ---- personal data ([pii]) ----
+
+// asr_declassify_requires reports the declassifications of d whose
+// function's #[declassify(...)] lacks a field of [pii] declassify_requires.
+fn asr_declassify_requires(pl: AsrPlan, pol: AsrPolicy, d: AsrDef) {
+    if pol.declass_requires.len() == 0 {
+        return;
+    }
+    let missing = Vec::new();
+    let calls = Vec::new();
+    let mut line = 0;
+    for a in d.assumes {
+        if a.kind != "pii.declassify" {
+            continue;
+        }
+        for r in pol.declass_requires {
+            let v = if r == "reason" {
+                a.reason
+            } else if r == "owner" { a.owner } else { a.expires };
+            if v == "" && !asr_has(missing, r) {
+                missing.push(r);
+            }
+        }
+        if line == 0 {
+            line = a.line;
+        }
+        calls.push(a.call + "()");
+    }
+    if missing.len() == 0 {
+        return;
+    }
+    let args = Vec::new();
+    for r in missing {
+        args.push(r + " = \"...\"");
+    }
+    asr_violation(
+        pl,
+        d,
+        line,
+        "declassify_requires",
+        "assumption",
+        missing,
+        "pii.declassify ("
+            + calls.join(", ")
+            + ") needs #[declassify("
+            + args.join(", ")
+            + ")] ([pii] declassify_requires)",
+    );
+}
+
+// asr_declassify_limit reports the files (modules) with more
+// declassifications than [pii] max_declassify_per_module, at the first
+// one over the limit.
+fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
+    if !pol.has_max_declass {
+        return;
+    }
+    let counts: HashMap<String, Int> = HashMap::new();
+    let files = Vec::new();
+    for d in cur.defs {
+        for a in d.assumes {
+            if a.kind == "pii.declassify" {
+                if !counts.contains_key(d.file) {
+                    files.push(d.file);
+                }
+                counts.insert(d.file, counts.get_or(&d.file, 0) + 1);
+            }
+        }
+    }
+    chk_sort_strings(files);
+    for f in files {
+        let n = counts.get_or(&f, 0);
+        if n <= pol.max_declass {
+            continue;
+        }
+        // the definitions of f in source order: the first site over the limit
+        let sites = Vec::new();
+        for d in cur.defs {
+            if d.file == f {
+                for a in d.assumes {
+                    if a.kind == "pii.declassify" {
+                        sites.push(asr_pad_line(a.line) + "\t" + d.name);
+                    }
+                }
+            }
+        }
+        chk_sort_strings(sites);
+        let at = asr_split_tab(sites.get(pol.max_declass).unwrap_or(""));
+        let dn = at.get(1).unwrap_or("");
+        match cur.by_name.get(dn) {
+            Some(d) => asr_violation(
+                pl,
+                d,
+                at.get(0).unwrap_or("0").parse_int().unwrap_or(0),
+                "max_declassify_per_module",
+                "assumption",
+                asr_one("pii.declassify"),
+                f
+                    + " declassifies personal data "
+                    + n.to_string()
+                    + " times ([pii] max_declassify_per_module = "
+                    + pol.max_declass.to_string()
+                    + ")",
+            ),
+            None => {}
+        }
+    }
+}
+
+// asr_pad_line renders a line number so that strings sort by it.
+fn asr_pad_line(n: Int) -> String {
+    let s = n.to_string();
+    let mut pad = "";
+    let mut i = s.len();
+    while i < 9 {
+        pad = pad + "0";
+        i = i + 1;
+    }
+    pad + s
+}
+
+fn asr_split_tab(s: String) -> Vec<String> {
+    s.split("\t")
 }
 
 fn asr_review_count(pl: AsrPlan) -> Int {

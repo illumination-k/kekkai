@@ -1,0 +1,17 @@
+{
+  "file": "testdata/check/err_idempotent.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "testdata/check/err_idempotent.kek",
+      "line": 24,
+      "col": 1,
+      "end_line": 24,
+      "end_col": 3,
+      "severity": "error",
+      "phase": "type",
+      "message": "idempotent handler `handle` reaches `net.post` via `settle` -> `charge` (line 5), which is not idempotent: a retry would do it again"
+    }
+  ]
+}
+--- exit 1

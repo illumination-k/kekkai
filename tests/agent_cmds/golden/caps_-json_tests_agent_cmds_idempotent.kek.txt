@@ -1,0 +1,123 @@
+{
+  "file": "tests/agent_cmds/idempotent.kek",
+  "functions": [
+    {
+      "name": "profile_key",
+      "signature": "fn profile_key(id: String) -> String",
+      "line": 5,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [],
+      "declassify": []
+    },
+    {
+      "name": "save_profile",
+      "signature": "fn save_profile(db: &Db, log: &Log, id: String, email: Pii<String>) -> Result<(), TxError>",
+      "line": 9,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "idempotent": true,
+      "caps": [
+        {
+          "name": "db",
+          "type": "&Db",
+          "used": true
+        },
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "db.transaction",
+        "log.info",
+        "tx.commit",
+        "tx.delete",
+        "tx.put"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "Pii::hash",
+        "Pii::mask",
+        "profile_key"
+      ],
+      "declassify": [
+        {
+          "call": "hash",
+          "line": 11,
+          "col": 39
+        },
+        {
+          "call": "mask",
+          "line": 13,
+          "col": 48
+        }
+      ]
+    },
+    {
+      "name": "notify",
+      "signature": "fn notify(net: &Net, id: String) -> Result<String, NetError>",
+      "line": 18,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "idempotent": false,
+      "caps": [
+        {
+          "name": "net",
+          "type": "&Net",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "net.post"
+      ],
+      "unused_caps": [],
+      "calls": [],
+      "declassify": []
+    },
+    {
+      "name": "handle",
+      "signature": "fn handle(req: Request, db: &Db, log: &Log) -> Response",
+      "line": 23,
+      "col": 4,
+      "handler": true,
+      "pure": false,
+      "async": true,
+      "idempotent": true,
+      "caps": [
+        {
+          "name": "db",
+          "type": "&Db",
+          "used": true
+        },
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "db.get"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "Pii::new",
+        "profile_key",
+        "save_profile"
+      ],
+      "declassify": []
+    }
+  ]
+}
+--- exit 0

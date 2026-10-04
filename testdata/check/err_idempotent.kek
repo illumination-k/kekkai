@@ -1,0 +1,40 @@
+// An idempotent handler, and the functions it calls, may only use
+// idempotent capability operations: a retry must not repeat an effect.
+
+fn charge(net: &Net, account: String) -> Result<String, NetError> {
+    net.post("https://processor.example/charges", account)
+}
+
+fn settle(net: &Net, account: String) -> Result<String, NetError> {
+    charge(net, account)
+}
+
+// reads, overwrites and deletes of keys are idempotent
+fn remember(db: &Db, log: &Log, k: String, v: String) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let old = tx.get(k)?;
+        tx.put(k, v)?;
+        tx.delete(k + ":tmp")?;
+        log.info("stored " + k);
+        tx.commit()
+    })
+}
+
+#[handler(idempotent)]
+fn handle(req: Request, db: &Db, net: &Net, log: &Log) -> Response { // ERROR "idempotent handler `handle` reaches `net.post` via `settle` -> `charge` (err_idempotent.kek:5), which is not idempotent"
+    let account = req.segment(0).unwrap_or("");
+    match remember(db, log, "last", account) {
+        Ok(_) => {}
+        Err(e) => {
+            return Response::text(500, e.message());
+        }
+    }
+    match net.get("https://rates.example/" + account) {
+        Ok(_) => {}
+        Err(_) => {}
+    }
+    match settle(net, account) {
+        Ok(body) => Response::text(200, body),
+        Err(e) => Response::text(502, e.message()),
+    }
+}

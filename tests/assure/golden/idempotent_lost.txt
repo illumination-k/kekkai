@@ -1,0 +1,101 @@
+# fetch_rate starts posting: it, and convert that calls it, are no longer idempotent
+$ kek assure plan app
+Needs review (1):
+  ! weaken idempotent (reaches an operation that a retry would repeat)   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+--- exit 0
+
+$ kek assure plan -json app
+{
+  "version": 1,
+  "path": "app",
+  "lock": "kekkai.assure.lock",
+  "lock_found": true,
+  "config": {
+    "lock": "39e08b1a536bf81fa473387097946df7",
+    "current": "39e08b1a536bf81fa473387097946df7"
+  },
+  "today": "2026-10-04",
+  "ok": false,
+  "summary": {
+    "definitions": 8,
+    "changes": 2,
+    "needs_review": 2,
+    "auto_approved": 0,
+    "violations": 0,
+    "expired": 0,
+    "config_errors": 0
+  },
+  "changes": [
+    {
+      "definition": "convert",
+      "file": "app/rates.kek",
+      "line": 14,
+      "class": "weaken",
+      "rule": "weaken",
+      "guarantee": "idempotent",
+      "evidence": "type",
+      "from": "true",
+      "to": "false",
+      "added": [],
+      "removed": [],
+      "message": "weaken idempotent (reaches an operation that a retry would repeat)",
+      "review": true,
+      "escalate": "owner"
+    },
+    {
+      "definition": "fetch_rate",
+      "file": "app/rates.kek",
+      "line": 3,
+      "class": "weaken",
+      "rule": "weaken",
+      "guarantee": "idempotent",
+      "evidence": "type",
+      "from": "true",
+      "to": "false",
+      "added": [],
+      "removed": [],
+      "message": "weaken idempotent (reaches an operation that a retry would repeat)",
+      "review": true,
+      "escalate": "owner"
+    }
+  ],
+  "violations": [],
+  "expired": [],
+  "config_errors": []
+}
+--- exit 0
+
+$ kek assure check app
+Needs review (1):
+  ! weaken idempotent (reaches an operation that a retry would repeat)   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+--- stderr
+kek assure check: kekkai.assure.lock is out of date: 2 change(s), 2 needing review (run kek assure plan, then kek assure apply)
+--- exit 1
+
+$ kek assure apply -yes -reason the rates API wants a POST -owner shogo -expires 2027-01-31 app
+Needs review (1):
+  ! weaken idempotent (reaches an operation that a retry would repeat)   convert (+1 more: fetch_rate)
+    -> app/rates.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+kekkai.assure.lock updated: 8 definitions, 2 change(s) approved, 2 waiver(s) recorded
+--- exit 0
+
+$ kek assure check app
+No changes: kekkai.assure.lock matches the program (8 definitions).
+--- exit 0
+
+# convert stops calling it (pure now): no weakening of idempotent, its effects strengthen
+$ kek assure plan -v app
+Auto-approved (3): strengthen 2, change 1
+  + change async: true -> false   convert
+  + strengthen effects: -Log -Net   convert
+  + strengthen net.hosts: -api.rates.example   convert
+--- exit 0
+
+# #[handler(idempotent)] on handle does not compile: buy queues an outbox message
+$ kek assure plan app
+--- stderr
+app/shop.kek:28:1: idempotent handler `handle` reaches `tx.outbox` via `buy` (app/shop.kek:19), which is not idempotent: a retry would do it again
+--- exit 1
+

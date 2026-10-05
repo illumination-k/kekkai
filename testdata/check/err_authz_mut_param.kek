@@ -1,0 +1,37 @@
+// A `mut` parameter can be the resource of a permission, but then it
+// cannot be reassigned: the permission is for the value passed in.
+struct Edit {}
+
+struct Doc {
+    owner: Int,
+    mut title: String,
+}
+
+#[policy]
+fn can_edit(u: Int, d: Doc) -> Option<Can<Edit, d>> {
+    if d.owner == u {
+        Some(Can::grant())
+    } else {
+        None
+    }
+}
+
+fn rename(mut d: Doc, t: String, _cap: Can<Edit, d>) {
+    d.title = t;
+    d = Doc { owner: 0, title: "" }; // ERROR "cannot assign to `d`: it is the resource of a permission"
+}
+
+fn escalate(u: Int, mut d: Doc, other: Doc) {
+    match can_edit(u, d) {
+        Some(cap) => {
+            d = other; // ERROR "cannot assign to `d`: it is the resource of a permission"
+            rename(d, "x", cap);
+        }
+        None => {}
+    }
+}
+
+fn fine(mut d: Doc, other: Doc) {
+    d = other;
+    d.title = "ok";
+}

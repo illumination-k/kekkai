@@ -232,6 +232,9 @@ struct Chk {
     // the trait object type expected of the `if`, `match` or block being
     // checked: its branches are coerced to it
     mut want_dyn: Option<Ty>,
+    // the binding ids of the parameters used as resources of permissions
+    // in the function being checked: they cannot be reassigned
+    mut resources: HashMap<Int, Bool>,
     // prelude mode: the program includes the runtime prelude, which may
     // define Response / TxError / NetError / IoError as structs and use
     // the `__` intrinsics
@@ -590,6 +593,7 @@ fn chk_check_full(
         dyn_uses: Vec::new(),
         vec_hint: None,
         want_dyn: None,
+        resources: HashMap::new(),
         prelude: prelude,
     };
     chk_declare(c, f);
@@ -1832,6 +1836,20 @@ fn chk_func(mut c: Chk, fun: ChkFunc) {
     for p in fun.params {
         chk_bind(c, p);
     }
+    // the parameters the signature names as resources (`Can<A, d>`)
+    c.resources = HashMap::new();
+    let mut named: HashMap<Int, Bool> = HashMap::new();
+    for p in fun.params {
+        chk_path_params(p.ty, fun.name, named);
+    }
+    chk_path_params(fun.result, fun.name, named);
+    let mut pi = 0;
+    for p in fun.params {
+        if named.contains_key(pi) {
+            c.resources.insert(p.id, true);
+        }
+        pi = pi + 1;
+    }
     c.rets = Vec::new();
     // the body of a function returning `impl Trait` is checked against a
     // variable in place of each opaque type (compiler/chk_dyn.kek)
@@ -2066,6 +2084,17 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                             "cannot assign twice to immutable variable `"
                                 + s.name
                                 + "` (declare it with `let mut`)",
+                        );
+                    }
+                    if c.resources.contains_key(b.id) {
+                        chk_errorf(
+                            c,
+                            s.pos,
+                            "cannot assign to `"
+                                + s.name
+                                + "`: it is the resource of a permission `Can<_, "
+                                + s.name
+                                + ">`, which must not outlive the value it was granted for",
                         );
                     }
                     c.info.assigns.insert(s.id, b);

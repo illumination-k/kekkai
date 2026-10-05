@@ -66,8 +66,12 @@ fn chk_resolve_path(mut c: Chk, te: AstType) -> Ty {
 // chk_binding_path is the path of variable b used as a resource: the
 // variable must not be reassignable, or the permission could outlive the
 // value it was granted for.
-fn chk_binding_path(c: Chk, b: ChkBinding, pos: AstPos) -> Ty {
-    if b.mutable {
+fn chk_binding_path(mut c: Chk, b: ChkBinding, pos: AstPos) -> Ty {
+    // a `mut` parameter may be a resource (it is then not reassignable,
+    // see chk_stmt); a `let mut` variable may not
+    if b.param {
+        c.resources.insert(b.id, true);
+    } else if b.mutable {
         chk_errorf(
             c,
             pos,

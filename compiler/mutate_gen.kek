@@ -22,6 +22,8 @@
 //   float     Float literal x → x + 1.0, x → 0.0
 //   bool      boolean literal flipped
 //   string    string literal → ""
+//   arm       a match arm deleted (when a final `_` arm catches the rest)
+//   jump      `break` ↔ `continue`
 //   stmt      a statement deleted (calls, assignments)
 //   result    a function's result replaced: 0, 0.0, "", None,
 //             Vec::new(), or negated (Bool)
@@ -35,8 +37,8 @@
 // evaluates the operands once, in the original order, and picks the
 // original or mutated operation at run time (`__mut_iop(k, x, y, op,
 // alt)`, `__mut_flip(k, b)`, ...), or `if __mut_on(k) { mutated } else {
-// original }` where the original is not duplicated. A pattern mutant
-// duplicates its match: `if __mut_on(k) { match x { mutated arms } } else
+// original }` where the original is not duplicated. A pattern or arm
+// mutant duplicates its match: `if __mut_on(k) { match x { mutated arms } } else
 // { match x { arms } }` (the copy with fresh ids). Several mutants of one
 // node nest. Sites record that they were reached, which tells the
 // launcher which tests cover which mutants.
@@ -538,12 +540,31 @@ fn mut_collect_expr(w: CovW, e: AstExpr) {
             }
         }
         AstExpr::Match(m) => {
+            // with a final `_` arm, any other arm can be deleted
+            let n = m.arms.len();
+            let catchall = match m.arms.get(n - 1) {
+                Some(a) => a.pat.wildcard && a.guard.is_none(),
+                None => false,
+            };
             let mut i = 0;
             for a in m.arms {
                 mut_collect_pat(w, m, a.pat);
                 match a.guard {
                     Some(g) => mut_collect_guard(w, m, i, g),
                     None => {}
+                }
+                if catchall && i < n - 1 {
+                    let c = mut_add(
+                        w,
+                        m.id,
+                        "arm",
+                        a.pos,
+                        i.to_string(),
+                        "",
+                        "delete match arm",
+                        true,
+                    );
+                    mut_set_last(w, mut_snip_at(w, c, 0, mut_line(w, a.pos).len(), ""));
                 }
                 i = i + 1;
             }
@@ -801,6 +822,28 @@ fn mut_stmt_id(s: AstStmt) -> Int {
 }
 
 fn mut_collect_stmt(w: CovW, s: AstStmt) {
+    // `break` ↔ `continue` (a `loop` with a value needs its `break value`)
+    let jump = match s {
+        AstStmt::Break(x) => if x.value.is_none() { "continue" } else { "" },
+        AstStmt::Continue(_) => "break",
+        _ => "",
+    };
+    if jump != "" {
+        let pos = fmt_stmt_pos(s);
+        let o = if jump == "break" { "continue" } else { "break" };
+        let c = mut_add(
+            w,
+            mut_stmt_id(s),
+            "jump",
+            pos,
+            o,
+            jump,
+            mut_q(o) + " → " + mut_q(jump),
+            true,
+        );
+        mut_set_last(w, mut_snip(w, c, pos.col, o.len(), jump));
+        return;
+    }
     let ok = match s {
         AstStmt::Assign(_) => true,
         AstStmt::FieldAssign(_) => true,
@@ -973,7 +1016,7 @@ fn mut_apply_expr(w: CovW, c: MutCand, orig: AstExpr, e: AstExpr) -> AstExpr {
     if k == "guard" {
         return mut_apply_guard(w, c, e);
     }
-    if k == "pattern" {
+    if k == "pattern" || k == "arm" {
         return mut_apply_pattern(w, c, orig, e);
     }
     e
@@ -1033,8 +1076,17 @@ fn mut_apply_guard(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
 
 fn mut_edit_arms(c: MutCand, m: AstMatch) -> AstMatch {
     let mut arms = Vec::new();
+    let del = if c.kind == "arm" {
+        c.op.parse_int().unwrap_or(-1)
+    } else {
+        -1
+    };
+    let mut i = 0;
     for a in m.arms {
-        arms.push(mut_arm(a, mut_pat_edit(a.pat, c), a.guard));
+        if i != del {
+            arms.push(mut_arm(a, mut_pat_edit(a.pat, c), a.guard));
+        }
+        i = i + 1;
     }
     AstMatch { id: m.id, pos: m.pos, x: m.x, arms: arms }
 }
@@ -1491,12 +1543,12 @@ fn mut_hook_expr(w: CovW, e: AstExpr, e2: AstExpr) -> AstExpr {
     // pattern mutants last: they wrap the match in an `if`
     for c in cs {
         let op = c.kind == "arith" || c.kind == "bitwise";
-        if c.kind != "pattern" && !(two && op) {
+        if c.kind != "pattern" && c.kind != "arm" && !(two && op) {
             out = mut_apply_expr(w, c, e, out);
         }
     }
     for c in cs {
-        if c.kind == "pattern" {
+        if c.kind == "pattern" || c.kind == "arm" {
             out = mut_apply_expr(w, c, e, out);
         }
     }
@@ -1552,6 +1604,36 @@ fn mut_hook_stmt(w: CovW, s: AstStmt, s2: AstStmt) -> AstStmt {
     let mut out = s2;
     for c in mut_active(w, mut_stmt_id(s)) {
         let p = c.pos;
+        if c.kind == "jump" {
+            let label = match s {
+                AstStmt::Break(x) => x.label,
+                AstStmt::Continue(x) => x.label,
+                _ => "",
+            };
+            let j = if c.alt == "break" {
+                AstStmt::Break(AstBreakStmt { id: cov_id(w), pos: p, label: label, value: None })
+            } else {
+                AstStmt::Continue(AstContinueStmt { id: cov_id(w), pos: p, label: label })
+            };
+            if w.real {
+                out = j;
+            } else {
+                // if __mut_on(k) { jump } else { s }
+                let mut js = Vec::new();
+                js.push(j);
+                let mut stmts = Vec::new();
+                stmts.push(out);
+                let e = cov_if(
+                    w,
+                    p,
+                    cov_call1(w, p, "__mut_on", c.id),
+                    cov_block_of(w, p, js, None),
+                    cov_block_of(w, p, stmts, None),
+                );
+                out = cov_expr_stmt(w, p, e, false);
+            }
+            continue;
+        }
         if w.real {
             out = cov_expr_stmt(w, p, AstExpr::UnitLit(AstUnitLit { id: cov_id(w), pos: p }), true);
         } else {

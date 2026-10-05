@@ -1,8 +1,12 @@
-// `kek mutate` on the newer language features: bit operations, compound
-// assignments, Float, match guards, range and or-patterns, macros and
-// derives. Most mutants are killed; a few survive on purpose (see the
-// comments), and some pattern mutants are killed by types (a match that
-// is no longer exhaustive).
+// Fixture of `kek mutate` (tests/suites/mutate.sh) on the newer language
+// features: bit operations, compound assignments, Float, match guards,
+// range and or-patterns, `break` / `continue`, a macro (only its
+// arguments are mutated) and a derive (not mutated). Most mutants are
+// killed; seven survive (see the comments): untested boundaries, and the
+// lowered lower bounds `60..=79` → `59..=79` and `80..100` → `79..100`,
+// which the arm before already matches (equivalent mutants). Removing the
+// guards of `kind` makes the next arm unreachable, and the off-by-one
+// bounds in `prefix` break its index proof: killed by types.
 
 #[derive(Debug, Clone, PartialEq)]
 struct Point {
@@ -41,6 +45,7 @@ fn scale(x: Float) -> Float {
     if x < 1.5 { -x * 2.0 } else { x - 0.5 }
 }
 
+// (no negative grade is tested: `0..=59` → `-1..=59` survives)
 fn grade(n: Int) -> String {
     match n {
         0..=59 => "F",
@@ -66,6 +71,21 @@ fn prefix(mut v: Vec<Int>) -> Vec<Int> {
         v[i + 1] += v[i];
     }
     v
+}
+
+// the even numbers before the first negative one, summed
+fn even_sum(v: Vec<Int>) -> Int {
+    let mut s = 0;
+    for x in v {
+        if x < 0 {
+            break;
+        }
+        if x % 2 == 1 {
+            continue;
+        }
+        s += x;
+    }
+    s
 }
 
 // removing the guard keeps the match well-typed (`Some(n)` is still
@@ -102,7 +122,8 @@ fn mean_values() -> Bool {
     mean(vec![1.0, 2.0, 6.0]) == 3.0
 }
 
-// (scale(1.5) is not tested: `<` → `<=` survives)
+// (nothing between 1.5 and 2.5 is tested: `<` → `<=` and 1.5 → 2.5
+// survive)
 #[test]
 fn scale_values() -> Bool {
     scale(1.0) == -2.0 && scale(3.0) == 2.5
@@ -131,6 +152,11 @@ fn prefix_values() -> Bool {
 }
 
 #[test]
+fn even_sum_values() -> Bool {
+    even_sum(vec![2, 3, 0, 4, -1, 6]) == 6
+}
+
+#[test]
 fn pick_values() -> Bool {
     pick(Some(0), true) == -1
         && pick(Some(0), false) == 0
@@ -138,6 +164,7 @@ fn pick_values() -> Bool {
         && pick(None, true) == 0
 }
 
+// (label(9) is not tested: `>` → `>=` survives)
 #[test]
 fn label_values() -> Bool {
     label(1) == "2-small" && label(10) == "11-big" && Point { x: 1, y: 2 } == Point { x: 1, y: 2 }

@@ -303,12 +303,38 @@ below `[cover] min_line` of `kekkai.toml`.
 
 ## `kek mutate [-json] [-run re] [-base <file|dir> | -diff <rev>] [-shard i/n] [-results f] [-merge f,...] [-j n] <file|dir>`
 
-Mutation testing on the typed AST (`compiler/mutate_gen.kek`). Mutants:
-arithmetic swaps on `Int`, comparison boundaries and negations, `&&`/`||`,
-negated `if`/`while` conditions, dropped `!`/`-`, integer literals (n+1, 0),
-flipped booleans, strings to `""`, deleted call/assignment statements, and
-function results replaced by `0`, `""`, `None`, `Vec::new()` (negated for
-`Bool`). `#[test]` and `#[rare]` functions are not mutated. Statement
+Mutation testing on the typed AST (`compiler/mutate_gen.kek`). Mutants
+(the `kind` of the report in parentheses):
+
+| Kind | Mutation |
+| --- | --- |
+| `arith` | on `Int` and `Float`: `+` ↔ `-`, `*` ↔ `/`, `%` → `*` (`Int`) or `%` → `/` (`Float`); compound assignments likewise: `+=` ↔ `-=`, `*=` ↔ `/=`, `%=` → `/=` |
+| `bitwise` | on `Int`: `&` ↔ `\|`, `^` → `&` and `^` → `\|`, `<<` ↔ `>>`; `&=` ↔ `\|=`, `^=` → `\|=`, `<<=` ↔ `>>=` |
+| `boundary` | on `Int` and `Float`: `<` ↔ `<=`, `>` ↔ `>=` |
+| `negate` | comparisons of any type: `<` → `>=`, `==` → `!=`, ... |
+| `logic` | `&&` ↔ `\|\|` |
+| `cond` | the condition of `if` / `while` negated |
+| `guard` | a match guard negated (`if g =>` → `if !(g) =>`) or removed |
+| `pattern` | a bound of a range pattern ± 1 (`0..=9` → `0..=10`; not to an empty range), one alternative of an or-pattern deleted (`A \| B` → `A`) |
+| `arm` | a match arm deleted, when a last `_` arm catches the rest |
+| `jump` | `break` ↔ `continue` |
+| `unary` | `!x` (`Bool`, and the bitwise not of `Int`) and `-x` (`Int`, `Float`) → `x` |
+| `int` | integer literal n → n + 1, n → 0 |
+| `float` | `Float` literal x → x + 1.0 (`1.5` → `2.5`), x → `0.0` |
+| `bool` | boolean literal flipped |
+| `string` | string literal → `""` |
+| `stmt` | a call or assignment statement deleted |
+| `result` | the function's result replaced by `0`, `0.0`, `""`, `None`, `Vec::new()`, or negated (`Bool`) |
+
+The same mutation of copies of one source (the target of `v[i + 1] += x`,
+read and written) is one mutant. `#[test]` and `#[rare]` functions are not
+mutated, and neither are derived implementations, the dispatch of `dyn`
+calls and the code a macro expands to (its arguments are mutated). Module
+items are reported by their paths (`geo::area`). A removed guard, a
+pattern mutant or a deleted `break`'s replacement can leave a match
+non-exhaustive, make an arm unreachable or a `loop` without its value:
+such mutants are killed by types. As a schema, a pattern or arm mutant
+duplicates its `match` (`if mutant k { mutated match } else { match }`). Statement
 deletions and result replacements are type-checked by group testing (all
 at once, bisecting only a group that fails); the rejected ones are
 **killed by types** (e.g. deleting `tx.commit()?;` breaks `Tx` linearity).

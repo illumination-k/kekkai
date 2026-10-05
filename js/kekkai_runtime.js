@@ -387,13 +387,17 @@ export function fetchNet(fetchFn = globalThis.fetch) {
 export const systemClock = () => ({ now: () => Date.now() });
 
 export const cryptoRandom = () => ({
+  // A uniform integer in [lo, hi). The 64 random bits are combined as a
+  // BigInt: as a Number they would round to a multiple of 2^12, and every
+  // power-of-two range would always give lo.
   int(lo, hi) {
+    lo = BigInt(lo);
+    hi = BigInt(hi);
     if (hi <= lo) return lo;
-    const span = Number(hi - lo);
     const buf = new Uint32Array(2);
     crypto.getRandomValues(buf);
-    const r = (buf[0] * 2 ** 32 + buf[1]) % span;
-    return lo + BigInt(r);
+    const x = (BigInt(buf[0]) << 32n) | BigInt(buf[1]);
+    return lo + (x % (hi - lo));
   },
 });
 

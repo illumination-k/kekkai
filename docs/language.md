@@ -28,6 +28,8 @@
 | `struct S<T>(T, mut U);`, `struct S;` | タプル構造体（フィールドは `s.0`）とユニット構造体（下記「構造体と列挙型の形」） |
 | `enum E<T> { A, B(T, U), C { x: T, y: U } }` | 再帰的に定義してよい。`C { .. }` は構造体のようなバリアント |
 | `fn(A, B) -> R` | 関数・クロージャの値（純粋） |
+| `dyn Trait`, `Box<dyn Trait>` | trait object：trait を実装したいろいろな型の値（下記「trait object と `impl Trait`」）。`Box<T>` は `T` と同じ |
+| `impl Trait` | 引数では匿名の型パラメータ、戻り値では本体から推論される不透明な型（下記） |
 | `Request`, `Response`, `TxError`, `NetError`, `IoError` | ホストが提供する不透明なデータ |
 | `&Log`, `&Net`, `&Db`, `&Clock`, `&Random`, `&Fs`, `Tx`, `&Tx` | capability（下記） |
 
@@ -138,7 +140,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 
 - trait は必須メソッド（`;` で終わる宣言）と既定メソッドを持つ。スーパートレイト（`trait Ord: Eq + PartialOrd`）、関連型（`type Item;`、`Self::Item`、`T::Item`）、型パラメータ（`trait From<T>`）を書ける。
 - 境界は `<T: A + B>`、`where T: A, Self::Item: Ord`、関連型の指定は `I: Iterator<Item = Int>`。
-- 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
+- 呼び出しは静的に解決する（trait object 経由の呼び出しも、プログラム全体で使われる型への分岐になる。下記）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
 - `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Debug, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Debug` の出力は Rust と同じ（`Point { x: 1, y: 2 }`、`Some(3)`、`Circle(Point { .. }, 3)`、文字列は `"a\"b\n"` のように引用・エスケープ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
@@ -197,6 +199,40 @@ fn sum_all<T: Add<Output = T>>(xs: Vec<T>, zero: T) -> T { ... acc = acc + x; ..
 - core は `Int`（全部）と `String`（`Add`）に実装しているので、generic な関数から使える。時刻の型には `Duration + Duration`、`Duration - Duration`、`-Duration`、`Duration * Int`、`Timestamp + Duration`、`Timestamp - Duration` がある（2 つの `Timestamp` の差は `t.since(&earlier)`）。
 - 同じ型に同じ trait を右辺の型ごとに複数実装できる（`Mul<Int>` と `Mul<V2>`）。ただし実装の中では `Self::Output` ではなく具体的な型を書く。
 
+## trait object と `impl Trait`
+
+```kek
+trait Shape: Display {
+    fn area(&self) -> Int;
+    fn describe(&self) -> String { format!("{} ({})", self, self.area()) }
+}
+
+let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Circle { r: 2 }), Box::new(Rect { w: 3, h: 4 })];
+let total: Int = shapes.iter().map(|s| s.area()).sum();
+
+fn make(kind: Int) -> Box<dyn Shape> {
+    if kind == 0 { Box::new(Circle { r: 1 }) } else { Box::new(Rect { w: kind, h: 2 }) }
+}
+fn largest(a: &dyn Shape, b: &mut dyn Counter) { ... }
+fn numbers(up: Bool) -> Box<dyn Iterator<Item = Int>> { ... }
+
+fn total(it: impl Iterator<Item = Int>) -> Int { it.sum() }        // 匿名の型パラメータ
+fn evens(n: Int) -> impl Iterator<Item = Int> {                     // 不透明な型
+    (0..n).filter(|x| x % 2 == 0)
+}
+fn price(cents: Int) -> impl Display { Money { cents } }
+```
+
+- `dyn Trait`（`dyn Iterator<Item = Int>` のように trait の引数と関連型も書く。関連型はすべて指定する）は trait を実装した値の型で、`Vec`・フィールド・引数・戻り値・`Option` などどこにでも書ける。Rust と同じく `Box<dyn Trait>`、`&dyn Trait`、`&mut dyn Trait` と書くのが普通だが、値はもともと参照なので `Box<T>` は `T` と同じ型で、`Box::new(x)` は `x` と同じ（プログラムが自分で `Box` を定義したときはそちらが使われる）。
+- 型が `dyn Trait` だと分かっている場所に別の型の値を書くと trait object に変換される（Rust の unsized coercion）：引数（`v.push(..)` も）、型を書いた `let`、`return` と関数の結果、struct のフィールド、代入、`vec![..]` の要素、そこにある `if`・`match`・ブロックの各分岐。値の型がその trait（と関連型の指定）を満たさなければ ``the trait bound `Plain: Shape` is not satisfied``。`Some(Box::new(x))` のように別の型の中に入れた値は変換されないので、先に `let` で `dyn` の型にする。別の trait object への変換（`Box<dyn Shape>` から `Box<dyn Display>`、スーパートレイトへのアップキャスト）もできる。
+- trait object でできるのは、その trait とスーパートレイトのメソッドの呼び出しだけ（フィールドはない）。`&self`・`&mut self`・`self` のメソッドが呼べ、可変性は普通の値と同じ（`&dyn T` からは `&mut self` のメソッドを呼べない。[mutability.md](mutability.md)）。`dyn Display`・`dyn Debug` は `format!` の `{}`・`{:?}` に使える。trait object を `T: Trait` の型引数にもできる。
+- オブジェクト安全性：trait object にできるのは、必須メソッド（スーパートレイトのものも）がすべて `self` のレシーバを持ち、自分の型パラメータを持たず、レシーバ以外に `Self` を使わない trait だけ（違反は ``the trait `Factory` cannot be made into an object: associated function `make` has no `self` parameter``、``method `apply` has generic type parameters``、``method `same` references the `Self` type in its parameters or return type``）。この条件を満たさない既定メソッド（`Iterator::map` など）は、Rust の `where Self: Sized` のメソッドと同じく trait object 自身を `Self` として既定の本体で呼ばれる（`numbers(true).map(|x| x * 10).collect()` が書ける）。条件を満たす既定メソッドは実装ごとの上書きに分岐する。
+- capability：trait object のメソッドも capability を引数に取れる。capability は呼び出しの引数として渡るので第二級のままで、trait の呼び出しと同じく「実装のどれかが呼ばれうる」として扱う（`kek caps`・冪等性・async・`kek assure` の依存はすべての実装を含む）。
+- `impl Trait` を引数の型に書くと匿名の型パラメータ（`fn total<I: Iterator<Item = Int>>(it: I)` と同じ）になる。`Vec<impl Display>` のように中に書いてもよい。
+- `impl Trait` を戻り値の型に書くと、本体から推論される不透明な型になる。すべての `return` と末尾の値は同じ型でなければならず（``mismatched types in function result: expected `Money`, found `String` ``）、その型は trait を満たさなければならない。呼び出し側からは trait（と関連型）しか見えない（``no field `cents` on type `impl Display` ``、`Money` の型には代入できない）。generic な関数では型パラメータごとに別の型になる。固有メソッドに書いてもよいが、trait のメソッドの戻り値（Rust の RPITIT）、`let`・フィールドの型には書けない。自分自身を返す再帰で型が決まらないときは ``cannot resolve opaque type``。
+- `impl Fn(A) -> R`・`dyn Fn(A) -> R` はこれまでどおり関数の値の型 `fn(A) -> R` と同じ。
+- 実装（`compiler/chk_dyn.kek`）：`dyn Trait` の型は lowering で「プログラム中でそこへ変換される具体型（単相化の後）ごとに 1 つの variant を持つ enum」になり、変換は variant を作ること、メソッド呼び出しは variant で分岐して各型の実装を呼ぶ関数（`<dyn Shape as Shape>::area<..>`）になる。クロージャの非関数化と同じく IR の新しい命令は要らず、Lean の参照インタプリタもそのまま動く。不透明な型は、lowering で推論された具体型に置き換わる。
+
 ## クロージャ
 
 ```kek
@@ -210,7 +246,7 @@ fn compose(f: fn(Int) -> Int, g: impl Fn(Int) -> Int) -> fn(Int) -> Int { move |
 - クロージャは純粋な第一級の値で、変数・フィールド・`Vec` に入れられる。名前付きの関数も値として使える（`apply(double, 3)`）。
 - 変数は値で捕捉する（`move` は書いても書かなくてもよい）。捕捉した変数への代入はできない（状態は struct のフィールドに置く）。捕捉した値は束縛の可変性と view を保つ（`let mut v` を捕捉すれば `v.push(..)` できる。`&T` を捕捉したクロージャは読み取り専用の値）。
 - capability を捕捉したり引数に取ったりはできない（クロージャは I/O をしない）。例外は `db.transaction(|tx| ...)` の本体で、これは第二級のまま。
-- 型の書き方は `fn(A) -> R`、`impl Fn(A) -> R`、境界 `F: Fn(A) -> R`（`FnMut`・`FnOnce` も同じ）。
+- 型の書き方は `fn(A) -> R`、`impl Fn(A) -> R`、`Box<dyn Fn(A) -> R>`、境界 `F: Fn(A) -> R`（`FnMut`・`FnOnce` も同じ）。
 
 ## capability
 

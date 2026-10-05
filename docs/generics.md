@@ -26,11 +26,13 @@
   - タプル（1〜8 要素）の比較・ハッシュの実装は、`#[derive]` と同じ生成器（`compiler/derive.kek`）が作る
   - core の関数は使われたものだけが IR に入る（`lower` は利用者の関数を根にして、generic な関数と core を必要に応じて下ろす）。core の自由関数は `__` で始まる名前にして利用者の名前空間を汚さない。
 - **単相化**：generics は IR の手前で具体化する（`Lower.queue`、インスタンス名は `name<Int,String>`）。IR に型変数は現れない。
-- **trait**：静的ディスパッチのみ。trait のメソッドは `Trait::m`（型パラメータは `Self`、trait のもの、メソッドのものの順）、実装は `<T as Trait>::m` という名前の関数になる。呼び出しは型検査では trait 経由として記録し、lowering で具体型から実装を引く（`chk_dispatch`）。
+- **trait**：静的ディスパッチ。trait のメソッドは `Trait::m`（型パラメータは `Self`、trait のもの、メソッドのものの順）、実装は `<T as Trait>::m` という名前の関数になる。呼び出しは型検査では trait 経由として記録し、lowering で具体型から実装を引く（`chk_dispatch`）。
   - 境界の確認は関数ごとの obligation として集め、推論が終わってから調べる（`chk_check_obls`）。
   - 関連型は `Ty::Assoc` で表し、具体型が分かった時点で実装の定義に正規化する（`chk_norm`）。
   - `==`・`<` などは、`Int` などの組み込みでなければ `PartialEq::eq`・`PartialOrd::lt` などの呼び出しになる。
   - `#[derive]` は実装のソースを生成し、位置を derive 属性に置き換えて解析する。
+- **trait object**（`dyn Trait`、`compiler/chk_dyn.kek`）：型検査では trait とスーパートレイトを実装する（引数は trait の引数と関連型の値）フィールドのない struct `dyn Trait` として扱い、`dyn` の型が期待される場所の値の変換を式の id ごとに記録する（`info.coercions`）。lowering では、変換される具体型（単相化の後）ごとに 1 つの variant を持つ enum にし、オブジェクト安全なメソッドの呼び出しを variant で分岐する関数にする。分岐の関数がさらに実装を具体化すると variant が増えうるので、変化がなくなるまで作り直す。オブジェクト安全でない既定メソッドは `Self = dyn Trait` で既定の本体を具体化する。trait の呼び出しはもともとすべての実装を呼び出し先に数えるので、effect・async・defhash の扱いは変わらない。
+- **`impl Trait`**：引数では匿名の型パラメータ（名前は `impl Trait<..>`）。戻り値では関数の型パラメータを引数に取る不透明な型（`ChkOpaque`）で、本体はその位置の推論変数に対して検査し、関数の検査の終わりに境界を確かめて具体型を記録する。呼び出し側は境界だけを知り、lowering（`lower_conc`）で具体型に置き換える。
 - **クロージャ**：非関数化。`fn(A) -> R` ごとに enum（クロージャ式ごと・値として使った関数ごとに 1 つの variant、フィールドは捕捉した値）と apply 関数を作る。IR の新しい命令は不要で、Lean の参照インタプリタもそのまま動く。クロージャは純粋なので async 変換の対象にならない。
 - **`HashMap`**：エントリを挿入順に持ち、バケットは連鎖（`next`）。連鎖が 8 を超えたバケットはキーの `Ord` による AVL 木にする。削除は穴を残し、表の拡張時に詰める（`epoch` を進める）。イテレータは詰め直しを検出すると、最後に返したエントリの挿入番号（`seq`）を二分探索して位置を付け直す。文字列のハッシュは `String::__hash`（ランタイムの FNV-1a、Lean にも同じ実装）で計算する。
 - 組み込みの `Map`（IR の `map.*` 命令、`wasm_coll` の Map 処理、値の box、prelude の `__Map`、Lean の `map.*`）は削除した。
@@ -43,7 +45,9 @@
 - 型の不変性はフィールドの `mut` で表し（`mut` のないフィールドには代入できない）、`Hash` の derive は `mut` フィールドのない struct に限る。
 - `HashMap` のキーは `Hash + Eq` に加えて `Ord` が必要（衝突したバケットを木にするため）。反復は挿入順。
 - クロージャは純粋で、変数を値で捕捉する（`FnMut` のように捕捉した変数へは代入できない。捕捉した `let mut` の値の中身は書き換えられる）。`Fn`・`FnMut`・`FnOnce` の区別はない。
-- trait object（`dyn Trait`）、`impl Trait` の戻り値（`impl Fn` を除く）、ブランケット実装（`impl<T: A> B for T`）、ライフタイムはない。
+- ブランケット実装（`impl<T: A> B for T`）、ライフタイムはない。
+- `Box<T>` は `T` と同じ（値はもともと参照）。`dyn Trait` はサイズのない型ではなく普通の値の型で、`Vec<dyn Shape>` とも書ける。trait object への変換は、期待される型が `dyn` のときの値そのものだけで、`Option<Circle>` から `Option<dyn Shape>` のような中身の変換はしない（Rust と同じ）。`if`・`match`・ブロックの分岐、`vec![..]` の要素には期待される型を伝える。
+- オブジェクト安全でない既定メソッドは `where Self: Sized` を書かなくても trait object で呼べる（trait object 自身を `Self` として既定の本体を使う）。必須メソッドがオブジェクト安全でない trait は trait object にできない。`dyn A + B`、`dyn Trait` のライフタイム、trait のメソッドの戻り値の `impl Trait`（RPITIT）はない。
 - 演算子 `+ - * /` は `Int`（と `String` の `+`）だけで、`Add` などの trait はない。
 - `HashMap` に `entry` API はない（`get_or` を使う）。`HashSet` の集合演算は `Vec` を返す。
 

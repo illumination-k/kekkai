@@ -352,9 +352,17 @@ fn mu_rel_shape(cx: MuCx, t: Ty, params: Bool) -> Bool {
         Ty::Result(a, b) => mu_rel_shape(cx, ty_prune(a), params)
             || mu_rel_shape(cx, ty_prune(b), params),
         Ty::Tuple(ts) => mu_rel_any(cx, ts, params),
-        Ty::Struct(st, args) => cx.always.contains_key(st.name) || mu_rel_any(cx, args, params),
+        Ty::Struct(st, args) => mu_abstract(t)
+            || cx.always.contains_key(st.name)
+            || mu_rel_any(cx, args, params),
         Ty::Enum(en, args) => cx.always.contains_key(en.name) || mu_rel_any(cx, args, params),
     }
+}
+
+// mu_abstract reports a trait object or opaque type (`dyn Trait`, `impl
+// Trait`): like a type parameter, its values may hold mutable state.
+fn mu_abstract(t: Ty) -> Bool {
+    ty_is_dyn(t) || ty_is_opaque_impl(t)
 }
 
 fn mu_rel_any(cx: MuCx, ts: Vec<Ty>, params: Bool) -> Bool {
@@ -1933,6 +1941,9 @@ fn mu_contents_rel(cx: MuCx, t: Ty) -> Bool {
         Ty::Result(a, b) => mu_rel(cx, a) || mu_rel(cx, b),
         Ty::Tuple(ts) => mu_rel_any(cx, ts, true),
         Ty::Struct(st, args) => {
+            if mu_abstract(ty_prune(t)) {
+                return true;
+            }
             if cx.info.lib_types.contains_key(st.name) {
                 return mu_rel_any(cx, args, true);
             }
@@ -1974,6 +1985,9 @@ fn mu_top_mutable(cx: MuCx, t: Ty) -> Bool {
         Ty::Param(_) => true,
         Ty::Assoc(_, _, _) => true,
         Ty::Struct(st, _) => {
+            if mu_abstract(ty_prune(t)) {
+                return true;
+            }
             for f in st.fields {
                 if f.mutable {
                     return true;

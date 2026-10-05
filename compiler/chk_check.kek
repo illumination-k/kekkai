@@ -147,6 +147,11 @@ struct ChkInfo {
     // functions whose signature mentions a parameter as the resource of a
     // permission (`Can<Edit, d>`): calls substitute the arguments' paths
     path_fns: HashMap<String, Bool>,
+    // opaque result types `impl Trait` (by their type name) and the
+    // coercions of values to trait objects (expression id -> the `dyn`
+    // type), see compiler/chk_dyn.kek
+    opaques: HashMap<String, ChkOpaque>,
+    coercions: HashMap<Int, Ty>,
 }
 
 // A closure's body is a scope with lambda set to the closure's id: a
@@ -198,6 +203,22 @@ struct Chk {
     // set by chk_lookup: the variable found is captured by a closure
     mut captured: Bool,
     builtins: ChkBuiltins,
+    // where `impl Trait` may appear in the type being resolved: "arg" (a
+    // parameter: an anonymous generic param, collected in anon), "ret" (a
+    // result: an opaque type of function opaque_fn over opaque_ps), ""
+    mut impl_mode: String,
+    mut anon: Vec<TyParam>,
+    mut opaque_fn: String,
+    mut opaque_ps: Vec<TyParam>,
+    // the trait objects written in the program (object safety is checked
+    // after the declarations)
+    dyn_uses: Vec<ChkDynUse>,
+    // the expected type of the `vec![..]` being checked (its elements may
+    // be coerced to trait objects)
+    mut vec_hint: Option<Ty>,
+    // the trait object type expected of the `if`, `match` or block being
+    // checked: its branches are coerced to it
+    mut want_dyn: Option<Ty>,
     // prelude mode: the program includes the runtime prelude, which may
     // define Response / TxError / NetError / IoError as structs and use
     // the `__` intrinsics
@@ -524,6 +545,8 @@ fn chk_check_full(
         refine_fns: HashMap::new(),
         alias_structs: HashMap::new(),
         path_fns: HashMap::new(),
+        opaques: HashMap::new(),
+        coercions: HashMap::new(),
     };
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs, core);
@@ -543,9 +566,17 @@ fn chk_check_full(
         obls: Vec::new(),
         captured: false,
         builtins: chk_new_builtins(),
+        impl_mode: "",
+        anon: Vec::new(),
+        opaque_fn: "",
+        opaque_ps: Vec::new(),
+        dyn_uses: Vec::new(),
+        vec_hint: None,
+        want_dyn: None,
         prelude: prelude,
     };
     chk_declare(c, f);
+    chk_check_dyn_uses(c);
     if prelude {
         chk_add_intrinsics(c);
     }
@@ -1208,6 +1239,8 @@ fn chk_declare_func(
         pi = pi + 1;
     }
     c.paths = paths;
+    c.impl_mode = "arg";
+    c.anon = Vec::new();
     let mut seen: HashMap<String, Bool> = HashMap::new();
     for p in fd.params {
         if p.name != "_" && seen.contains_key(p.name) {
@@ -1249,12 +1282,28 @@ fn chk_declare_func(
         b.param = true;
         fun.params.push(b);
     }
+    // `impl Trait` parameters are anonymous generic params, after the
+    // declared ones
+    for p in c.anon {
+        tparams.push(p);
+    }
+    c.anon = Vec::new();
+    c.impl_mode = if chk_is_trait_method_name(c, name) {
+        "trait"
+    } else {
+        "ret"
+    };
+    c.opaque_fn = name;
+    c.opaque_ps = tparams;
     match fd.result {
         Some(te) => {
             fun.result = chk_resolve_type(c, te, false);
         }
         None => {}
     }
+    c.impl_mode = "";
+    c.opaque_fn = "";
+    c.opaque_ps = Vec::new();
     c.paths = HashMap::new();
     let mut has_paths = ty_mentions_path(fun.result);
     for b in fun.params {
@@ -1528,6 +1577,12 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
         }
         AstType::Named(te) => {
             let n = te.name;
+            if n.starts_with("dyn ") {
+                return chk_dyn_type(c, te);
+            }
+            if n.starts_with("impl ") {
+                return chk_impl_type(c, te);
+            }
             if n.contains("::") {
                 chk_type_args(c, te, 0);
                 return chk_assoc_type(c, te);
@@ -1642,6 +1697,13 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 }
                 None => {}
             }
+            if n == "Box" {
+                // `Box<T>` is T unless the program defines `Box`: values
+                // are references already (`Box::new(x)` is x,
+                // compiler/desugar.kek)
+                let a = chk_type_args(c, te, 1);
+                return chk_ty_at(a, 0);
+            }
             chk_errorf(c, te.pos, "unknown type `" + n + "`");
             ty_unit()
         }
@@ -1701,12 +1763,28 @@ fn chk_func(mut c: Chk, fun: ChkFunc) {
         chk_bind(c, p);
     }
     c.rets = Vec::new();
-    c.rets.push(ChkRet { ty: fun.result, closure: None });
+    // the body of a function returning `impl Trait` is checked against a
+    // variable in place of each opaque type (compiler/chk_dyn.kek)
+    let opaques = chk_opaque_vars(c, fun);
+    let result = if opaques.len() > 0 {
+        chk_hide_opaques(fun.result, opaques)
+    } else {
+        fun.result
+    };
+    c.rets.push(ChkRet { ty: result, closure: None });
+    if ty_is_dyn(ty_prune(result)) {
+        c.want_dyn = Some(result);
+    }
     let t = chk_block(c, fun.decl.body);
-    chk_expect(c, chk_tail_pos(fun.decl.body), t, fun.result, "function result");
+    match fun.decl.body.tail {
+        Some(e) => chk_coerce(c, e, t, result, "function result"),
+        None => chk_expect(c, chk_tail_pos(fun.decl.body), t, result, "function result"),
+    }
     chk_preds(c, fun);
     chk_pop(c);
+    chk_opaque_oblige(c, opaques);
     chk_check_obls(c);
+    chk_opaque_store(c, opaques);
     c.info.wheres = Vec::new();
     c.cur = chk_dummy_func();
     c.tscope = HashMap::new();
@@ -1806,7 +1884,9 @@ fn chk_record(mut c: Chk, id: Int, t: Ty) -> Ty {
     t
 }
 
-fn chk_block(c: Chk, b: AstBlock) -> Ty {
+fn chk_block(mut c: Chk, b: AstBlock) -> Ty {
+    let want = c.want_dyn;
+    c.want_dyn = None;
     chk_push(c, false);
     let mut diverges = false;
     for s in b.stmts {
@@ -1816,9 +1896,16 @@ fn chk_block(c: Chk, b: AstBlock) -> Ty {
     }
     let mut t = ty_unit();
     match b.tail {
-        Some(e) => {
-            t = chk_expr(c, e);
-        }
+        Some(e) => match want {
+            Some(w) => {
+                let et = chk_expr_expect(c, e, w);
+                chk_coerce(c, e, et, w, "block value");
+                t = w;
+            }
+            None => {
+                t = chk_expr(c, e);
+            }
+        },
         None => {
             if diverges {
                 t = ty_never();
@@ -1839,11 +1926,21 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 Some(te) => {
                     let want = chk_resolve_type(c, te, false);
                     let got = chk_expr_expect(c, s.init, want);
-                    chk_expect(c, ast_expr_pos(s.init), got, want, "let binding");
+                    chk_coerce(c, s.init, got, want, "let binding");
                     t = want;
                 }
                 None => {
+                    let hint = c.vec_hint;
+                    c.vec_hint = None;
                     t = chk_expr(c, s.init);
+                    match hint {
+                        Some(h) => {
+                            if s.name.starts_with("__vec") {
+                                ty_unify(t, h);
+                            }
+                        }
+                        None => {}
+                    }
                 }
             }
             if ty_is_prim(ty_prune(t), "!") {
@@ -1893,7 +1990,7 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                         );
                     }
                     c.info.assigns.insert(s.id, b);
-                    chk_expect(c, ast_expr_pos(s.value), t, b.ty, "assignment");
+                    chk_coerce(c, s.value, t, b.ty, "assignment");
                 }
             }
             false
@@ -1944,7 +2041,7 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 None => {}
             }
             let vt = chk_expr(c, s.value);
-            chk_expect(c, ast_expr_pos(s.value), vt, ft, "field assignment");
+            chk_coerce(c, s.value, vt, ft, "field assignment");
             match ty_prune(c.info.types.get(ast_expr_id(s.target.x)).unwrap_or(ty_invalid())) {
                 Ty::Struct(st, _) => {
                     if c.info.alias_structs.contains_key(st.name) {
@@ -2036,8 +2133,8 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
             match s.value {
                 None => chk_expect(c, s.pos, ty_unit(), rc.ty, "return"),
                 Some(v) => {
-                    let t = chk_expr(c, v);
-                    chk_expect(c, ast_expr_pos(v), t, rc.ty, "return");
+                    let t = chk_expr_expect(c, v, rc.ty);
+                    chk_coerce(c, v, t, rc.ty, "return");
                 }
             }
             true
@@ -2224,6 +2321,8 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
         }
         AstExpr::Block(b) => chk_block(c, b),
         AstExpr::If(e) => {
+            let want = c.want_dyn;
+            c.want_dyn = None;
             let ct = chk_expr(c, e.cond);
             chk_push(c, false);
             match e.pat {
@@ -2232,6 +2331,7 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 }
                 None => chk_expect(c, ast_expr_pos(e.cond), ct, ty_bool(), "if condition"),
             }
+            c.want_dyn = want;
             let tt = chk_block(c, e.then);
             chk_pop(c);
             match e.els {
@@ -2240,7 +2340,14 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     chk_record(c, e.id, ty_unit())
                 }
                 Some(els) => {
-                    let et = chk_expr(c, els);
+                    let et = match want {
+                        Some(w) => {
+                            let t1 = chk_expr_expect(c, els, w);
+                            chk_coerce(c, els, t1, w, "`else` branch");
+                            w
+                        }
+                        None => chk_expr(c, els),
+                    };
                     if !ty_unify(tt, et) {
                         chk_errorf(
                             c,
@@ -2300,7 +2407,20 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                         }
                         i = i + 1;
                     }
-                    chk_errorf(c, e.pos, "struct `" + st.name + "` has no field `" + e.name + "`");
+                    if ty_is_dyn(t) || ty_is_opaque_impl(t) {
+                        // trait objects and opaque types have only methods
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "no field `" + e.name + "` on type `" + ty_str(t) + "`",
+                        );
+                    } else {
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "struct `" + st.name + "` has no field `" + e.name + "`",
+                        );
+                    }
                     chk_record(c, e.id, ty_invalid())
                 }
                 _ => {
@@ -2347,7 +2467,14 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     };
                     let mut seen: HashMap<String, Bool> = HashMap::new();
                     for f in e.fields {
-                        let t = chk_expr(c, f.value);
+                        let t = match chk_struct_field(st, f.name) {
+                            Some(fi) => chk_expr_expect(
+                                c,
+                                f.value,
+                                ty_subst(fi.ty, st.params, args),
+                            ),
+                            None => chk_expr(c, f.value),
+                        };
                         match chk_struct_field(st, f.name) {
                             None => {
                                 chk_errorf(
@@ -2365,9 +2492,9 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                                     );
                                 }
                                 seen.insert(f.name, true);
-                                chk_expect(
+                                chk_coerce(
                                     c,
-                                    ast_expr_pos(f.value),
+                                    f.value,
                                     t,
                                     ty_subst(fi.ty, st.params, args),
                                     "field `" + f.name + "`",
@@ -3024,17 +3151,69 @@ fn chk_arg(c: Chk, a0: AstExpr, want: Ty, what: String) {
         }
         _ => {
             let t = chk_expr_expect(c, a, want);
-            chk_expect(c, ast_expr_pos(a), t, want, "argument of " + what);
+            chk_coerce(c, a, t, want, "argument of " + what);
         }
     }
 }
 
 // chk_expr_expect checks e where a value of type want is expected (a
 // closure takes its parameter types from it).
-fn chk_expr_expect(c: Chk, e: AstExpr, want: Ty) -> Ty {
+fn chk_expr_expect(mut c: Chk, e: AstExpr, want: Ty) -> Ty {
+    let w = ty_prune(want);
     match e {
         AstExpr::Closure(cl) => chk_closure(c, cl, Some(want)),
+        AstExpr::Block(b) => {
+            if ty_is_dyn(w) {
+                c.want_dyn = Some(w);
+            } else if chk_is_vec_macro(b) && chk_is_dyn_vec(w) {
+                // `vec![a, b]` where `Vec<dyn Trait>` is expected: the
+                // elements are coerced (compiler/macro.kek)
+                c.vec_hint = Some(w);
+            }
+            chk_expr(c, e)
+        }
+        AstExpr::Macro(m) => {
+            match m.expansion {
+                AstExpr::Block(b) => {
+                    if m.errs.len() == 0 && chk_is_vec_macro(b) && chk_is_dyn_vec(w) {
+                        c.vec_hint = Some(w);
+                    }
+                }
+                _ => {}
+            }
+            chk_expr(c, e)
+        }
+        AstExpr::If(_) => {
+            if ty_is_dyn(w) {
+                c.want_dyn = Some(w);
+            }
+            chk_expr(c, e)
+        }
+        AstExpr::Match(_) => {
+            if ty_is_dyn(w) {
+                c.want_dyn = Some(w);
+            }
+            chk_expr(c, e)
+        }
         _ => chk_expr(c, e),
+    }
+}
+
+// chk_is_vec_macro reports whether b is the expansion of `vec![a, ...]`.
+fn chk_is_vec_macro(b: AstBlock) -> Bool {
+    match b.stmts.get(0) {
+        Some(s) => match s {
+            AstStmt::Let(l) => l.name.starts_with("__vec") && l.ty.is_none(),
+            _ => false,
+        },
+        None => false,
+    }
+}
+
+fn chk_is_dyn_vec(t: Ty) -> Bool {
+    match t {
+        Ty::Vec(el) => ty_is_dyn(ty_prune(el)),
+        _ => false,
     }
 }
 
@@ -3789,7 +3968,7 @@ fn chk_user_method(mut c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
         let w0 = rest.get(0).unwrap_or(ty_int());
         let w1 = rest.get(1).unwrap_or(ty_int());
         chk_expect(c, ast_expr_pos(a0), chk_expr(c, a0), w0, "index");
-        chk_expect(c, ast_expr_pos(a1), chk_expr_expect(c, a1, w1), w1, "element assignment");
+        chk_coerce(c, a1, chk_expr_expect(c, a1, w1), w1, "element assignment");
     } else {
         chk_args(c, e.pos, "`" + fun.name + "`", e.args, rest);
     }

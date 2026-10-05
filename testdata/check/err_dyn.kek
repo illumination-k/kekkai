@@ -1,0 +1,76 @@
+// Trait objects: object safety, coercions that do not implement the trait,
+// and the associated types a trait object must name.
+trait Shape {
+    fn area(&self) -> Int;
+}
+
+trait Factory {
+    fn make() -> Self;
+}
+
+trait Mapper {
+    fn apply<T>(&self, x: T) -> T;
+}
+
+trait Same {
+    fn same(&self, other: Self) -> Bool;
+}
+
+trait Copyable {
+    fn copy(&self) -> Self;
+}
+
+trait Fancy: Copyable {
+    fn fancy(&self) -> Int;
+}
+
+struct Sq {
+    s: Int,
+}
+
+impl Shape for Sq {
+    fn area(&self) -> Int {
+        self.s * self.s
+    }
+}
+
+struct Plain {
+    n: Int,
+}
+
+fn f1(x: Box<dyn Factory>) {} // ERROR "the trait `Factory` cannot be made into an object: associated function `make` has no `self` parameter"
+
+fn f2(x: &dyn Mapper) {} // ERROR "the trait `Mapper` cannot be made into an object: method `apply` has generic type parameters"
+
+fn f3(x: &dyn Same) {} // ERROR "the trait `Same` cannot be made into an object: method `same` references the `Self` type in its parameters or return type"
+
+fn f4(x: Vec<Box<dyn Fancy>>) {} // ERROR "method `copy` of supertrait `Copyable` references the `Self` type"
+
+fn f5(x: Box<dyn Iterator>) {} // ERROR "the value of the associated type `Item` in `Iterator` must be specified"
+
+fn f6(x: Box<dyn Nope>) {} // ERROR "cannot find trait `Nope`"
+
+fn not_shape() -> Box<dyn Shape> {
+    Box::new(Plain { n: 1 }) // ERROR "the trait bound `Plain: Shape` is not satisfied"
+}
+
+fn wrong_item() -> Box<dyn Iterator<Item = String>> {
+    Box::new(0..3) // ERROR "type mismatch resolving `<Range as Iterator>::Item == String`: found `Int`"
+}
+
+fn no_field(s: Box<dyn Shape>) -> Int {
+    s.s // ERROR "no field `s` on type `dyn Shape`"
+}
+
+fn no_method(s: Box<dyn Shape>) -> Int {
+    s.perimeter() // ERROR "no method named `perimeter` found for `dyn Shape`"
+}
+
+fn push_plain(mut v: Vec<Box<dyn Shape>>) {
+    v.push(Box::new(Sq { s: 1 }));
+    v.push(Box::new(Plain { n: 2 })); // ERROR "the trait bound `Plain: Shape` is not satisfied"
+}
+
+
+#[test]
+fn prop(s: Box<dyn Shape>) {} // ERROR "cannot generate inputs of type `dyn Shape` for a property test"

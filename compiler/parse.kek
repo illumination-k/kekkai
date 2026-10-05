@@ -728,6 +728,26 @@ fn parse_type(p: ParseState) -> AstType {
         }
         return AstType::Tuple(AstTupleType { id: parse_id(p), pos: t.pos, elems: elems });
     }
+    if (t.kind == "impl" || (t.kind == "IDENT" && t.text == "dyn")) && parse_peek_at(p, "IDENT") {
+        let n = parse_peek_text(p);
+        if n != "Fn" && n != "FnMut" && n != "FnOnce" {
+            // `impl Trait<Args>` / `dyn Trait<Args>`: a named type whose
+            // name carries the prefix ("impl Iterator", "dyn Shape")
+            parse_next(p);
+            let prefix = if t.kind == "impl" { "impl " } else { "dyn " };
+            let tn = parse_expect(p, "IDENT");
+            let mut nt = AstNamedType {
+                id: parse_id(p),
+                pos: t.pos,
+                name: prefix + tn.text,
+                args: Vec::new(),
+            };
+            if parse_at(p, "<") {
+                nt.args = parse_type_args(p);
+            }
+            return AstType::Named(nt);
+        }
+    }
     if t.kind == "fn" || t.kind == "impl" || (t.kind == "IDENT" && t.text == "dyn") {
         return parse_fn_type(p);
     }
@@ -774,13 +794,6 @@ fn parse_fn_type(p: ParseState) -> AstType {
     } else if t.kind == "impl" || t.text == "dyn" {
         let prefix = if t.kind == "impl" { "impl " } else { "dyn " };
         let n = parse_expect(p, "IDENT");
-        if n.text != "Fn" && n.text != "FnMut" && n.text != "FnOnce" {
-            parse_fail(
-                p,
-                n.pos,
-                "only `" + prefix + "Fn(...)` is supported, found `" + prefix + n.text + "`",
-            );
-        }
         kind = prefix + n.text;
     }
     let mut ft = AstFnType {

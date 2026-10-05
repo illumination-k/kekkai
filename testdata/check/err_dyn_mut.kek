@@ -1,0 +1,26 @@
+// Trait objects and mutability (docs/mutability.md): `&dyn T` is
+// read-only, `&mut dyn T` may call `&mut self` methods.
+trait Counter {
+    fn bump(&mut self) -> Int;
+    fn get(&self) -> Int;
+}
+
+fn read_only(c: &dyn Counter) -> Int {
+    c.get() + c.bump() // ERROR "cannot borrow `c` as mutable through a shared reference `&dyn Counter` (take `&mut dyn Counter`)"
+}
+
+fn writable(c: &mut dyn Counter) -> Int {
+    c.bump() + c.get()
+}
+
+fn not_mut(c: Box<dyn Counter>) -> Int {
+    c.bump() // ERROR "cannot borrow `c` as mutable: it is not declared as mutable"
+}
+
+fn shared_elems(cs: &Vec<Box<dyn Counter>>) -> Int {
+    let mut t = 0;
+    for c in cs.iter() {
+        t += c.bump(); // ERROR "cannot borrow `c` as mutable: it is borrowed from the shared reference `cs`"
+    }
+    t
+}

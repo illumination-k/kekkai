@@ -47,6 +47,9 @@ fn pbt_why_in(info: ChkInfo, t0: Ty, mut seen: HashMap<String, Bool>) -> String 
             if info.lib_types.contains_key(st.name) {
                 return "`" + st.name + "` is a library type";
             }
+            if ty_is_dyn(t) || ty_is_opaque_impl(t) {
+                return "the values of `" + ty_str(t) + "` cannot be generated";
+            }
             let k = ty_key(t);
             if seen.contains_key(k) {
                 return "";

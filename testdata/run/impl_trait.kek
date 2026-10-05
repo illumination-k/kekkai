@@ -1,0 +1,87 @@
+// exit: 0
+// `impl Trait` (compiler/chk_dyn.kek): as a parameter type (an anonymous
+// generic parameter) and as a result type (an opaque type: callers only
+// see the trait), with iterator adapters chained through functions.
+
+fn total(it: impl Iterator<Item = Int>) -> Int {
+    let mut sum = 0;
+    for x in it {
+        sum += x;
+    }
+    sum
+}
+
+fn evens(n: Int) -> impl Iterator<Item = Int> {
+    (0..n).filter(|x| x % 2 == 0)
+}
+
+fn squares_of_evens(n: Int) -> impl Iterator<Item = Int> {
+    evens(n).map(|x| x * x)
+}
+
+fn labelled(it: impl Iterator<Item = Int>, tag: String) -> impl Iterator<Item = String> {
+    it.enumerate().map(move |p| format!("{}{}={}", tag, p.0, p.1))
+}
+
+struct Money {
+    cents: Int,
+}
+
+impl Display for Money {
+    fn fmt(&self, f: &mut Formatter) {
+        write!(f, "${}.{:02}", self.cents / 100, self.cents % 100);
+    }
+}
+
+fn price(cents: Int) -> impl Display {
+    Money { cents }
+}
+
+fn show_all(xs: Vec<impl Display>) -> String {
+    let mut parts = Vec::new();
+    for x in xs.iter() {
+        parts.push(x.to_string());
+    }
+    parts.join(", ")
+}
+
+fn wrap<T: Display>(x: T) -> impl Display {
+    x
+}
+
+fn pair_up(a: impl Display, b: impl Display) -> String {
+    format!("<{} {}>", a, b)
+}
+
+fn adder(k: Int) -> impl Fn(Int) -> Int {
+    move |x| x + k
+}
+
+struct Countdown {
+    mut n: Int,
+}
+
+impl Countdown {
+    fn ticks(&self) -> impl Iterator<Item = Int> {
+        (1..self.n + 1).rev()
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    log.info(format!("total {}", total(evens(10))));
+    log.info(format!("squares {:?}", squares_of_evens(9).collect::<Vec<Int>>()));
+    let ls: Vec<String> = labelled(evens(5), "e").collect();
+    log.info(ls.join(" "));
+    log.info(format!("{} {}", price(1205), wrap(7)));
+    log.info(show_all(vec![price(5), price(250)]));
+    log.info(pair_up(1, "x"));
+    let add3 = adder(3);
+    log.info(format!("{}", add3(4)));
+    let fs: Vec<Box<dyn Fn(Int) -> Int>> = vec![Box::new(|x| x + 1), Box::new(adder(5))];
+    log.info(format!("{:?}", fs.iter().map(|f| f(10)).collect::<Vec<Int>>()));
+    let cd = Countdown { n: 3 };
+    log.info(format!("{:?}", cd.ticks().collect::<Vec<Int>>()));
+    log.info(format!("{}", total(1..=4)));
+    0
+}

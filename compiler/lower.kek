@@ -51,6 +51,29 @@ struct LowerFnType {
     cases: Vec<LowerFnCase>,
 }
 
+// Trait objects: the values of a type `dyn Trait` are the variants of an
+// enum, one per type coerced to it (one field: the value), and a call of a
+// dispatchable trait method goes through a function that switches on the
+// variant and calls the implementation for its type (compiler/chk_dyn.kek).
+
+// LowerDynType is a trait object type: its agg and the (concrete) types of
+// its variants.
+struct LowerDynType {
+    ty: Ty,
+    agg: Int,
+    cases: Vec<Ty>,
+}
+
+// LowerDynCall is the dispatch function `name` of trait method tf (of
+// trait tr) with the concrete type arguments targs (Self = the trait
+// object type).
+struct LowerDynCall {
+    name: String,
+    tf: ChkFunc,
+    tr: String,
+    targs: Vec<Ty>,
+}
+
 struct Lower {
     info: ChkInfo,
     prog: IrProgram,
@@ -65,6 +88,10 @@ struct Lower {
     lambdas: Vec<LowerLambda>,
     fntys: HashMap<String, LowerFnType>,
     fnty_keys: Vec<String>,
+    // trait object types by agg key, and the dispatch functions requested
+    dyns: HashMap<String, LowerDynType>,
+    dyn_calls: Vec<LowerDynCall>,
+    dyn_names: HashMap<String, Bool>,
     mut fun: IrFunc,
     mut cur: Int,
     mut vars: HashMap<Int, Int>,
@@ -104,6 +131,9 @@ fn lower_lower(info: ChkInfo) -> IrProgram {
         lambdas: Vec::new(),
         fntys: HashMap::new(),
         fnty_keys: Vec::new(),
+        dyns: HashMap::new(),
+        dyn_calls: Vec::new(),
+        dyn_names: HashMap::new(),
         fun: lower_empty_func(),
         cur: 0,
         vars: HashMap::new(),
@@ -126,19 +156,40 @@ fn lower_lower(info: ChkInfo) -> IrProgram {
     // may request more of both)
     let mut next = 0;
     let mut next_lam = 0;
-    while next < l.queue.len() || next_lam < l.lambdas.len() {
-        if next < l.queue.len() {
-            match l.queue.get(next) {
-                Some(inst) => prog.funcs.push(lower_func(l, inst.fun, inst.targs, inst.name)),
-                None => {}
+    let mut done = false;
+    while !done {
+        while next < l.queue.len() || next_lam < l.lambdas.len() {
+            if next < l.queue.len() {
+                match l.queue.get(next) {
+                    Some(inst) => prog.funcs.push(lower_func(l, inst.fun, inst.targs, inst.name)),
+                    None => {}
+                }
+                next = next + 1;
+            } else {
+                match l.lambdas.get(next_lam) {
+                    Some(lm) => prog.funcs.push(lower_lambda(l, lm)),
+                    None => {}
+                }
+                next_lam = next_lam + 1;
             }
-            next = next + 1;
-        } else {
-            match l.lambdas.get(next_lam) {
-                Some(lm) => prog.funcs.push(lower_lambda(l, lm)),
-                None => {}
+        }
+        // the dispatch functions of trait objects, once every variant is
+        // known: building them may request more instances (which may add
+        // variants), so they are rebuilt until nothing changes
+        let ncalls = l.dyn_calls.len();
+        let ncases = lower_dyn_cases(l);
+        let mut fs = Vec::new();
+        for dc in l.dyn_calls {
+            fs.push(lower_dyn_dispatch(l, dc));
+        }
+        if next == l.queue.len()
+            && next_lam == l.lambdas.len()
+            && ncalls == l.dyn_calls.len()
+            && ncases == lower_dyn_cases(l) {
+            for f in fs {
+                prog.funcs.push(f);
             }
-            next_lam = next_lam + 1;
+            done = true;
         }
     }
     for k in l.fnty_keys {
@@ -192,7 +243,8 @@ fn lower_handler_params(h: ChkFunc) -> Vec<IrHandlerParam> {
 // lowered: type params replaced by its type arguments, unbound inference
 // variables defaulted.
 fn lower_conc(l: Lower, t: Ty) -> Ty {
-    ty_resolve(chk_norm(l.info, ty_subst(ty_resolve(t), l.subst_ps, l.subst_args)))
+    let st = ty_subst(ty_resolve(t), l.subst_ps, l.subst_args);
+    ty_resolve(chk_norm(l.info, chk_reveal(l.info, st)))
 }
 
 // lower_trait_call emits a call of trait method tf (of trait tr) with type
@@ -212,6 +264,10 @@ fn lower_trait_call(
     }
     let mut ins = lower_instr("call");
     ins.args = args;
+    if ty_is_dyn(conc.get(0).unwrap_or(ty_unit())) {
+        ins.name = lower_dyn_call(l, tf, tr, conc);
+        return lower_emit_to(l, t, ins);
+    }
     match chk_dispatch(l.info, tr, tf.decl.name, conc) {
         Some(m) => match m.fun {
             Some(f) => {
@@ -350,7 +406,213 @@ fn lower_agg(mut l: Lower, tc: Ty) -> Int {
         }
         _ => {}
     }
+    if ty_is_dyn(t) {
+        // variants are added as values are coerced to this type
+        td.is_variant = true;
+        l.dyns.insert(key, LowerDynType { ty: t, agg: i, cases: Vec::new() });
+    }
     i
+}
+
+// ---- trait objects ----
+
+// lower_dyn_cases counts the variants of every trait object type.
+fn lower_dyn_cases(l: Lower) -> Int {
+    let mut n = 0;
+    for (_, d) in l.dyns.iter() {
+        n = n + d.cases.len();
+    }
+    n
+}
+
+// lower_coerce turns the value v of expression id into the trait object
+// type dt (the variant for its type).
+fn lower_coerce(l: Lower, v: Int, id: Int, dt0: Ty) -> Int {
+    let dt = lower_conc(l, dt0);
+    let src = lower_type_of_id(l, id);
+    let key = ty_key(dt);
+    if ty_key(src) == key {
+        // a generic value instantiated with the trait object type itself
+        return v;
+    }
+    let agg = lower_agg(l, dt);
+    let mut d = match l.dyns.get(key) {
+        Some(x) => x,
+        None => {
+            return v;
+        }
+    };
+    let skey = ty_key(src);
+    let mut tag = -1;
+    let mut i = 0;
+    for c in d.cases {
+        if ty_key(c) == skey {
+            tag = i;
+        }
+        i = i + 1;
+    }
+    if tag < 0 {
+        tag = d.cases.len();
+        d.cases.push(src);
+        let st = lower_ty(l, src);
+        match l.prog.types.get(agg) {
+            Some(mut td) => {
+                let mut fs = Vec::new();
+                fs.push(st);
+                td.variants.push(fs);
+            }
+            None => {}
+        }
+    }
+    lower_variant(l, ir_ty_agg(agg), agg, tag, lower_args1(v))
+}
+
+// lower_dyn_call is the function called for trait method tf with the
+// concrete type arguments targs whose Self is a trait object type: the
+// dispatch function of a dispatchable method, otherwise the trait's
+// default body instantiated with Self = the trait object type.
+fn lower_dyn_call(mut l: Lower, tf: ChkFunc, tr: String, targs: Vec<Ty>) -> String {
+    let m = tf.decl.name;
+    if !chk_dyn_dispatchable(l.info, tf) {
+        return match l.info.funcs.get(tr + "::" + m) {
+            Some(f) => {
+                if f.decl.has_body {
+                    lower_inst(l, f, targs)
+                } else {
+                    "<no impl of " + tr + " for " + ty_str(targs.get(0).unwrap_or(ty_unit())) + ">"
+                }
+            }
+            None => "<no impl of " + tr + ">",
+        };
+    }
+    let mut keys = Vec::new();
+    for t in targs {
+        keys.push(ty_key(t));
+    }
+    let self_t = targs.get(0).unwrap_or(ty_unit());
+    let name = "<" + ty_key(self_t) + " as " + tr + ">::" + m + "<" + keys.join(",") + ">";
+    if !l.dyn_names.contains_key(name) {
+        l.dyn_names.insert(name, true);
+        lower_agg(l, self_t);
+        l.dyn_calls.push(LowerDynCall { name: name, tf: tf, tr: tr, targs: targs });
+    }
+    name
+}
+
+// lower_dyn_case_targs are the type arguments of a dispatched call for
+// the variant holding a value of type c.
+fn lower_dyn_case_targs(dc: LowerDynCall, c: Ty) -> Vec<Ty> {
+    let mut out = Vec::new();
+    out.push(c);
+    for j in 1..dc.targs.len() {
+        out.push(dc.targs.get(j).unwrap_or(ty_unit()));
+    }
+    out
+}
+
+// lower_dyn_dispatch builds a dispatch function: the receiver's variant
+// selects the implementation for the type it holds.
+fn lower_dyn_dispatch(mut l: Lower, dc: LowerDynCall) -> IrFunc {
+    l.subst_ps = Vec::new();
+    l.subst_args = Vec::new();
+    let self_t = dc.targs.get(0).unwrap_or(ty_unit());
+    let agg = lower_agg(l, self_t);
+    let d = match l.dyns.get(ty_key(self_t)) {
+        Some(x) => x,
+        None => LowerDynType { ty: self_t, agg: agg, cases: Vec::new() },
+    };
+    let mut ps = Vec::new();
+    for t in chk_param_types(dc.tf, dc.targs) {
+        ps.push(chk_norm(l.info, t));
+    }
+    let ret = chk_norm(l.info, ty_subst(dc.tf.result, dc.tf.tparams, dc.targs));
+    // async when an implementation it may call is
+    let mut asy = false;
+    for c in d.cases {
+        match chk_dispatch(l.info, dc.tr, dc.tf.decl.name, lower_dyn_case_targs(dc, c)) {
+            Some(m) => match m.fun {
+                Some(f) => {
+                    if f.async {
+                        asy = true;
+                    }
+                }
+                None => {}
+            },
+            None => {}
+        }
+    }
+    l.fun = IrFunc {
+        name: dc.name,
+        nparams: ps.len(),
+        locals: Vec::new(),
+        names: Vec::new(),
+        result: lower_ty(l, ret),
+        is_async: asy,
+        blocks: Vec::new(),
+    };
+    l.vars = HashMap::new();
+    l.exits = Vec::new();
+    l.loops = Vec::new();
+    let mut params = Vec::new();
+    let mut k = 0;
+    for p in ps {
+        let pn = if k == 0 { "self" } else { "a" + k.to_string() };
+        params.push(lower_new_local(l, lower_ty(l, p), pn));
+        k = k + 1;
+    }
+    let recv = params.get(0).unwrap_or(0);
+    l.cur = lower_new_block(l);
+    let mut tg = lower_instr("tag");
+    tg.ty = agg;
+    tg.args = lower_args1(recv);
+    let tag = lower_emit_to(l, ir_ty("int"), tg);
+    let mut targets = Vec::new();
+    for c in d.cases {
+        targets.push(lower_new_block(l));
+    }
+    let dflt = lower_new_block(l);
+    targets.push(dflt);
+    lower_terminate(l, lower_term("switch", lower_args1(tag), targets));
+    let mut i = 0;
+    for c in d.cases {
+        lower_set_block(l, targets.get(i).unwrap_or(dflt));
+        let mut vf = lower_instr("vfield");
+        vf.ty = agg;
+        vf.tag = i;
+        vf.index = 0;
+        vf.args = lower_args1(recv);
+        let mut args = Vec::new();
+        args.push(lower_emit_to(l, lower_ty(l, c), vf));
+        for j in 1..params.len() {
+            args.push(params.get(j).unwrap_or(0));
+        }
+        let cargs = lower_dyn_case_targs(dc, c);
+        let mut call = lower_instr("call");
+        call.args = args;
+        if ty_is_dyn(c) {
+            // a trait object upcast to this one
+            call.name = lower_dyn_call(l, dc.tf, dc.tr, cargs);
+        } else {
+            match chk_dispatch(l.info, dc.tr, dc.tf.decl.name, cargs) {
+                Some(m) => match m.fun {
+                    Some(f) => {
+                        call.name = lower_inst(l, f, m.targs);
+                    }
+                    None => {}
+                },
+                None => {
+                    call.name = "<no impl of " + dc.tr + " for " + ty_str(c) + ">";
+                }
+            }
+        }
+        let r = lower_emit_to(l, l.fun.result, call);
+        lower_terminate(l, lower_term("ret", lower_args1(r), Vec::new()));
+        i = i + 1;
+    }
+    lower_set_block(l, dflt);
+    lower_terminate(l, lower_term("unreachable", Vec::new(), Vec::new()));
+    lower_prune(l.fun);
+    l.fun
 }
 
 // ---- closures ----
@@ -1001,7 +1263,21 @@ fn lower_variant(l: Lower, t: IrTy, agg: Int, tag: Int, args: Vec<Int>) -> Int {
     lower_emit_to(l, t, ins)
 }
 
+// lower_expr lowers an expression, turning it into a trait object where
+// the checker coerced it.
 fn lower_expr(l: Lower, e0: AstExpr) -> Int {
+    let v = lower_expr0(l, e0);
+    if l.info.coercions.len() == 0 {
+        return v;
+    }
+    let id = ast_expr_id(e0);
+    match l.info.coercions.get(id) {
+        Some(dt) => lower_coerce(l, v, id, dt),
+        None => v,
+    }
+}
+
+fn lower_expr0(l: Lower, e0: AstExpr) -> Int {
     match e0 {
         AstExpr::IntLit(e) => lower_intc(l, e.value),
         AstExpr::BoolLit(e) => lower_constant(l, IrConst {

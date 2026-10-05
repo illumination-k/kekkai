@@ -1,0 +1,100 @@
+// exit: 0
+// Macros (compiler/macro.kek): vec!, format! (Display, Debug, captured
+// names, positions, escapes, width / alignment / fill / zero padding /
+// precision, Int radixes and signs), write!, matches!.
+
+struct Celsius {
+    deg: Int,
+}
+
+impl Display for Celsius {
+    fn fmt(&self, f: &mut Formatter) {
+        write!(f, "{}°C", self.deg);
+    }
+}
+
+#[derive(Debug)]
+struct Reading {
+    place: String,
+    temp: Option<Int>,
+    tags: Vec<String>,
+}
+
+fn next(mut counter: Vec<Int>) -> Int {
+    counter.push(0);
+    counter.len()
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    // vec!
+    let v = vec![1, 2, 3];
+    let mut grid = vec![vec![0; 2]; 3];
+    match grid.get(0) {
+        Some(mut row) => {
+            row.set(0, 7);
+        }
+        None => {}
+    }
+    let empty: Vec<String> = vec![];
+    log.info(format!("{:?} {:?} {:?} {}", v, grid, empty, vec!["a", "b"].len()));
+
+    // Display and Debug
+    let name = "Kekkai";
+    let n = 42;
+    log.info(format!("hello {name}, n = {n}, {{literal}} {}", n + 1));
+    log.info(format!("{} {:?} {} {:?} {:?}", "s", "s\t\"q\"\n", true, (), Some(-1)));
+    let r = Reading { place: "Kyoto", temp: Some(31), tags: vec!["hot"] };
+    log.info(format!("{:?}", r));
+    log.info(format!("{}", Celsius { deg: -3 }));
+    log.info(Celsius { deg: 20 }.to_string() + " " + "str".to_string() + " " + n.to_string());
+    let ok: Result<Int, String> = Ok(1);
+    let err: Result<Int, String> = Err("bad");
+    log.info(format!("{:?} {:?} {:?}", ok, err, (1, "two", (3,))));
+    let mut m: HashMap<String, Int> = HashMap::new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let mut s: HashSet<Int> = HashSet::new();
+    s.insert(5);
+    log.info(format!("{:?} {:?} {:?}", m, s, 1.cmp(&2)));
+
+    // positions and named arguments
+    log.info(format!("{1} {0} {1} {x}", "a", "b", x = 9));
+
+    // width, alignment, fill, precision
+    log.info(format!("[{:>6}] [{:<6}] [{:^6}] [{:6}] [{:6}]", "ab", "ab", "ab", "ab", 12));
+    log.info(
+        format!("[{:*^9}] [{:-<4}] [{:.3}] [{:>8.2}] [{:>8?}]", "mid", 1, "abcdef", "abcdef", "q"),
+    );
+
+    // Int formats
+    log.info(
+        format!(
+            "[{:05}] [{:05}] [{:+}] [{:+}] [{:x}] [{:X}] [{:#x}] [{:b}] [{:#b}] [{:o}] [{:#o}]",
+            42,
+            -42,
+            7,
+            -7,
+            255,
+            255,
+            255,
+            5,
+            5,
+            8,
+            8,
+        ),
+    );
+    log.info(format!("[{:x}] [{:#010x}] [{:>6x}] [{:<+5}]", -1, 255, 255, 3));
+
+    // arguments are evaluated once, in order
+    let counter: Vec<Int> = Vec::new();
+    log.info(format!("{1} {0}", next(counter), next(counter)));
+
+    // matches!
+    let o = Some(3);
+    log.info(format!("{} {} {}", matches!(o, Some(_)), matches!(o, None), matches!(n, 42)));
+
+    // write! into a Formatter
+    log.info(format!("{}", Celsius { deg: 100 }));
+    0
+}

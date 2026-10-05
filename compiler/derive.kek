@@ -1,11 +1,11 @@
 // `#[derive(...)]` (prefix derive_): the implementations of PartialEq, Eq,
-// PartialOrd, Ord, Hash, Default, Clone, Serialize and Deserialize for a
+// PartialOrd, Ord, Hash, Default, Clone, Debug, Serialize and Deserialize for a
 // struct or enum, generated as source text and parsed with every position
 // at the attribute (so that errors in them point at the derive). The core
 // library also gets these traits for tuples this way.
 
 fn derive_traits() -> Vec<String> {
-    "PartialEq Eq PartialOrd Ord Hash Default Clone Serialize Deserialize".split(" ")
+    "PartialEq Eq PartialOrd Ord Hash Default Clone Debug Serialize Deserialize".split(" ")
 }
 
 // derive_items adds the derived implementations of f's structs and enums
@@ -272,6 +272,35 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         }
         return h + " {\n    fn hash<H: Hasher>(&self, state: &mut H) {\n" + body + "    }\n}\n";
     }
+    if tr == "Debug" {
+        // Rust's format: `Point { x: 1, y: 2 }`, `Empty`, `(1, "a")`
+        let mut body = "";
+        if lit == "" {
+            body = "        f.write_str(\"(\");\n";
+            let mut k = 0;
+            for f in fields {
+                if k > 0 {
+                    body = body + "        f.write_str(\", \");\n";
+                }
+                body = body + "        f.write_debug(&self." + f + ");\n";
+                k = k + 1;
+            }
+            let close = if fields.len() == 1 { ",)" } else { ")" };
+            body = body + "        f.write_str(\"" + close + "\");\n";
+        } else if fields.len() == 0 {
+            body = "        f.write_str(\"" + lit + "\");\n";
+        } else {
+            let mut k = 0;
+            for f in fields {
+                let sep = if k == 0 { lit + " { " } else { ", " };
+                body = body + "        f.write_str(\"" + sep + f + ": \");\n";
+                body = body + "        f.write_debug(&self." + f + ");\n";
+                k = k + 1;
+            }
+            body = body + "        f.write_str(\" }\");\n";
+        }
+        return h + " {\n    fn fmt(&self, f: &mut Formatter) {\n" + body + "    }\n}\n";
+    }
     if tr == "Clone" {
         // an owned deep copy: every field cloned
         let mut lit_s = "";
@@ -419,6 +448,33 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
             + arms.join("")
             + "        }\n    }\n}\n";
     }
+    if tr == "Debug" {
+        // `V`, `V(1, "a")` (Rust's format, without the enum's name)
+        let mut arms = Vec::new();
+        for v in ed.variants {
+            let mut body = "{\n                f.write_str(\"" + v.name;
+            if v.fields.len() > 0 {
+                body = body + "(";
+            }
+            body = body + "\");\n";
+            for i in 0..v.fields.len() {
+                if i > 0 {
+                    body = body + "                f.write_str(\", \");\n";
+                }
+                body = body + "                f.write_debug(a" + i.to_string() + ");\n";
+            }
+            if v.fields.len() > 0 {
+                body = body + "                f.write_str(\")\");\n";
+            }
+            arms.push(
+                "            " + derive_pat(ed.name, v, "a") + " => " + body + "            }\n",
+            );
+        }
+        return h
+            + " {\n    fn fmt(&self, f: &mut Formatter) {\n        match self {\n"
+            + arms.join("")
+            + "        }\n    }\n}\n";
+    }
     if tr == "Clone" {
         let mut arms = Vec::new();
         for v in ed.variants {
@@ -482,7 +538,7 @@ fn derive_tuples() -> String {
         } else {
             "(" + ns.join(", ") + ")"
         };
-        for tr in "PartialEq Eq PartialOrd Ord Hash Clone".split(" ") {
+        for tr in "PartialEq Eq PartialOrd Ord Hash Clone Debug".split(" ") {
             let mut ps = Vec::new();
             for x in ns {
                 ps.push(x + ": " + tr);

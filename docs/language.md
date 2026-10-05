@@ -6,11 +6,11 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
-- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`#[test(cases = N)]` でケース数を指定）。
+- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`#[test(cases = N)]` でケース数を指定）。テストの中でだけ `assert!`・`assert_eq!` などが使える（下記「マクロ」）。
 
 ## 型
 
@@ -84,7 +84,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 - 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Debug, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Debug` の出力は Rust と同じ（`Point { x: 1, y: 2 }`、`Some(3)`、`Circle(Point { .. }, 3)`、文字列は `"a\"b\n"` のように引用・エスケープ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
 
 ### 演算子と core の trait
 
@@ -95,9 +95,50 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 | `Hash`, `Hasher` | `x.hash(&mut h)`、`DefaultHasher::new()`、`h.finish()` |
 | `Default` | `default() -> Self` |
 | `Clone` | `clone(&self) -> Self`：所有する深い複製（下記「可変性」） |
+| `Display`, `Debug` | `fmt(&self, f: &mut Formatter)`：`{}`・`to_string()` と `{:?}`（下記「表示」） |
+| `Add<Rhs>`, `Sub<Rhs>`, `Mul<Rhs>`, `Div<Rhs>`, `Rem<Rhs>`, `Neg` | `+ - * / %` と単項 `-`（下記「演算子のオーバーロード」） |
 | `Iterator`, `DoubleEndedIterator`, `IntoIterator`, `FromIterator<A>`, `Sum<A>`, `Product<A>` | 下記 |
 
-core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Labeled` にも）。
+core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Labeled` にも。`Display` は `Int`・`Bool`・`String`・`()` と時刻の型だけ、`Debug` は `HashMap`・`HashSet`・`Ordering`・時刻の型にも）。
+
+### 表示（`Display`・`Debug`）
+
+```kek
+trait Display {
+    fn fmt(&self, f: &mut Formatter);
+    fn to_string(&self) -> String { ... }   // 既定メソッド
+}
+trait Debug {
+    fn fmt(&self, f: &mut Formatter);
+}
+
+impl Display for Point {
+    fn fmt(&self, f: &mut Formatter) {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+```
+
+- `Formatter` は文字列を組み立てるだけの core の struct で、`f.write_str(s)`、`f.write_display(&x)`、`f.write_debug(&x)` と `write!(f, ...)`・`writeln!(f, ...)` で書く。Rust と違い `fmt` は何も返さない（書き込みは失敗しない）ので、`fmt::Result` も `?` も要らない。
+- `x.to_string()` は `Display` を実装したどの型にも使える（`Display` の既定メソッド。`Int`・`Bool` は組み込み、`Duration`・`Date` は固有メソッドが優先）。
+- `Labeled` はどちらも実装しない。`format!("{}", u.email)`・`format!("{:?}", u.email)`・`u.email.to_string()` は型エラーで、`"x" + l` と同じく `map`・`zip`・`and_then` と格下げの方法が添えられる。
+
+### 演算子のオーバーロード
+
+```kek
+impl Add for V2 {                 // `impl Add<V2> for V2` と同じ
+    type Output = V2;
+    fn add(self, rhs: V2) -> V2 { V2 { x: self.x + rhs.x, y: self.y + rhs.y } }
+}
+impl Mul<Int> for V2 { type Output = V2; fn mul(self, k: Int) -> V2 { ... } }
+
+fn sum_all<T: Add<Output = T>>(xs: Vec<T>, zero: T) -> T { ... acc = acc + x; ... }
+```
+
+- `Int`（`+` では `String` も）以外の値の `a + b` は `Add::add(a, b)` の呼び出しになる（`-`：`Sub`、`*`：`Mul`、`/`：`Div`、`%`：`Rem`、単項 `-`：`Neg`）。右辺の型は trait の引数で、省くと `Self`（Rust の `Rhs = Self`）。結果の型は `Output`。
+- 呼び出しは静的に解決し、`kek assure`・`kek affected` などの依存（defhash）には実装が入る。篩型の検査器は整数の演算としては扱わない。
+- core は `Int`（全部）と `String`（`Add`）に実装しているので、generic な関数から使える。時刻の型には `Duration + Duration`、`Duration - Duration`、`-Duration`、`Duration * Int`、`Timestamp + Duration`、`Timestamp - Duration` がある（2 つの `Timestamp` の差は `t.since(&earlier)`）。
+- 同じ型に同じ trait を右辺の型ごとに複数実装できる（`Mul<Int>` と `Mul<V2>`）。ただし実装の中では `Self::Output` ではなく具体的な型を書く。
 
 ## クロージャ
 
@@ -198,7 +239,7 @@ fn same_domain(a: User, b: User) -> Labeled<PII, Bool> {
 | `l.expose_unchecked() -> T` | 値そのもの（脱出口） |
 | `clone()` | `T: Clone` なら |
 
-- `Labeled` は表示・変換・比較・順序・ハッシュの trait を実装しない。`log.info(l)`・`"x" + l`・`Response::text(200, l)`・`tx.put(k, l)`・`l.to_string()`・`l == m`・`if` の条件はどれも型エラーになり、エラーには `map`・`zip`・`and_then` と格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。違うラベルの値は `zip` で組み合わせられない。
+- `Labeled` は表示（`Display`・`Debug`）・変換・比較・順序・ハッシュ・演算子の trait を実装しない。`log.info(l)`・`"x" + l`・`format!("{}", l)`・`Response::text(200, l)`・`tx.put(k, l)`・`l.to_string()`・`l == m`・`if` の条件はどれも型エラーになり、エラーには `map`・`zip`・`and_then` と格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。違うラベルの値は `zip` で組み合わせられない。
 - **暗黙のフロー**：ラベル付きの値で分岐できるのは `map`・`zip`・`and_then` に渡すクロージャの中だけで、その結果は同じラベルで包まれる。クロージャは中身を読み取り専用で受け取り、書き換えられる状態（`&T` で借りていない `Vec` など）と関数の値を捕捉できない（capability はもともと捕捉できない）。関数を渡すときはクロージャ式か名前付きの関数（可変な状態に届く引数は `&T`）。違反は ``the closure given to `map` cannot capture `seen: Vec<Int>`: it has mutable state that the closure could write the labeled value to`` のように報告する（`kek check -json` の phase `flow`）。
 - そのため、格下げしないプログラムでは素の出力はラベル付きの入力に依存しない（非干渉性。終了と時間のチャネルは除く。コア計算での証明は `lean/Kekkai/Flow.lean`）。
 - 格下げ（`mask`・`hash`・`expose_unchecked` の呼び出し）は `kek caps` に関数ごとに一覧され（`declassify`）、`kek assure` に前提 `flow.declassify` として記録される。関数に `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けると、その関数の格下げの承認者・理由・期限になる（`kekkai.toml` の `[flow] declassify_requires` で必須にでき、`[flow] max_declassify_per_module` でファイルごとの数を制限できる。[assure.md](assure.md)）。
@@ -388,6 +429,55 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
 - パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`
 
+## マクロ
+
+```kek
+let v = vec![1, 2, 3];
+let grid = vec![vec![0; w]; h];          // 要素は clone される
+log.info(format!("{name}: {} items, first = {:?}", v.len(), v.get(0)));
+let s = format!("[{:>8}] [{:<5}] [{:^7}] [{:05}] [{:#x}] [{:+}] [{:.3}]", title, n, c, n, n, n, s);
+if matches!(r, Ok(_)) { ... }
+
+#[test]
+fn parses() {
+    assert!(parse("1").is_ok());
+    assert_eq!(parse("1"), Ok(1), "input {}", "1");
+}
+```
+
+マクロ `name!(...)`・`name![...]` は構文解析で普通の式に展開される（`compiler/macro.kek`）。以降の検査・コード生成は展開結果を見て、`kek fmt` は書いたとおりの呼び出しを出力する。式の位置にも文の位置にも書ける。自分でマクロを定義することはできず、知らない名前はエラーになる。
+
+| マクロ | 展開 |
+| --- | --- |
+| `vec![a, b]`, `vec![]`, `vec![x; n]` | `Vec` を作って `push`。`vec![x; n]` は `x.clone()` を n 個（`T: Clone`） |
+| `format!("...", args)` | `String`（下記） |
+| `write!(f, "...", args)`, `writeln!` | `f.write_str(format!(...))`（`writeln!` は改行を足す）。`Display`・`Debug` の実装で使う |
+| `matches!(e, pat)` | `match e { pat => true, _ => false }`（ガード `if` はまだない） |
+| `assert!(c)`, `assert!(c, "...", args)` | 失敗すると `assertion failed: <c のソース>` かメッセージでテストを止める |
+| `assert_eq!(a, b)`, `assert_ne!(a, b)`（後ろにメッセージも可） | `PartialEq` で比べ、両辺を `Debug` で表示する（`left: ..`・`right: ..`） |
+| `panic!("...", args)`, `unreachable!()`, `todo!()`, `unimplemented!()` | テストを止める（型は何にでもなる） |
+
+書式文字列はコンパイル時に解析する。`{}`（`Display`）、`{:?}`（`Debug`）、`{0}`（位置）、`{name}`（スコープの変数を捕捉、または名前付き引数 `name = e`）、`{{`・`}}`（波括弧そのもの）。書式指定は `{:[[fill]align][+][#][0][width][.precision][type]}`：
+
+- `width` と `align`（`<` 左、`^` 中央、`>` 右）・`fill`（任意の 1 文字）は表示した文字列（コードポイント数）を詰める。揃えの既定は数（`Int`）が右、ほかは左。
+- `+`（正でも符号）、`0`（符号と接頭辞の後ろを 0 で埋める）、`#`（`0x`・`0b`・`0o`）、`type` の `x`・`X`・`b`・`o`（16・2・8 進。負の数は Rust の i64 と同じく 2 の補数）は `Int` だけ。
+- `.precision` は `String` だけで、先頭の n 文字に切る。
+- `{:#?}`（整形した Debug）、`{:e}`、`width$` の引数指定は未対応。
+- 誤りはコンパイルエラーになる：引数が足りない（`2 positional arguments in format string, but there is 1 argument`）、使われない引数（`argument never used`）、範囲外の位置、閉じていない `{`・対応のない `}`、知らない書式、文字列リテラルでない書式文字列、`Display`・`Debug` を実装しない値（`#[derive(Debug)]` や `impl Display` を勧める）。
+- 引数はちょうど 1 回、書いた順に評価される。
+
+`assert!` などの止まるマクロは **`#[test]` 関数の中でだけ**使える。Kekkai の本番コードは panic しない約束なので、ほかの場所（テストから呼ぶ補助関数も含む）では `` `assert!` can only be used in `#[test]` functions: Kekkai code does not panic; return a `Result` or an `Option` ... `` というエラーになる。テストで失敗すると、そのテストだけが止まり、メッセージが報告される（ほかのテストは続く）：
+
+```
+test eq_fails ... FAILED (panicked)
+    panicked at asserts.kek:26:5:
+    assertion `left == right` failed
+      left: Pair { a: 4, b: "x" }
+     right: Pair { a: 5, b: "x\n" }
+```
+
+実行時には prelude の `__panic_report` が標準エラーにこれを書いて終了コード 101 で終わる（モックの `log` の行と outbox も続けて出す）。prelude のない IR（`kek ir`、Lean の参照インタプリタ）では `unreachable` になる。`println!`・`print!`・`eprintln!`・`dbg!` は使えない（出力には capability が要る）。エラーは `log.info(format!(...))` を勧める。
+
 ## イテレータ
 
 ```kek
@@ -421,6 +511,7 @@ for (i, w) in words.iter().enumerate() { ... }
 
 ## 組み込みメソッド（抜粋）
 
+- `Display` を実装した型：`to_string`（`String` にも）
 - `Int`：`to_string`, `abs`, `min`, `max`, `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, `cmp`
 - `String`：`len`, `char_at(i) -> Option<Int>`（UTF-16）, `slice(a, b)`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`, `replace`, `trim`, `to_upper`, `to_lower`, `parse_int`, `to_bytes`；`String::from_char(c)`, `String::from_bytes(v)`
 - `Option`/`Result`：`is_some`, `is_none`, `is_ok`, `is_err`, `unwrap_or`

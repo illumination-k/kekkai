@@ -29,7 +29,7 @@ struct Date {
     __d: Int,
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 enum Weekday {
     Mon,
     Tue,
@@ -455,6 +455,109 @@ impl DateTime {
             millis: millis,
             offset_minutes: offset,
         })
+    }
+}
+
+// ---- formatting and operators ----
+//
+// `{}` and `{:?}` are the text forms: RFC 3339 for Timestamp (UTC) and
+// DateTime, `YYYY-MM-DD` for Date, "1h30m" for Duration. Durations add,
+// subtract, negate and scale by an Int; a Timestamp moves by a Duration
+// (`t.since(&earlier)` is the Duration between two).
+
+impl Display for Timestamp {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_rfc3339());
+    }
+}
+
+impl Debug for Timestamp {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_rfc3339());
+    }
+}
+
+impl Display for Duration {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_string());
+    }
+}
+
+impl Debug for Duration {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_string());
+    }
+}
+
+impl Display for Date {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_string());
+    }
+}
+
+impl Debug for Date {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_string());
+    }
+}
+
+impl Display for DateTime {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_rfc3339());
+    }
+}
+
+impl Debug for DateTime {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_rfc3339());
+    }
+}
+
+impl Add<Duration> for Duration {
+    type Output = Duration;
+
+    fn add(self, rhs: Duration) -> Duration {
+        Duration { __ms: self.__ms + rhs.__ms }
+    }
+}
+
+impl Sub<Duration> for Duration {
+    type Output = Duration;
+
+    fn sub(self, rhs: Duration) -> Duration {
+        Duration { __ms: self.__ms - rhs.__ms }
+    }
+}
+
+impl Mul<Int> for Duration {
+    type Output = Duration;
+
+    fn mul(self, rhs: Int) -> Duration {
+        Duration { __ms: self.__ms * rhs }
+    }
+}
+
+impl Neg for Duration {
+    type Output = Duration;
+
+    fn neg(self) -> Duration {
+        Duration { __ms: 0 - self.__ms }
+    }
+}
+
+impl Add<Duration> for Timestamp {
+    type Output = Timestamp;
+
+    fn add(self, rhs: Duration) -> Timestamp {
+        Timestamp { __ms: self.__ms + rhs.__ms }
+    }
+}
+
+impl Sub<Duration> for Timestamp {
+    type Output = Timestamp;
+
+    fn sub(self, rhs: Duration) -> Timestamp {
+        Timestamp { __ms: self.__ms - rhs.__ms }
     }
 }
 

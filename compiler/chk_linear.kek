@@ -347,7 +347,17 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
             }
             out
         }
-        AstExpr::Call(e) => lin_exprs(lc, e.args, s),
+        AstExpr::Call(e) => {
+            s = lin_exprs(lc, e.args, s);
+            match lc.info.calls.get(e.id) {
+                // `__panic` (the panicking macros) does not return
+                Some(ci) => if ci.kind == "panic" {
+                    return None;
+                },
+                None => {}
+            }
+            s
+        }
         AstExpr::Method(e) => {
             let mi = lc.info.methods.get(e.id);
             match mi {
@@ -412,6 +422,7 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
             let s1 = lin_expr(lc, e.x, s);
             lin_expr(lc, e.index, s1)
         }
+        AstExpr::Macro(e) => lin_expr(lc, e.expansion, s),
         _ => s,
     }
 }

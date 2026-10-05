@@ -603,11 +603,17 @@ fn mu_store(cx: MuCx, v: MuVal, demand: Int, e: AstExpr, dest: String) {
     if v.view <= demand {
         return;
     }
+    // the local of a `vec![..]` expansion (compiler/macro.kek)
+    let place = if dest.starts_with("`__vec") {
+        "`vec![..]`"
+    } else {
+        dest
+    };
     mu_error(
         cx,
         ast_expr_pos(e),
         "cannot store a borrowed value in "
-            + dest
+            + place
             + ": it comes from "
             + v.src
             + " ("
@@ -1182,6 +1188,7 @@ fn mu_expr(cx: MuCx, e0: AstExpr) -> MuVal {
             };
             MuVal { view: view, mutable: b.mutable, root: b.root, path: "", src: b.src }
         }
+        AstExpr::Macro(e) => mu_expr(cx, e.expansion),
         AstExpr::StructLit(e) => {
             let mut taint = 0;
             let mut src = "";

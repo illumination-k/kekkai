@@ -492,6 +492,13 @@ fn cx_expr_in(mut w: CxWalk, e: AstExpr, logic: String) {
             cx_expr(w, x.x);
             cx_expr(w, x.index);
         }
+        // a macro counts what its arguments do (not the branches of its
+        // expansion, e.g. the `if` of assert!)
+        AstExpr::Macro(x) => {
+            for a in x.args {
+                cx_expr(w, a);
+            }
+        }
         _ => {}
     }
 }

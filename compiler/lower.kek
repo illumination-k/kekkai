@@ -1039,6 +1039,27 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
             if e.op == "&" || e.op == "&mut " || e.op == "*" {
                 return x;
             }
+            match l.info.binops.get(e.id) {
+                // `-x` through Neg (not on Int, which is primitive)
+                Some(mi) => {
+                    if lower_ty(l, mi.recv_ty).kind != "int" {
+                        match mi.func {
+                            Some(tf) => {
+                                return lower_trait_call(
+                                    l,
+                                    lower_type_of(l, e0),
+                                    tf,
+                                    mi.op,
+                                    mi.targs,
+                                    lower_args1(x),
+                                );
+                            }
+                            None => {}
+                        }
+                    }
+                }
+                None => {}
+            }
             let mut ins = lower_instr("unop");
             ins.name = if e.op == "!" { "not" } else { "neg" };
             ins.args = lower_args1(x);
@@ -1092,6 +1113,7 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
         AstExpr::Try(e) => lower_try(l, e, e0),
         AstExpr::Closure(e) => lower_closure(l, e),
         AstExpr::Index(e) => lower_index(l, e, e0),
+        AstExpr::Macro(e) => lower_expr(l, e.expansion),
         AstExpr::Range(e) => {
             let mut ins = lower_instr("struct");
             ins.ty = lower_agg(l, lower_type_of_id(l, e.id));
@@ -1315,6 +1337,33 @@ fn lower_call(l: Lower, e: AstExpr, ci: ChkCallInfo, arg_exprs: Vec<AstExpr>) ->
         }
         ins.args = args;
         return lower_emit_to(l, t, ins);
+    }
+    if k == "panic" {
+        // `__panic(msg)` (the panicking macros): the runtime prelude, when
+        // present, reports the message and exits; the block ends with a trap
+        match l.info.funcs.get("__panic_report") {
+            Some(f) => {
+                let p = ast_expr_pos(e);
+                let parts = p.file.split("/");
+                let file = parts.get(parts.len() - 1).unwrap_or(p.file);
+                let at = file + ":" + p.line.to_string() + ":" + p.col.to_string();
+                let mut ins = lower_instr("call");
+                ins.name = lower_inst(l, f, Vec::new());
+                ins.args = lower_args2(
+                    args.get(0).unwrap_or(0),
+                    lower_constant(l, IrConst {
+                        kind: "string",
+                        int_val: 0,
+                        bool_val: false,
+                        str_val: at,
+                    }),
+                );
+                lower_emit_to(l, ir_ty("unit"), ins);
+            }
+            None => {}
+        }
+        lower_terminate(l, lower_term("unreachable", Vec::new(), Vec::new()));
+        return lower_new_local(l, t, "");
     }
     if k == "ok" || k == "err" || k == "some" {
         let tag = if k == "ok" { 0 } else { 1 };

@@ -621,6 +621,7 @@ fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
         AstExpr::Range(r) => ref_show_r(r.start, from, to)
             + if r.inclusive { "..=" } else { ".." }
             + ref_show_r(r.end, from, to),
+        AstExpr::Macro(m) => m.name + "!(..)",
         _ => "...",
     }
 }
@@ -1300,6 +1301,7 @@ fn ref_scan_expr(cx: RefCtx, mut sc: RefScan, e: AstExpr, recv: Bool) {
             ref_scan_expr(cx, sc, x.x, true);
             ref_scan_expr(cx, sc, x.index, false);
         }
+        AstExpr::Macro(m) => ref_scan_expr(cx, sc, m.expansion, false),
         _ => {}
     }
 }
@@ -2647,6 +2649,7 @@ fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
             ref_val_other()
         }
         AstExpr::Index(x) => ref_index(cx, st, x, e),
+        AstExpr::Macro(m) => ref_expr(cx, st, m.expansion),
         _ => ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), ast_expr_pos(e)),
     }
 }

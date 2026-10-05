@@ -316,6 +316,28 @@ enum AstExpr {
     Tuple(AstTupleLit),
     Range(AstRange),
     Index(AstIndex),
+    Macro(AstMacro),
+}
+
+// `name!(args)` or `name![args]`, expanded by the parser
+// (compiler/macro.kek). args (with arg_names, "" or the name of a
+// `name = e` argument of a format macro), repeat (`vec![x; n]`) and pat
+// (`matches!(e, pat)`) are the invocation as written, for the formatter;
+// expansion is the code every later pass walks instead (it contains the
+// argument expressions themselves). errs are expansion errors (a bad
+// format string, an unknown macro), reported by the type checker.
+struct AstMacro {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    // "(" or "["
+    delim: String,
+    args: Vec<AstExpr>,
+    arg_names: Vec<String>,
+    mut repeat: Bool,
+    mut pat: Option<AstPattern>,
+    mut expansion: AstExpr,
+    errs: Vec<AstError>,
 }
 
 // `x[i]`: element i of a Vec (the refinement checker proves the bounds).
@@ -551,6 +573,7 @@ fn ast_expr_pos(e: AstExpr) -> AstPos {
         AstExpr::Tuple(x) => x.pos,
         AstExpr::Range(x) => x.pos,
         AstExpr::Index(x) => x.pos,
+        AstExpr::Macro(x) => x.pos,
     }
 }
 
@@ -576,6 +599,7 @@ fn ast_expr_id(e: AstExpr) -> Int {
         AstExpr::Tuple(x) => x.id,
         AstExpr::Range(x) => x.id,
         AstExpr::Index(x) => x.id,
+        AstExpr::Macro(x) => x.id,
     }
 }
 

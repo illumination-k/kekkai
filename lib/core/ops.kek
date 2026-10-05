@@ -1,0 +1,99 @@
+// Operator overloading, as in Rust's core::ops: `a + b` on a type that is
+// not Int (or String for `+`) calls `Add::add(a, b)`, and likewise `-`
+// (Sub), `*` (Mul), `/` (Div), `%` (Rem) and unary `-` (Neg). The
+// right-hand side type is the trait's parameter; written without it
+// (`impl Add for Point`, `T: Add<Output = T>`) it is Self, as Rust's
+// default `Rhs = Self`.
+//
+//   impl Add for Point {
+//       type Output = Point;
+//       fn add(self, rhs: Point) -> Point { Point { x: self.x + rhs.x, y: self.y + rhs.y } }
+//   }
+//
+// Int implements them all (Add also String), so generic code can use them.
+
+trait Add<Rhs> {
+    type Output;
+    fn add(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Sub<Rhs> {
+    type Output;
+    fn sub(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Mul<Rhs> {
+    type Output;
+    fn mul(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Div<Rhs> {
+    type Output;
+    fn div(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Rem<Rhs> {
+    type Output;
+    fn rem(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Neg {
+    type Output;
+    fn neg(self) -> Self::Output;
+}
+
+impl Add<Int> for Int {
+    type Output = Int;
+
+    fn add(self, rhs: Int) -> Int {
+        self + rhs
+    }
+}
+
+impl Sub<Int> for Int {
+    type Output = Int;
+
+    fn sub(self, rhs: Int) -> Int {
+        self - rhs
+    }
+}
+
+impl Mul<Int> for Int {
+    type Output = Int;
+
+    fn mul(self, rhs: Int) -> Int {
+        self * rhs
+    }
+}
+
+impl Div<Int> for Int {
+    type Output = Int;
+
+    fn div(self, rhs: Int) -> Int {
+        self / rhs
+    }
+}
+
+impl Rem<Int> for Int {
+    type Output = Int;
+
+    fn rem(self, rhs: Int) -> Int {
+        self % rhs
+    }
+}
+
+impl Neg for Int {
+    type Output = Int;
+
+    fn neg(self) -> Int {
+        -self
+    }
+}
+
+impl Add<String> for String {
+    type Output = String;
+
+    fn add(self, rhs: String) -> String {
+        self + rhs
+    }
+}

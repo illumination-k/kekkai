@@ -1,0 +1,117 @@
+// exit: 0
+// Operator overloading (lib/core/ops.kek): `+ - * / %` and unary `-` on a
+// type with an implementation of Add, Sub, Mul, Div, Rem or Neg; generic
+// code through bounds; the core time types.
+
+#[derive(Debug, Clone, PartialEq)]
+struct V2 {
+    x: Int,
+    y: Int,
+}
+
+impl Add for V2 {
+    type Output = V2;
+
+    fn add(self, rhs: V2) -> V2 {
+        V2 { x: self.x + rhs.x, y: self.y + rhs.y }
+    }
+}
+
+impl Sub for V2 {
+    type Output = V2;
+
+    fn sub(self, rhs: V2) -> V2 {
+        V2 { x: self.x - rhs.x, y: self.y - rhs.y }
+    }
+}
+
+// a different right-hand side and output
+impl Mul<Int> for V2 {
+    type Output = V2;
+
+    fn mul(self, k: Int) -> V2 {
+        V2 { x: self.x * k, y: self.y * k }
+    }
+}
+
+impl Mul<V2> for V2 {
+    type Output = Int;
+
+    fn mul(self, rhs: V2) -> Int {
+        self.x * rhs.x + self.y * rhs.y
+    }
+}
+
+impl Neg for V2 {
+    type Output = V2;
+
+    fn neg(self) -> V2 {
+        V2 { x: -self.x, y: -self.y }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Money {
+    Yen(Int),
+}
+
+impl Div<Int> for Money {
+    type Output = Money;
+
+    fn div(self, n: Int) -> Money {
+        match self {
+            Money::Yen(a) => Money::Yen(a / n),
+        }
+    }
+}
+
+impl Rem<Int> for Money {
+    type Output = Money;
+
+    fn rem(self, n: Int) -> Money {
+        match self {
+            Money::Yen(a) => Money::Yen(a % n),
+        }
+    }
+}
+
+fn sum_all<T: Add<Output = T> + Clone>(xs: Vec<T>, zero: T) -> T {
+    let mut acc = zero;
+    for x in xs {
+        acc = acc + x;
+    }
+    acc
+}
+
+fn negate<T: Neg<Output = T>>(x: T) -> T {
+    -x
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let a = V2 { x: 1, y: 2 };
+    let b = V2 { x: 10, y: 20 };
+    log.info(format!("{:?}", a.clone() + b.clone()));
+    log.info(format!("{:?}", b.clone() - a.clone() - a.clone()));
+    log.info(format!("{:?}", a.clone() * 3));
+    log.info(format!("{}", a.clone() * b.clone()));
+    log.info(format!("{:?}", -a.clone()));
+    log.info(format!("{:?}", -(a.clone() + b.clone()) * 2));
+    log.info(format!("{:?} {:?}", Money::Yen(1000) / 3, Money::Yen(1000) % 3));
+    let vs = vec![a.clone(), b.clone(), V2 { x: 100, y: 200 }];
+    log.info(format!("{:?}", sum_all(vs, V2 { x: 0, y: 0 })));
+    log.info(format!("{} {}", sum_all(vec![1, 2, 3], 0), sum_all(vec!["a", "b"], "")));
+    log.info(format!("{:?} {}", negate(a), negate(5)));
+    let d = Duration::hours(1) + Duration::minutes(30) - Duration::seconds(15);
+    log.info(format!("{} {} {}", d, -d, d * 2));
+    let t = Timestamp::from_unix_ms(0) + Duration::days(1);
+    log.info(
+        format!(
+            "{} {:?} {}",
+            t,
+            t - Duration::hours(1),
+            Date::parse("2026-10-05").unwrap_or(t.date()),
+        ),
+    );
+    0
+}

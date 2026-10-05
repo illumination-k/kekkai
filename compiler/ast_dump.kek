@@ -438,6 +438,11 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             ast_dump_expr(d, depth + 1, x.x);
             ast_dump_expr(d, depth + 1, x.index);
         }
+        AstExpr::Macro(x) => {
+            ast_line(d, depth, "macro " + x.name + "! @" + ast_dump_pos(x.pos));
+            ast_line(d, depth + 1, "expansion");
+            ast_dump_expr(d, depth + 2, x.expansion);
+        }
         AstExpr::Tuple(x) => {
             ast_line(d, depth, "tuple @" + ast_dump_pos(x.pos));
             for a in x.elems {

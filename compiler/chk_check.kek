@@ -2164,6 +2164,10 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 return chk_record(c, e.id, t);
             }
             let t = chk_expr(c, e.x);
+            if e.op == "-" && chk_op_overloaded(c, "Neg", ty_prune(t)) {
+                let r = chk_op_trait(c, e.id, e.pos, "-", "Neg", t, None);
+                return chk_record(c, e.id, r);
+            }
             if e.op == "-" {
                 chk_expect(c, e.pos, t, ty_int(), "negation");
                 return chk_record(c, e.id, ty_int());
@@ -2378,6 +2382,29 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 }
             }
         }
+        AstExpr::Macro(e) => {
+            for err in e.errs {
+                chk_errorf(c, err.pos, err.msg);
+            }
+            if e.errs.len() > 0 {
+                // still check the arguments, for their own errors
+                for a in e.args {
+                    chk_expr(c, a);
+                }
+                return chk_record(c, e.id, ty_invalid());
+            }
+            if mac_panicking(e.name) && !ast_has_attr(c.cur.decl, "test") && !chk_is_lib(c.cur) {
+                chk_errorf(
+                    c,
+                    e.pos,
+                    "`"
+                        + e.name
+                        + "!` can only be used in `#[test]` functions: Kekkai code does not panic; return a `Result` or an `Option` and let the caller handle the failure",
+                );
+            }
+            let t = chk_expr_cap(c, e.expansion, allow_cap);
+            chk_record(c, e.id, t)
+        }
         AstExpr::Range(e) => {
             let a = chk_expr(c, e.start);
             let b = chk_expr(c, e.end);
@@ -2527,6 +2554,31 @@ fn chk_param_types(fun: ChkFunc, targs: Vec<Ty>) -> Vec<Ty> {
 
 // chk_call_func checks a call of a user function (or method called by
 // path) with already instantiated type arguments.
+// chk_call_what names a called function in diagnostics; the helpers that
+// format! expands to (compiler/macro.kek) are named by the format spec.
+fn chk_call_what(fun: ChkFunc) -> String {
+    if fun.name == "__fmt_trunc" {
+        return "a precision `{:.N}` (which truncates a String)";
+    }
+    if fun.name == "__fmt_int" {
+        return "an Int format (`{:x}`, `{:X}`, `{:b}`, `{:o}`, `{:+}`, `{:#}`, `{:0N}`)";
+    }
+    "`" + fun.name + "`"
+}
+
+// chk_method_hint explains a missing method: on labeled data, and
+// `to_string` (which comes with Display).
+fn chk_method_hint(rt: Ty, m: String) -> String {
+    let h = chk_pii_hint(rt, ty_unit());
+    if h != "" {
+        return h;
+    }
+    if m == "to_string" {
+        return " (`to_string` comes with the trait `Display`: implement it for the type)";
+    }
+    ""
+}
+
 fn chk_call_func(
     mut c: Chk,
     id: Int,
@@ -2567,7 +2619,7 @@ fn chk_call_func(
         ps = chk_subst_paths(fun, ps, paths);
     }
     chk_check_grant(c, fun, pos);
-    chk_args(c, pos, "`" + fun.name + "`", args, ps);
+    chk_args(c, pos, chk_call_what(fun), args, ps);
     chk_oblige_bounds(c, pos, fun, targs);
     chk_note_call(c, fun, pos);
     let mut result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
@@ -2650,20 +2702,176 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
         }
     }
     let px = ty_prune(xt);
-    match px {
-        Ty::Param(_) => {
-            chk_errorf(
-                c,
-                e.pos,
-                "binary operation `" + op + "` cannot be applied to type `" + ty_str(px) + "`",
-            );
-            return ty_invalid();
-        }
-        _ => {}
+    let tr = chk_op_trait_name(op);
+    if tr != "" && chk_op_overloaded(c, tr, px) {
+        return chk_op_trait(c, e.id, e.pos, op, tr, xt, Some(yt));
     }
     chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), "arithmetic");
     chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), "arithmetic");
     ty_int()
+}
+
+// chk_op_trait_name is the core trait of an arithmetic operator
+// (lib/core/ops.kek), "" for the others.
+fn chk_op_trait_name(op: String) -> String {
+    if op == "+" {
+        return "Add";
+    }
+    if op == "-" {
+        return "Sub";
+    }
+    if op == "*" {
+        return "Mul";
+    }
+    if op == "/" {
+        return "Div";
+    }
+    if op == "%" {
+        return "Rem";
+    }
+    ""
+}
+
+// chk_op_overloaded reports whether an arithmetic operator (of core trait
+// tr) on a value of type t goes through the operator traits: on a type
+// param, a struct or enum other than Labeled (whose error explains labeled
+// data), and any type with an implementation of tr. The primitives and
+// still unknown types are Int arithmetic.
+fn chk_op_overloaded(c: Chk, tr: String, t: Ty) -> Bool {
+    match t {
+        Ty::Prim(_) => false,
+        Ty::Var(_) => false,
+        Ty::Cap(_, _) => false,
+        Ty::Param(_) => true,
+        Ty::Struct(st, _) => st.name != "Labeled",
+        Ty::Enum(_, _) => true,
+        _ => chk_find_impl(c.info, tr, t, Vec::new(), 0).is_some(),
+    }
+}
+
+// chk_op_trait checks the operator op on an operand of type xt (and a
+// right operand of type yt) as a call of the core trait method
+// (`a + b` is `Add::add(a, b)` with Rhs the type of b), recorded in binops
+// (id is the operator's node) for lowering. It returns the trait's Output.
+fn chk_op_trait(
+    mut c: Chk,
+    id: Int,
+    pos: AstPos,
+    op: String,
+    tr: String,
+    xt: Ty,
+    yt: Option<Ty>,
+) -> Ty {
+    let m = tr.to_lower();
+    let what = if yt.is_some() {
+        "binary operation"
+    } else {
+        "unary operation"
+    };
+    let tf = match c.info.funcs.get(tr + "::" + m) {
+        Some(f) => f,
+        None => {
+            chk_errorf(
+                c,
+                pos,
+                what + " `" + op + "` cannot be applied to type `" + ty_str(xt) + "`",
+            );
+            return ty_invalid();
+        }
+    };
+    let mut args = Vec::new();
+    let mut targs = Vec::new();
+    targs.push(xt);
+    match yt {
+        Some(t) => {
+            args.push(t);
+            targs.push(t);
+        }
+        None => {}
+    }
+    let px = ty_prune(xt);
+    let mut ok = false;
+    let mut out = ty_invalid();
+    match px {
+        Ty::Param(p) => {
+            if chk_param_has(c.info, p, tr, args) {
+                ok = true;
+                out = chk_norm(c.info, Ty::Assoc(xt, tr, "Output"));
+            }
+        }
+        _ => match chk_find_impl(c.info, tr, xt, args, 0) {
+            Some(found) => {
+                ok = true;
+                match yt {
+                    Some(t) => {
+                        // the impl's Rhs (an inference variable on the right
+                        // takes it)
+                        let want = ty_subst(
+                            found.im.trait_args.get(0).unwrap_or(t),
+                            found.im.tparams,
+                            found.targs,
+                        );
+                        ty_unify(t, want);
+                    }
+                    None => {}
+                }
+                for i in 0..found.im.assoc_names.len() {
+                    if found.im.assoc_names.get(i).unwrap_or("") == "Output" {
+                        let a = found.im.assoc_tys.get(i).unwrap_or(ty_invalid());
+                        out = chk_norm(c.info, ty_subst(a, found.im.tparams, found.targs));
+                    }
+                }
+            }
+            None => {}
+        },
+    }
+    if !ok {
+        let mut hint = "";
+        match px {
+            Ty::Param(p) => {
+                hint = " (add the bound `" + p.name + ": " + tr + "`)";
+            }
+            _ => {
+                hint = " (implement the trait `" + tr + "` for it)";
+            }
+        }
+        let mut msg = what + " `" + op + "` cannot be applied to type `" + ty_str(xt) + "`";
+        match yt {
+            Some(t) => {
+                if chk_find_impl(c.info, tr, xt, Vec::new(), 0).is_some() {
+                    msg = "cannot apply `"
+                        + op
+                        + "` to `"
+                        + ty_str(xt)
+                        + "` and `"
+                        + ty_str(t)
+                        + "`: there is no `impl "
+                        + tr
+                        + "<"
+                        + ty_str(t)
+                        + "> for "
+                        + ty_str(xt)
+                        + "`";
+                    hint = "";
+                }
+            }
+            None => {}
+        }
+        if !ty_is_prim(px, "<invalid>") {
+            chk_errorf(c, pos, msg + hint);
+        }
+        return ty_invalid();
+    }
+    c.info.binops.insert(id, ChkMethodInfo {
+        kind: "trait",
+        builtin: None,
+        op: tr,
+        recv_ty: xt,
+        closure: None,
+        func: Some(tf),
+        targs: targs,
+    });
+    out
 }
 
 // chk_builtin_eq reports the types whose `==` is a primitive operation.
@@ -3038,6 +3246,13 @@ fn chk_call(mut c: Chk, e: AstCall) -> Ty {
                     c.info.calls.insert(e.id, ci);
                     return ci.ty;
                 }
+            }
+            if f.name == "__panic" && !c.info.funcs.contains_key(f.name) {
+                // the builtin of the panicking macros (compiler/macro.kek):
+                // it does not return
+                chk_args(c, e.pos, "`__panic`", e.args, chk_tys1(ty_string()));
+                c.info.calls.insert(e.id, chk_call_info("panic", ty_never()));
+                return ty_never();
             }
             // a local variable (a closure) shadows a function
             if chk_lookup(c, f.name, f.pos).is_some() {
@@ -3420,7 +3635,7 @@ fn chk_method(mut c: Chk, e: AstMethodCall) -> Ty {
                     + "` found for `"
                     + ty_str(rt)
                     + "`"
-                    + chk_pii_hint(rt, ty_unit()),
+                    + chk_method_hint(rt, e.name),
             );
             chk_exprs(c, e.args);
             ty_invalid()

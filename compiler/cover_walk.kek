@@ -236,6 +236,7 @@ fn cov_div_expr(e: AstExpr, loops: Int) -> Bool {
         AstExpr::Tuple(x) => cov_div_exprs(x.elems, loops),
         AstExpr::Range(x) => cov_div_expr(x.start, loops) || cov_div_expr(x.end, loops),
         AstExpr::Index(x) => cov_div_expr(x.x, loops) || cov_div_expr(x.index, loops),
+        AstExpr::Macro(x) => cov_div_exprs(x.args, loops),
         _ => false,
     }
 }
@@ -519,9 +520,143 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
             let base = cov_expr(w, x.x);
             AstExpr::Index(AstIndex { id: x.id, pos: x.pos, x: base, index: cov_expr(w, x.index) })
         }
+        AstExpr::Macro(x) => cov_macro(w, x),
         _ => e,
     };
     mut_hook_expr(w, e, e2)
+}
+
+// cov_macro rewrites the arguments of a macro and puts them into a copy of
+// its expansion. The code the expansion adds gets neither probes nor
+// mutants: the branch of `assert!` that panics is not a branch of the
+// program, and its message is not the program's string.
+fn cov_macro(w: CovW, m: AstMacro) -> AstExpr {
+    let mut subst: HashMap<Int, AstExpr> = HashMap::new();
+    let mut args = Vec::new();
+    let fmt = mac_format_index(m.name);
+    let mut i = 0;
+    for a in m.args {
+        // the format string is not in the expansion (its pieces are)
+        let a2 = if i == fmt { a } else { cov_expr(w, a) };
+        i = i + 1;
+        subst.insert(ast_expr_id(a), a2);
+        args.push(a2);
+    }
+    AstExpr::Macro(AstMacro {
+        id: m.id,
+        pos: m.pos,
+        name: m.name,
+        delim: m.delim,
+        args: args,
+        arg_names: m.arg_names,
+        repeat: m.repeat,
+        pat: m.pat,
+        expansion: cov_subst(m.expansion, subst),
+        errs: m.errs,
+    })
+}
+
+// cov_subst copies an expansion (the node kinds compiler/macro.kek builds),
+// replacing the argument expressions by their rewritten versions.
+fn cov_subst(e: AstExpr, subst: HashMap<Int, AstExpr>) -> AstExpr {
+    match subst.get(ast_expr_id(e)) {
+        Some(r) => {
+            return r;
+        }
+        None => {}
+    }
+    match e {
+        AstExpr::Binary(x) => AstExpr::Binary(AstBinary {
+            id: x.id,
+            pos: x.pos,
+            op: x.op,
+            x: cov_subst(x.x, subst),
+            y: cov_subst(x.y, subst),
+        }),
+        AstExpr::Unary(x) => AstExpr::Unary(AstUnary {
+            id: x.id,
+            pos: x.pos,
+            op: x.op,
+            x: cov_subst(x.x, subst),
+        }),
+        AstExpr::Call(x) => AstExpr::Call(AstCall {
+            id: x.id,
+            pos: x.pos,
+            func: x.func,
+            args: cov_subst_all(x.args, subst),
+        }),
+        AstExpr::Method(x) => AstExpr::Method(AstMethodCall {
+            id: x.id,
+            pos: x.pos,
+            recv: cov_subst(x.recv, subst),
+            name: x.name,
+            targs: x.targs,
+            args: cov_subst_all(x.args, subst),
+        }),
+        AstExpr::If(x) => AstExpr::If(AstIf {
+            id: x.id,
+            pos: x.pos,
+            pat: x.pat,
+            cond: cov_subst(x.cond, subst),
+            then: cov_subst_block(x.then, subst),
+            els: match x.els {
+                Some(el) => Some(cov_subst(el, subst)),
+                None => None,
+            },
+        }),
+        AstExpr::Match(x) => {
+            let mut arms = Vec::new();
+            for a in x.arms {
+                arms.push(AstMatchArm {
+                    id: a.id,
+                    pos: a.pos,
+                    pat: a.pat,
+                    body: cov_subst(a.body, subst),
+                });
+            }
+            AstExpr::Match(AstMatch { id: x.id, pos: x.pos, x: cov_subst(x.x, subst), arms: arms })
+        }
+        AstExpr::Block(b) => AstExpr::Block(cov_subst_block(b, subst)),
+        _ => e,
+    }
+}
+
+fn cov_subst_all(es: Vec<AstExpr>, subst: HashMap<Int, AstExpr>) -> Vec<AstExpr> {
+    let mut out = Vec::new();
+    for e in es {
+        out.push(cov_subst(e, subst));
+    }
+    out
+}
+
+fn cov_subst_block(b: AstBlock, subst: HashMap<Int, AstExpr>) -> AstBlock {
+    let mut stmts = Vec::new();
+    for s in b.stmts {
+        let s2 = match s {
+            AstStmt::Let(l) => AstStmt::Let(AstLetStmt {
+                id: l.id,
+                pos: l.pos,
+                mutable: l.mutable,
+                name: l.name,
+                pat: l.pat,
+                ty: l.ty,
+                init: cov_subst(l.init, subst),
+            }),
+            AstStmt::Expr(x) => AstStmt::Expr(AstExprStmt {
+                id: x.id,
+                pos: x.pos,
+                x: cov_subst(x.x, subst),
+                semi: x.semi,
+            }),
+            _ => s,
+        };
+        stmts.push(s2);
+    }
+    let tail = match b.tail {
+        Some(t) => Some(cov_subst(t, subst)),
+        None => None,
+    };
+    AstBlock { id: b.id, pos: b.pos, stmts: stmts, tail: tail, end: b.end }
 }
 
 fn cov_if_expr(mut w: CovW, x: AstIf) -> AstExpr {

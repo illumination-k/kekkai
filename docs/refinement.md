@@ -194,7 +194,7 @@ goal: i < len(v)             // 省略すると false
 | 項目 | 決定 |
 | --- | --- |
 | 冪等な操作 | 許可リスト：`log.*`、`clock.now_ms`、`net.get`、`db.get`、`db.transaction`、`tx.get`・`tx.put`・`tx.delete`・`tx.commit`・`tx.rollback`、`fs.read`・`fs.list`・`fs.set_cwd`。リストにない操作（今後増えるものを含む）は冪等でない |
-| 冪等でない操作 | `net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`（ストアの外の書き込みで、ハンドラからは保守的に禁止）、`fs.read_line`（入力を消費する）、`random.int`（リトライで別の ID・トークンを作り、それを書けば 2 件目のレコードになる） |
+| 冪等でない操作 | `net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`（ストアの外の書き込みで、ハンドラからは保守的に禁止）、`fs.read_line`・`fs.read_stdin`（入力を消費する）、`fs.write_stdout`、`random.int`（リトライで別の ID・トークンを作り、それを書けば 2 件目のレコードになる） |
 | `tx.delete` | 冪等（2 回目は何もしない） |
 | `Clock` | 冪等（時刻は読むだけ。キーを時刻から作るような値の依存は見ない） |
 | 判定の単位 | 操作の種類だけ。値（何を書くか、キーの有無で分岐するか）は見ない。Idempotency-Key で重複を検出して `tx.outbox` を使うパターン（`examples/payments`）は型では冪等と認めない |

@@ -128,7 +128,7 @@ fn compose(f: fn(Int) -> Int, g: impl Fn(Int) -> Int) -> fn(Int) -> Int { move |
 | `&Clock` | `now_ms() -> Int` |
 | `&Random` | `int(lo, hi) -> Int` |
 | `&Net` | `get(url)`, `post(url, body)` → `Result<String, NetError>` |
-| `&Fs` | `read(path)`, `write(path, s)`, `write_bytes(path, Vec<Int>)` → `Result<_, IoError>` |
+| `&Fs` | `read(path)`, `write(path, s)`, `write_bytes(path, Vec<Int>)`, `list(dir)` → `Result<_, IoError>`；標準入出力は `read_line() -> Option<String>`、`read_stdin(n) -> Option<String>`（n バイト）、`write_stdout(s)`（改行なし） |
 | `&Db` | `get(key)`, `transaction(\|tx\| ...)` |
 
 ### トランザクション
@@ -159,7 +159,7 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response { ... }
 
 - 冪等なハンドラと、そこから呼び出しグラフで到達できる関数は、冪等な capability の操作しか使えない。リトライ（同じリクエストの再送、Workers の再実行）で状態が変わらないことを型検査で保証する。
 - 冪等とみなす操作：`log.*`、`clock.now_ms`、`net.get`、`db.get`、`db.transaction`、`tx.get`、`tx.put`（同じキーの上書き）、`tx.delete`（2 回目は何もしない）、`tx.commit`・`tx.rollback`、`fs.read`・`fs.list`・`fs.set_cwd`。
-- それ以外は冪等でない：`net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`、`fs.read_line`（入力を消費する）、`random.int`（リトライで別の ID などを作ってしまう）。新しい操作は一覧に加えるまで冪等でないとみなす。
+- それ以外は冪等でない：`net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`、`fs.read_line`・`fs.read_stdin`（入力を消費する）、`fs.write_stdout`、`random.int`（リトライで別の ID などを作ってしまう）。新しい操作は一覧に加えるまで冪等でないとみなす。
 - 違反はハンドラに報告する：``idempotent handler `h` reaches `net.post` via `settle` -> `charge` (payments.kek:12), which is not idempotent: a retry would do it again``。
 - 冪等性は操作の種類で判定する。`tx.put` に乱数や時刻を書く・キーの有無で分岐して別の効果を起こす、といった値に依存する性質は見ない。Idempotency-Key で重複を検出する `tx.outbox` のような、実装上冪等なパターンも型では冪等と認めない（`#[handler]` のまま使う）。
 - `kek caps` は冪等なハンドラに `#[handler(idempotent)]`、capability を受け取る関数に `idempotent: true|false` を表示する（JSON は全関数の `idempotent`）。`kek assure` は `idempotent` の保証を記録する。

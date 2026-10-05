@@ -857,6 +857,25 @@ fn chk_preds(c: Chk, fun: ChkFunc) {
             );
         }
     }
+    // a predicate is about the values passed in: a `mut` parameter could
+    // be reassigned before the postcondition is checked
+    for e in fun.decl.preds {
+        for p in fun.params {
+            if p.mutable && p.name != "self" && chk_pred_mentions(e, p.name) {
+                chk_errorf(
+                    c,
+                    ast_expr_pos(e),
+                    "a refinement predicate cannot mention the `mut` parameter `"
+                        + p.name
+                        + "` (take it without `mut` and copy it with `let mut "
+                        + p.name
+                        + " = "
+                        + p.name
+                        + ";`)",
+                );
+            }
+        }
+    }
     chk_push(c, false);
     chk_bind(c, chk_new_binding(c, "result", fun.result, fun.decl.pos));
     for e in fun.decl.preds {
@@ -868,6 +887,29 @@ fn chk_preds(c: Chk, fun: ChkFunc) {
         }
     }
     chk_pop(c);
+}
+
+// chk_pred_mentions reports whether the variable name occurs in the
+// predicate e.
+fn chk_pred_mentions(e: AstExpr, name: String) -> Bool {
+    match e {
+        AstExpr::Ident(x) => x.name == name,
+        AstExpr::Unary(x) => chk_pred_mentions(x.x, name),
+        AstExpr::Binary(x) => chk_pred_mentions(x.x, name) || chk_pred_mentions(x.y, name),
+        AstExpr::Field(x) => chk_pred_mentions(x.x, name),
+        AstExpr::Method(x) => {
+            if chk_pred_mentions(x.recv, name) {
+                return true;
+            }
+            for a in x.args {
+                if chk_pred_mentions(a, name) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 // chk_pred_formula reports a predicate outside the language of
@@ -1293,6 +1335,8 @@ fn chk_declare_func(
         }
         let mut b = chk_new_binding(c, p.name, t, p.pos);
         b.param = true;
+        // `mut n: Int` can be reassigned, as in Rust
+        b.mutable = p.mutable;
         fun.params.push(b);
     }
     // `impl Trait` parameters are anonymous generic params, after the
@@ -3395,6 +3439,7 @@ fn chk_closure(mut c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
         }
         let mut b = chk_new_binding(c, p.name, t, p.pos);
         b.param = true;
+        b.mutable = p.mutable;
         li.params.push(b);
         chk_bind(c, b);
         ps.push(t);

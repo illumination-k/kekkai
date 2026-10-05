@@ -1,0 +1,40 @@
+// exit: 3
+// Modules (docs/modules.md): the subdirectories geometry/, geometry/util/
+// and store/ are the modules `geometry`, `geometry::util` and `store`.
+// This file is the root module.
+
+use geometry::{Point, Shape};
+use store::Inventory as Inv;
+use geometry::util;
+
+const ROOT_LIMIT: Int = 3;
+
+// a root item: visible from every module through `crate::`
+fn banner(s: String) -> String {
+    "== " + s + " =="
+}
+
+#[main]
+fn main(args: Vec<String>, fs: &Fs) -> Int {
+    fs.write_stdout(banner("modules") + "\n");
+    let p = Point::new(3, 4);
+    fs.write_stdout(p.x.to_string() + " " + p.y.to_string() + "\n");
+    fs.write_stdout(geometry::describe(Shape::Circle(p, 2)) + "\n");
+    let sq = geometry::Shape::Square { corner: Point { x: 1, y: 1 }, side: 3 };
+    fs.write_stdout(geometry::describe(sq) + "\n");
+    fs.write_stdout(util::square(7).to_string() + " " + geometry::util::cube(2).to_string() + "\n");
+    fs.write_stdout(geometry::ORIGIN.x.to_string() + "\n");
+    let mut inv = Inv::new();
+    inv.add("apple", 3);
+    inv.add("pear", 2);
+    inv.add("apple", 1);
+    fs.write_stdout(inv.count("apple").to_string() + " " + inv.total().to_string() + "\n");
+    fs.write_stdout(store::label(Point { x: 0, y: 9 }) + "\n");
+    match p.quadrant() {
+        geometry::Quadrant::First => fs.write_stdout("first\n"),
+        _ => fs.write_stdout("other\n"),
+    }
+    let d: geometry::Dist = p.manhattan();
+    fs.write_stdout(d.to_string() + "\n");
+    ROOT_LIMIT
+}

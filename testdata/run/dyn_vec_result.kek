@@ -1,0 +1,22 @@
+trait Shape {
+    fn area(&self) -> Int;
+}
+
+struct Sq(Int);
+
+impl Shape for Sq {
+    fn area(&self) -> Int {
+        self.0 * self.0
+    }
+}
+
+fn all() -> Vec<Box<dyn Shape>> {
+    vec![Box::new(Sq(2)), Box::new(Sq(3))]
+}
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let total: Int = all().iter().map(|s| s.area()).sum();
+    log.info(total.to_string());
+    0
+}

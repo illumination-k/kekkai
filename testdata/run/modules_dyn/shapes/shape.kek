@@ -1,0 +1,31 @@
+pub trait Shape {
+    fn area(&self) -> Int;
+}
+
+pub struct Sq(pub Int);
+
+impl Shape for Sq {
+    fn area(&self) -> Int {
+        self.0 * self.0
+    }
+}
+
+pub fn all() -> Vec<Box<dyn Shape>> {
+    vec![Box::new(Sq(2)), Box::new(Sq(3))]
+}
+
+pub fn evens(n: Int) -> impl Iterator<Item = Int> {
+    (0..n).filter(|x| x % 2 == 0)
+}
+
+pub fn find(v: Vec<Int>, t: Int) -> Int {
+    let r = 'outer: loop {
+        for x in v.iter() {
+            if x == t {
+                break 'outer x * 10;
+            }
+        }
+        break -1;
+    };
+    r
+}

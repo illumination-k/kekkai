@@ -637,7 +637,7 @@ fn asr_model(l: DhLoaded) -> AsrState {
             entry = "test";
         }
         asr_state_add(st, AsrDef {
-            name: d.name,
+            name: ast_display_name(d.name),
             hash: d.hash,
             file: asr_clean_file(d.pos.file),
             line: d.pos.line,

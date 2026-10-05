@@ -1,0 +1,30 @@
+pub struct Counter {
+    value: Int,
+    pub label: String,
+}
+
+pub struct Meters(Int);
+
+impl Meters {
+    pub fn get(&self) -> Int {
+        self.0
+    }
+}
+
+impl Counter {
+    pub fn new() -> Counter {
+        Counter::fresh()
+    }
+
+    fn fresh() -> Counter {
+        Counter { value: 0, label: "c" }
+    }
+
+    pub fn get(&self) -> Int {
+        self.value + self.bump()
+    }
+
+    fn bump(&self) -> Int {
+        self.value + 1
+    }
+}

@@ -15,6 +15,10 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
     let mut poss = Vec::new();
     for sd in f.structs {
         for a in sd.attrs {
+            if a.name.starts_with("__") {
+                // added by compiler/modres.kek
+                continue;
+            }
             if a.name != "derive" {
                 errs.push(AstError { pos: a.pos, msg: "unknown attribute `#[" + a.name + "]`" });
                 continue;
@@ -59,6 +63,10 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
     }
     for ed in f.enums {
         for a in ed.attrs {
+            if a.name.starts_with("__") {
+                // added by compiler/modres.kek
+                continue;
+            }
             if a.name != "derive" {
                 errs.push(AstError { pos: a.pos, msg: "unknown attribute `#[" + a.name + "]`" });
                 continue;
@@ -187,6 +195,13 @@ fn derive_known(tr: String, mut errs: Vec<AstError>, pos: AstPos) -> Bool {
     false
 }
 
+// derive_base_name is a type's name without its module (`Point` for the
+// global name `geometry$Point`: compiler/modres.kek), as Debug shows it.
+fn derive_base_name(name: String) -> String {
+    let parts = name.split("$");
+    parts.get(parts.len() - 1).unwrap_or(name)
+}
+
 // derive_header is `impl<T: Tr, ...> Tr for Name<T, ...>`.
 fn derive_header(tr: String, name: String, gs: Vec<AstGeneric>) -> String {
     if gs.len() == 0 {
@@ -283,7 +298,7 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         let mut body = "";
         if lit.ends_with("(") {
             // a tuple struct: `Meters(3)`
-            body = "        f.write_str(\"" + lit + "\");\n";
+            body = "        f.write_str(\"" + derive_base_name(lit) + "\");\n";
             let mut k = 0;
             for f in fields {
                 if k > 0 {
@@ -306,11 +321,15 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
             let close = if fields.len() == 1 { ",)" } else { ")" };
             body = body + "        f.write_str(\"" + close + "\");\n";
         } else if fields.len() == 0 {
-            body = "        f.write_str(\"" + lit + "\");\n";
+            body = "        f.write_str(\"" + derive_base_name(lit) + "\");\n";
         } else {
             let mut k = 0;
             for f in fields {
-                let sep = if k == 0 { lit + " { " } else { ", " };
+                let sep = if k == 0 {
+                    derive_base_name(lit) + " { "
+                } else {
+                    ", "
+                };
                 body = body + "        f.write_str(\"" + sep + f + ": \");\n";
                 body = body + "        f.write_debug(&self." + f + ");\n";
                 k = k + 1;
@@ -643,7 +662,7 @@ fn derive_serde_struct(sd: AstStructDecl, tr: String, aliases: Vec<AstTypeAlias>
             + body
             + "        Value::Map(fields)\n    }\n}\n";
     }
-    let mut body = "        v.expect_map(\"" + sd.name + "\")?;\n";
+    let mut body = "        v.expect_map(\"" + ast_display_name(sd.name) + "\")?;\n";
     let mut inits = Vec::new();
     let mut i = 0;
     for f in sd.fields {
@@ -703,7 +722,13 @@ fn derive_serde_tuple_struct(
         let read = if n == 1 {
             "Deserialize::from_value(v)?"
         } else {
-            "v.element(\"" + sd.name + "\", " + k.to_string() + ", " + n.to_string() + ")?"
+            "v.element(\""
+                + ast_display_name(sd.name)
+                + "\", "
+                + k.to_string()
+                + ", "
+                + n.to_string()
+                + ")?"
         };
         body = body
             + "        let "
@@ -713,7 +738,14 @@ fn derive_serde_tuple_struct(
             + " = "
             + read
             + ";\n"
-            + derive_checks(f.ty, x, "\"" + sd.name + "\"", aliases, 0, "        ");
+            + derive_checks(
+                f.ty,
+                x,
+                "\"" + ast_display_name(sd.name) + "\"",
+                aliases,
+                0,
+                "        ",
+            );
         args.push(x);
         k = k + 1;
     }
@@ -786,7 +818,11 @@ fn derive_serde_enum(ed: AstEnumDecl, tr: String, aliases: Vec<AstTypeAlias>) ->
         let n = v.fields.len();
         let mut inner = "";
         if v.named {
-            inner = "            p.expect_map(\"" + ed.name + "::" + v.name + "\")?;\n";
+            inner = "            p.expect_map(\""
+                + ast_display_name(ed.name)
+                + "::"
+                + v.name
+                + "\")?;\n";
         }
         let mut args = Vec::new();
         for k in 0..n {

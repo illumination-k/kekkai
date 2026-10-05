@@ -981,11 +981,7 @@ fn lower_block(l: Lower, b: AstBlock) -> Int {
     }
     match b.tail {
         Some(e) => lower_expr(l, e),
-        None => if out >= 0 {
-            out
-        } else {
-            lower_unit(l)
-        },
+        None => if out >= 0 { out } else { lower_unit(l) },
     }
 }
 

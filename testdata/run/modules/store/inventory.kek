@@ -1,0 +1,38 @@
+// The module `store` uses `geometry` through `crate::`.
+
+use crate::geometry::*;
+
+pub struct Inventory {
+    counts: HashMap<String, Int>,
+}
+
+impl Inventory {
+    pub fn new() -> Inventory {
+        Inventory { counts: HashMap::new() }
+    }
+
+    pub fn add(&mut self, name: String, n: Int) {
+        let c = self.counts.get(name).unwrap_or(0);
+        self.counts.insert(name, c + n);
+    }
+
+    pub fn count(&self, name: String) -> Int {
+        self.counts.get(name).unwrap_or(0)
+    }
+
+    pub fn total(&self) -> Int {
+        let mut t = 0;
+        for (_, v) in self.counts.iter() {
+            t += v;
+        }
+        t
+    }
+}
+
+pub fn label(p: Point) -> String {
+    let q = match p.quadrant() {
+        Quadrant::First => "first",
+        Quadrant::Other => "other",
+    };
+    crate::banner(q) + " " + crate::geometry::describe(Shape::Circle(p, 1))
+}

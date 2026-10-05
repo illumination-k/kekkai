@@ -315,7 +315,11 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
             ast_dump_block(d, depth + 1, w.body);
         }
         AstStmt::For(f) => {
-            ast_line(d, depth, "for" + ast_dump_label(f.label) + " " + f.var + " @" + ast_dump_pos(f.pos));
+            ast_line(
+                d,
+                depth,
+                "for" + ast_dump_label(f.label) + " " + f.var + " @" + ast_dump_pos(f.pos),
+            );
             match f.pat {
                 Some(pt) => ast_dump_pattern(d, depth + 1, pt),
                 None => {}

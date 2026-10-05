@@ -144,7 +144,7 @@ fn testrun_tests_tsv(tests: Vec<TestrunTest>) -> String {
     let mut lines = Vec::new();
     for t in tests {
         lines.push(
-            t.name
+            ast_display_name(t.name)
                 + "\t"
                 + t.hash
                 + "\t"
@@ -180,7 +180,7 @@ fn testrun_tests_json(tests: Vec<TestrunTest>) -> String {
         };
         items.push(
             "{\"name\":"
-                + json_quote(t.name)
+                + json_quote(ast_display_name(t.name))
                 + ",\"caps\":["
                 + caps.join(",")
                 + "],\"result\":"
@@ -262,8 +262,8 @@ fn testrun_harness(tests: Vec<TestrunTest>) -> String {
             args.push("__" + c.to_lower());
         }
         let call = t.name + "(" + args.join(", ") + ")";
-        let who = json_quote(t.name) + ", " + json_quote(testrun_kind(t));
-        b = b + "    if __name == " + json_quote(t.name) + " {\n";
+        let who = json_quote(ast_display_name(t.name)) + ", " + json_quote(testrun_kind(t));
+        b = b + "    if __name == " + json_quote(ast_display_name(t.name)) + " {\n";
         ti = ti + 1;
         if testrun_params(t).len() > 0 {
             b = b + "        return __kt_" + ti.to_string() + "(" + args.join(", ") + ");\n    }\n";
@@ -376,9 +376,13 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
         k = k + 1;
     }
     b = b + "fn __kd_" + n + "(" + vdecl.join(", ") + ") -> String {\n    ";
-    b = b + json_quote(t.name + "(") + " + " + shows.join(" + \", \" + ") + " + \")\"\n}\n\n";
+    b = b
+        + json_quote(ast_display_name(t.name) + "(")
+        + " + "
+        + shows.join(" + \", \" + ")
+        + " + \")\"\n}\n\n";
     // __kt_n
-    let who = json_quote(t.name) + ", " + json_quote(testrun_kind(t));
+    let who = json_quote(ast_display_name(t.name)) + ", " + json_quote(testrun_kind(t));
     let mut gen_args = Vec::new();
     let mut cur_args = Vec::new();
     k = 0;
@@ -388,7 +392,7 @@ fn testrun_property(pg: PbtGen, t: TestrunTest, n: String) -> String {
         k = k + 1;
     }
     b = b + "fn __kt_" + n + "(" + caps_decl.join(", ") + ") -> Int {\n";
-    b = b + "    let __g = __gen_new(" + json_quote(t.name) + ");\n";
+    b = b + "    let __g = __gen_new(" + json_quote(ast_display_name(t.name)) + ");\n";
     b = b + "    let __n = __test_cases(" + t.cases.to_string() + ");\n";
     b = b + "    let mut __i = 0;\n    while __i < __n {\n        __gen_case(__g, __i, __n);\n";
     k = 0;
@@ -575,7 +579,7 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     }
     let mut names = Vec::new();
     for t in all {
-        names.push(t.name + "\n");
+        names.push(ast_display_name(t.name) + "\n");
     }
     if !testrun_write(fs, log, out_dir + "/tests.txt", names.join("")) {
         return 1;
@@ -593,7 +597,7 @@ fn testrun_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
         tests = Vec::new();
         for t in all {
-            if want.get(t.name).unwrap_or(false) {
+            if want.get(ast_display_name(t.name)).unwrap_or(false) {
                 tests.push(t);
             }
         }
@@ -617,7 +621,11 @@ fn testrun_build(
     for s in srcs {
         all.push(s);
     }
-    all.push(FeSource { name: "<prelude>/kek_test_main.kek", text: testrun_harness(tests) });
+    all.push(FeSource {
+        name: "<prelude>/kek_test_main.kek",
+        text: testrun_harness(tests),
+        module: "",
+    });
     for s in prelude_sources() {
         all.push(s);
     }

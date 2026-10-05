@@ -1,0 +1,26 @@
+// Another file of the module `geometry`: it sees the items of point.kek
+// without `use`.
+
+pub enum Shape {
+    Circle(Point, Int),
+    Square { corner: Point, side: Int },
+}
+
+pub fn describe(s: Shape) -> String {
+    match s {
+        Shape::Circle(c, r) => "circle at " + show(c) + " r=" + r.to_string(),
+        Shape::Square { corner, side } => "square at "
+            + show(corner)
+            + " area="
+            + util::square(side).to_string(),
+    }
+}
+
+fn show(p: Point) -> String {
+    format!("{:?}", p)
+}
+
+#[test]
+fn describe_circle() -> Bool {
+    describe(Shape::Circle(ORIGIN, 1)) == "circle at Point { x: 0, y: 0 } r=1"
+}

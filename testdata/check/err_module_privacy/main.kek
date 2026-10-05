@@ -1,0 +1,15 @@
+// Private methods and fields of a module (docs/modules.md), checked after
+// type checking.
+
+use a::Counter;
+
+fn uses() -> Int {
+    let c = Counter::new();
+    let n = c.bump(); // ERROR "method `bump` of `a::Counter` is private to module `a`"
+    let v = c.value; // ERROR "field `value` of `a::Counter` is private to module `a`"
+    let d = Counter { value: 1, label: "x" }; // ERROR "field `value` of `a::Counter` is private to module `a`"
+    let e = Counter::fresh(); // ERROR "associated function `fresh` of `a::Counter` is private to module `a`"
+    let Counter { label, .. } = e;
+    let m = a::Meters(3); // ERROR "field `0` of `a::Meters` is private to module `a`"
+    n + v + d.get() + label.len() + m.get()
+}

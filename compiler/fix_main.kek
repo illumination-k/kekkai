@@ -24,6 +24,8 @@ struct FixFile {
     name: String,
     mut text: String,
     orig: String,
+    // the module of the file (FeSource.module)
+    module: String,
 }
 
 struct FixEdit {
@@ -108,7 +110,13 @@ fn fix_program(path: String, write: Bool, fs: &Fs, log: &Log) -> Int {
         } else {
             s.name
         };
-        files.push(FixFile { path: s.name, name: name, text: s.text, orig: s.text });
+        files.push(FixFile {
+            path: s.name,
+            name: name,
+            text: s.text,
+            orig: s.text,
+            module: s.module,
+        });
     }
     let mut total = 0;
     if kind == "" {
@@ -230,7 +238,7 @@ fn fix_find(files: Vec<FixFile>, name: String) -> Option<FixFile> {
 fn fix_check(files: Vec<FixFile>, kind: String) -> ChkResult {
     let mut srcs = Vec::new();
     for f in files {
-        srcs.push(FeSource { name: f.name, text: f.text });
+        srcs.push(FeSource { name: f.name, text: f.text, module: f.module });
     }
     if kind == "core" {
         let core = chk_parse_core_from(srcs);

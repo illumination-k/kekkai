@@ -1133,15 +1133,19 @@ fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         let mut fns = Vec::new();
         for d in l.prog.defs {
             let o = irjson_obj();
-            irjson_set(o, "name", IrjVal::Str(d.name));
+            irjson_set(o, "name", IrjVal::Str(ast_display_name(d.name)));
             irjson_set(o, "file", IrjVal::Str(d.pos.file));
             irjson_set(o, "line", irjson_int(d.pos.line));
-            irjson_set(o, "sig", IrjVal::Str(d.sig));
+            irjson_set(o, "sig", IrjVal::Str(ast_display_name(d.sig)));
             irjson_set(o, "caps", irjson_strs(d.caps));
             irjson_set(o, "hash", IrjVal::Str(d.hash));
             irjson_set(o, "hash_lits", IrjVal::Str(d.hash_lits));
             irjson_set(o, "trans", IrjVal::Str(d.trans));
-            irjson_set(o, "deps", irjson_strs(d.deps));
+            let mut deps = Vec::new();
+            for x in d.deps {
+                deps.push(ast_display_name(x));
+            }
+            irjson_set(o, "deps", irjson_strs(deps));
             fns.push(irjson_val(o));
         }
         let o = irjson_obj();
@@ -1155,7 +1159,7 @@ fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut lines = Vec::new();
     lines.push("program " + l.prog.hash);
     for d in l.prog.defs {
-        lines.push(dh_short(d.hash) + " " + dh_short(d.trans) + " " + d.name);
+        lines.push(dh_short(d.hash) + " " + dh_short(d.trans) + " " + ast_display_name(d.name));
     }
     frontend_print(log, lines);
     0

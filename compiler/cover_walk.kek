@@ -167,12 +167,10 @@ fn cov_div_stmt(s: AstStmt, loops: Int) -> Bool {
         AstStmt::Assign(a) => cov_div_expr(a.value, loops),
         AstStmt::FieldAssign(a) => cov_div_expr(a.target.x, loops) || cov_div_expr(a.value, loops),
         // a labeled `break` / `continue` may leave outer loops too
-        AstStmt::Break(b) => loops == 0
-            || b.label != ""
-            || match b.value {
-                Some(v) => cov_div_expr(v, loops),
-                None => false,
-            },
+        AstStmt::Break(b) => loops == 0 || b.label != "" || match b.value {
+            Some(v) => cov_div_expr(v, loops),
+            None => false,
+        },
         AstStmt::Continue(c) => loops == 0 || c.label != "",
         // `loop` ends only by `break` (or never)
         AstStmt::While(x) => x.is_loop

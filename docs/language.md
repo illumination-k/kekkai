@@ -5,7 +5,12 @@
 ## プログラムの構成
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
-- トップレベルは `struct`・`enum`・`trait`・`impl`・`fn`・`type`・`const` のみ。グローバル変数はない（＝暗黙の権限がない）。`const` は純粋な値で、使うたびに評価される（下記「定数」）。
+- ディレクトリのサブディレクトリはモジュール（`foo/` が `foo`、`a/b/` が `a::b`。`mod foo;` は書かない）。直下のファイルはルートモジュール。設計は [modules.md](modules.md)。
+  - 項目は `pub` を付けない限り、そのモジュールと子孫からだけ見える。固有の `impl` のメソッドと struct のフィールドも同じ（`pub fn`・`pub x: Int`）。ルートモジュールの項目は `pub` なしでどこからでも `crate::x` で名指せる。
+  - パスは `foo::bar()`・`foo::Type::new()`・`foo::Enum::V`・`crate::x`・`super::x`・`self::x`。先頭は `crate`・`self`・`super`・子モジュール・`use` した名前。
+  - `use foo::bar;`・`use foo::{a, b as c};`・`use foo::*;`・`use crate::util;` はそのファイルだけに効く。core と prelude の名前はどこからでも見える。trait のメソッドは `use` しなくても見つかる。
+  - `#[main]`・`#[handler]` はルートモジュールに置く。診断・`kek caps`・`kek test` などはモジュールの項目を `foo::bar` と表示する。
+- トップレベルは `use` と `struct`・`enum`・`trait`・`impl`・`fn`・`type`・`const`（それぞれ `pub` を付けられる）のみ。グローバル変数はない（＝暗黙の権限がない）。`const` は純粋な値で、使うたびに評価される（下記「定数」）。
 - どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`Vec`／`Int`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`／`BTreeMap`／`BTreeSet`／`VecDeque`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）

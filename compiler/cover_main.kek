@@ -173,7 +173,11 @@ fn cov_with_harness(p: CovProg) -> FeProgram {
         all.push(s);
     }
     if !p.main {
-        all.push(FeSource { name: "<prelude>/kek_test_main.kek", text: testrun_harness(p.tests) });
+        all.push(FeSource {
+            name: "<prelude>/kek_test_main.kek",
+            text: testrun_harness(p.tests),
+            module: "",
+        });
     }
     for s in prelude_sources() {
         all.push(s);
@@ -235,12 +239,12 @@ fn cov_write_tests(p: CovProg, out_dir: String, fs: &Fs, log: &Log) -> Bool {
     let mut names = Vec::new();
     let mut keys = Vec::new();
     for t in p.tests {
-        names.push(t.name + "\n");
+        names.push(ast_display_name(t.name) + "\n");
         let tr = match p.dh.by_name.get(t.name) {
             Some(d) => d.trans,
             None => "",
         };
-        keys.push(t.name + "\t" + tr + "\n");
+        keys.push(ast_display_name(t.name) + "\t" + tr + "\n");
     }
     tool_write(fs, log, out_dir + "/tests.txt", names.join(""))
         && tool_write(fs, log, out_dir + "/testkeys.txt", keys.join(""))

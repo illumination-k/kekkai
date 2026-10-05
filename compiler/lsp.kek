@@ -641,7 +641,7 @@ fn lsp_top_names(t: String) -> Vec<String> {
 fn lsp_sources(srv: LspServer, fs: &Fs, path: String) -> Vec<FeSource> {
     let text = lsp_text(srv, fs, path).unwrap_or("");
     let mut one = Vec::new();
-    one.push(FeSource { name: path, text: text });
+    one.push(FeSource { name: path, text: text, module: "" });
     let dir = lsp_dir(path);
     let entries = match fs.list(if dir == "" { "/" } else { dir }) {
         Ok(es) => es,
@@ -678,7 +678,7 @@ fn lsp_sources(srv: LspServer, fs: &Fs, path: String) -> Vec<FeSource> {
                 }
             }
         }
-        srcs.push(FeSource { name: p, text: t });
+        srcs.push(FeSource { name: p, text: t, module: "" });
     }
     if srcs.len() < 2 {
         return one;

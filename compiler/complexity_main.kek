@@ -177,7 +177,7 @@ fn cx_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
         log.info(irjson_encode(irjson_val(o), false));
     } else {
-        log.info(cx_text(findings, allowed, defs, lim, all));
+        log.info(ast_display_name(cx_text(findings, allowed, defs, lim, all)));
     }
     if findings.len() > 0 {
         return 1;
@@ -657,11 +657,11 @@ fn cx_metrics_json(m: CxMetrics) -> IrjObj {
 
 fn cx_def_json(d: CxDef) -> IrjObj {
     let o = irjson_obj();
-    irjson_set(o, "name", IrjVal::Str(d.d.name));
+    irjson_set(o, "name", IrjVal::Str(ast_display_name(d.d.name)));
     irjson_set(o, "file", IrjVal::Str(d.d.pos.file));
     irjson_set(o, "line", irjson_int(d.d.pos.line));
     irjson_set(o, "col", irjson_int(d.d.pos.col));
-    irjson_set(o, "sig", IrjVal::Str(d.d.sig));
+    irjson_set(o, "sig", IrjVal::Str(ast_display_name(d.d.sig)));
     irjson_set(o, "hash", IrjVal::Str(d.d.hash));
     irjson_set(o, "cognitive", irjson_int(d.m.cognitive));
     irjson_set(o, "cyclomatic", irjson_int(d.m.cyclomatic));

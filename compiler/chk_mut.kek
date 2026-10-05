@@ -21,7 +21,9 @@
 // mutation, but may build values from borrowed data (struct literals,
 // constructors, `let`, returns): every call into them taints its result
 // with the views of its arguments instead (`shared`, or `shared-contents`
-// for a function marked `#[fresh]`).
+// for a function marked `#[fresh]`). A function marked `#[owned]`
+// (`Deserialize::from_value`) builds an owned value from what it reads, as
+// `clone` does: its result is not tainted.
 
 struct MuBind {
     id: Int,
@@ -82,7 +84,8 @@ struct MuCx {
     always: HashMap<String, Bool>,
     // "S.f" -> the demand of a struct field declared with a reference type
     field_refs: HashMap<String, Int>,
-    // the names of functions implementing Clone::clone
+    // the names of functions implementing Clone::clone or an `#[owned]`
+    // trait method: their results are owned
     clones: HashMap<String, Bool>,
     // functions whose signature is fixed by a trait
     fixed: HashMap<String, Bool>,
@@ -242,6 +245,9 @@ fn mu_new_cx(info: ChkInfo, f: AstFile) -> MuCx {
                                 mu_compare_sig(cx, fun, tf);
                                 if ast_has_attr(tf.decl, "fresh") {
                                     cx.fresh.insert(fun.name, true);
+                                }
+                                if ast_has_attr(tf.decl, "owned") {
+                                    cx.clones.insert(fun.name, true);
                                 }
                             }
                             None => {}
@@ -2004,7 +2010,9 @@ fn mu_fn_value_shared(cx: MuCx, a: AstExpr, callee: String) {
 }
 
 fn mu_is_clone(cx: MuCx, fun: ChkFunc) -> Bool {
-    fun.name == "Clone::clone" || cx.clones.contains_key(fun.name)
+    fun.name == "Clone::clone"
+        || cx.clones.contains_key(fun.name)
+        || ast_has_attr(fun.decl, "owned")
 }
 
 // ---- information flow (docs/authz-flow.md) ----

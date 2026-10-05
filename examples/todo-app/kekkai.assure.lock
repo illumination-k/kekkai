@@ -1,0 +1,1224 @@
+{
+  "version": 1,
+  "config": "388206cf55809aaf0b75c7cc1b88d3b8",
+  "definitions": {
+    "<Credentials as Deserialize>::from_value": {
+      "hash": "3b47026d0f5f102bcfe7c7119be00500",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<ErrorBody as Serialize>::to_value": {
+      "hash": "1018f88cc6ac60a93c1aa9dc2ee2c62f",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<NewTodo as Deserialize>::from_value": {
+      "hash": "7ea472b5e2f8050f12840f260caa1998",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<Session as Deserialize>::from_value": {
+      "hash": "ce5dacad6db57ac583b1f27c0764682e",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<Session as Serialize>::to_value": {
+      "hash": "0001546a51397df4c32a93800747c8af",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<Todo as Deserialize>::from_value": {
+      "hash": "69c8d34156c30ff364e577f34d115229",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<Todo as Serialize>::to_value": {
+      "hash": "c5d1cf0505dcc16d191ba6fdfda7a00e",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<TodoView as Serialize>::to_value": {
+      "hash": "e18a0668fc721c047dde230ca465744d",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<UserRecord as Deserialize>::from_value": {
+      "hash": "59a3d5649d719a068e05e729045b154a",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<UserRecord as Serialize>::to_value": {
+      "hash": "d4b7085d256241965e09ed0779909676",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "<UserView as Serialize>::to_value": {
+      "hash": "1f0b8921f25f5223ba055b34654a8129",
+      "file": "server/main.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "account": {
+      "hash": "8c54c62e5afde1c63812b0f084fadb55",
+      "file": "server/main.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock",
+            "Db",
+            "Log",
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "auth_error": {
+      "hash": "581379e8759b59848e5c72e7c3e1ec7e",
+      "file": "server/main.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "body": {
+      "hash": "8257ca6b17633948d83e80a1016fc7f5",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "can_edit": {
+      "hash": "f38d23f16a36f044fed731d9036855c6",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [
+        {
+          "kind": "policy",
+          "reason": "a todo is changed only by the user who created it",
+          "owner": "illumination-k",
+          "expires": ""
+        }
+      ],
+      "waivers": [
+        {
+          "guarantee": "assumption",
+          "items": [
+            "policy"
+          ],
+          "reason": "initial ledger of the todo app",
+          "owner": "illumination-k",
+          "expires": "2027-12-31",
+          "approved": "2026-10-05"
+        }
+      ]
+    },
+    "change": {
+      "hash": "d407babca4aa7fe1dd124a7cc4ab4986",
+      "file": "server/main.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "cookie": {
+      "hash": "a0e48ab84d3dd6710dfd617606b5cb0d",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": true,
+          "evidence": "smt"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "create": {
+      "hash": "2654af5e34afd325a7f67c29cf2a49f8",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": false,
+          "evidence": "smt"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "credentials_are_read_checked_and_labeled": {
+      "hash": "399cec51cdfe89c25915e05d6b425e53",
+      "file": "server/auth.kek",
+      "entry": "test",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "current_user": {
+      "hash": "76b5bca1f7e7f6c569f3db8000d2be83",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock",
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "decode": {
+      "hash": "cfd822081c2a4c14babbb50fa33ac05d",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "end_session": {
+      "hash": "06db04898f68bceaf59d878488343a2a",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "handle": {
+      "hash": "b6064fd84f8b60875d1961d28c712e7e",
+      "file": "server/main.kek",
+      "entry": "handler",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock",
+            "Db",
+            "Log",
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "hex_digit": {
+      "hash": "4bcc6b2d63784d68ed5d1f8efdfe116f",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": false,
+          "evidence": "smt"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "index_key": {
+      "hash": "f23ba3b9a6b5330b4beb7879e98aa591",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "json_error": {
+      "hash": "ddb45fccebded95b00539751fe925d0c",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "list": {
+      "hash": "70e40198f858fc334b3475ebaad1f001",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "load": {
+      "hash": "c9138a47fac65be0031cb9a94eeb1f73",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "login": {
+      "hash": "390c0e82a1202e06b07f4d3d32ffb3df",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "others_cannot_edit": {
+      "hash": "5dc0b33022e7909cf76c4333a3596327",
+      "file": "server/todos.kek",
+      "entry": "test",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "password_hash": {
+      "hash": "78e14e4b30e813b3472be6dd64d203f1",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [
+        {
+          "kind": "flow.declassify",
+          "call": "hash",
+          "reason": "only a salted, stretched hash of the password is stored",
+          "owner": "illumination-k",
+          "expires": "2027-12-31"
+        }
+      ],
+      "waivers": [
+        {
+          "guarantee": "assumption",
+          "items": [
+            "flow.declassify(hash)"
+          ],
+          "reason": "initial ledger of the todo app",
+          "owner": "illumination-k",
+          "expires": "2027-12-31",
+          "approved": "2026-10-05"
+        }
+      ]
+    },
+    "password_ok": {
+      "hash": "ed9b73a200a34a948866475e34ac8796",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [
+        {
+          "kind": "flow.declassify",
+          "call": "expose_unchecked",
+          "reason": "reveals only whether the password is long enough",
+          "owner": "illumination-k",
+          "expires": "2027-12-31"
+        }
+      ],
+      "waivers": [
+        {
+          "guarantee": "assumption",
+          "items": [
+            "flow.declassify(expose_unchecked)"
+          ],
+          "reason": "initial ledger of the todo app",
+          "owner": "illumination-k",
+          "expires": "2027-12-31",
+          "approved": "2026-10-05"
+        }
+      ]
+    },
+    "random_hex": {
+      "hash": "919c0c5ab7baa62524cd68994d136798",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "read_ids": {
+      "hash": "521f904f43f4f82eb4a6038d63190d0a",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Tx"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "remove": {
+      "hash": "77719f5716f02fec940e4e6f48f99c50",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "authz.requires.Edit(t)": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "reply": {
+      "hash": "4320dae0465bd5c7d2760f98d6850dde",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "readonly": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "session_cookie": {
+      "hash": "f50f2e12a28c386c4c15ba5be23f6cc0",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "session_key": {
+      "hash": "fad23678dd1de748b351f7ff3693d00b",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "session_ttl": {
+      "hash": "c27adad6ccbfaffec31d2263b9dc4389",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "session_valid": {
+      "hash": "910d41306ea6f4588816044d3bd7644d",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "sessions_expire": {
+      "hash": "929eb570c657756ea1bcf27ae663762c",
+      "file": "server/auth.kek",
+      "entry": "test",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "signed_in": {
+      "hash": "f56bdd2a461d8e108c30be6bb7c9e599",
+      "file": "server/main.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock",
+            "Db",
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "signup": {
+      "hash": "14d4c57e58eff2873d764539b2ca6ad1",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db",
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "signup_then_login": {
+      "hash": "1fca6a180b26c2008fcdfa86306881ee",
+      "file": "server/auth.kek",
+      "entry": "test",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db",
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "flow.noninterference": {
+          "value": false,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "start_session": {
+      "hash": "7987f863de8478db5b682cc7d9ad223f",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock",
+            "Db",
+            "Random"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "store_error": {
+      "hash": "1e9dc61c40b1da55e719c28888b9f83d",
+      "file": "server/http.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "stretch": {
+      "hash": "0014ecb2d1a1fb2f9fb5f6bc2f464d90",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "todo_key": {
+      "hash": "044c3a21775a531e1428747f1f3f2c6c",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "todos": {
+      "hash": "5198215351d661c8e4191651d6028cc9",
+      "file": "server/main.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db",
+            "Log"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "toggle": {
+      "hash": "ef0aa43fd545f65b81622aaf2361b413",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": true,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Db"
+          ],
+          "evidence": "type"
+        },
+        "tx.linear": {
+          "value": true,
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "authz.requires.Edit(t)": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "user_key": {
+      "hash": "2cbc1e9bb6367e08df5f1ef86355964e",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "usernames": {
+      "hash": "a74be37f2b201e09f572f37337d0fba0",
+      "file": "server/auth.kek",
+      "entry": "test",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "valid_username": {
+      "hash": "1701eefb6d5b062577610eb6a4406c1c",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": true,
+          "evidence": "smt"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "view": {
+      "hash": "12a79b35cbdd2164b8e4a85e2e95c95c",
+      "file": "server/todos.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    }
+  }
+}

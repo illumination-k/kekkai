@@ -49,6 +49,19 @@ run = "./kek bootstrap-update"
 description = "Build a #[handler] program and serve it locally on workerd (usage: mise run dev -- examples/todo/todo.kek)"
 run = "scripts/dev.sh"
 
+[tasks.todo-app]
+description = "Serve examples/todo-app (frontend + Kekkai API with accounts) on http://127.0.0.1:8787"
+run = "ASSETS=examples/todo-app/public OUT=out/todo-app scripts/dev.sh examples/todo-app/server"
+
+[tasks.todo-app-check]
+description = "Tests of examples/todo-app and its assurance ledger (kek assure check)"
+dir = "examples/todo-app"
+run = ["../../kek test server", "../../kek assure check server"]
+
+[tasks.hooks]
+description = "Install the pre-commit hook that runs kek assure check on the projects a commit touches"
+run = "scripts/install-hooks.sh"
+
 [tasks.bench]
 description = "Time mutate/test/cover/hash/build cold and warm; with a git ref, compare against it (scripts/bench.sh [ref])"
 run = "scripts/bench.sh"

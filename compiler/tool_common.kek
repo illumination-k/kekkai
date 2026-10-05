@@ -441,64 +441,83 @@ fn tool_write(fs: &Fs, log: &Log, p: String, text: String) -> Bool {
 
 // ---- kekkai.toml ----
 //
-// The project configuration is a TOML subset: `[section]` /
-// `[section.sub]` headers, `key = value` with strings, integers, booleans
-// and arrays of those (arrays may span lines), and `#` comments. It is
-// returned as a ToolJson object: section -> {key -> value}; keys before
-// the first header are in the section "".
+// The project configuration is TOML, read by the core library (Toml). It
+// is returned as a ToolJson object: section -> {key -> value}; keys before
+// the first header are in the section "". A table inside a section is the
+// section `name.key` (`[module."app/billing"]` is the section
+// `module."app/billing"`), listed when it has keys of its own or no tables.
+// Floats are truncated to integers.
 
 fn tool_toml_parse(text: String) -> Result<ToolJson, String> {
+    let doc = match Toml::parse(text) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err("kekkai.toml:" + e.line.to_string() + ": " + e.msg);
+        }
+    };
     let root = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
-    let mut section = "";
-    let mut cur = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
-    tool_toml_put(root, "", ToolJson::Obj(cur));
-    let lines = text.split("\n");
-    let mut ln = 0;
-    while ln < lines.len() {
-        let mut line = tool_toml_strip(lines.get(ln).unwrap_or(""));
-        ln = ln + 1;
-        if line == "" {
-            continue;
-        }
-        if line.starts_with("[") {
-            if !line.ends_with("]") {
-                return Err("kekkai.toml:" + ln.to_string() + ": bad section header");
-            }
-            section = line.slice(1, line.len() - 1).trim();
-            cur = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
-            match root.vals.get(section) {
-                Some(ToolJson::Obj(o)) => {
-                    cur = o;
+    let top = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+    tool_toml_put(root, "", ToolJson::Obj(top));
+    match doc {
+        Value::Map(es) => {
+            for e in es {
+                match e.1 {
+                    Value::Map(inner) => tool_toml_section(root, tool_toml_key(e.0), inner),
+                    v => tool_toml_put(top, e.0, tool_value_json(v)),
                 }
-                _ => tool_toml_put(root, section, ToolJson::Obj(cur)),
             }
-            continue;
         }
-        let eq = match line.index_of("=") {
-            Some(i) => i,
-            None => {
-                return Err("kekkai.toml:" + ln.to_string() + ": expected key = value");
-            }
-        };
-        let mut key = line.slice(0, eq).trim();
-        if key.starts_with("\"") && key.ends_with("\"") && key.len() >= 2 {
-            key = key.slice(1, key.len() - 1);
-        }
-        let mut value = line.slice(eq + 1, line.len()).trim();
-        // an array continues until its brackets balance
-        while value.starts_with("[") && !tool_toml_balanced(value) && ln < lines.len() {
-            value = value + " " + tool_toml_strip(lines.get(ln).unwrap_or(""));
-            ln = ln + 1;
-        }
-        let p = ToolJsonParser { s: tool_toml_to_json(value), i: 0, err: "" };
-        let v = tool_json_value(p);
-        tool_json_ws(p);
-        if p.err != "" || p.i < p.s.len() {
-            return Err("kekkai.toml:" + ln.to_string() + ": bad value for " + key);
-        }
-        tool_toml_put(cur, key, v);
+        _ => {}
     }
     Ok(ToolJson::Obj(root))
+}
+
+// tool_toml_section adds the section name (and its tables) to root.
+fn tool_toml_section(root: ToolJsonObj, name: String, es: Vec<(String, Value)>) {
+    let sec = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+    let mut plain = false;
+    let mut tables = false;
+    for e in es {
+        match e.1 {
+            Value::Map(_) => {
+                tables = true;
+            }
+            v => {
+                plain = true;
+                tool_toml_put(sec, e.0, tool_value_json(v));
+            }
+        }
+    }
+    if plain || !tables {
+        tool_toml_put(root, name, ToolJson::Obj(sec));
+    }
+    for e in es {
+        match e.1 {
+            Value::Map(inner) => tool_toml_section(root, name + "." + tool_toml_key(e.0), inner),
+            _ => {}
+        }
+    }
+}
+
+// tool_toml_key is a key as written in a header: bare, or quoted.
+fn tool_toml_key(k: String) -> String {
+    let mut i = 0;
+    while i < k.len() {
+        let c = k.char_at(i).unwrap_or(0);
+        let bare = (c >= 65 && c <= 90)
+            || (c >= 97 && c <= 122)
+            || (c >= 48 && c <= 57)
+            || c == 95
+            || c == 45;
+        if !bare {
+            return "\"" + k + "\"";
+        }
+        i = i + 1;
+    }
+    if k == "" {
+        return "\"\"";
+    }
+    k
 }
 
 fn tool_toml_put(mut o: ToolJsonObj, k: String, v: ToolJson) {
@@ -508,52 +527,39 @@ fn tool_toml_put(mut o: ToolJsonObj, k: String, v: ToolJson) {
     o.vals.insert(k, v);
 }
 
-// tool_toml_strip drops a `#` comment (outside strings) and surrounding
-// blanks.
-fn tool_toml_strip(line: String) -> String {
-    let mut in_str = false;
-    let mut i = 0;
-    while i < line.len() {
-        let c = line.char_at(i).unwrap_or(0);
-        if c == 92 && in_str {
-            i = i + 2;
-            continue;
+// tool_value_json converts a value of the core library's data model.
+fn tool_value_json(v: Value) -> ToolJson {
+    match v {
+        Value::Null => ToolJson::Null,
+        Value::Bool(b) => ToolJson::Bool(b),
+        Value::Int(n) => ToolJson::Num(n),
+        Value::Float(f) => {
+            let mut end = 0;
+            while end < f.len() {
+                let c = f.char_at(end).unwrap_or(0);
+                if !((c >= 48 && c <= 57) || ((c == 45 || c == 43) && end == 0)) {
+                    break;
+                }
+                end = end + 1;
+            }
+            ToolJson::Num(f.slice(0, end).replace("+", "").parse_int().unwrap_or(0))
         }
-        if c == 34 {
-            in_str = !in_str;
-        } else if c == 35 && !in_str {
-            return line.slice(0, i).trim();
+        Value::Str(s) => ToolJson::Str(s),
+        Value::Seq(xs) => {
+            let mut out = Vec::new();
+            for x in xs {
+                out.push(tool_value_json(x));
+            }
+            ToolJson::Arr(out)
         }
-        i = i + 1;
+        Value::Map(es) => {
+            let o = ToolJsonObj { keys: Vec::new(), vals: HashMap::new() };
+            for e in es {
+                tool_toml_put(o, e.0, tool_value_json(e.1));
+            }
+            ToolJson::Obj(o)
+        }
     }
-    line.trim()
-}
-
-fn tool_toml_balanced(s: String) -> Bool {
-    let mut depth = 0;
-    let mut in_str = false;
-    let mut i = 0;
-    while i < s.len() {
-        let c = s.char_at(i).unwrap_or(0);
-        if c == 92 && in_str {
-            i = i + 2;
-            continue;
-        }
-        if c == 34 {
-            in_str = !in_str;
-        } else if !in_str && c == 91 {
-            depth = depth + 1;
-        } else if !in_str && c == 93 {
-            depth = depth - 1;
-        }
-        i = i + 1;
-    }
-    depth == 0
-}
-
-// tool_toml_to_json drops a trailing comma inside arrays (`[1, 2,]`).
-fn tool_toml_to_json(v: String) -> String {
-    v.replace(",]", "]").replace(", ]", "]")
 }
 
 // tool_config reads ./kekkai.toml (an empty configuration when absent).

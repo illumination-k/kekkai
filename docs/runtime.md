@@ -4,7 +4,7 @@
 
 - ランタイム本体：`js/kekkai_runtime.js`（`kek build` が `kekkai_runtime.js` として出力する）。WasmGCのモジュールは文字列や `HashMap` などを自前で持ち（`lib/prelude`・`lib/core`）、JSから受け取るのはcapabilityの操作だけである。文字列は線形メモリを通してUTF-16で受け渡す
 - Workersのエントリポイント：`compiler/glue_worker.kek`（`kek build`）が `worker.js` と `wrangler.toml` を生成する
-- 例：`examples/`（todo、冪等な決済、Webhookのファンアウト）
+- 例：`examples/`（todo、冪等な決済、Webhookのファンアウト、フロントエンドとアカウント付きの todo-app）
 
 ## 1. 何を言語が決め、何をアダプタが決めるか
 
@@ -163,7 +163,7 @@ commitとoutboxの記録を同じトランザクションにする本当の意�
 mise run dev -- examples/todo/todo.kek
 ```
 
-`scripts/dev.sh` は `-target do` でビルドし、workerd で配信する（Cloudflareのアカウントもネットワークも要らない）。`Db` はDurable ObjectのSQLiteストレージで、データは出力ディレクトリの `.state` に残る。outboxはデフォルトで `log` になる。設定は環境変数 `PORT`、`OUT`、`OUTBOX`、`SHARD` で変えられる。D1のバックエンドを使うには、生成された `wrangler.toml` でCloudflareのツールにデプロイする。
+`scripts/dev.sh` は `-target do` でビルドし、workerd で配信する（Cloudflareのアカウントもネットワークも要らない）。`Db` はDurable ObjectのSQLiteストレージで、データは出力ディレクトリの `.state` に残る。outboxはデフォルトで `log` になる。設定は環境変数 `PORT`、`OUT`、`OUTBOX`、`SHARD` で変えられる。`ASSETS=dir` を付けると、Workers Static Assets と同じく GET で存在するファイルは `dir` から返し、それ以外をプログラムに渡す（`examples/todo-app`）。D1のバックエンドを使うには、生成された `wrangler.toml` でCloudflareのツールにデプロイする。
 
 ## 6. テスト
 

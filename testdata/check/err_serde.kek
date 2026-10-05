@@ -1,0 +1,31 @@
+// Serialization: labeled data can be read but not written, and only the
+// core library may mark a function #[owned].
+struct Secret {}
+
+#[derive(Serialize)] // ERROR "cannot derive `Serialize` for `Account`: field `password` holds labeled data"
+struct Account {
+    name: String,
+    password: Labeled<Secret, String>,
+}
+
+#[derive(Deserialize)]
+struct Login {
+    name: String,
+    password: Labeled<Secret, String>,
+}
+
+#[owned] // ERROR "`#[owned]` is only allowed in the core library and the prelude"
+fn copy(v: &Value) -> Value {
+    v.clone()
+}
+
+fn leak(l: Login) -> String {
+    Json::to_string(&l.password) // ERROR "Serialize"
+}
+
+fn read(s: String) -> Option<Login> {
+    match Json::from_str::<Login>(s) {
+        Ok(l) => Some(l),
+        Err(_) => None,
+    }
+}

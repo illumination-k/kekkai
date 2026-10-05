@@ -1,0 +1,598 @@
+// Time (docs/time.md): instants, durations and calendar dates, computed in
+// plain Kekkai. Reading the clock is the only effect, and it takes the
+// capability: `Timestamp::now(clock)`.
+//
+//   let expires = Timestamp::now(clock).add(Duration::days(7));
+//   expires.to_rfc3339()                  // "2026-10-12T09:30:00Z"
+//   Timestamp::parse("2026-10-05T18:30:00+09:00")
+//   Date::parse("2026-10-05")?.weekday()  // Weekday::Mon
+//
+// Times are UTC or a fixed offset from it: there is no time zone database
+// (no daylight saving rules) and no leap seconds. The proleptic Gregorian
+// calendar is used for every year, 0000 to 9999 in text.
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+struct Timestamp {
+    __ms: Int,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+struct Duration {
+    __ms: Int,
+}
+
+// A calendar date. Built by Date::new or Date::parse, so it is always valid.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+struct Date {
+    __y: Int,
+    __m: Int,
+    __d: Int,
+}
+
+#[derive(PartialEq, Eq, Clone)]
+enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+// A date and a time of day at a fixed offset from UTC (minutes east):
+// what an RFC 3339 timestamp writes.
+#[derive(PartialEq, Eq, Clone)]
+struct DateTime {
+    date: Date,
+    hour: Int,
+    minute: Int,
+    second: Int,
+    millis: Int,
+    offset_minutes: Int,
+}
+
+// ---- Duration ----
+
+impl Duration {
+    fn ms(n: Int) -> Duration {
+        Duration { __ms: n }
+    }
+
+    fn seconds(n: Int) -> Duration {
+        Duration { __ms: n * 1000 }
+    }
+
+    fn minutes(n: Int) -> Duration {
+        Duration { __ms: n * 60000 }
+    }
+
+    fn hours(n: Int) -> Duration {
+        Duration { __ms: n * 3600000 }
+    }
+
+    fn days(n: Int) -> Duration {
+        Duration { __ms: n * 86400000 }
+    }
+
+    fn as_ms(&self) -> Int {
+        self.__ms
+    }
+
+    // as_seconds rounds toward negative infinity.
+    fn as_seconds(&self) -> Int {
+        __time_floor_div(self.__ms, 1000)
+    }
+
+    fn add(&self, other: Duration) -> Duration {
+        Duration { __ms: self.__ms + other.__ms }
+    }
+
+    fn sub(&self, other: Duration) -> Duration {
+        Duration { __ms: self.__ms - other.__ms }
+    }
+
+    fn mul(&self, k: Int) -> Duration {
+        Duration { __ms: self.__ms * k }
+    }
+
+    fn is_negative(&self) -> Bool {
+        self.__ms < 0
+    }
+
+    // to_string is the duration in units: "1d2h3m4s5ms", "-90s", "0s".
+    fn to_string(&self) -> String {
+        if self.__ms == 0 {
+            return "0s";
+        }
+        let mut rest = self.__ms;
+        let mut sign = "";
+        if rest < 0 {
+            sign = "-";
+            rest = 0 - rest;
+        }
+        let mut parts = Vec::new();
+        parts.push(sign);
+        let units = __time_units();
+        for u in units.iter() {
+            let n = rest / u.1;
+            if n > 0 {
+                parts.push(n.to_string() + u.0);
+                rest = rest - n * u.1;
+            }
+        }
+        parts.join("")
+    }
+
+    // parse reads what to_string writes: a sequence of `<n><unit>` with the
+    // units d, h, m, s and ms, optionally signed ("1h30m", "-500ms").
+    fn parse(s: String) -> Result<Duration, SerdeError> {
+        let mut i = 0;
+        let n = s.len();
+        let mut neg = false;
+        if n > 0 && (s.char_at(0).unwrap_or(0) == 45 || s.char_at(0).unwrap_or(0) == 43) {
+            neg = s.char_at(0).unwrap_or(0) == 45;
+            i = 1;
+        }
+        if i >= n {
+            return Err(SerdeError::new("expected a duration such as 1h30m"));
+        }
+        let mut total = 0;
+        while i < n {
+            let start = i;
+            while i < n && __time_digit(s.char_at(i).unwrap_or(0)) {
+                i = i + 1;
+            }
+            if i == start {
+                return Err(SerdeError::new("expected a duration such as 1h30m"));
+            }
+            let k = s.slice(start, i).parse_int().unwrap_or(-1);
+            let ustart = i;
+            while i < n && !__time_digit(s.char_at(i).unwrap_or(0)) {
+                i = i + 1;
+            }
+            let unit = s.slice(ustart, i);
+            let mut scale = 0;
+            for u in __time_units().iter() {
+                if u.0 == unit {
+                    scale = u.1;
+                }
+            }
+            if scale == 0 || k < 0 || k > 9223372036854775807 / scale {
+                return Err(SerdeError::new("expected a duration such as 1h30m"));
+            }
+            total = total + k * scale;
+        }
+        Ok(Duration { __ms: if neg { 0 - total } else { total } })
+    }
+}
+
+fn __time_units() -> Vec<(String, Int)> {
+    let mut v = Vec::new();
+    v.push(("d", 86400000));
+    v.push(("h", 3600000));
+    v.push(("m", 60000));
+    v.push(("s", 1000));
+    v.push(("ms", 1));
+    v
+}
+
+// ---- Timestamp ----
+
+impl Timestamp {
+    // now reads the clock.
+    fn now(clock: &Clock) -> Timestamp {
+        Timestamp { __ms: clock.now_ms() }
+    }
+
+    fn from_unix_ms(ms: Int) -> Timestamp {
+        Timestamp { __ms: ms }
+    }
+
+    fn from_unix_seconds(s: Int) -> Timestamp {
+        Timestamp { __ms: s * 1000 }
+    }
+
+    fn unix_ms(&self) -> Int {
+        self.__ms
+    }
+
+    // unix_seconds rounds toward negative infinity.
+    fn unix_seconds(&self) -> Int {
+        __time_floor_div(self.__ms, 1000)
+    }
+
+    fn add(&self, d: Duration) -> Timestamp {
+        Timestamp { __ms: self.__ms + d.__ms }
+    }
+
+    fn sub(&self, d: Duration) -> Timestamp {
+        Timestamp { __ms: self.__ms - d.__ms }
+    }
+
+    // since is the time from earlier to self (negative if earlier is later).
+    fn since(&self, earlier: &Timestamp) -> Duration {
+        Duration { __ms: self.__ms - earlier.__ms }
+    }
+
+    fn is_before(&self, other: &Timestamp) -> Bool {
+        self.__ms < other.__ms
+    }
+
+    fn is_after(&self, other: &Timestamp) -> Bool {
+        self.__ms > other.__ms
+    }
+
+    // date is the UTC calendar date.
+    fn date(&self) -> Date {
+        self.at_offset(0).date
+    }
+
+    // at_offset is the date and time at offset_minutes east of UTC.
+    fn at_offset(&self, offset_minutes: Int) -> DateTime {
+        let local = self.__ms + offset_minutes * 60000;
+        let days = __time_floor_div(local, 86400000);
+        let in_day = local - days * 86400000;
+        DateTime {
+            date: __date_from_days(days),
+            hour: in_day / 3600000,
+            minute: in_day / 60000 % 60,
+            second: in_day / 1000 % 60,
+            millis: in_day % 1000,
+            offset_minutes: offset_minutes,
+        }
+    }
+
+    // to_rfc3339 is the UTC time: "2026-10-05T09:30:00Z", with ".123" when
+    // the milliseconds are not zero.
+    fn to_rfc3339(&self) -> String {
+        self.at_offset(0).to_rfc3339()
+    }
+
+    // parse reads an RFC 3339 date-time with an offset ("Z" or "+09:00";
+    // "t", "z" and a space for "T" are accepted, as in TOML).
+    fn parse(s: String) -> Result<Timestamp, SerdeError> {
+        Ok(DateTime::parse(s)?.timestamp())
+    }
+}
+
+// ---- Date ----
+
+impl Date {
+    // new is the date, if it exists (month 1-12, day within the month).
+    fn new(year: Int, month: Int, day: Int) -> Option<Date> {
+        if month < 1 || month > 12 || day < 1 || day > __days_in_month(year, month) {
+            return None;
+        }
+        Some(Date { __y: year, __m: month, __d: day })
+    }
+
+    fn year(&self) -> Int {
+        self.__y
+    }
+
+    fn month(&self) -> Int {
+        self.__m
+    }
+
+    fn day(&self) -> Int {
+        self.__d
+    }
+
+    fn is_leap_year(&self) -> Bool {
+        __is_leap(self.__y)
+    }
+
+    // days_since_epoch counts days from 1970-01-01.
+    fn days_since_epoch(&self) -> Int {
+        __days_from_civil(self.__y, self.__m, self.__d)
+    }
+
+    fn from_days_since_epoch(days: Int) -> Date {
+        __date_from_days(days)
+    }
+
+    fn add_days(&self, n: Int) -> Date {
+        __date_from_days(self.days_since_epoch() + n)
+    }
+
+    // days_until is the number of days from self to other.
+    fn days_until(&self, other: &Date) -> Int {
+        other.days_since_epoch() - self.days_since_epoch()
+    }
+
+    fn weekday(&self) -> Weekday {
+        // 1970-01-01 was a Thursday
+        match __time_floor_mod(self.days_since_epoch() + 3, 7) {
+            0 => Weekday::Mon,
+            1 => Weekday::Tue,
+            2 => Weekday::Wed,
+            3 => Weekday::Thu,
+            4 => Weekday::Fri,
+            5 => Weekday::Sat,
+            _ => Weekday::Sun,
+        }
+    }
+
+    // start_of_day is midnight at the start of the date, UTC.
+    fn start_of_day(&self) -> Timestamp {
+        Timestamp { __ms: self.days_since_epoch() * 86400000 }
+    }
+
+    // to_string is "YYYY-MM-DD".
+    fn to_string(&self) -> String {
+        __time_pad(self.__y, 4) + "-" + __time_pad(self.__m, 2) + "-" + __time_pad(self.__d, 2)
+    }
+
+    fn parse(s: String) -> Result<Date, SerdeError> {
+        if s.len() != 10 || s.char_at(4).unwrap_or(0) != 45 || s.char_at(7).unwrap_or(0) != 45 {
+            return Err(SerdeError::new("expected a date YYYY-MM-DD"));
+        }
+        let y = __time_num(s, 0, 4);
+        let m = __time_num(s, 5, 7);
+        let d = __time_num(s, 8, 10);
+        if y < 0 || m < 0 || d < 0 {
+            return Err(SerdeError::new("expected a date YYYY-MM-DD"));
+        }
+        match Date::new(y, m, d) {
+            Some(x) => Ok(x),
+            None => Err(SerdeError::new("no such date")),
+        }
+    }
+}
+
+impl Weekday {
+    // number is 1 for Monday to 7 for Sunday (ISO 8601).
+    fn number(&self) -> Int {
+        match self {
+            Weekday::Mon => 1,
+            Weekday::Tue => 2,
+            Weekday::Wed => 3,
+            Weekday::Thu => 4,
+            Weekday::Fri => 5,
+            Weekday::Sat => 6,
+            Weekday::Sun => 7,
+        }
+    }
+}
+
+// ---- DateTime ----
+
+impl DateTime {
+    // timestamp is the instant the date and time at the offset stand for.
+    fn timestamp(&self) -> Timestamp {
+        Timestamp {
+            __ms: self.date.days_since_epoch() * 86400000
+                + self.hour * 3600000
+                + self.minute * 60000
+                + self.second * 1000
+                + self.millis
+                - self.offset_minutes * 60000,
+        }
+    }
+
+    fn to_rfc3339(&self) -> String {
+        let mut s = self.date.to_string()
+            + "T"
+            + __time_pad(self.hour, 2)
+            + ":"
+            + __time_pad(self.minute, 2)
+            + ":"
+            + __time_pad(self.second, 2);
+        if self.millis != 0 {
+            s = s + "." + __time_pad(self.millis, 3);
+        }
+        if self.offset_minutes == 0 {
+            return s + "Z";
+        }
+        let mut o = self.offset_minutes;
+        let mut sign = "+";
+        if o < 0 {
+            sign = "-";
+            o = 0 - o;
+        }
+        s + sign + __time_pad(o / 60, 2) + ":" + __time_pad(o % 60, 2)
+    }
+
+    // parse reads an RFC 3339 date-time. Fractions of a second beyond
+    // milliseconds are truncated.
+    fn parse(s: String) -> Result<DateTime, SerdeError> {
+        let bad = SerdeError::new("expected a date-time such as 2026-10-05T09:30:00Z");
+        if s.len() < 20 {
+            return Err(bad);
+        }
+        let date = Date::parse(s.slice(0, 10))?;
+        let t = s.char_at(10).unwrap_or(0);
+        if !(t == 84 || t == 116 || t == 32)
+            || s.char_at(13).unwrap_or(0) != 58
+            || s.char_at(16).unwrap_or(0) != 58 {
+            return Err(bad);
+        }
+        let hour = __time_num(s, 11, 13);
+        let minute = __time_num(s, 14, 16);
+        let second = __time_num(s, 17, 19);
+        if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
+            return Err(SerdeError::new("no such time of day"));
+        }
+        let mut i = 19;
+        let mut millis = 0;
+        if s.char_at(i).unwrap_or(0) == 46 {
+            i = i + 1;
+            let start = i;
+            while i < s.len() && __time_digit(s.char_at(i).unwrap_or(0)) {
+                i = i + 1;
+            }
+            if i == start {
+                return Err(bad);
+            }
+            let frac = s.slice(start, i) + "00";
+            millis = __time_num(frac, 0, 3);
+        }
+        let rest = s.slice(i, s.len());
+        let mut offset = 0;
+        if rest == "Z" || rest == "z" {
+            offset = 0;
+        } else if rest.len() == 6
+            && (rest.char_at(0).unwrap_or(0) == 43 || rest.char_at(0).unwrap_or(0) == 45)
+            && rest.char_at(3).unwrap_or(0) == 58 {
+            let oh = __time_num(rest, 1, 3);
+            let om = __time_num(rest, 4, 6);
+            if oh < 0 || oh > 23 || om < 0 || om > 59 {
+                return Err(bad);
+            }
+            offset = oh * 60 + om;
+            if rest.char_at(0).unwrap_or(0) == 45 {
+                offset = 0 - offset;
+            }
+        } else {
+            return Err(bad);
+        }
+        Ok(DateTime {
+            date: date,
+            hour: hour,
+            minute: minute,
+            second: second,
+            millis: millis,
+            offset_minutes: offset,
+        })
+    }
+}
+
+// ---- serialization ----
+
+impl Serialize for Timestamp {
+    fn to_value(&self) -> Value {
+        Value::Str(self.to_rfc3339())
+    }
+}
+
+impl Deserialize for Timestamp {
+    fn from_value(v: &Value) -> Result<Timestamp, SerdeError> {
+        match v {
+            Value::Str(s) => Timestamp::parse(s),
+            _ => Err(v.mismatch("a date-time string")),
+        }
+    }
+}
+
+impl Serialize for Date {
+    fn to_value(&self) -> Value {
+        Value::Str(self.to_string())
+    }
+}
+
+impl Deserialize for Date {
+    fn from_value(v: &Value) -> Result<Date, SerdeError> {
+        match v {
+            Value::Str(s) => Date::parse(s),
+            _ => Err(v.mismatch("a date string")),
+        }
+    }
+}
+
+impl Serialize for Duration {
+    fn to_value(&self) -> Value {
+        Value::Str(self.to_string())
+    }
+}
+
+// A duration is read from a string with units ("1h30m") or from an
+// integer number of milliseconds.
+impl Deserialize for Duration {
+    fn from_value(v: &Value) -> Result<Duration, SerdeError> {
+        match v {
+            Value::Str(s) => Duration::parse(s),
+            Value::Int(n) => Ok(Duration::ms(n)),
+            _ => Err(v.mismatch("a duration such as \"1h30m\"")),
+        }
+    }
+}
+
+// ---- calendar arithmetic ----
+
+fn __time_floor_div(a: Int, b: Int) -> Int {
+    let q = a / b;
+    if a % b != 0 && (a < 0) != (b < 0) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+fn __time_floor_mod(a: Int, b: Int) -> Int {
+    a - __time_floor_div(a, b) * b
+}
+
+fn __is_leap(y: Int) -> Bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn __days_in_month(y: Int, m: Int) -> Int {
+    if m == 2 {
+        if __is_leap(y) { 29 } else { 28 }
+    } else if m == 4 || m == 6 || m == 9 || m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+// __days_from_civil and __date_from_days: Howard Hinnant's algorithms
+// (days since 1970-01-01 in the proleptic Gregorian calendar).
+fn __days_from_civil(y0: Int, m: Int, d: Int) -> Int {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = __time_floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn __date_from_days(z0: Int) -> Date {
+    let z = z0 + 719468;
+    let era = __time_floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    Date { __y: y, __m: m, __d: d }
+}
+
+fn __time_digit(c: Int) -> Bool {
+    c >= 48 && c <= 57
+}
+
+// __time_num is the decimal number in s[a..b] (-1 if not all digits).
+fn __time_num(s: String, a: Int, b: Int) -> Int {
+    if b > s.len() {
+        return -1;
+    }
+    let mut x = 0;
+    for j in a..b {
+        let c = s.char_at(j).unwrap_or(0);
+        if !__time_digit(c) {
+            return -1;
+        }
+        x = x * 10 + c - 48;
+    }
+    x
+}
+
+// __time_pad is n with zeros in front to width digits ("-" first if
+// negative).
+fn __time_pad(n: Int, width: Int) -> String {
+    let neg = n < 0;
+    let mut s = if neg {
+        (0 - n).to_string()
+    } else {
+        n.to_string()
+    };
+    while s.len() < width {
+        s = "0" + s;
+    }
+    if neg { "-" + s } else { s }
+}

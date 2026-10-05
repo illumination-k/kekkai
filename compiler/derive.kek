@@ -1,11 +1,11 @@
 // `#[derive(...)]` (prefix derive_): the implementations of PartialEq, Eq,
-// PartialOrd, Ord, Hash, Default and Clone for a struct or enum, generated as
-// source text and parsed with every position at the attribute (so that
-// errors in them point at the derive). The core library also gets these
-// traits for tuples this way.
+// PartialOrd, Ord, Hash, Default, Clone, Serialize and Deserialize for a
+// struct or enum, generated as source text and parsed with every position
+// at the attribute (so that errors in them point at the derive). The core
+// library also gets these traits for tuples this way.
 
 fn derive_traits() -> Vec<String> {
-    "PartialEq Eq PartialOrd Ord Hash Default Clone".split(" ")
+    "PartialEq Eq PartialOrd Ord Hash Default Clone Serialize Deserialize".split(" ")
 }
 
 // derive_items adds the derived implementations of f's structs and enums
@@ -48,7 +48,11 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
                         continue;
                     }
                 }
-                srcs.push(derive_struct(sd, tr));
+                if tr == "Serialize" || tr == "Deserialize" {
+                    srcs.push(derive_serde_struct(sd, tr, f.aliases));
+                } else {
+                    srcs.push(derive_struct(sd, tr));
+                }
                 poss.push(a.pos);
             }
         }
@@ -75,7 +79,11 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
                     });
                     continue;
                 }
-                srcs.push(derive_enum(ed, tr));
+                if tr == "Serialize" || tr == "Deserialize" {
+                    srcs.push(derive_serde_enum(ed, tr, f.aliases));
+                } else {
+                    srcs.push(derive_enum(ed, tr));
+                }
                 poss.push(a.pos);
             }
         }
@@ -92,12 +100,13 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
     }
 }
 
-// Labeled data: Labeled (lib/core/labeled.kek) implements only Clone, so
-// only Clone can be derived for a type that holds one (a derived equality,
-// Hash, order or default would need the same of Labeled, and would leak it).
+// Labeled data: Labeled (lib/core/labeled.kek) implements only Clone and
+// Deserialize (lib/core/serde.kek), so only these can be derived for a type
+// that holds one (a derived equality, Hash, order, default or Serialize
+// would need the same of Labeled, and would leak it).
 
 fn derive_pii_ok(tr: String) -> Bool {
-    tr == "Clone"
+    tr == "Clone" || tr == "Deserialize"
 }
 
 fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstError {
@@ -111,7 +120,7 @@ fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstE
             + what
             + " holds labeled data (`Labeled`), which has no `"
             + tr
-            + "` (only `Clone` can be derived)",
+            + "` (only `Clone` and `Deserialize` can be derived)",
     }
 }
 
@@ -483,4 +492,314 @@ fn derive_tuples() -> String {
         }
     }
     out
+}
+
+// ---- Serialize and Deserialize (lib/core/serde.kek) ----
+//
+// A struct is a map of its fields in order; an enum variant is externally
+// tagged: `"V"` without fields, `{"V": x}` with one, `{"V": [x, y]}` with
+// more. Deserialize reads every field into a local of the field's type with
+// the aliases resolved, checks the predicates of the refined aliases in it
+// (which also gives the refinement checker the facts to build the value),
+// and builds the value.
+
+fn derive_serde_struct(sd: AstStructDecl, tr: String, aliases: Vec<AstTypeAlias>) -> String {
+    let h = derive_header(tr, sd.name, sd.generics);
+    if tr == "Serialize" {
+        let mut body = "        let mut fields = Vec::new();\n";
+        for f in sd.fields {
+            body = body
+                + "        fields.push((\""
+                + f.name
+                + "\", self."
+                + f.name
+                + ".to_value()));\n";
+        }
+        return h
+            + " {\n    fn to_value(&self) -> Value {\n"
+            + body
+            + "        Value::Map(fields)\n    }\n}\n";
+    }
+    let mut body = "        v.expect_map(\"" + sd.name + "\")?;\n";
+    let mut inits = Vec::new();
+    let mut i = 0;
+    for f in sd.fields {
+        let x = "f" + i.to_string();
+        body = body
+            + "        let "
+            + x
+            + ": "
+            + derive_ty(f.ty, aliases)
+            + " = v.field(\""
+            + f.name
+            + "\")?;\n"
+            + derive_checks(f.ty, x, "\"" + f.name + "\"", aliases, 0, "        ");
+        inits.push(f.name + ": " + x);
+        i = i + 1;
+    }
+    h
+        + " {\n    fn from_value(v: &Value) -> Result<Self, SerdeError> {\n"
+        + body
+        + "        Ok("
+        + sd.name
+        + " { "
+        + inits.join(", ")
+        + " })\n    }\n}\n"
+}
+
+fn derive_serde_enum(ed: AstEnumDecl, tr: String, aliases: Vec<AstTypeAlias>) -> String {
+    let h = derive_header(tr, ed.name, ed.generics);
+    if tr == "Serialize" {
+        let mut arms = Vec::new();
+        for v in ed.variants {
+            let tag = "\"" + v.name + "\"";
+            let n = v.fields.len();
+            let mut r = "Value::Str(" + tag + ")";
+            if n == 1 {
+                r = "Value::tagged(" + tag + ", a0.to_value())";
+            } else if n > 1 {
+                let mut pushes = "";
+                for k in 0..n {
+                    pushes = pushes
+                        + "                xs.push(a"
+                        + k.to_string()
+                        + ".to_value());\n";
+                }
+                r = "{\n                let mut xs = Vec::new();\n"
+                    + pushes
+                    + "                Value::tagged("
+                    + tag
+                    + ", Value::Seq(xs))\n            }";
+            }
+            arms.push("            " + derive_pat(ed.name, v, "a") + " => " + r + ",\n");
+        }
+        return h
+            + " {\n    fn to_value(&self) -> Value {\n        match self {\n"
+            + arms.join("")
+            + "        }\n    }\n}\n";
+    }
+    let mut body = "        let tag = v.variant_name(\""
+        + ed.name
+        + "\")?;\n        let p = v.variant_payload();\n";
+    for v in ed.variants {
+        let n = v.fields.len();
+        let mut inner = "";
+        let mut args = Vec::new();
+        for k in 0..n {
+            let x = "a" + k.to_string();
+            let t = v.fields.get(k).unwrap_or(
+                AstType::Unit(AstUnitType { id: 0, pos: AstPos { file: "", line: 0, col: 0 } }),
+            );
+            let read = if n == 1 {
+                "p.decode_in(\"" + v.name + "\")?"
+            } else {
+                "p.element(\"" + v.name + "\", " + k.to_string() + ", " + n.to_string() + ")?"
+            };
+            inner = inner
+                + "            let "
+                + x
+                + ": "
+                + derive_ty(t, aliases)
+                + " = "
+                + read
+                + ";\n"
+                + derive_checks(t, x, "\"" + v.name + "\"", aliases, 0, "            ");
+            args.push(x);
+        }
+        let built = if n == 0 {
+            ed.name + "::" + v.name
+        } else {
+            ed.name + "::" + v.name + "(" + args.join(", ") + ")"
+        };
+        body = body
+            + "        if tag == \""
+            + v.name
+            + "\" {\n"
+            + inner
+            + "            return Ok("
+            + built
+            + ");\n        }\n";
+    }
+    h
+        + " {\n    fn from_value(v: &Value) -> Result<Self, SerdeError> {\n"
+        + body
+        + "        Err(v.unknown_variant(\""
+        + ed.name
+        + "\", tag))\n    }\n}\n"
+}
+
+fn derive_alias(name: String, aliases: Vec<AstTypeAlias>) -> Option<AstTypeAlias> {
+    for a in aliases {
+        if a.name == name {
+            return Some(a);
+        }
+    }
+    None
+}
+
+// derive_ty is the source of type t with the aliases resolved (so that a
+// local of a refined type can be bound before its predicate is checked).
+fn derive_ty(t: AstType, aliases: Vec<AstTypeAlias>) -> String {
+    match t {
+        AstType::Named(x) => {
+            if x.args.len() == 0 {
+                match derive_alias(x.name, aliases) {
+                    Some(a) => {
+                        return derive_ty(a.ty, aliases);
+                    }
+                    None => {}
+                }
+            }
+            if x.args.len() == 0 {
+                return x.name;
+            }
+            let mut args = Vec::new();
+            for a in x.args {
+                args.push(derive_ty(a, aliases));
+            }
+            x.name + "<" + args.join(", ") + ">"
+        }
+        AstType::Ref(x) => {
+            let m = if x.mutable { "&mut " } else { "&" };
+            m + derive_ty(x.elem, aliases)
+        }
+        AstType::Unit(_) => "()",
+        AstType::Tuple(x) => {
+            let mut es = Vec::new();
+            for e in x.elems {
+                es.push(derive_ty(e, aliases));
+            }
+            if es.len() == 1 {
+                "(" + es.join("") + ",)"
+            } else {
+                "(" + es.join(", ") + ")"
+            }
+        }
+        AstType::Fn(_) => fmt_typ(t),
+    }
+}
+
+// derive_checks is the code that returns an error unless the value x of
+// type t satisfies the predicates of the refined aliases in t (directly,
+// or in the elements of an Option or a Vec). path is an expression: the
+// field's name, with the index of each Vec element.
+fn derive_checks(
+    t: AstType,
+    x: String,
+    path: String,
+    aliases: Vec<AstTypeAlias>,
+    depth: Int,
+    ind: String,
+) -> String {
+    match t {
+        AstType::Named(n) => {
+            if n.args.len() == 0 {
+                return match derive_alias(n.name, aliases) {
+                    Some(a) => {
+                        let inner = derive_checks(a.ty, x, path, aliases, depth, ind);
+                        match a.pred {
+                            Some(p) => inner
+                                + ind
+                                + "if !("
+                                + derive_pred(p, x)
+                                + ") {\n"
+                                + ind
+                                + "    return Err(v.refused("
+                                + path
+                                + ", \""
+                                + n.name
+                                + "\"));\n"
+                                + ind
+                                + "}\n",
+                            None => inner,
+                        }
+                    }
+                    None => "",
+                };
+            }
+            if n.args.len() == 1 && (n.name == "Option" || n.name == "Vec") {
+                let y = "e" + depth.to_string();
+                let i = "i" + depth.to_string();
+                let inner_path = if n.name == "Vec" {
+                    path + " + \"[\" + " + i + ".to_string() + \"]\""
+                } else {
+                    path
+                };
+                let inner = derive_checks(
+                    n.args.get(0).unwrap_or(t),
+                    y,
+                    inner_path,
+                    aliases,
+                    depth + 1,
+                    ind + "        ",
+                );
+                if inner == "" {
+                    return "";
+                }
+                if n.name == "Option" {
+                    return ind
+                        + "match "
+                        + x
+                        + " {\n"
+                        + ind
+                        + "    Some("
+                        + y
+                        + ") => {\n"
+                        + inner
+                        + ind
+                        + "    }\n"
+                        + ind
+                        + "    None => {}\n"
+                        + ind
+                        + "}\n";
+                }
+                return ind
+                    + "for ("
+                    + i
+                    + ", "
+                    + y
+                    + ") in "
+                    + x
+                    + ".iter().enumerate() {\n"
+                    + inner
+                    + ind
+                    + "}\n";
+            }
+            ""
+        }
+        AstType::Ref(r) => derive_checks(r.elem, x, path, aliases, depth, ind),
+        _ => "",
+    }
+}
+
+// derive_pred is the source of the predicate e of a refined alias with
+// `self` replaced by x (predicates are linear: literals, variables, fields,
+// `len()`, arithmetic, comparisons and connectives).
+fn derive_pred(e: AstExpr, x: String) -> String {
+    match e {
+        AstExpr::IntLit(n) => if n.value < 0 {
+            "(" + n.value.to_string() + ")"
+        } else {
+            n.value.to_string()
+        },
+        AstExpr::BoolLit(b) => if b.value { "true" } else { "false" },
+        AstExpr::Ident(i) => if i.name == "self" { x } else { i.name },
+        AstExpr::Binary(b) => "("
+            + derive_pred(b.x, x)
+            + " "
+            + b.op
+            + " "
+            + derive_pred(b.y, x)
+            + ")",
+        AstExpr::Unary(u) => u.op + "(" + derive_pred(u.x, x) + ")",
+        AstExpr::Field(f) => derive_pred(f.x, x) + "." + f.name,
+        AstExpr::Method(m) => {
+            let mut args = Vec::new();
+            for a in m.args {
+                args.push(derive_pred(a, x));
+            }
+            derive_pred(m.recv, x) + "." + m.name + "(" + args.join(", ") + ")"
+        }
+        _ => "true",
+    }
 }

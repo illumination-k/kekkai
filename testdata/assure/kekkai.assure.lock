@@ -59,6 +59,10 @@
         "tested": {
           "value": false,
           "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": false,
+          "evidence": "smt"
         }
       },
       "assumptions": [

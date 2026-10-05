@@ -115,7 +115,7 @@ kek assure check [-json] <file|dir>
 | `effects` | 集合（上限） | `type` | 引数で受け取る capability の種類（`Log`, `Net`, `Db`, `Fs`, `Clock`, `Random`, `Tx`）。capability は第二級でアンビエントな権限がないので、これが関数とその呼び出し先が起こしうる副作用の上限になる。空なら純粋 |
 | `net.hosts` | 集合（上限） | `type` | `net.get`・`net.post`・`tx.outbox` の URL から読み取った通信先ホスト。呼び出しグラフで到達できる関数の分を含む。URL が文字列リテラルか、ホストの終わり（`/`・`?`・`#`）まで含むリテラルで始まる `+` の連結のときだけホストが分かり、それ以外は `*`（不明） |
 | `tx.linear` | 真偽 | `type` | `db.transaction` を開く関数。`Tx` の線形性（commit／rollback をちょうど1回）を型検査器が保証している |
-| `refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow` | 真偽 | `smt` | 関数の `v[i]` の範囲・除数（0 でも `MIN / -1` でもない）・`+ - *` のオーバーフローの検証条件が、その種類について 1 つ以上あり、すべて篩型の検査器（`compiler/refine.kek`、ソルバは `compiler/smt.kek`）で証明できた。`kekkai.toml` の `[refine]` にかかわらず全関数で全種類を調べる。検証条件のない種類は省く。成り立たなくなると弱化。推論は数学的な整数で行うので、`refine.no_overflow` のない関数の他の証明はラップアラウンドがないことを前提にする（[refinement.md](refinement.md)） |
+| `refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow` | 真偽 | `smt` | 関数の `v[i]` の範囲・除数（0 でも `MIN / -1` でもない）・`+ - *` のオーバーフローの検証条件が、その種類について 1 つ以上あり、すべて篩型の検査器（`compiler/refine.kek`、ソルバは `compiler/smt.kek`）で証明できた。`kekkai.toml` の `[refine]` にかかわらず全関数で全種類を調べる。証明できない検証条件がある種類は偽、検証条件のない種類は省く。成り立たなくなると弱化。検証条件がなくなって省かれた（割り算が別の関数に移ったなど）のは弱化ではなく `change`。推論は数学的な整数で行うので、`refine.no_overflow` のない関数の他の証明はラップアラウンドがないことを前提にする（[refinement.md](refinement.md)） |
 | `idempotent` | 真偽 | `type` | capability を受け取る関数で、呼び出しグラフで到達できる capability の操作がすべて冪等（リトライしても状態が変わらない：読み取り、ログ、時計、`tx.put`・`tx.delete`、トランザクション）。偽なら省く。成り立たなくなると弱化（関数が純粋になった場合は除く）。`#[handler(idempotent)]` はこれを型エラーとして要求する |
 | `readonly` | 真偽 | `type` | 書き換えられる状態を持つ引数（`Vec`・`mut` フィールドのある struct など）を受け取り、そのどれも書き換えない：`mut`・`&mut`・`mut self`・`&mut self` の引数がなく、所有型の引数を共有の参照とみなしても可変性の規則（[mutability.md](mutability.md)）を満たす（書き換えも、可変な場所への移動もしない）。偽なら省く。成り立たなくなると弱化 |
 | `authz.requires.<A>(<r>)` | 真偽 | `type` | 権限 `Can<A, r>` を引数に取る関数（[authz-flow.md](authz-flow.md)）。`#[policy]` の関数が発行した権限なしには呼べない。権限を取らなくなると弱化 |
@@ -176,7 +176,7 @@ JSON。キーの順序は固定で、定義は名前順、配列の要素は1行
 | --- | --- | --- |
 | `strengthen` | `strengthen` | 集合の要素が減った、真偽の保証が成り立つようになった、前提が消えた |
 | `strengthen` | `new_contract` | ロックになかった保証が新たに成り立つ（例：`tx.linear`） |
-| `change` | `change` | 本体だけが変わり保証は同じ（`change body (guarantees unchanged)`）、`file`・`entry`・`async` の変化、`tx.linear` の消失（トランザクションを開かなくなった）、名前の変更（同じハッシュの定義が消えて現れた：`rename: a -> b`） |
+| `change` | `change` | 本体だけが変わり保証は同じ（`change body (guarantees unchanged)`）、`file`・`entry`・`async` の変化、`tx.linear` の消失（トランザクションを開かなくなった）、`refine.*` の消失（その種類の検証条件がなくなった）、名前の変更（同じハッシュの定義が消えて現れた：`rename: a -> b`） |
 | `weaken` | `weaken` | 集合に要素が増えた、真偽の保証が成り立たなくなった（例：`tested`） |
 | `weaken` | `allowed_host` | `net.hosts` に増えたホストがすべてその場所の `allowed_hosts` に含まれる |
 | `assumption` | `new_assumption` | 新しい前提、または前提の理由・責任者・期限の変更 |

@@ -1,0 +1,372 @@
+// JSON (RFC 8259) for Value (lib/core/serde.kek).
+//
+//   Json::parse(s) -> Result<Value, SerdeError>
+//   Json::render(&v) / Json::render_pretty(&v) -> String
+//   Json::from_str::<T>(s) -> Result<T, SerdeError>
+//   Json::to_string(&x) / Json::to_string_pretty(&x) -> String
+//
+// Numbers with a fraction or an exponent become Value::Float (as written;
+// rendering writes TOML's inf and nan as null);
+// integers outside the 64-bit range are an error. Objects keep the order
+// of their keys; a repeated key is an error. Nesting is limited to 256
+// levels.
+
+struct Json {}
+
+impl Json {
+    fn parse(s: String) -> Result<Value, SerdeError> {
+        let mut p = __JsonParser { s: s, n: s.len(), i: 0 };
+        p.ws();
+        let v = p.value(0)?;
+        p.ws();
+        if p.i < p.n {
+            return Err(p.fail("unexpected data after the value"));
+        }
+        Ok(v)
+    }
+
+    fn render(v: &Value) -> String {
+        let mut out = Vec::new();
+        __json_render(&mut out, v, -1, 0);
+        out.join("")
+    }
+
+    // render_pretty indents by two spaces.
+    fn render_pretty(v: &Value) -> String {
+        let mut out = Vec::new();
+        __json_render(&mut out, v, 0, 0);
+        out.join("")
+    }
+
+    fn from_str<T: Deserialize>(s: String) -> Result<T, SerdeError> {
+        T::from_value(&Json::parse(s)?)
+    }
+
+    fn to_string<T: Serialize>(x: &T) -> String {
+        Json::render(&x.to_value())
+    }
+
+    fn to_string_pretty<T: Serialize>(x: &T) -> String {
+        Json::render_pretty(&x.to_value())
+    }
+}
+
+// indent < 0 renders on one line.
+fn __json_render(mut out: Vec<String>, v: &Value, indent: Int, depth: Int) {
+    match v {
+        Value::Null => out.push("null"),
+        Value::Bool(b) => out.push(if b { "true" } else { "false" }),
+        Value::Int(n) => out.push(n.to_string()),
+        Value::Float(f) => out.push(__json_float(f)),
+        Value::Str(s) => out.push(__serde_quote(s)),
+        Value::Seq(xs) => {
+            if xs.len() == 0 {
+                out.push("[]");
+                return;
+            }
+            out.push("[");
+            let mut first = true;
+            for x in xs.iter() {
+                if !first {
+                    out.push(",");
+                }
+                first = false;
+                __json_newline(out, indent, depth + 1);
+                __json_render(out, x, indent, depth + 1);
+            }
+            __json_newline(out, indent, depth);
+            out.push("]");
+        }
+        Value::Map(es) => {
+            if es.len() == 0 {
+                out.push("{}");
+                return;
+            }
+            out.push("{");
+            let mut first = true;
+            for e in es.iter() {
+                if !first {
+                    out.push(",");
+                }
+                first = false;
+                __json_newline(out, indent, depth + 1);
+                out.push(__serde_quote(e.0));
+                out.push(if indent < 0 { ":" } else { ": " });
+                __json_render(out, &e.1, indent, depth + 1);
+            }
+            __json_newline(out, indent, depth);
+            out.push("}");
+        }
+    }
+}
+
+// __json_float is a float in JSON's syntax: TOML's inf and nan have no
+// JSON form and become null (as in JavaScript), a leading `+` is dropped.
+fn __json_float(f: String) -> String {
+    let g = if f.starts_with("+") {
+        f.slice(1, f.len())
+    } else {
+        f
+    };
+    if g == "inf" || g == "-inf" || g == "nan" || g == "-nan" {
+        return "null";
+    }
+    g
+}
+
+fn __json_newline(mut out: Vec<String>, indent: Int, depth: Int) {
+    if indent >= 0 {
+        out.push("\n");
+        for _ in 0..depth {
+            out.push("  ");
+        }
+    }
+}
+
+struct __JsonParser {
+    s: String,
+    n: Int,
+    mut i: Int,
+}
+
+impl __JsonParser {
+    fn peek(&self) -> Int {
+        if self.i < self.n {
+            self.s.char_at(self.i).unwrap_or(-1)
+        } else {
+            -1
+        }
+    }
+
+    fn fail(&self, msg: String) -> SerdeError {
+        __serde_at(self.s, self.i, msg)
+    }
+
+    fn ws(&mut self) {
+        while self.i < self.n {
+            let c = self.peek();
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                self.i = self.i + 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn word(&mut self, w: String, v: Value) -> Result<Value, SerdeError> {
+        if self.s.slice(self.i, self.i + w.len()) == w {
+            self.i = self.i + w.len();
+            Ok(v)
+        } else {
+            Err(self.fail("unexpected character"))
+        }
+    }
+
+    fn value(&mut self, depth: Int) -> Result<Value, SerdeError> {
+        if depth > 256 {
+            return Err(self.fail("nested too deeply"));
+        }
+        let c = self.peek();
+        if c == 123 {
+            return self.object(depth);
+        }
+        if c == 91 {
+            return self.array(depth);
+        }
+        if c == 34 {
+            return Ok(Value::Str(self.string()?));
+        }
+        if c == 116 {
+            return self.word("true", Value::Bool(true));
+        }
+        if c == 102 {
+            return self.word("false", Value::Bool(false));
+        }
+        if c == 110 {
+            return self.word("null", Value::Null);
+        }
+        if c == 45 || (c >= 48 && c <= 57) {
+            return self.number();
+        }
+        if c < 0 {
+            return Err(self.fail("unexpected end of input"));
+        }
+        Err(self.fail("unexpected character"))
+    }
+
+    fn digits(&mut self) -> Int {
+        let start = self.i;
+        while self.peek() >= 48 && self.peek() <= 57 {
+            self.i = self.i + 1;
+        }
+        self.i - start
+    }
+
+    fn number(&mut self) -> Result<Value, SerdeError> {
+        let start = self.i;
+        if self.peek() == 45 {
+            self.i = self.i + 1;
+        }
+        let int_start = self.i;
+        let nd = self.digits();
+        if nd == 0 {
+            return Err(self.fail("expected a digit"));
+        }
+        if nd > 1 && self.s.char_at(int_start).unwrap_or(0) == 48 {
+            return Err(__serde_at(self.s, int_start, "leading zero in a number"));
+        }
+        let mut float = false;
+        if self.peek() == 46 {
+            self.i = self.i + 1;
+            if self.digits() == 0 {
+                return Err(self.fail("expected a digit after the decimal point"));
+            }
+            float = true;
+        }
+        if self.peek() == 101 || self.peek() == 69 {
+            self.i = self.i + 1;
+            if self.peek() == 43 || self.peek() == 45 {
+                self.i = self.i + 1;
+            }
+            if self.digits() == 0 {
+                return Err(self.fail("expected a digit in the exponent"));
+            }
+            float = true;
+        }
+        let text = self.s.slice(start, self.i);
+        if float {
+            return Ok(Value::Float(text));
+        }
+        match text.parse_int() {
+            Some(n) => Ok(Value::Int(n)),
+            None => Err(__serde_at(self.s, start, "integer out of range")),
+        }
+    }
+
+    fn string(&mut self) -> Result<String, SerdeError> {
+        self.i = self.i + 1;
+        let mut parts = Vec::new();
+        let mut start = self.i;
+        while true {
+            if self.i >= self.n {
+                return Err(self.fail("unterminated string"));
+            }
+            let c = self.peek();
+            if c == 34 {
+                parts.push(self.s.slice(start, self.i));
+                self.i = self.i + 1;
+                return Ok(parts.join(""));
+            }
+            if c < 32 {
+                return Err(self.fail("control character in a string"));
+            }
+            if c == 92 {
+                parts.push(self.s.slice(start, self.i));
+                self.i = self.i + 1;
+                let e = self.peek();
+                if e == 34 {
+                    parts.push("\"");
+                } else if e == 92 {
+                    parts.push("\\");
+                } else if e == 47 {
+                    parts.push("/");
+                } else if e == 98 {
+                    parts.push(String::from_char(8));
+                } else if e == 102 {
+                    parts.push(String::from_char(12));
+                } else if e == 110 {
+                    parts.push("\n");
+                } else if e == 114 {
+                    parts.push("\r");
+                } else if e == 116 {
+                    parts.push("\t");
+                } else if e == 117 {
+                    let mut x = 0;
+                    for k in 1..5 {
+                        let d = __serde_hex_value(self.s.char_at(self.i + k).unwrap_or(0));
+                        if d < 0 {
+                            return Err(self.fail("bad \\u escape"));
+                        }
+                        x = x * 16 + d;
+                    }
+                    // surrogate halves are code units: two escapes make a pair
+                    parts.push(String::from_char(x));
+                    self.i = self.i + 4;
+                } else {
+                    return Err(self.fail("bad escape"));
+                }
+                self.i = self.i + 1;
+                start = self.i;
+            } else {
+                self.i = self.i + 1;
+            }
+        }
+        Err(self.fail("unexpected end of input"))
+    }
+
+    fn array(&mut self, depth: Int) -> Result<Value, SerdeError> {
+        self.i = self.i + 1;
+        let mut out = Vec::new();
+        self.ws();
+        if self.peek() == 93 {
+            self.i = self.i + 1;
+            return Ok(Value::Seq(out));
+        }
+        while true {
+            self.ws();
+            out.push(self.value(depth + 1)?);
+            self.ws();
+            let c = self.peek();
+            self.i = self.i + 1;
+            if c == 93 {
+                return Ok(Value::Seq(out));
+            }
+            if c != 44 {
+                self.i = self.i - 1;
+                return Err(self.fail("expected `,` or `]`"));
+            }
+        }
+        Err(self.fail("unexpected end of input"))
+    }
+
+    fn object(&mut self, depth: Int) -> Result<Value, SerdeError> {
+        self.i = self.i + 1;
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        self.ws();
+        if self.peek() == 125 {
+            self.i = self.i + 1;
+            return Ok(Value::Map(out));
+        }
+        while true {
+            self.ws();
+            if self.peek() != 34 {
+                return Err(self.fail("expected a string key"));
+            }
+            let at = self.i;
+            let k = self.string()?;
+            if !seen.insert(k) {
+                return Err(__serde_at(self.s, at, "duplicate key"));
+            }
+            self.ws();
+            if self.peek() != 58 {
+                return Err(self.fail("expected `:`"));
+            }
+            self.i = self.i + 1;
+            self.ws();
+            let v = self.value(depth + 1)?;
+            out.push((k, v));
+            self.ws();
+            let c = self.peek();
+            self.i = self.i + 1;
+            if c == 125 {
+                return Ok(Value::Map(out));
+            }
+            if c != 44 {
+                self.i = self.i - 1;
+                return Err(self.fail("expected `,` or `}`"));
+            }
+        }
+        Err(self.fail("unexpected end of input"))
+    }
+}

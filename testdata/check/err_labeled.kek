@@ -119,7 +119,7 @@ enum Who {
     Known(Labeled<PII, String>),
 }
 
-#[derive(PartialEq)] // ERROR "cannot derive `PartialEq` for `Pair`: field `email` holds labeled data (`Labeled`), which has no `PartialEq` (only `Clone` can be derived)"
+#[derive(PartialEq)] // ERROR "cannot derive `PartialEq` for `Pair`: field `email` holds labeled data (`Labeled`), which has no `PartialEq` (only `Clone` and `Deserialize` can be derived)"
 struct Pair {
     email: Labeled<PII, String>,
 }

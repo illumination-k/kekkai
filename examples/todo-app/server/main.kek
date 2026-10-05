@@ -1,0 +1,182 @@
+// A todo app with accounts: the API behind examples/todo-app/public.
+//
+//   POST   /api/signup      {"username", "password"} -> 201 {"username"} + session cookie
+//   POST   /api/login       {"username", "password"} -> 200 {"username"} + session cookie
+//   POST   /api/logout                               -> 204, cookie cleared
+//   GET    /api/me                                   -> {"username"} | 401
+//   GET    /api/todos                                -> [{"id", "title", "done"}]
+//   POST   /api/todos       {"title"}                -> 201 {"id", "title", "done"}
+//   POST   /api/todos/<id>/toggle                    -> {"id", "title", "done"}
+//   DELETE /api/todos/<id>                           -> 204
+//
+// Bodies are JSON; errors are {"error"}. Everything under /api/todos needs
+// a session; another user's todo is answered with 404, as if it did not
+// exist.
+
+#[derive(Serialize)]
+struct UserView {
+    username: String,
+}
+
+fn auth_error(e: AuthError) -> Response {
+    match e {
+        AuthError::Invalid(m) => json_error(400, m),
+        AuthError::Taken => json_error(409, "that username is taken"),
+        AuthError::BadLogin => json_error(401, "wrong username or password"),
+        AuthError::Store(err) => store_error(err),
+    }
+}
+
+fn signed_in(db: &Db, random: &Random, clock: &Clock, status: Int, u: &User) -> Response {
+    match start_session(db, random, clock, u) {
+        Ok(token) => reply(status, &UserView { username: u.name }).with_header(
+            "set-cookie",
+            session_cookie(token, session_ttl()),
+        ),
+        Err(e) => store_error(e),
+    }
+}
+
+fn account(req: Request, db: &Db, log: &Log, clock: &Clock, random: &Random) -> Response {
+    let method = req.method();
+    let action = req.segment(1).unwrap_or("");
+    if action == "me" && method == "GET" {
+        return match current_user(req, db, clock) {
+            Some(u) => reply(200, &UserView { username: u.name }),
+            None => json_error(401, "not signed in"),
+        };
+    }
+    if method != "POST" {
+        return json_error(405, "method not allowed");
+    }
+    if action == "signup" {
+        let c: Credentials = match body(req) {
+            Ok(c) => c,
+            Err(r) => {
+                return r;
+            }
+        };
+        return match signup(db, random, c.username, &c.password) {
+            Ok(u) => {
+                log.info("signup " + u.name);
+                signed_in(db, random, clock, 201, &u)
+            }
+            Err(e) => auth_error(e),
+        };
+    }
+    if action == "login" {
+        let c: Credentials = match body(req) {
+            Ok(c) => c,
+            Err(r) => {
+                return r;
+            }
+        };
+        return match login(db, c.username, &c.password) {
+            Ok(u) => signed_in(db, random, clock, 200, &u),
+            Err(e) => {
+                log.warn("failed login for " + c.username);
+                auth_error(e)
+            }
+        };
+    }
+    if action == "logout" {
+        match cookie(req, "sid") {
+            Some(token) => match end_session(db, token) {
+                Ok(_) => {}
+                Err(e) => {
+                    return store_error(e);
+                }
+            },
+            None => {}
+        }
+        return Response::no_content().with_header("set-cookie", session_cookie("", Duration::ms(0)));
+    }
+    json_error(404, "not found")
+}
+
+fn change(req: Request, db: &Db, u: &User, id: Int) -> Response {
+    let t = match load(db, id) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return json_error(404, "no such todo");
+        }
+        Err(e) => {
+            return store_error(e);
+        }
+    };
+    let cap = match can_edit(u, t) {
+        Some(cap) => cap,
+        None => {
+            return json_error(404, "no such todo");
+        }
+    };
+    let method = req.method();
+    let action = req.segment(3).unwrap_or("");
+    if method == "POST" && action == "toggle" {
+        return match toggle(db, t, cap) {
+            Ok(n) => reply(200, &view(&n)),
+            Err(e) => store_error(e),
+        };
+    }
+    if method == "DELETE" && action == "" {
+        return match remove(db, t, cap) {
+            Ok(_) => Response::no_content(),
+            Err(e) => store_error(e),
+        };
+    }
+    json_error(405, "method not allowed")
+}
+
+fn todos(req: Request, db: &Db, log: &Log, u: &User) -> Response {
+    let method = req.method();
+    match req.segment(2) {
+        None => {
+            if method == "GET" {
+                return match list(db, u) {
+                    Ok(ts) => {
+                        let views: Vec<TodoView> = ts.iter().map(|t| view(t)).collect();
+                        reply(200, &views)
+                    }
+                    Err(e) => store_error(e),
+                };
+            }
+            if method == "POST" {
+                let n: NewTodo = match body(req) {
+                    Ok(n) => n,
+                    Err(r) => {
+                        return r;
+                    }
+                };
+                if n.title.trim() == "" {
+                    return json_error(400, "title: the title is blank");
+                }
+                return match create(db, u, n.title) {
+                    Ok(t) => {
+                        log.info(u.name + " created todo " + t.id.to_string());
+                        reply(201, &view(&t))
+                    }
+                    Err(e) => store_error(e),
+                };
+            }
+            json_error(405, "method not allowed")
+        }
+        Some(s) => match s.parse_int() {
+            Some(id) => change(req, db, u, id),
+            None => json_error(400, "bad id"),
+        },
+    }
+}
+
+#[handler]
+fn handle(req: Request, db: &Db, log: &Log, clock: &Clock, random: &Random) -> Response {
+    if req.segment(0).unwrap_or("") != "api" {
+        return json_error(404, "not found");
+    }
+    if req.segment(1).unwrap_or("") != "todos" {
+        return account(req, db, log, clock, random);
+    }
+    match current_user(req, db, clock) {
+        Some(u) => todos(req, db, log, &u),
+        None => json_error(401, "not signed in"),
+    }
+}

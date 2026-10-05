@@ -95,7 +95,8 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 - core と prelude の本体も同じ規則で検査する：書き換え（可変な経路、`shared` を通さない）はすべて同じ。
 - ただし借用したデータから値を作ること（struct リテラル・コンストラクタ・`let`・戻り値・局所的なコレクションへの格納）は許す。core の関数の結果は、呼び出し側で引数の view に汚染される（設計の「結果は `shared`」）ので、`Iter { v: *self, .. }` のように `&self` を包んで返しても安全。引数（`self` を含む）が根の場所への格納だけは検査する（`extend` が借用した要素を受け手に入れるなど）。
 - core の関数の呼び出しでは、引数は何でも渡せる（結果が汚染される）。ただし `mut`・`&mut`・`mut self`・`&mut self` で受け取る位置には `shared` を渡せない。`&mut self` のメソッド（`insert`・`push`・`extend` など）の他の引数は受け手に格納されるので、受け手が `own` なら `own` でなければならない（受け手が `shared-contents` なら `shared` も可）。
-- `#[fresh]` は core と prelude でだけ書ける（それ以外ではエラー）。メソッドにも付けられるように、メソッドの属性を構文として受け付ける（`#[fresh]` 以外はエラー）。
+- `#[owned]` を付けた core の関数（`Deserialize::from_value` と `Value` の `field`・`decode_in`・`element`）は、読んだ値から所有する値を作るので、`clone` と同じく結果を汚染しない。trait のメソッドに付けると、その実装すべてに効く（利用者の実装は通常の規則で検査されるので、借用した値をそのまま返せない）。
+- `#[fresh]`・`#[owned]` は core と prelude でだけ書ける（それ以外ではエラー）。メソッドにも付けられるように、メソッドの属性を構文として受け付ける（`#[fresh]` 以外はエラー）。
 - `clone()`（`Clone::clone` とその実装）の結果は常に `own`。利用者の `Clone` の実装は通常の規則で検査されるので、`&self` をそのまま返すことはできない。
 
 ### クロージャ

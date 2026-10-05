@@ -258,5 +258,5 @@ structural (86% similar, distance 4):
 --- exit 1
 --- bad kekkai.toml
 --- stderr
-kekkai.toml:1: bad section header
+kekkai.toml:1: expected `]`
 --- exit 2

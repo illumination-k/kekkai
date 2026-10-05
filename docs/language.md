@@ -380,13 +380,17 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 
 - `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ。`s` が可変であること）
 - `if c { } else if d { } else { }`、`if let P = e { } else { }`（式）
-- `match e { pat => e, ... }`（式、網羅性検査あり、ネスト可）
+- `match e { pat => e, pat if guard => e, ... }`（式、網羅性検査あり、ネスト可）。ガード `if guard`（`Bool`）は腕の束縛を見られ、ガードのある腕は網羅性に数えない（Rust と同じ）
 - `while c { }`, `while let P = e { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
 - `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
 - `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
 - 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
-- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`
+- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
+  - or パターンはネストでき（`Some(1 | 2)`）、`match` の腕・`if let`・`while let` の先頭には `|` を書いてもよい。どの選択肢も同じ名前を同じ型・同じ可変性で束縛すること。網羅性検査は選択肢ごとに展開して数える
+  - 範囲は `Int` だけで、`lo > hi`（`lo..hi` では `lo >= hi`）はエラー。`Int` は範囲を並べても網羅とみなさない（`_` が要る）
+  - `x @ p` は p に一致した値全体を x に束縛する。p が or パターンなら括弧が要る（`x @ (A | B)`）
+  - 篩型の検査は、整数の範囲・or パターン・`@` の束縛を腕（と `if let`）の事実にし、ガードのない腕の否定を後の `_` の腕の事実にする。ガードは腕の中だけの事実になる
 
 ## イテレータ
 

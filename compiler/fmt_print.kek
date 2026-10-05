@@ -484,7 +484,14 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
         FmtUnitKind::Stmt(s) => fmt_stmt(p, s, ind),
         FmtUnitKind::Tail(e) => fmt_stmt_expr(p, e, ind),
         FmtUnitKind::Arm(a) => {
-            let h = fmt_pat(p, a.pat) + " => ";
+            let mut h = fmt_pat(p, a.pat);
+            match a.guard {
+                Some(g) => {
+                    h = h + " if " + fmt_expr(p, g, ind, ind * 4 + fmt_w(p, h) + 4, false);
+                }
+                None => {}
+            }
+            h = h + " => ";
             let body = fmt_expr(p, a.body, ind, ind * 4 + fmt_w(p, h), false);
             match a.body {
                 AstExpr::Block(_) => h + body,
@@ -1503,6 +1510,26 @@ fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
     if pt.wildcard {
         return "_";
     }
+    if pt.alts.len() > 0 {
+        let mut es = Vec::new();
+        for a in pt.alts {
+            es.push(fmt_pat_paren(p, a));
+        }
+        return es.join(" | ");
+    }
+    match pt.at.get(0) {
+        Some(sub) => {
+            let mut s = pt.bind + " @ " + fmt_pat_paren(p, sub);
+            if pt.mutable {
+                s = "mut " + s;
+            }
+            return s;
+        }
+        None => {}
+    }
+    if pt.range {
+        return fmt_range_pat(p, pt);
+    }
     if pt.tuple {
         let mut es = Vec::new();
         for a in pt.args {
@@ -1543,6 +1570,57 @@ fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
         return s + "(" + as_.join(", ") + ")";
     }
     pt.bind
+}
+
+// fmt_pat_paren parenthesizes an or-pattern (an alternative of another
+// or-pattern, or the pattern after `@`).
+fn fmt_pat_paren(p: FmtPrinter, pt: AstPattern) -> String {
+    if pt.alts.len() > 0 {
+        return "(" + fmt_pat(p, pt) + ")";
+    }
+    fmt_pat(p, pt)
+}
+
+// fmt_range_pat returns a range pattern with its bounds as written.
+fn fmt_range_pat(p: FmtPrinter, pt: AstPattern) -> String {
+    let n = p.src.len();
+    let mut lo = "";
+    if pt.range_lo.is_some() {
+        lo = fmt_int_text(p, pt.pos);
+    }
+    let mut i = fmt_offset(p, pt.pos);
+    while i + 1 < n && !(fmt_src_at(p, i) == 46 && fmt_src_at(p, i + 1) == 46) {
+        i = i + 1;
+    }
+    i = i + 2;
+    let mut op = "..";
+    if pt.range_incl {
+        op = "..=";
+        i = i + 1;
+    }
+    if pt.range_hi.is_none() {
+        return lo + op;
+    }
+    let mut neg = "";
+    while i < n && fmt_pat_space(fmt_src_at(p, i)) {
+        i = i + 1;
+    }
+    if i < n && fmt_src_at(p, i) == 45 {
+        neg = "-";
+        i = i + 1;
+        while i < n && fmt_pat_space(fmt_src_at(p, i)) {
+            i = i + 1;
+        }
+    }
+    let mut j = i;
+    while j < n && (fmt_src_at(p, j) == 95 || lex_is_digit(fmt_src_at(p, j))) {
+        j = j + 1;
+    }
+    lo + op + neg + p.src.slice(i, j)
+}
+
+fn fmt_pat_space(c: Int) -> Bool {
+    c == 32 || c == 9 || c == 10 || c == 13
 }
 
 // ---- literals keep their source spelling ----

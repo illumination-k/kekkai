@@ -1,0 +1,85 @@
+enum Op {
+    Add(Int, Int),
+    Neg(Int),
+    Name(String),
+    Nop,
+}
+
+fn or_bindings(o: Option<Int>, op: Op, p: (Int, String)) -> Int {
+    let a = match o {
+        Some(x) | None => 1, // ERROR "variable `x` is not bound in all patterns"
+    };
+    let b = match o {
+        None | Some(y) => 2, // ERROR "variable `y` is not bound in all patterns"
+    };
+    let c = match op {
+        Op::Neg(n) | Op::Name(n) => 3, // ERROR "mismatched types: variable `n` is `Int` in the first alternative and `String` here"
+        Op::Add(n, _) | Op::Add(_, n) => n,
+        _ => 0,
+    };
+    let d = match p {
+        (mut n, _) | (n, _) => n, // ERROR "variable `n` is bound with different mutability in the alternatives"
+    };
+    a + b + c + d
+}
+
+fn guards(o: Option<Int>, b: Bool) -> Int {
+    let a = match o { // ERROR "non-exhaustive patterns in match on `Option<Int>`: missing `Some(_)`"
+        Some(n) if n > 0 => n,
+        None => 0,
+    };
+    let c = match o {
+        Some(n) if n => n, // ERROR "match guard"
+        _ => 0,
+    };
+    let d = match b {
+        true | false => 1,
+        _ => 2, // ERROR "unreachable pattern"
+    };
+    // a guarded arm does not make later arms unreachable
+    let e = match b {
+        _ if a > 0 => 1,
+        _ => 2,
+    };
+    // `@` and or-patterns are understood by the exhaustiveness check
+    let f = match o {
+        whole @ (Some(_) | None) => whole.unwrap_or(0),
+    };
+    let g = match (b, o) { // ERROR "non-exhaustive patterns in match on `(Bool, Option<Int>)`: missing `(..)`"
+        (true, Some(_)) | (false, None) => 1,
+        (true, None) => 2,
+    };
+    a + c + d + e + f + g
+}
+
+fn ranges(s: String, n: Int) -> Int {
+    let a = match s {
+        1..=5 => 1, // ERROR "range pattern used on `String`"
+        _ => 0,
+    };
+    let b = match n {
+        5..=1 => 1, // ERROR "lower range bound must be less than or equal to upper"
+        3..3 => 2, // ERROR "lower range bound must be less than upper"
+        0..=9 => 3,
+        _ => 4,
+    };
+    let c = match n { // ERROR "non-exhaustive patterns in match on `Int`: add a `_` arm"
+        ..=0 => 0,
+        1.. => 1,
+    };
+    a + b + c
+}
+
+fn guard_commit(db: &Db, o: Option<Int>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        match o {
+            Some(_) if tx.commit().is_ok() => Ok(()), // ERROR "transaction `tx` cannot be ended in a match guard"
+            _ => tx.commit(),
+        }
+    })
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    0
+}

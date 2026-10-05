@@ -1579,6 +1579,10 @@ fn lower_match(l: Lower, e: AstMatch, e0: AstExpr) -> Int {
     for arm in e.arms {
         let next = lower_new_block(l);
         lower_pattern(l, x, arm.pat, next);
+        match arm.guard {
+            Some(g) => lower_test(l, lower_expr(l, g), next),
+            None => {}
+        }
         let v = lower_expr(l, arm.body);
         lower_assign_result(l, res, v, ast_expr_id(arm.body));
         lower_jump(l, join);
@@ -1620,12 +1624,51 @@ fn lower_pattern(mut l: Lower, x: Int, p: AstPattern, fail: Int) {
         }
     };
     let k = pi.kind;
-    if k == "bind" {
+    if k == "bind" || k == "at" {
         match pi.bind {
             Some(b) => {
-                let dst = lower_new_local(l, lower_ty(l, b.ty), b.name);
+                // the alternatives of an or-pattern share their bindings
+                let dst = match l.vars.get(b.id) {
+                    Some(d) => d,
+                    None => lower_new_local(l, lower_ty(l, b.ty), b.name),
+                };
                 lower_copy_to(l, dst, x);
                 l.vars.insert(b.id, dst);
+            }
+            None => {}
+        }
+        if k == "at" {
+            for sub in pi.args {
+                lower_pattern(l, x, sub, fail);
+            }
+        }
+    } else if k == "or" {
+        // try the alternatives in order
+        let ok = lower_new_block(l);
+        for alt in pi.args {
+            let next = lower_new_block(l);
+            lower_pattern(l, x, alt, next);
+            lower_jump(l, ok);
+            lower_set_block(l, next);
+        }
+        lower_jump(l, fail);
+        lower_set_block(l, ok);
+    } else if k == "range" {
+        match p.range_lo {
+            Some(lo) => {
+                let mut ge = lower_instr("binop");
+                ge.name = "le";
+                ge.args = lower_args2(lower_intc(l, lo), x);
+                lower_test(l, lower_emit_to(l, ir_ty("bool"), ge), fail);
+            }
+            None => {}
+        }
+        match p.range_hi {
+            Some(hi) => {
+                let mut le = lower_instr("binop");
+                le.name = if p.range_incl { "le" } else { "lt" };
+                le.args = lower_args2(x, lower_intc(l, hi));
+                lower_test(l, lower_emit_to(l, ir_ty("bool"), le), fail);
             }
             None => {}
         }

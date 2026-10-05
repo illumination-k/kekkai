@@ -453,6 +453,9 @@ struct AstIf {
 
 // Pattern in a match arm. Patterns nest: `Ok(Some(n))`. A tuple pattern
 // `(p, q)` has tuple set and its elements in args (`()` has none).
+// An or-pattern `p | q` has its alternatives in alts. A range pattern
+// `lo..=hi` / `lo..hi` / `..=hi` / `lo..` has range set (incl for `..=`).
+// `name @ p` has bind set and p as the single element of at.
 struct AstPattern {
     id: Int,
     pos: AstPos,
@@ -466,12 +469,20 @@ struct AstPattern {
     mut int_value: Option<Int>,
     mut bool_lit: Option<Bool>,
     mut str_value: Option<String>,
+    alts: Vec<AstPattern>,
+    mut range: Bool,
+    mut range_lo: Option<Int>,
+    mut range_hi: Option<Int>,
+    mut range_incl: Bool,
+    at: Vec<AstPattern>,
 }
 
+// `pat => body` or, with guard set, `pat if guard => body`.
 struct AstMatchArm {
     id: Int,
     pos: AstPos,
     pat: AstPattern,
+    guard: Option<AstExpr>,
     body: AstExpr,
 }
 
@@ -768,4 +779,28 @@ fn ast_quote(s: String) -> String {
     parts.push(s.slice(start, n));
     parts.push("\"");
     parts.join("")
+}
+
+// ast_new_pattern returns a pattern with no parts set (a binding of "").
+fn ast_new_pattern(id: Int, pos: AstPos) -> AstPattern {
+    AstPattern {
+        id: id,
+        pos: pos,
+        wildcard: false,
+        tuple: false,
+        mutable: false,
+        bind: "",
+        ty: "",
+        ctor: "",
+        args: Vec::new(),
+        int_value: None,
+        bool_lit: None,
+        str_value: None,
+        alts: Vec::new(),
+        range: false,
+        range_lo: None,
+        range_hi: None,
+        range_incl: false,
+        at: Vec::new(),
+    }
 }

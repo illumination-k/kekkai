@@ -163,7 +163,7 @@ fn lex_two_char(a: Int, b: Int) -> String {
 }
 
 fn lex_one_char(c: Int) -> String {
-    // ( ) { } [ ] , ; : . & | ? # ! = < > + - * / %
+    // ( ) { } [ ] , ; : . & | ? # ! = < > + - * / % @
     if c == 40
         || c == 41
         || c == 123
@@ -186,7 +186,8 @@ fn lex_one_char(c: Int) -> String {
         || c == 45
         || c == 42
         || c == 47
-        || c == 37 {
+        || c == 37
+        || c == 64 {
         return String::from_char(c);
     }
     ""

@@ -270,6 +270,32 @@ fn lin_exprs(lc: LinChecker, es: Vec<AstExpr>, s0: Option<LinState>) -> Option<L
     s
 }
 
+// lin_guard checks a match guard, which runs whether or not its arm is
+// taken: it must not end a transaction.
+fn lin_guard(lc: LinChecker, g: AstExpr, s: Option<LinState>) -> Option<LinState> {
+    let before = lin_clone(s);
+    let after = lin_expr(lc, g, s);
+    match after {
+        Some(a) => {
+            for k in a.m.keys() {
+                let bv = match before {
+                    Some(bs) => bs.m.get(k).unwrap_or(false),
+                    None => false,
+                };
+                if bv != a.m.get(k).unwrap_or(false) {
+                    lin_errorf(
+                        lc,
+                        ast_expr_pos(g),
+                        "transaction `" + lin_name(a, k) + "` cannot be ended in a match guard",
+                    );
+                }
+            }
+        }
+        None => {}
+    }
+    after
+}
+
 fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinState> {
     let st = match s0 {
         None => {
@@ -337,7 +363,14 @@ fn lin_expr(lc: LinChecker, e0: AstExpr, s0: Option<LinState>) -> Option<LinStat
             let mut out = None;
             let mut first = true;
             for arm in e.arms {
-                let as_ = lin_expr(lc, arm.body, lin_clone(s));
+                let mut arm_s = lin_clone(s);
+                match arm.guard {
+                    Some(g) => {
+                        arm_s = lin_guard(lc, g, arm_s);
+                    }
+                    None => {}
+                }
+                let as_ = lin_expr(lc, arm.body, arm_s);
                 if first {
                     out = as_;
                     first = false;

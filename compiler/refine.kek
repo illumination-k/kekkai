@@ -12,7 +12,8 @@
 //     (`x`, `x#1`, ...), an immutable `let x = e` adds `x == e`;
 //   - the facts on a path are the preconditions, the predicates of refined
 //     parameters, `len(v) >= 0`, branch conditions (`if`, `while`, `match`
-//     integer patterns, `&&` / `||`), `for` ranges, callee postconditions
+//     integer, range and or-patterns, `@` bindings and guards, `&&` /
+//     `||`), `for` ranges, callee postconditions
 //     and the bounds of indexes already performed;
 //   - at a join (after `if` / `match`), the variables that differ get a
 //     new version and the branch facts become one disjunction;
@@ -1268,6 +1269,10 @@ fn ref_scan_expr(cx: RefCtx, mut sc: RefScan, e: AstExpr, recv: Bool) {
         AstExpr::Match(x) => {
             ref_scan_expr(cx, sc, x.x, false);
             for a in x.arms {
+                match a.guard {
+                    Some(g) => ref_scan_expr(cx, sc, g, false),
+                    None => {}
+                }
                 ref_scan_expr(cx, sc, a.body, false);
             }
         }
@@ -2865,12 +2870,38 @@ fn ref_if(cx: RefCtx, st: RefSt, x: AstIf, e: AstExpr) -> RefVal {
     let mut brs = Vec::new();
     let mut vals = Vec::new();
     match x.pat {
-        Some(_) => {
-            ref_expr(cx, st, x.cond);
+        Some(p) => {
+            let cv = ref_expr(cx, st, x.cond);
             let s1 = ref_clone(st);
+            let s2 = ref_clone(st);
+            if cv.kind == "int" {
+                // `if let 1..=9 = e`, `if let n @ (1 | 2) = e`
+                match ref_pat_fact(cx, p, cv.lin) {
+                    Some(f) => {
+                        let text = ref_show(x.cond);
+                        let pt = ref_pat_text(cx, p);
+                        ref_fact(cx, s1, f, p.pos, "`if let` `" + text + "` matches `" + pt + "`");
+                        ref_fact(
+                            cx,
+                            s2,
+                            SmtF::Not(f),
+                            p.pos,
+                            "`if let` `" + text + "` does not match `" + pt + "`",
+                        );
+                        match cx.info.patterns.get(p.id) {
+                            Some(pi) => match pi.bind {
+                                Some(bnd) => ref_assign_new(cx, s1, bnd, cv, p.pos),
+                                None => {}
+                            },
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+            }
+            ref_at_facts(cx, s1, p);
             vals.push(ref_block(cx, s1, x.then));
             brs.push(s1);
-            let s2 = ref_clone(st);
             match x.els {
                 Some(el) => vals.push(ref_expr(cx, s2, el)),
                 None => vals.push(ref_val_other()),
@@ -2907,10 +2938,14 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
     let mut brs = Vec::new();
     let mut vals = Vec::new();
     let mut prev = Vec::new();
+    // negated facts of earlier unguarded range / or-pattern arms
+    let mut prev_f = Vec::new();
+    let mut prev_t = Vec::new();
     for arm in m.arms {
         let s = ref_clone(st);
         let p = arm.pat;
         let text = ref_show(m.x);
+        let guarded = arm.guard.is_some();
         match p.int_value {
             Some(k) => {
                 if sv.kind == "int" {
@@ -2921,10 +2956,34 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
                         p.pos,
                         "`match` arm `" + text + " == " + k.to_string() + "`",
                     );
-                    prev.push(k);
+                    if !guarded {
+                        prev.push(k);
+                    }
                 }
             }
-            None => {}
+            None => {
+                if sv.kind == "int" {
+                    match ref_pat_fact(cx, p, sv.lin) {
+                        Some(f) => {
+                            let pt = ref_pat_text(cx, p);
+                            ref_fact(
+                                cx,
+                                s,
+                                f,
+                                p.pos,
+                                "`match` arm `" + text + "` matches `" + pt + "`",
+                            );
+                            if !guarded {
+                                prev_f.push(SmtF::Not(f));
+                                prev_t.push(
+                                    "`match` arm `" + text + "` does not match `" + pt + "`",
+                                );
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
         }
         match p.bool_lit {
             Some(bv) => {
@@ -2940,7 +2999,8 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
             }
             None => {}
         }
-        if (p.wildcard || (p.bind != "" && p.ctor == "")) && sv.kind == "int" {
+        let at = p.at.len() > 0;
+        if (p.wildcard || (p.bind != "" && p.ctor == "" && !at)) && sv.kind == "int" {
             for k in prev {
                 match ref_cmp("!=", sv.lin, ref_lc(k)) {
                     Some(f) => ref_fact(
@@ -2953,6 +3013,13 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
                     None => {}
                 }
             }
+            let mut i = 0;
+            for f in prev_f {
+                ref_fact(cx, s, f, p.pos, prev_t.get(i).unwrap_or(""));
+                i = i + 1;
+            }
+        }
+        if (p.wildcard || (p.bind != "" && p.ctor == "")) && sv.kind == "int" {
             match cx.info.patterns.get(p.id) {
                 Some(pi) => match pi.bind {
                     Some(bnd) => ref_assign_new(cx, s, bnd, sv, p.pos),
@@ -2961,10 +3028,154 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
                 None => {}
             }
         }
+        ref_at_facts(cx, s, p);
+        // the guard holds in the arm (its negation is not kept for the
+        // later arms)
+        match arm.guard {
+            Some(g) => {
+                let gf = ref_cond(cx, s, g);
+                ref_fact(cx, s, gf, ast_expr_pos(g), "`match` guard `" + ref_show(g) + "`");
+            }
+            None => {}
+        }
         vals.push(ref_expr(cx, s, arm.body));
         brs.push(s);
     }
     ref_join(cx, st, brs, vals, t, m.pos)
+}
+
+// ref_pat_fact is the fact that the Int x matches a literal, range,
+// or- or `@` pattern; None when the pattern says nothing (or a bound does
+// not fit in 64 bits), so that the fact can be negated.
+fn ref_pat_fact(cx: RefCtx, p: AstPattern, x: SmtLin) -> Option<SmtF> {
+    let pi = match cx.info.patterns.get(p.id) {
+        Some(pi) => pi,
+        None => {
+            return None;
+        }
+    };
+    if pi.kind == "int" {
+        return ref_cmp("==", x, ref_lc(p.int_value.unwrap_or(0)));
+    }
+    if pi.kind == "range" {
+        let mut fs = Vec::new();
+        match p.range_lo {
+            Some(lo) => match ref_cmp("<=", ref_lc(lo), x) {
+                Some(f) => fs.push(f),
+                None => {
+                    return None;
+                }
+            },
+            None => {}
+        }
+        match p.range_hi {
+            Some(hi) => match ref_cmp(if p.range_incl { "<=" } else { "<" }, x, ref_lc(hi)) {
+                Some(f) => fs.push(f),
+                None => {
+                    return None;
+                }
+            },
+            None => {}
+        }
+        return Some(SmtF::And(fs));
+    }
+    if pi.kind == "at" {
+        return match p.at.get(0) {
+            Some(sub) => ref_pat_fact(cx, sub, x),
+            None => None,
+        };
+    }
+    if pi.kind == "or" {
+        let mut fs = Vec::new();
+        for a in p.alts {
+            match ref_pat_fact(cx, a, x) {
+                Some(f) => fs.push(f),
+                None => {
+                    return None;
+                }
+            }
+        }
+        return Some(SmtF::Or(fs));
+    }
+    None
+}
+
+// ref_at_facts: an Int bound by `n @ p` inside a pattern (`Some(n @
+// 1..=9)`) matches p. Alternatives of or-patterns are skipped (only one
+// of them matched); a binding already in st (the scrutinee's) is kept.
+fn ref_at_facts(cx: RefCtx, mut st: RefSt, p: AstPattern) {
+    let pi = match cx.info.patterns.get(p.id) {
+        Some(pi) => pi,
+        None => {
+            return;
+        }
+    };
+    if pi.kind == "or" {
+        return;
+    }
+    if pi.kind == "at" {
+        match pi.bind {
+            Some(b) => {
+                let key = "v" + b.id.to_string();
+                if ty_is_prim(ty_prune(b.ty), "Int") && !st.env.contains_key(key) {
+                    let a = ref_atom(cx, b.name, b.name);
+                    st.env.insert(key, a);
+                    match ref_pat_fact(cx, p, ref_la(a)) {
+                        Some(f) => ref_fact(
+                            cx,
+                            st,
+                            f,
+                            p.pos,
+                            "pattern `" + b.name + " @ " + ref_pat_text(cx, p) + "`",
+                        ),
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    for a in pi.args {
+        ref_at_facts(cx, st, a);
+    }
+}
+
+// ref_pat_text shows a pattern ref_pat_fact understands.
+fn ref_pat_text(cx: RefCtx, p: AstPattern) -> String {
+    if p.alts.len() > 0 {
+        let mut ts = Vec::new();
+        for a in p.alts {
+            ts.push(ref_pat_text(cx, a));
+        }
+        return ts.join(" | ");
+    }
+    match p.at.get(0) {
+        Some(sub) => {
+            return ref_pat_text(cx, sub);
+        }
+        None => {}
+    }
+    if p.range {
+        let mut t = "";
+        match p.range_lo {
+            Some(lo) => {
+                t = lo.to_string();
+            }
+            None => {}
+        }
+        t = t + if p.range_incl { "..=" } else { ".." };
+        match p.range_hi {
+            Some(hi) => {
+                t = t + hi.to_string();
+            }
+            None => {}
+        }
+        return t;
+    }
+    match p.int_value {
+        Some(k) => k.to_string(),
+        None => "_",
+    }
 }
 
 // ref_len is the length of a Vec / String expression (an atom of its

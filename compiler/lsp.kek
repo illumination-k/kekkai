@@ -1167,7 +1167,7 @@ fn lsp_walk_stmt(mut w: LspWalk, fs: &Fs, s0: AstStmt) {
 fn lsp_walk_pat(mut w: LspWalk, fs: &Fs, p: AstPattern) {
     match w.info.patterns.get(p.id) {
         Some(pi) => {
-            if pi.kind == "bind" {
+            if pi.kind == "bind" || pi.kind == "at" {
                 match pi.bind {
                     Some(b) => lsp_add(
                         w,
@@ -1196,6 +1196,12 @@ fn lsp_walk_pat(mut w: LspWalk, fs: &Fs, p: AstPattern) {
         None => {}
     }
     for a in p.args {
+        lsp_walk_pat(w, fs, a);
+    }
+    for a in p.alts {
+        lsp_walk_pat(w, fs, a);
+    }
+    for a in p.at {
         lsp_walk_pat(w, fs, a);
     }
 }
@@ -1344,6 +1350,10 @@ fn lsp_walk_expr(mut w: LspWalk, fs: &Fs, e0: AstExpr) {
             lsp_walk_expr(w, fs, e.x);
             for arm in e.arms {
                 lsp_walk_pat(w, fs, arm.pat);
+                match arm.guard {
+                    Some(g) => lsp_walk_expr(w, fs, g),
+                    None => {}
+                }
                 lsp_walk_expr(w, fs, arm.body);
             }
         }

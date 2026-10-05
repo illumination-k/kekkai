@@ -334,6 +334,10 @@ fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
         AstExpr::Match(x) => {
             asr_w_expr(w, x.x);
             for arm in x.arms {
+                match arm.guard {
+                    Some(g) => asr_w_expr(w, g),
+                    None => {}
+                }
                 asr_w_expr(w, arm.body);
             }
         }

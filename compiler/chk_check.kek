@@ -93,7 +93,9 @@ struct ChkForIter {
     next: ChkMethodInfo,
 }
 
-// kind: "wild", "bind", "int", "bool", "string", "ctor"
+// kind: "wild", "bind", "int", "bool", "string", "ctor", "tuple", "range",
+// "or" (args: the alternatives, sharing the first one's bindings), "at"
+// (`x @ p`: bind x, args [p])
 struct ChkPatInfo {
     mut kind: String,
     mut ty: Ty,

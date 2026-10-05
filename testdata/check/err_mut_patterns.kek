@@ -1,0 +1,28 @@
+// The mutability rules in match guards, or-patterns and `@` bindings.
+
+fn guard_mutates(o: Option<Vec<Int>>) -> Int {
+    match o {
+        Some(v) if v.pop().is_some() => 1, // ERROR "cannot mutate `v`: it is not declared as mutable"
+        Some(mut w) | Some(mut w) if w.pop().is_some() => 2,
+        mut whole @ Some(_) => {
+            whole = None;
+            3
+        }
+        _ => 0,
+    }
+}
+
+fn at_mutates(o: Option<Vec<Int>>) -> Int {
+    match o {
+        Some(xs @ _) => {
+            xs.push(1); // ERROR "cannot mutate `xs`"
+            1
+        }
+        None => 0,
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    0
+}

@@ -248,6 +248,40 @@ fn dh_pattern_node(w: DhWalk, p: AstPattern) {
         dh_emit(w, "p_");
         return;
     }
+    if p.alts.len() > 0 {
+        dh_emit(w, "por/" + p.alts.len().to_string());
+        for a in p.alts {
+            dh_pattern(w, a);
+        }
+        return;
+    }
+    match p.at.get(0) {
+        Some(sub) => {
+            dh_emit(w, "pat");
+            dh_declare(w, p.bind);
+            dh_pattern(w, sub);
+            return;
+        }
+        None => {}
+    }
+    if p.range {
+        let mut r = "";
+        match p.range_lo {
+            Some(n) => {
+                r = n.to_string();
+            }
+            None => {}
+        }
+        r = r + if p.range_incl { "..=" } else { ".." };
+        match p.range_hi {
+            Some(n) => {
+                r = r + n.to_string();
+            }
+            None => {}
+        }
+        dh_lit(w, p.pos, "lit:range=" + r);
+        return;
+    }
     if p.tuple {
         dh_emit(w, "ptuple/" + p.args.len().to_string());
         for a in p.args {
@@ -592,6 +626,13 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
                 let mark = dh_scope_mark(w);
                 dh_emit(w, "arm");
                 dh_pattern(w, arm.pat);
+                match arm.guard {
+                    Some(g) => {
+                        dh_emit(w, "guard");
+                        dh_expr(w, g);
+                    }
+                    None => {}
+                }
                 dh_expr(w, arm.body);
                 dh_scope_reset(w, mark);
             }

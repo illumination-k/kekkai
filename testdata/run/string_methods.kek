@@ -1,0 +1,156 @@
+// String methods of core (lib/core/string.kek).
+fn q(s: String) -> String {
+    "<" + s + ">"
+}
+
+fn qs(v: &Vec<String>) -> String {
+    let parts: Vec<String> = v.iter().map(|s| q(s)).collect();
+    v.len().to_string() + ":" + parts.join("")
+}
+
+fn opt(o: Option<Int>) -> String {
+    match o {
+        Some(x) => x.to_string(),
+        None => "None",
+    }
+}
+
+fn opt_s(o: Option<String>) -> String {
+    match o {
+        Some(s) => q(s),
+        None => "None",
+    }
+}
+
+fn pair(o: Option<(String, String)>) -> String {
+    match o {
+        Some((a, b)) => q(a) + q(b),
+        None => "None",
+    }
+}
+
+fn ints(v: Vec<Int>) -> String {
+    let parts: Vec<String> = v.iter().map(|x| x.to_string()).collect();
+    parts.join(",")
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let empty = String::new();
+    log.info(
+        "new " + q(empty) + " " + empty.is_empty().to_string() + " " + "x".is_empty().to_string(),
+    );
+    let s = "héllo 😀!";
+    log.info(
+        "chars "
+            + ints(s.chars().collect())
+            + " count "
+            + s.chars().count().to_string()
+            + " len "
+            + s.len().to_string(),
+    );
+    log.info("rev " + ints(s.chars().rev().collect()));
+    let lone = String::from_char(55357) + "a" + String::from_char(56832);
+    log.info("lone " + ints(lone.chars().collect()) + " " + ints(lone.chars().rev().collect()));
+    let idx: Vec<String> = "a😀b".char_indices().map(|p| p.0.to_string() + "=" + p.1.to_string()).collect();
+    log.info("char_indices " + idx.join(" "));
+    log.info("bytes " + ints("é😀".bytes().collect()) + " " + "".bytes().count().to_string());
+    log.info(
+        "repeat " + q("ab".repeat(3)) + q("ab".repeat(0)) + q("ab".repeat(-2)) + q("".repeat(5)),
+    );
+    log.info(
+        "lines "
+            + qs(&"a\nb\r\n\nc\n".lines())
+            + " "
+            + qs(&"".lines())
+            + " "
+            + qs(&"\n".lines())
+            + " "
+            + qs(&"x\r\ny".lines()),
+    );
+    log.info(
+        "find "
+            + opt("abcabc".find("bc"))
+            + " "
+            + opt("abcabc".rfind("bc"))
+            + " "
+            + opt("abc".find("x"))
+            + " "
+            + opt("abc".rfind("x"))
+            + " "
+            + opt("abc".rfind(""))
+            + " "
+            + opt("ab".rfind("abc")),
+    );
+    log.info(
+        "strip "
+            + opt_s("foobar".strip_prefix("foo"))
+            + " "
+            + opt_s("foobar".strip_prefix("bar"))
+            + " "
+            + opt_s("foobar".strip_suffix("bar"))
+            + " "
+            + opt_s("foo".strip_suffix("foo"))
+            + " "
+            + opt_s("foo".strip_suffix("xfoo")),
+    );
+    log.info(
+        "trim "
+            + q(" \t\n a b ".trim_start())
+            + q((" " + String::from_char(12288) + "a b  " + String::from_char(12288)).trim_end())
+            + q("   ".trim_start())
+            + q("".trim_end()),
+    );
+    log.info(
+        "trim_matches "
+            + q("xxaxx".trim_start_matches("x"))
+            + q("xxaxx".trim_end_matches("xx"))
+            + q("ab".trim_start_matches("")),
+    );
+    log.info(
+        "split_once "
+            + pair("k=v=w".split_once("="))
+            + " "
+            + pair("k=v=w".rsplit_once("="))
+            + " "
+            + pair("kv".split_once("="))
+            + " "
+            + pair("a::b".split_once("::"))
+            + " "
+            + pair("=".rsplit_once("=")),
+    );
+    log.info(
+        "splitn "
+            + qs(&"a,b,c,d".splitn(2, ","))
+            + " "
+            + qs(&"a,b".splitn(5, ","))
+            + " "
+            + qs(&"a,b".splitn(0, ","))
+            + " "
+            + qs(&"a,b".splitn(1, ","))
+            + " "
+            + qs(&",".splitn(3, ",")),
+    );
+    log.info(
+        "split_whitespace "
+            + qs(&"  a  b\tc\n d ".split_whitespace())
+            + " "
+            + qs(&"   ".split_whitespace())
+            + " "
+            + qs(&"x".split_whitespace()),
+    );
+    log.info(
+        "same "
+            + q("abc".to_string())
+            + q("abc".to_owned())
+            + q("abc".as_str())
+            + " "
+            + "HeLLo".eq_ignore_ascii_case("hello").to_string()
+            + " "
+            + "é".eq_ignore_ascii_case("É").to_string()
+            + " "
+            + "ab".eq_ignore_ascii_case("abc").to_string(),
+    );
+    0
+}
+// exit: 0

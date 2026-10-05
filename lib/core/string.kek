@@ -1,0 +1,321 @@
+// Methods of String, as in Rust's str and String (`len`, `char_at`,
+// `slice`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`,
+// `replace`, `trim`, `to_upper`, `to_lower`, `parse_int` and `to_bytes`
+// are builtins). Strings are UTF-16: indices count code units, and a code
+// point (Rust's char) is an Int.
+
+impl String {
+    fn new() -> String {
+        ""
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.len() == 0
+    }
+
+    fn to_string(&self) -> String {
+        *self
+    }
+
+    fn to_owned(&self) -> String {
+        *self
+    }
+
+    fn as_str(&self) -> String {
+        *self
+    }
+
+    // chars iterates over the code points; a surrogate pair is one code
+    // point and a lone surrogate is U+FFFD (as in to_bytes).
+    fn chars(&self) -> Chars {
+        Chars { s: *self, i: 0, end: self.len() }
+    }
+
+    // char_indices iterates over (index of the first code unit, code point).
+    fn char_indices(&self) -> CharIndices {
+        CharIndices { chars: self.chars() }
+    }
+
+    // bytes iterates over the UTF-8 encoding (to_bytes is the Vec).
+    fn bytes(&self) -> Iter<Int> {
+        self.to_bytes().iter()
+    }
+
+    // repeat is n copies of self ("" when n <= 0).
+    fn repeat(&self, n: Int) -> String {
+        let mut out = "";
+        let mut part = *self;
+        let mut k = n;
+        while k > 0 {
+            if k % 2 == 1 {
+                out = out + part;
+            }
+            k = k / 2;
+            if k > 0 {
+                part = part + part;
+            }
+        }
+        out
+    }
+
+    // lines splits at "\n" and "\r\n"; a final line ending does not start
+    // another (empty) line.
+    fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.len() == 0 {
+            return out;
+        }
+        let parts = self.split("\n");
+        let n = parts.len();
+        let mut i = 0;
+        while i < n {
+            match parts.get(i) {
+                Some(p) => {
+                    if !(i == n - 1 && p == "") {
+                        if p.ends_with("\r") {
+                            out.push(p.slice(0, p.len() - 1));
+                        } else {
+                            out.push(p);
+                        }
+                    }
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+        out
+    }
+
+    // find is the index of the first occurrence of pat (= index_of).
+    fn find(&self, pat: String) -> Option<Int> {
+        self.index_of(pat)
+    }
+
+    // rfind is the index of the last occurrence of pat.
+    fn rfind(&self, pat: String) -> Option<Int> {
+        let k = pat.len();
+        let mut i = self.len() - k;
+        while i >= 0 {
+            if self.slice(i, i + k) == pat {
+                return Some(i);
+            }
+            i = i - 1;
+        }
+        None
+    }
+
+    fn strip_prefix(&self, prefix: String) -> Option<String> {
+        if self.starts_with(prefix) {
+            Some(self.slice(prefix.len(), self.len()))
+        } else {
+            None
+        }
+    }
+
+    fn strip_suffix(&self, suffix: String) -> Option<String> {
+        if self.ends_with(suffix) {
+            Some(self.slice(0, self.len() - suffix.len()))
+        } else {
+            None
+        }
+    }
+
+    // trim_start and trim_end remove the white space that trim removes.
+    fn trim_start(&self) -> String {
+        let n = self.len();
+        let mut a = 0;
+        while a < n && __is_white_space(self.char_at(a)) {
+            a = a + 1;
+        }
+        self.slice(a, n)
+    }
+
+    fn trim_end(&self) -> String {
+        let mut b = self.len();
+        while b > 0 && __is_white_space(self.char_at(b - 1)) {
+            b = b - 1;
+        }
+        self.slice(0, b)
+    }
+
+    fn trim_start_matches(&self, pat: String) -> String {
+        let k = pat.len();
+        if k == 0 {
+            return *self;
+        }
+        let mut s = *self;
+        while s.starts_with(pat) {
+            s = s.slice(k, s.len());
+        }
+        s
+    }
+
+    fn trim_end_matches(&self, pat: String) -> String {
+        let k = pat.len();
+        if k == 0 {
+            return *self;
+        }
+        let mut s = *self;
+        while s.ends_with(pat) {
+            s = s.slice(0, s.len() - k);
+        }
+        s
+    }
+
+    // split_once splits at the first occurrence of sep.
+    fn split_once(&self, sep: String) -> Option<(String, String)> {
+        match self.index_of(sep) {
+            Some(i) => Some((self.slice(0, i), self.slice(i + sep.len(), self.len()))),
+            None => None,
+        }
+    }
+
+    // rsplit_once splits at the last occurrence of sep.
+    fn rsplit_once(&self, sep: String) -> Option<(String, String)> {
+        match self.rfind(sep) {
+            Some(i) => Some((self.slice(0, i), self.slice(i + sep.len(), self.len()))),
+            None => None,
+        }
+    }
+
+    // splitn splits at sep into at most n pieces (the last one holds the
+    // rest; none when n <= 0).
+    fn splitn(&self, n: Int, sep: String) -> Vec<String> {
+        let mut out = Vec::new();
+        if n <= 0 {
+            return out;
+        }
+        let mut rest = *self;
+        while out.len() < n - 1 {
+            match rest.split_once(sep) {
+                Some((a, b)) => {
+                    out.push(a);
+                    rest = b;
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+        out.push(rest);
+        out
+    }
+
+    // split_whitespace splits at runs of white space, dropping empty pieces.
+    fn split_whitespace(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let n = self.len();
+        let mut i = 0;
+        while i < n {
+            while i < n && __is_white_space(self.char_at(i)) {
+                i = i + 1;
+            }
+            let start = i;
+            while i < n && !__is_white_space(self.char_at(i)) {
+                i = i + 1;
+            }
+            if i > start {
+                out.push(self.slice(start, i));
+            }
+        }
+        out
+    }
+
+    // eq_ignore_ascii_case compares with ASCII letters case-folded.
+    fn eq_ignore_ascii_case(&self, other: String) -> Bool {
+        self.len() == other.len() && self.to_lower() == other.to_lower()
+    }
+}
+
+// The white space of trim: U+0009–000D, U+0020, U+00A0, U+1680,
+// U+2000–200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF.
+fn __is_white_space(c: Option<Int>) -> Bool {
+    match c {
+        Some(x) => (x >= 9 && x <= 13)
+            || x == 32
+            || x == 160
+            || x == 5760
+            || (x >= 8192 && x <= 8202)
+            || x == 8232
+            || x == 8233
+            || x == 8239
+            || x == 8287
+            || x == 12288
+            || x == 65279,
+        None => false,
+    }
+}
+
+// Chars iterates over the code points of a string (String::chars).
+struct Chars {
+    s: String,
+    mut i: Int,
+    mut end: Int,
+}
+
+impl Iterator for Chars {
+    type Item = Int;
+
+    fn next(&mut self) -> Option<Int> {
+        if self.i >= self.end {
+            return None;
+        }
+        let c = self.s.char_at(self.i).unwrap_or(0);
+        self.i = self.i + 1;
+        if c >= 55296 && c < 56320 {
+            if self.i < self.end {
+                let d = self.s.char_at(self.i).unwrap_or(0);
+                if d >= 56320 && d < 57344 {
+                    self.i = self.i + 1;
+                    return Some(65536 + (c - 55296) * 1024 + (d - 56320));
+                }
+            }
+            return Some(65533);
+        }
+        if c >= 56320 && c < 57344 {
+            return Some(65533);
+        }
+        Some(c)
+    }
+}
+
+impl DoubleEndedIterator for Chars {
+    fn next_back(&mut self) -> Option<Int> {
+        if self.i >= self.end {
+            return None;
+        }
+        self.end = self.end - 1;
+        let d = self.s.char_at(self.end).unwrap_or(0);
+        if d >= 56320 && d < 57344 {
+            if self.end > self.i {
+                let c = self.s.char_at(self.end - 1).unwrap_or(0);
+                if c >= 55296 && c < 56320 {
+                    self.end = self.end - 1;
+                    return Some(65536 + (c - 55296) * 1024 + (d - 56320));
+                }
+            }
+            return Some(65533);
+        }
+        if d >= 55296 && d < 56320 {
+            return Some(65533);
+        }
+        Some(d)
+    }
+}
+
+// CharIndices iterates over (index, code point) (String::char_indices).
+struct CharIndices {
+    chars: Chars,
+}
+
+impl Iterator for CharIndices {
+    type Item = (Int, Int);
+
+    fn next(&mut self) -> Option<(Int, Int)> {
+        let i = self.chars.i;
+        match self.chars.next() {
+            Some(c) => Some((i, c)),
+            None => None,
+        }
+    }
+}

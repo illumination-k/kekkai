@@ -1,0 +1,529 @@
+// Methods of Vec, as in Rust's Vec and slice (`push`, `get`, `set`, `pop`,
+// `len` and `join` are builtins, `iter` is in iter.kek).
+//
+// Nothing panics. A position between elements (`insert`, `split_off`,
+// `truncate`, `resize`, the bounds of `slice`) is clamped to [0, len]; an
+// element index (`remove`, `swap`) that is out of range gives None or does
+// nothing. A chunk or window size below 1 gives no chunks.
+
+impl<T> Vec<T> {
+    fn with_capacity(n: Int) -> Vec<T> {
+        Vec::new()
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.len() == 0
+    }
+
+    fn first(&self) -> Option<T> {
+        self.get(0)
+    }
+
+    fn last(&self) -> Option<T> {
+        self.get(self.len() - 1)
+    }
+
+    // insert puts x at index i, shifting the later elements right; i is
+    // clamped to [0, len] (Rust panics when i > len).
+    fn insert(&mut self, i: Int, x: T) {
+        let n = self.len();
+        let at = if i < 0 {
+            0
+        } else if i > n { n } else { i };
+        self.push(x);
+        let mut j = n;
+        while j > at {
+            match self.get(j - 1) {
+                Some(y) => {
+                    self.set(j, y);
+                }
+                None => {}
+            }
+            j = j - 1;
+        }
+        self.set(at, x);
+    }
+
+    // remove takes out the element at i, shifting the later elements left.
+    fn remove(&mut self, i: Int) -> Option<T> {
+        let n = self.len();
+        if i < 0 || i >= n {
+            return None;
+        }
+        let x = self.get(i);
+        let mut j = i;
+        while j + 1 < n {
+            match self.get(j + 1) {
+                Some(y) => {
+                    self.set(j, y);
+                }
+                None => {}
+            }
+            j = j + 1;
+        }
+        self.pop();
+        x
+    }
+
+    // swap_remove takes out the element at i, putting the last element in
+    // its place (O(1), does not keep the order).
+    fn swap_remove(&mut self, i: Int) -> Option<T> {
+        let n = self.len();
+        if i < 0 || i >= n {
+            return None;
+        }
+        let x = self.get(i);
+        match self.pop() {
+            Some(y) => {
+                if i < n - 1 {
+                    self.set(i, y);
+                }
+            }
+            None => {}
+        }
+        x
+    }
+
+    // swap exchanges the elements at i and j (nothing when either is out of
+    // range).
+    fn swap(&mut self, i: Int, j: Int) {
+        match self.get(i) {
+            Some(a) => match self.get(j) {
+                Some(b) => {
+                    self.set(i, b);
+                    self.set(j, a);
+                }
+                None => {}
+            },
+            None => {}
+        }
+    }
+
+    fn reverse(&mut self) {
+        let mut i = 0;
+        let mut j = self.len() - 1;
+        while i < j {
+            self.swap(i, j);
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+
+    // truncate keeps the first n elements.
+    fn truncate(&mut self, n: Int) {
+        let keep = if n < 0 { 0 } else { n };
+        while self.len() > keep {
+            self.pop();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.truncate(0);
+    }
+
+    fn extend<I: Iterator<Item = T>>(&mut self, mut iter: I) {
+        while let Some(x) = iter.next() {
+            self.push(x);
+        }
+    }
+
+    // append moves the elements of other to the end of self, leaving other
+    // empty.
+    fn append(&mut self, other: &mut Vec<T>) {
+        let n = other.len();
+        let mut i = 0;
+        while i < n {
+            match other.get(i) {
+                Some(x) => self.push(x),
+                None => {}
+            }
+            i = i + 1;
+        }
+        other.truncate(0);
+    }
+
+    // split_off returns the elements from index at on, leaving the first
+    // `at` in self; at is clamped to [0, len].
+    #[fresh]
+    fn split_off(&mut self, at: Int) -> Vec<T> {
+        let tail = self.slice(at, self.len());
+        let n = self.len() - tail.len();
+        self.truncate(n);
+        tail
+    }
+
+    // slice returns a new Vec of the elements in [a, b), like
+    // `v[a..b].to_vec()` in Rust; the bounds are clamped to [0, len] (as
+    // String::slice).
+    #[fresh]
+    fn slice(&self, a: Int, b: Int) -> Vec<T> {
+        let n = self.len();
+        let lo = if a < 0 {
+            0
+        } else if a > n { n } else { a };
+        let hi = if b < 0 {
+            0
+        } else if b > n { n } else { b };
+        let mut out = Vec::new();
+        let mut i = lo;
+        while i < hi {
+            match self.get(i) {
+                Some(x) => out.push(x),
+                None => {}
+            }
+            i = i + 1;
+        }
+        out
+    }
+
+    fn retain(&mut self, f: impl Fn(&T) -> Bool) {
+        let n = self.len();
+        let mut k = 0;
+        let mut i = 0;
+        while i < n {
+            match self.get(i) {
+                Some(x) => {
+                    if f(&x) {
+                        self.set(k, x);
+                        k = k + 1;
+                    }
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+        self.truncate(k);
+    }
+
+    // dedup_by_key removes consecutive elements with the same key.
+    fn dedup_by_key<K: PartialEq>(&mut self, f: impl Fn(&T) -> K) {
+        self.dedup_by(|a, b| f(a) == f(b));
+    }
+
+    // dedup_by removes each element for which same(x, previous kept) holds.
+    fn dedup_by(&mut self, same: impl Fn(&T, &T) -> Bool) {
+        let n = self.len();
+        if n <= 1 {
+            return;
+        }
+        let mut k = 1;
+        let mut i = 1;
+        while i < n {
+            match self.get(i) {
+                Some(x) => match self.get(k - 1) {
+                    Some(prev) => {
+                        if !same(&x, &prev) {
+                            self.set(k, x);
+                            k = k + 1;
+                        }
+                    }
+                    None => {}
+                },
+                None => {}
+            }
+            i = i + 1;
+        }
+        self.truncate(k);
+    }
+
+    // sort_by sorts with a comparison, keeping the order of equal elements
+    // (a merge sort: O(n log n)).
+    fn sort_by(&mut self, cmp: impl Fn(&T, &T) -> Ordering) {
+        let n = self.len();
+        if n <= 1 {
+            return;
+        }
+        let mut src = self.slice(0, n);
+        let mut dst = self.slice(0, n);
+        let mut width = 1;
+        while width < n {
+            let mut lo = 0;
+            while lo < n {
+                let mid = if lo + width < n { lo + width } else { n };
+                let hi = if mid + width < n { mid + width } else { n };
+                let mut i = lo;
+                let mut j = mid;
+                let mut k = lo;
+                while k < hi {
+                    let take_left = if i >= mid {
+                        false
+                    } else if j >= hi {
+                        true
+                    } else {
+                        match src.get(i) {
+                            Some(a) => match src.get(j) {
+                                Some(b) => !cmp(&b, &a).is_lt(),
+                                None => true,
+                            },
+                            None => false,
+                        }
+                    };
+                    let from = if take_left { i } else { j };
+                    match src.get(from) {
+                        Some(x) => {
+                            dst.set(k, x);
+                        }
+                        None => {}
+                    }
+                    if take_left {
+                        i = i + 1;
+                    } else {
+                        j = j + 1;
+                    }
+                    k = k + 1;
+                }
+                lo = hi;
+            }
+            let t = src;
+            src = dst;
+            dst = t;
+            width = width * 2;
+        }
+        let mut i = 0;
+        while i < n {
+            match src.get(i) {
+                Some(x) => {
+                    self.set(i, x);
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+    }
+
+    // sort_by_key sorts by a key, keeping the order of equal keys (the key
+    // is computed for each comparison, as in Rust).
+    fn sort_by_key<K: Ord>(&mut self, f: impl Fn(&T) -> K) {
+        self.sort_by(|a, b| f(a).cmp(&f(b)));
+    }
+
+    // The unstable sorts are the stable ones.
+    fn sort_unstable_by(&mut self, cmp: impl Fn(&T, &T) -> Ordering) {
+        self.sort_by(cmp);
+    }
+
+    fn sort_unstable_by_key<K: Ord>(&mut self, f: impl Fn(&T) -> K) {
+        self.sort_by(|a, b| f(a).cmp(&f(b)));
+    }
+
+    // binary_search_by searches a Vec sorted consistently with f, which
+    // compares an element with the target: Ok(index of a match) or
+    // Err(the index where it could be inserted keeping the order).
+    fn binary_search_by(&self, f: impl Fn(&T) -> Ordering) -> Result<Int, Int> {
+        let mut lo = 0;
+        let mut hi = self.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.get(mid) {
+                Some(x) => match f(&x) {
+                    Ordering::Less => {
+                        lo = mid + 1;
+                    }
+                    Ordering::Greater => {
+                        hi = mid;
+                    }
+                    Ordering::Equal => {
+                        return Ok(mid);
+                    }
+                },
+                None => {
+                    return Err(lo);
+                }
+            }
+        }
+        Err(lo)
+    }
+
+    fn binary_search_by_key<K: Ord>(&self, key: &K, f: impl Fn(&T) -> K) -> Result<Int, Int> {
+        self.binary_search_by(|x| f(x).cmp(key))
+    }
+
+    // partition_point returns the index of the first element for which p is
+    // false (the Vec is partitioned: all true, then all false).
+    fn partition_point(&self, p: impl Fn(&T) -> Bool) -> Int {
+        let mut lo = 0;
+        let mut hi = self.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.get(mid) {
+                Some(x) => {
+                    if p(&x) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                None => {
+                    return lo;
+                }
+            }
+        }
+        lo
+    }
+
+    // chunks splits into Vecs of n elements (the last may be shorter).
+    #[fresh]
+    fn chunks(&self, n: Int) -> Vec<Vec<T>> {
+        let mut out = Vec::new();
+        if n < 1 {
+            return out;
+        }
+        let len = self.len();
+        let mut i = 0;
+        while i < len {
+            out.push(self.slice(i, i + n));
+            i = i + n;
+        }
+        out
+    }
+
+    // windows returns every run of n consecutive elements.
+    #[fresh]
+    fn windows(&self, n: Int) -> Vec<Vec<T>> {
+        let mut out = Vec::new();
+        if n < 1 {
+            return out;
+        }
+        let len = self.len();
+        let mut i = 0;
+        while i + n <= len {
+            out.push(self.slice(i, i + n));
+            i = i + 1;
+        }
+        out
+    }
+
+    // rotate_left moves the first k elements to the end (k is taken modulo
+    // len, so a negative k rotates right).
+    fn rotate_left(&mut self, k: Int) {
+        let n = self.len();
+        if n <= 1 {
+            return;
+        }
+        let r = k.rem_euclid(n);
+        if r == 0 {
+            return;
+        }
+        let mut rotated = self.slice(r, n);
+        let mut head = self.slice(0, r);
+        rotated.append(&mut head);
+        let mut i = 0;
+        while i < n {
+            match rotated.get(i) {
+                Some(x) => {
+                    self.set(i, x);
+                }
+                None => {}
+            }
+            i = i + 1;
+        }
+    }
+
+    fn rotate_right(&mut self, k: Int) {
+        self.rotate_left(0 - k.rem_euclid(self.len().max(1)));
+    }
+}
+
+impl<T: Clone> Vec<T> {
+    // extend_from_slice pushes copies of the elements of other.
+    fn extend_from_slice(&mut self, other: &Vec<T>) {
+        for x in other.iter() {
+            self.push(x.clone());
+        }
+    }
+
+    // fill sets every element to a copy of x.
+    fn fill(&mut self, x: T) {
+        let n = self.len();
+        let mut i = 0;
+        while i < n {
+            self.set(i, x.clone());
+            i = i + 1;
+        }
+    }
+
+    // resize truncates to n elements or pushes copies of x up to n.
+    fn resize(&mut self, n: Int, x: T) {
+        self.truncate(n);
+        while self.len() < n {
+            self.push(x.clone());
+        }
+    }
+
+    // repeat returns n copies of the elements one after another.
+    fn repeat(&self, n: Int) -> Vec<T> {
+        let mut out = Vec::new();
+        let mut k = 0;
+        while k < n {
+            for x in self.iter() {
+                out.push(x.clone());
+            }
+            k = k + 1;
+        }
+        out
+    }
+}
+
+impl<T: PartialEq> Vec<T> {
+    fn contains(&self, x: &T) -> Bool {
+        for y in self.iter() {
+            if y == x {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn starts_with(&self, prefix: &Vec<T>) -> Bool {
+        let k = prefix.len();
+        if k > self.len() {
+            return false;
+        }
+        self.slice(0, k) == prefix
+    }
+
+    fn ends_with(&self, suffix: &Vec<T>) -> Bool {
+        let n = self.len();
+        let k = suffix.len();
+        if k > n {
+            return false;
+        }
+        self.slice(n - k, n) == suffix
+    }
+
+    // dedup removes consecutive equal elements.
+    fn dedup(&mut self) {
+        self.dedup_by(|a, b| a == b);
+    }
+}
+
+impl<T: Ord> Vec<T> {
+    // sort sorts in ascending order, keeping the order of equal elements.
+    fn sort(&mut self) {
+        self.sort_by(|a, b| a.cmp(b));
+    }
+
+    fn sort_unstable(&mut self) {
+        self.sort_by(|a, b| a.cmp(b));
+    }
+
+    // binary_search searches a sorted Vec: Ok(index of a match) or Err(the
+    // index where x could be inserted keeping the order).
+    fn binary_search(&self, x: &T) -> Result<Int, Int> {
+        self.binary_search_by(|y| y.cmp(x))
+    }
+}
+
+impl<T> Vec<Vec<T>> {
+    // concat joins the Vecs into one.
+    #[fresh]
+    fn concat(&self) -> Vec<T> {
+        let mut out = Vec::new();
+        for v in self.iter() {
+            for x in v.iter() {
+                out.push(x);
+            }
+        }
+        out
+    }
+}

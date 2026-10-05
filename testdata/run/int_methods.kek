@@ -1,0 +1,215 @@
+// Int methods of core (lib/core/int.kek): checked / saturating / wrapping
+// arithmetic at the bounds, Euclidean division, bit counts.
+fn opt(o: Option<Int>) -> String {
+    match o {
+        Some(x) => x.to_string(),
+        None => "None",
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let max = Int::max_value();
+    let min = Int::min_value();
+    log.info(
+        "bounds " + max.to_string() + " " + min.to_string() + " " + (max + 1 == min).to_string(),
+    );
+
+    log.info(
+        "pow "
+            + 2.pow(10).to_string()
+            + " "
+            + (-3).pow(3).to_string()
+            + " "
+            + 7.pow(0).to_string()
+            + " "
+            + 2.pow(64).to_string()
+            + " "
+            + 2.pow(-1).to_string()
+            + " "
+            + (-1).pow(-3).to_string(),
+    );
+
+    log.info(
+        "checked_add "
+            + opt(1.checked_add(2))
+            + " "
+            + opt(max.checked_add(1))
+            + " "
+            + opt(min.checked_add(-1))
+            + " "
+            + opt(min.checked_add(max)),
+    );
+    log.info(
+        "checked_sub "
+            + opt(5.checked_sub(7))
+            + " "
+            + opt(min.checked_sub(1))
+            + " "
+            + opt(max.checked_sub(-1))
+            + " "
+            + opt(0.checked_sub(min))
+            + " "
+            + opt((-1).checked_sub(min)),
+    );
+    log.info(
+        "checked_mul "
+            + opt(6.checked_mul(7))
+            + " "
+            + opt(max.checked_mul(2))
+            + " "
+            + opt(min.checked_mul(-1))
+            + " "
+            + opt((-1).checked_mul(min))
+            + " "
+            + opt(min.checked_mul(1))
+            + " "
+            + opt(0.checked_mul(min))
+            + " "
+            + opt(4611686018427387904.checked_mul(-2))
+            + " "
+            + opt(4611686018427387904.checked_mul(2)),
+    );
+    log.info(
+        "checked_div "
+            + opt(7.checked_div(2))
+            + " "
+            + opt(7.checked_div(0))
+            + " "
+            + opt(min.checked_div(-1))
+            + " rem "
+            + opt((-7).checked_rem(2))
+            + " "
+            + opt(7.checked_rem(0))
+            + " "
+            + opt(min.checked_rem(-1)),
+    );
+    log.info(
+        "checked_pow "
+            + opt(3.checked_pow(39))
+            + " "
+            + opt(3.checked_pow(40))
+            + " "
+            + opt((-2).checked_pow(63))
+            + " "
+            + opt(2.checked_pow(63))
+            + " "
+            + opt(2.checked_pow(-1))
+            + " neg "
+            + opt(min.checked_neg())
+            + " "
+            + opt(5.checked_neg())
+            + " abs "
+            + opt(min.checked_abs())
+            + " "
+            + opt((-5).checked_abs()),
+    );
+    log.info(
+        "wrapping "
+            + max.wrapping_add(1).to_string()
+            + " "
+            + min.wrapping_sub(1).to_string()
+            + " "
+            + max.wrapping_mul(2).to_string()
+            + " "
+            + min.wrapping_neg().to_string(),
+    );
+    log.info(
+        "saturating "
+            + max.saturating_add(1).to_string()
+            + " "
+            + min.saturating_add(-1).to_string()
+            + " "
+            + min.saturating_sub(1).to_string()
+            + " "
+            + max.saturating_sub(-1).to_string()
+            + " "
+            + max.saturating_mul(-2).to_string()
+            + " "
+            + min.saturating_mul(-1).to_string()
+            + " "
+            + 3.saturating_add(4).to_string()
+            + " "
+            + (-2).saturating_pow(65).to_string(),
+    );
+    log.info(
+        "signum "
+            + (-9).signum().to_string()
+            + " "
+            + 0.signum().to_string()
+            + " "
+            + 9.signum().to_string()
+            + " "
+            + 0.is_positive().to_string()
+            + " "
+            + (-1).is_negative().to_string(),
+    );
+    log.info(
+        "euclid "
+            + (-7).rem_euclid(3).to_string()
+            + " "
+            + (-7).div_euclid(3).to_string()
+            + " "
+            + 7.rem_euclid(-3).to_string()
+            + " "
+            + 7.div_euclid(-3).to_string()
+            + " "
+            + (-7).rem_euclid(-3).to_string()
+            + " "
+            + (-7).div_euclid(-3).to_string()
+            + " "
+            + 7.rem_euclid(0).to_string()
+            + " "
+            + 7.div_euclid(0).to_string(),
+    );
+    log.info(
+        "clamp "
+            + 5.clamp(0, 3).to_string()
+            + " "
+            + (-5).clamp(0, 3).to_string()
+            + " "
+            + 2.clamp(0, 3).to_string()
+            + " "
+            + 2.clamp(5, 1).to_string()
+            + " abs_diff "
+            + 3.abs_diff(10).to_string()
+            + " "
+            + 10.abs_diff(-3).to_string(),
+    );
+    log.info(
+        "bits "
+            + 0.count_ones().to_string()
+            + " "
+            + 255.count_ones().to_string()
+            + " "
+            + (-1).count_ones().to_string()
+            + " "
+            + min.count_ones().to_string()
+            + " "
+            + 1.count_zeros().to_string(),
+    );
+    log.info(
+        "leading "
+            + 0.leading_zeros().to_string()
+            + " "
+            + 1.leading_zeros().to_string()
+            + " "
+            + (-1).leading_zeros().to_string()
+            + " "
+            + max.leading_zeros().to_string()
+            + " trailing "
+            + 0.trailing_zeros().to_string()
+            + " "
+            + 8.trailing_zeros().to_string()
+            + " "
+            + min.trailing_zeros().to_string()
+            + " pow2 "
+            + 64.is_power_of_two().to_string()
+            + " "
+            + 0.is_power_of_two().to_string()
+            + " "
+            + 6.is_power_of_two().to_string(),
+    );
+    0
+}
+// exit: 0

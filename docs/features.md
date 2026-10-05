@@ -47,7 +47,8 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | 演算子の多重定義 `Add` `Sub` `Mul` `Div` `Rem` `Neg` | ✅ | |
 | `Display` / `Debug`、`#[derive(Debug)]`、`to_string` | ✅ | `Labeled` は実装しない（情報フロー） |
 | 浮動小数点数 `f64` | 🚧 | IR・Lean・コード生成・数値の表示が要る |
-| `dyn Trait` | 🚧 | クロージャ（`dyn Fn`）のみ |
+| `dyn Trait`（`Box<dyn Trait>`、`&dyn Trait`） | ✅ | オブジェクト安全な trait。全プログラムで変換される型の enum と分岐の関数に下ろす。`dyn A + B` はない |
+| `impl Trait`（引数・戻り値） | ✅ | 戻り値は不透明な型。trait のメソッドの戻り値（RPITIT）はない |
 | goroutine / channel、`async` | ⛔ | I/O はコンパイラがステートマシンに変換する。並行性は Workers に任せる |
 | 所有権・ライフタイム | ⛔ | 可変性の追跡（docs/mutability.md）で代える |
 

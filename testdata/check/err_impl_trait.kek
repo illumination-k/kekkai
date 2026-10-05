@@ -1,0 +1,70 @@
+// `impl Trait`: the returned values must agree and implement the trait,
+// callers only see the trait, and it is allowed only in signatures.
+struct Money {
+    cents: Int,
+}
+
+impl Display for Money {
+    fn fmt(&self, f: &mut Formatter) {
+        write!(f, "{}", self.cents);
+    }
+}
+
+fn mixed(b: Bool) -> impl Display {
+    if b {
+        return Money { cents: 1 };
+    }
+    "free" // ERROR "mismatched types in function result: expected `Money`, found `String`"
+}
+
+fn not_display() -> impl Display { // ERROR "the trait bound `Vec<Int>: Display` is not satisfied"
+    vec![1, 2]
+}
+
+fn wrong_item() -> impl Iterator<Item = String> { // ERROR "type mismatch resolving `<Range as Iterator>::Item == String`: found `Int`"
+    0..3
+}
+
+fn money() -> impl Display {
+    Money { cents: 5 }
+}
+
+fn hidden() -> Int {
+    money().cents // ERROR "no field `cents` on type `impl Display`"
+}
+
+fn opaque_is_not_concrete() -> Money {
+    money() // ERROR "mismatched types in function result: expected `Money`, found `impl Display`"
+}
+
+fn sum(it: impl Iterator<Item = Int>) -> Int {
+    it.fold(0, |a, b| a + b)
+}
+
+fn show(x: impl Display) -> String {
+    x.to_string()
+}
+
+fn not_display_arg() -> String {
+    show(vec![1]) // ERROR "the trait bound `Vec<Int>: Display` is not satisfied"
+}
+
+fn sum_ok() -> Int {
+    sum(0..3)
+}
+
+fn in_let() {
+    let x: impl Display = 1; // ERROR "`impl Trait` is only allowed in the parameter and return types of functions"
+}
+
+struct Holder {
+    d: impl Display, // ERROR "`impl Trait` is only allowed in the parameter and return types of functions"
+}
+
+trait Source {
+    fn items(&self) -> impl Iterator<Item = Int>; // ERROR "`impl Iterator<Item = Int>` is not supported in the return type of a trait method"
+}
+
+fn forever(n: Int) -> impl Display { // ERROR "cannot resolve opaque type `impl Display`: it expands to a recursive type"
+    forever(n)
+}

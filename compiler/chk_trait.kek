@@ -1053,6 +1053,15 @@ fn chk_implements(info: ChkInfo, t0: Ty, tr: String, args: Vec<Ty>, depth: Int) 
             chk_find_impl(info, tr, t, args, depth).is_some()
         }
         Ty::Param(p) => chk_param_has(info, p, tr, args),
+        Ty::Struct(_, _) => match chk_struct_bound(info, t) {
+            // a trait object or an opaque type: its bound
+            Some(b) => {
+                let mut bs = Vec::new();
+                bs.push(b);
+                chk_bounds_have(info, bs, tr, args)
+            }
+            None => chk_find_impl(info, tr, t, args, depth).is_some(),
+        },
         Ty::Assoc(_, _, _) => {
             let nt = chk_norm(info, t);
             match nt {
@@ -1091,23 +1100,19 @@ fn chk_norm(info: ChkInfo, t0: Ty) -> Ty {
                     Ty::Assoc(s, tr, n)
                 }
                 Ty::Var(_) => Ty::Assoc(s, tr, n),
-                _ => {
-                    // the trait declaring Name may be a supertrait of tr
-                    for t2 in chk_trait_closure(info, tr) {
-                        match chk_find_impl(info, t2, s, Vec::new(), 0) {
-                            Some(m) => {
-                                for i in 0..m.im.assoc_names.len() {
-                                    if m.im.assoc_names.get(i).unwrap_or("") == n {
-                                        let a = m.im.assoc_tys.get(i).unwrap_or(ty_unit());
-                                        return chk_norm(info, ty_subst(a, m.im.tparams, m.targs));
-                                    }
-                                }
+                Ty::Struct(_, _) => match chk_struct_bound(info, s) {
+                    // a trait object or an opaque type: its bound
+                    Some(b) => {
+                        for i in 0..b.assoc_names.len() {
+                            if b.assoc_names.get(i).unwrap_or("") == n {
+                                return chk_norm(info, b.assoc_tys.get(i).unwrap_or(ty_unit()));
                             }
-                            None => {}
                         }
+                        Ty::Assoc(s, tr, n)
                     }
-                    Ty::Assoc(s, tr, n)
-                }
+                    None => chk_norm_impl_assoc(info, s, tr, n),
+                },
+                _ => chk_norm_impl_assoc(info, s, tr, n),
             }
         }
         Ty::Result(a, b) => {
@@ -1125,6 +1130,25 @@ fn chk_norm(info: ChkInfo, t0: Ty) -> Ty {
         }
         _ => t,
     }
+}
+
+// chk_norm_impl_assoc resolves `<s as tr>::n` from the implementation for
+// s (the trait declaring n may be a supertrait of tr).
+fn chk_norm_impl_assoc(info: ChkInfo, s: Ty, tr: String, n: String) -> Ty {
+    for t2 in chk_trait_closure(info, tr) {
+        match chk_find_impl(info, t2, s, Vec::new(), 0) {
+            Some(m) => {
+                for i in 0..m.im.assoc_names.len() {
+                    if m.im.assoc_names.get(i).unwrap_or("") == n {
+                        let a = m.im.assoc_tys.get(i).unwrap_or(ty_unit());
+                        return chk_norm(info, ty_subst(a, m.im.tparams, m.targs));
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    Ty::Assoc(s, tr, n)
 }
 
 fn chk_norm_all(info: ChkInfo, ts: Vec<Ty>) -> Vec<Ty> {

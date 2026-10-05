@@ -12,7 +12,10 @@ struct ChkTag {
     refutable: Bool,
 }
 
-fn chk_match(c: Chk, e: AstMatch) -> Ty {
+fn chk_match(mut c: Chk, e: AstMatch) -> Ty {
+    // a trait object type expected of the match (its arms are coerced)
+    let want = c.want_dyn;
+    c.want_dyn = None;
     let mut st = ty_prune(chk_expr(c, e.x));
     if ty_is_prim(st, "<invalid>") {
         st = chk_new_var(c);
@@ -41,7 +44,14 @@ fn chk_match(c: Chk, e: AstMatch) -> Ty {
                 rows.push(row);
             }
         }
-        let at = chk_expr(c, arm.body);
+        let at = match want {
+            Some(w) => {
+                let t1 = chk_expr_expect(c, arm.body, w);
+                chk_coerce(c, arm.body, t1, w, "match arm");
+                w
+            }
+            None => chk_expr(c, arm.body),
+        };
         if !ty_unify(result, at) {
             let s1 = ty_str(ty_resolve(result));
             chk_errorf(

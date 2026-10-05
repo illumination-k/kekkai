@@ -70,7 +70,11 @@ fn search_term_of(t0: Ty) -> SearchTerm {
         Ty::Var(v) => search_tvar("c:_" + v.id.to_string()),
         Ty::Param(p) => search_tvar("c:" + p.name + "#" + p.id.to_string()),
         Ty::Vec(e) => search_con("Vec", search_list1(search_term_of(e))),
-        Ty::Struct(st, args) => search_con(st.name, search_terms_of(args)),
+        Ty::Struct(st, args) => if ty_is_dyn(t) || ty_is_opaque_impl(t) {
+            search_con0(ty_str(t))
+        } else {
+            search_con(st.name, search_terms_of(args))
+        },
         Ty::Enum(en, args) => search_con(en.name, search_terms_of(args)),
         _ => search_con0(ty_str(t)),
     }
@@ -277,6 +281,11 @@ fn search_typ(mut p: SearchParser) -> SearchTerm {
         }
         return search_con0("()");
     }
+    if (t.kind == "impl" || (t.kind == "IDENT" && t.text == "dyn")) && search_peek(p) == "IDENT" {
+        // `dyn Trait<..>` / `impl Trait<..>`: one constructor named by the
+        // type as the checker prints it
+        return search_con0(t.text + " " + search_trait_text(p));
+    }
     if t.kind == "IDENT" {
         let name = t.text;
         let c = name.char_at(0).unwrap_or(0);
@@ -305,10 +314,45 @@ fn search_typ(mut p: SearchParser) -> SearchTerm {
                 return bad;
             }
         }
+        if name == "Box" && args.len() == 1 {
+            // `Box<T>` is T
+            return search_at(args, 0);
+        }
         return search_con(name, args);
     }
     search_fail(p, "expected a type, found " + lex_kind_name(t.kind));
     bad
+}
+
+// search_trait_text reads `Trait<Args>` (after `dyn` / `impl`) as text
+// in the checker's spelling: `Iterator<Item = Int>`.
+fn search_trait_text(p: SearchParser) -> String {
+    let mut out = search_next(p).text;
+    if search_peek(p) != "<" {
+        return out;
+    }
+    let mut depth = 0;
+    while search_peek(p) != "EOF" {
+        let t = search_next(p);
+        if t.kind == "<" {
+            depth = depth + 1;
+            out = out + "<";
+        } else if t.kind == ">" || t.kind == ">>" {
+            let n = if t.kind == ">" { 1 } else { 2 };
+            depth = depth - n;
+            out = out + t.kind;
+            if depth <= 0 {
+                break;
+            }
+        } else if t.kind == "," {
+            out = out + ", ";
+        } else if t.kind == "=" {
+            out = out + " = ";
+        } else {
+            out = out + t.text;
+        }
+    }
+    out
 }
 
 // ---- unification (substitutions map variable names to terms) ----

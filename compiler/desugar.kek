@@ -21,6 +21,8 @@
 //                             declaration order, which keeps the order of
 //                             evaluation), pattern `E::V { b, .. }` ->
 //                             `E::V(_, b)`
+//   Box::new(e)               e (the type `Box<T>` is T in the checker),
+//                             unless the program defines `Box`
 //   S { a, .. }               (pattern) every field in declaration order:
 //                             `S { a: a, b: _ }`
 //
@@ -598,6 +600,19 @@ fn desugar_expr(cx: DsgCx, e0: AstExpr) -> AstExpr {
                     }
                 }
                 AstExpr::Path(p) => {
+                    if p.ty == "Box"
+                        && p.name == "new"
+                        && e.args.len() == 1
+                        && !cx.structs.contains_key("Box")
+                        && !cx.enums.contains_key("Box") {
+                        // `Box<T>` is T (values are references already)
+                        match e.args.get(0) {
+                            Some(a) => {
+                                return desugar_expr(cx, a);
+                            }
+                            None => {}
+                        }
+                    }
                     if desugar_named_variant(cx, p.ty, p.name).is_some() {
                         desugar_braces_error(cx, p.pos, p.ty, p.name);
                         return AstExpr::Call(AstCall {

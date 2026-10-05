@@ -23,6 +23,9 @@
   - `default.kek`：`Default`
   - `iter.kek`：`Iterator` とアダプタ、`Range`・`RangeInclusive`、`Vec` のイテレータ、`FromIterator`・`Sum`・`Product`
   - `hashmap.kek`：`HashMap`・`HashSet`
+  - `entry.kek`：`HashMap`・`BTreeMap` の entry API（`Entry`・`OccupiedEntry`・`VacantEntry`）
+  - `btree.kek`：`BTreeMap`・`BTreeSet`（AVL 木）、`Bound`・`RangeBounds`
+  - `vecdeque.kek`：`VecDeque`（リングバッファ）
   - タプル（1〜8 要素）の比較・ハッシュの実装は、`#[derive]` と同じ生成器（`compiler/derive.kek`）が作る
   - core の関数は使われたものだけが IR に入る（`lower` は利用者の関数を根にして、generic な関数と core を必要に応じて下ろす）。core の自由関数は `__` で始まる名前にして利用者の名前空間を汚さない。
 - **単相化**：generics は IR の手前で具体化する（`Lower.queue`、インスタンス名は `name<Int,String>`）。IR に型変数は現れない。
@@ -45,7 +48,7 @@
 - クロージャは純粋で、変数を値で捕捉する（`FnMut` のように捕捉した変数へは代入できない。捕捉した `let mut` の値の中身は書き換えられる）。`Fn`・`FnMut`・`FnOnce` の区別はない。
 - trait object（`dyn Trait`）、`impl Trait` の戻り値（`impl Fn` を除く）、ブランケット実装（`impl<T: A> B for T`）、ライフタイムはない。
 - 演算子 `+ - * /` は `Int`（と `String` の `+`）だけで、`Add` などの trait はない。
-- `HashMap` に `entry` API はない（`get_or` を使う）。`HashSet` の集合演算は `Vec` を返す。
+- `HashMap`・`BTreeMap` の `entry` API は `&mut V` の代わりに値を返す（[language.md](language.md#entry-api)）。`HashSet`・`BTreeSet` の集合演算は `Vec` を返す。
 
 ## 残課題
 

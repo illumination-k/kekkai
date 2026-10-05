@@ -177,6 +177,224 @@ trait Iterator {
         best
     }
 
+    // max_by and min_by compare with a function; max_by returns the last of
+    // equal maxima and min_by the first of equal minima (as Rust's).
+    fn max_by(mut self, f: impl Fn(Self::Item, Self::Item) -> Ordering) -> Option<Self::Item> {
+        let mut best = None;
+        while let Some(x) = self.next() {
+            best = match best {
+                Some(b) => match f(x, b) {
+                    Ordering::Less => Some(b),
+                    _ => Some(x),
+                },
+                None => Some(x),
+            };
+        }
+        best
+    }
+
+    fn min_by(mut self, f: impl Fn(Self::Item, Self::Item) -> Ordering) -> Option<Self::Item> {
+        let mut best = None;
+        while let Some(x) = self.next() {
+            best = match best {
+                Some(b) => match f(x, b) {
+                    Ordering::Less => Some(x),
+                    _ => Some(b),
+                },
+                None => Some(x),
+            };
+        }
+        best
+    }
+
+    // reduce folds with the first element as the initial value (None when
+    // empty).
+    fn reduce(mut self, f: impl Fn(Self::Item, Self::Item) -> Self::Item) -> Option<Self::Item> {
+        match self.next() {
+            Some(first) => {
+                let mut acc = first;
+                while let Some(x) = self.next() {
+                    acc = f(acc, x);
+                }
+                Some(acc)
+            }
+            None => None,
+        }
+    }
+
+    // try_fold folds while f returns Some / Ok, stopping at the first None /
+    // Err (which it returns).
+    fn try_fold<B, R: __Try<Output = B>>(&mut self, init: B, f: impl Fn(B, Self::Item) -> R) -> R {
+        let mut acc = init;
+        while let Some(x) = self.next() {
+            let r = f(acc, x);
+            match r.__output() {
+                Some(b) => {
+                    acc = b;
+                }
+                None => {
+                    return r;
+                }
+            }
+        }
+        R::__from_output(acc)
+    }
+
+    // try_for_each calls f until it returns None / Err.
+    fn try_for_each<R: __Try<Output = ()>>(&mut self, f: impl Fn(Self::Item) -> R) -> R {
+        while let Some(x) = self.next() {
+            let r = f(x);
+            if r.__output().is_none() {
+                return r;
+            }
+        }
+        R::__from_output(())
+    }
+
+    // partition splits the elements into those satisfying p and the rest.
+    #[fresh]
+    fn partition(mut self, p: impl Fn(Self::Item) -> Bool) -> (Vec<Self::Item>, Vec<Self::Item>) {
+        let mut yes = Vec::new();
+        let mut no = Vec::new();
+        while let Some(x) = self.next() {
+            if p(x) {
+                yes.push(x);
+            } else {
+                no.push(x);
+            }
+        }
+        (yes, no)
+    }
+
+    #[fresh]
+    fn unzip<A, B>(mut self) -> (Vec<A>, Vec<B>)
+    where
+        Self::Item: __Pair<First = A, Second = B>,
+    {
+        let mut va = Vec::new();
+        let mut vb = Vec::new();
+        while let Some(p) = self.next() {
+            let (a, b) = p.__split();
+            va.push(a);
+            vb.push(b);
+        }
+        (va, vb)
+    }
+
+    fn is_sorted(mut self) -> Bool
+    where
+        Self::Item: Ord,
+    {
+        self.is_sorted_by(|a, b| a <= b)
+    }
+
+    // is_sorted_by checks f(a, b) for every adjacent pair.
+    fn is_sorted_by(mut self, f: impl Fn(Self::Item, Self::Item) -> Bool) -> Bool {
+        match self.next() {
+            Some(first) => {
+                let mut prev = first;
+                while let Some(x) = self.next() {
+                    if !f(prev, x) {
+                        return false;
+                    }
+                    prev = x;
+                }
+                true
+            }
+            None => true,
+        }
+    }
+
+    fn is_sorted_by_key<K: Ord>(mut self, f: impl Fn(Self::Item) -> K) -> Bool {
+        self.map(f).is_sorted()
+    }
+
+    // cmp compares two iterators lexicographically.
+    fn cmp<J: Iterator<Item = Self::Item>>(mut self, mut other: J) -> Ordering
+    where
+        Self::Item: Ord,
+    {
+        loop {
+            match self.next() {
+                Some(x) => match other.next() {
+                    Some(y) => match x.cmp(&y) {
+                        Ordering::Equal => {}
+                        o => {
+                            return o;
+                        }
+                    },
+                    None => {
+                        return Ordering::Greater;
+                    }
+                },
+                None => {
+                    if other.next().is_none() {
+                        return Ordering::Equal;
+                    }
+                    return Ordering::Less;
+                }
+            }
+        }
+    }
+
+    fn eq<J: Iterator<Item = Self::Item>>(mut self, mut other: J) -> Bool
+    where
+        Self::Item: PartialEq,
+    {
+        loop {
+            match self.next() {
+                Some(x) => match other.next() {
+                    Some(y) => {
+                        if x != y {
+                            return false;
+                        }
+                    }
+                    None => {
+                        return false;
+                    }
+                },
+                None => {
+                    return other.next().is_none();
+                }
+            }
+        }
+    }
+
+    fn ne<J: Iterator<Item = Self::Item>>(self, other: J) -> Bool
+    where
+        Self::Item: PartialEq,
+    {
+        !self.eq(other)
+    }
+
+    fn lt<J: Iterator<Item = Self::Item>>(self, other: J) -> Bool
+    where
+        Self::Item: Ord,
+    {
+        self.cmp(other) == Ordering::Less
+    }
+
+    fn le<J: Iterator<Item = Self::Item>>(self, other: J) -> Bool
+    where
+        Self::Item: Ord,
+    {
+        self.cmp(other) != Ordering::Greater
+    }
+
+    fn gt<J: Iterator<Item = Self::Item>>(self, other: J) -> Bool
+    where
+        Self::Item: Ord,
+    {
+        self.cmp(other) == Ordering::Greater
+    }
+
+    fn ge<J: Iterator<Item = Self::Item>>(self, other: J) -> Bool
+    where
+        Self::Item: Ord,
+    {
+        self.cmp(other) != Ordering::Less
+    }
+
     // ---- adapters ----
 
     #[fresh]
@@ -238,6 +456,81 @@ trait Iterator {
     fn peekable(self) -> Peekable<Self, Self::Item> {
         Peekable { iter: self, peeked: None, has: false }
     }
+
+    // flat_map maps each element to something iterable (Vec, Option,
+    // HashMap, ...) and yields its elements in turn.
+    #[fresh]
+    fn flat_map<U: IntoIterator>(
+        self,
+        f: impl Fn(Self::Item) -> U,
+    ) -> FlatMap<Self, Self::Item, U, U::IntoIter> {
+        FlatMap { iter: self, f: f, cur: None }
+    }
+
+    // flatten yields the elements of each element (an iterator of Vec,
+    // Option, ...).
+    #[fresh]
+    fn flatten<J>(self) -> FlatMap<Self, Self::Item, Self::Item, J>
+    where
+        Self::Item: IntoIterator<IntoIter = J>,
+    {
+        FlatMap { iter: self, f: |x| x, cur: None }
+    }
+
+    // scan threads a state through the elements: f(state, x) returns the
+    // next state and the element to yield, or None to stop (Rust's closure
+    // takes `&mut St` and returns Option<B>).
+    #[fresh]
+    fn scan<St, B>(
+        self,
+        init: St,
+        f: impl Fn(St, Self::Item) -> Option<(St, B)>,
+    ) -> Scan<Self, Self::Item, St, B> {
+        Scan { iter: self, state: init, f: f, done: false }
+    }
+
+    // inspect calls f on each element as it passes.
+    #[fresh]
+    fn inspect(self, f: impl Fn(Self::Item)) -> Inspect<Self, Self::Item> {
+        Inspect { iter: self, f: f }
+    }
+
+    // map_while maps while f returns Some, and stops at the first None.
+    #[fresh]
+    fn map_while<B>(self, f: impl Fn(Self::Item) -> Option<B>) -> MapWhile<Self, Self::Item, B> {
+        MapWhile { iter: self, f: f, done: false }
+    }
+
+    // fuse stops for good after the first None.
+    #[fresh]
+    fn fuse(self) -> Fuse<Self> {
+        Fuse { iter: self, done: false }
+    }
+
+    // cycle repeats the elements forever (nothing if there are none). The
+    // elements of the first pass are remembered and replayed; since
+    // closures are pure this is the same as restarting a clone.
+    #[fresh]
+    fn cycle(self) -> Cycle<Self, Self::Item> {
+        Cycle { iter: self, buf: Vec::new(), first: true, i: 0 }
+    }
+
+    // copied and cloned: copied yields the elements as they are (values are
+    // never borrowed in Kekkai); cloned yields clone() of each, so its
+    // elements are owned even when the collection is borrowed (#[owned]:
+    // the iterator it wraps is reachable only through a `__` field).
+    #[fresh]
+    fn copied(self) -> Self {
+        self
+    }
+
+    #[owned]
+    fn cloned(self) -> Cloned<Self, Self::Item>
+    where
+        Self::Item: Clone,
+    {
+        Cloned { __iter: self, __item: None }
+    }
 }
 
 // An iterator that can also produce its elements from the back.
@@ -271,6 +564,61 @@ trait Sum<A> {
 
 trait Product<A> {
     fn product<I: Iterator<Item = A>>(iter: I) -> Self;
+}
+
+// __Pair is what unzip accepts: a pair (A, B).
+trait __Pair {
+    type First;
+    type Second;
+
+    fn __split(self) -> (Self::First, Self::Second);
+}
+
+impl<A, B> __Pair for (A, B) {
+    type First = A;
+    type Second = B;
+
+    fn __split(self) -> (A, B) {
+        self
+    }
+}
+
+// __Try is what try_fold and try_for_each accept from their closure:
+// Option and Result (Rust's unstable Try trait). __output is the value to
+// continue with, or None to stop and return the value itself.
+trait __Try {
+    type Output;
+
+    fn __output(&self) -> Option<Self::Output>;
+
+    fn __from_output(x: Self::Output) -> Self;
+}
+
+impl<T> __Try for Option<T> {
+    type Output = T;
+
+    fn __output(&self) -> Option<T> {
+        *self
+    }
+
+    fn __from_output(x: T) -> Option<T> {
+        Some(x)
+    }
+}
+
+impl<T, E> __Try for Result<T, E> {
+    type Output = T;
+
+    fn __output(&self) -> Option<T> {
+        match *self {
+            Ok(x) => Some(x),
+            Err(_) => None,
+        }
+    }
+
+    fn __from_output(x: T) -> Result<T, E> {
+        Ok(x)
+    }
 }
 
 // ---- adapters ----
@@ -525,6 +873,186 @@ impl<I: Iterator<Item = A>, A> Iterator for Peekable<I, A> {
     }
 }
 
+struct FlatMap<I, A, U, J> {
+    iter: I,
+    f: fn(A) -> U,
+    mut cur: Option<J>,
+}
+
+impl<I: Iterator<Item = A>, A, U: IntoIterator<IntoIter = J>, J: Iterator> Iterator for FlatMap<I, A, U, J> {
+    type Item = J::Item;
+
+    fn next(&mut self) -> Option<J::Item> {
+        loop {
+            match self.cur {
+                Some(mut inner) => match inner.next() {
+                    Some(x) => {
+                        return Some(x);
+                    }
+                    None => {
+                        self.cur = None;
+                    }
+                },
+                None => {}
+            }
+            match self.iter.next() {
+                Some(x) => {
+                    self.cur = Some((self.f)(x).into_iter());
+                }
+                None => {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+struct Scan<I, A, St, B> {
+    iter: I,
+    mut state: St,
+    f: fn(St, A) -> Option<(St, B)>,
+    mut done: Bool,
+}
+
+impl<I: Iterator<Item = A>, A, St, B> Iterator for Scan<I, A, St, B> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        if self.done {
+            return None;
+        }
+        match self.iter.next() {
+            Some(x) => match (self.f)(self.state, x) {
+                Some((st, y)) => {
+                    self.state = st;
+                    Some(y)
+                }
+                None => {
+                    self.done = true;
+                    None
+                }
+            },
+            None => None,
+        }
+    }
+}
+
+struct Inspect<I, A> {
+    iter: I,
+    f: fn(A),
+}
+
+impl<I: Iterator<Item = A>, A> Iterator for Inspect<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        match self.iter.next() {
+            Some(x) => {
+                (self.f)(x);
+                Some(x)
+            }
+            None => None,
+        }
+    }
+}
+
+struct MapWhile<I, A, B> {
+    iter: I,
+    f: fn(A) -> Option<B>,
+    mut done: Bool,
+}
+
+impl<I: Iterator<Item = A>, A, B> Iterator for MapWhile<I, A, B> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        if self.done {
+            return None;
+        }
+        match self.iter.next() {
+            Some(x) => {
+                let y = (self.f)(x);
+                if y.is_none() {
+                    self.done = true;
+                }
+                y
+            }
+            None => None,
+        }
+    }
+}
+
+struct Fuse<I> {
+    iter: I,
+    mut done: Bool,
+}
+
+impl<I: Iterator> Iterator for Fuse<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<I::Item> {
+        if self.done {
+            return None;
+        }
+        let x = self.iter.next();
+        if x.is_none() {
+            self.done = true;
+        }
+        x
+    }
+}
+
+struct Cycle<I, A> {
+    iter: I,
+    mut buf: Vec<A>,
+    mut first: Bool,
+    mut i: Int,
+}
+
+impl<I: Iterator<Item = A>, A> Iterator for Cycle<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        if self.first {
+            match self.iter.next() {
+                Some(x) => {
+                    self.buf.push(x);
+                    return Some(x);
+                }
+                None => {
+                    self.first = false;
+                }
+            }
+        }
+        let n = self.buf.len();
+        if n == 0 {
+            return None;
+        }
+        if self.i >= n {
+            self.i = 0;
+        }
+        let x = self.buf.get(self.i);
+        self.i = self.i + 1;
+        x
+    }
+}
+
+struct Cloned<I, A> {
+    __iter: I,
+    __item: Option<A>,
+}
+
+impl<I: Iterator<Item = A>, A: Clone> Iterator for Cloned<I, A> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        match self.__iter.next() {
+            Some(x) => Some(x.clone()),
+            None => None,
+        }
+    }
+}
+
 struct Rev<I> {
     iter: I,
 }
@@ -741,5 +1269,119 @@ impl Product<Int> for Int {
             p = p * x;
         }
         p
+    }
+}
+
+// collect of code points (`Int`, what `chars()` yields) into a String.
+// Code points above U+FFFF become surrogate pairs; what is not a Unicode
+// scalar value (negative, a surrogate, above U+10FFFF) becomes U+FFFD.
+impl FromIterator<Int> for String {
+    fn from_iter<I: Iterator<Item = Int>>(mut iter: I) -> String {
+        let mut parts = Vec::new();
+        while let Some(c) = iter.next() {
+            if c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF) {
+                parts.push(String::from_char(0xFFFD));
+            } else if c >= 0x10000 {
+                let u = c - 0x10000;
+                parts.push(String::from_char(0xD800 + (u >> 10)));
+                parts.push(String::from_char(0xDC00 + (u & 0x3FF)));
+            } else {
+                parts.push(String::from_char(c));
+            }
+        }
+        parts.join("")
+    }
+}
+
+// collect into Option<C>: None at the first None, else Some of the
+// collection of the values.
+impl<A, C: FromIterator<A>> FromIterator<Option<A>> for Option<C> {
+    fn from_iter<I: Iterator<Item = Option<A>>>(mut iter: I) -> Option<C> {
+        let mut v = Vec::new();
+        while let Some(x) = iter.next() {
+            match x {
+                Some(a) => v.push(a),
+                None => {
+                    return None;
+                }
+            }
+        }
+        Some(C::from_iter(v.iter()))
+    }
+}
+
+// collect into Result<C, E>: the first Err, else Ok of the collection.
+impl<A, E, C: FromIterator<A>> FromIterator<Result<A, E>> for Result<C, E> {
+    fn from_iter<I: Iterator<Item = Result<A, E>>>(mut iter: I) -> Result<C, E> {
+        let mut v = Vec::new();
+        while let Some(x) = iter.next() {
+            match x {
+                Ok(a) => v.push(a),
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(C::from_iter(v.iter()))
+    }
+}
+
+impl<A, S: Sum<A>> Sum<Option<A>> for Option<S> {
+    fn sum<I: Iterator<Item = Option<A>>>(iter: I) -> Option<S> {
+        let o: Option<Vec<A>> = iter.collect();
+        match o {
+            Some(v) => Some(S::sum(v.iter())),
+            None => None,
+        }
+    }
+}
+
+impl<A, E, S: Sum<A>> Sum<Result<A, E>> for Result<S, E> {
+    fn sum<I: Iterator<Item = Result<A, E>>>(iter: I) -> Result<S, E> {
+        let r: Result<Vec<A>, E> = iter.collect();
+        match r {
+            Ok(v) => Ok(S::sum(v.iter())),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl<A, P: Product<A>> Product<Option<A>> for Option<P> {
+    fn product<I: Iterator<Item = Option<A>>>(iter: I) -> Option<P> {
+        let o: Option<Vec<A>> = iter.collect();
+        match o {
+            Some(v) => Some(P::product(v.iter())),
+            None => None,
+        }
+    }
+}
+
+impl<A, E, P: Product<A>> Product<Result<A, E>> for Result<P, E> {
+    fn product<I: Iterator<Item = Result<A, E>>>(iter: I) -> Result<P, E> {
+        let r: Result<Vec<A>, E> = iter.collect();
+        match r {
+            Ok(v) => Ok(P::product(v.iter())),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// Option iterates over its value (if any), so that flatten and flat_map
+// accept it.
+impl<T> IntoIterator for Option<T> {
+    type Item = T;
+    type IntoIter = Iter<T>;
+
+    fn into_iter(self) -> Iter<T> {
+        self.iter()
+    }
+}
+
+impl<T, E> IntoIterator for Result<T, E> {
+    type Item = T;
+    type IntoIter = Iter<T>;
+
+    fn into_iter(self) -> Iter<T> {
+        self.iter()
     }
 }

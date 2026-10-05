@@ -193,6 +193,53 @@ impl<T: Debug> Debug for HashSet<T> {
     }
 }
 
+impl<K: Debug + Ord, V: Debug> Debug for BTreeMap<K, V> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("{");
+        let mut first = true;
+        for (k, v) in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&k);
+            f.write_str(": ");
+            f.write_debug(&v);
+        }
+        f.write_str("}");
+    }
+}
+
+impl<T: Debug + Ord> Debug for BTreeSet<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("{");
+        let mut first = true;
+        for x in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&x);
+        }
+        f.write_str("}");
+    }
+}
+
+impl<T: Debug> Debug for VecDeque<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("[");
+        let mut first = true;
+        for x in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&x);
+        }
+        f.write_str("]");
+    }
+}
+
 // ---- helpers of the macros (compiler/macro.kek) ----
 
 fn __fmt_display<T: Display>(x: &T) -> String {

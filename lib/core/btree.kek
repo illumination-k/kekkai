@@ -1,0 +1,852 @@
+// BTreeMap and BTreeSet, with Rust's API (std::collections): maps and
+// sets kept sorted by the keys (`Ord`).
+//
+// The map is an AVL tree (not a B-tree: the name and the API are Rust's),
+// so insert, remove, get and the first / last operations are O(log n).
+// Iteration is a live view like HashMap's: an iterator remembers the last
+// key it returned and finds the next one from the root (O(log n) per
+// step), so it sees keys inserted after it was created and skips removed
+// ones. `range` is the same iterator with bounds.
+
+// ---- bounds (std::ops::Bound, RangeBounds) ----
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+enum Bound<T> {
+    Included(T),
+    Excluded(T),
+    Unbounded,
+}
+
+// RangeBounds is what `range` accepts: `a..b` and `a..=b` (Int keys) and a
+// pair of bounds `(Bound::Excluded(lo), Bound::Unbounded)` (any key).
+trait RangeBounds<T> {
+    fn start_bound(&self) -> Bound<T>;
+
+    fn end_bound(&self) -> Bound<T>;
+}
+
+impl RangeBounds<Int> for Range {
+    fn start_bound(&self) -> Bound<Int> {
+        Bound::Included(self.start)
+    }
+
+    fn end_bound(&self) -> Bound<Int> {
+        Bound::Excluded(self.end)
+    }
+}
+
+impl RangeBounds<Int> for RangeInclusive {
+    fn start_bound(&self) -> Bound<Int> {
+        Bound::Included(self.start)
+    }
+
+    fn end_bound(&self) -> Bound<Int> {
+        Bound::Included(self.end)
+    }
+}
+
+impl<T> RangeBounds<T> for (Bound<T>, Bound<T>) {
+    fn start_bound(&self) -> Bound<T> {
+        self.0
+    }
+
+    fn end_bound(&self) -> Bound<T> {
+        self.1
+    }
+}
+
+// ---- the tree ----
+
+struct __BNode<K, V> {
+    key: K,
+    mut value: V,
+    mut left: Option<__BNode<K, V>>,
+    mut right: Option<__BNode<K, V>>,
+    mut height: Int,
+}
+
+struct BTreeMap<K, V> {
+    mut __root: Option<__BNode<K, V>>,
+    mut __len: Int,
+}
+
+fn __bt_height<K, V>(n: &Option<__BNode<K, V>>) -> Int {
+    match *n {
+        Some(x) => x.height,
+        None => 0,
+    }
+}
+
+fn __bt_fix<K, V>(mut n: __BNode<K, V>) {
+    n.height = 1 + __bt_height(&n.left).max(__bt_height(&n.right));
+}
+
+// __bt_rot_right lifts n's left child (which must exist).
+fn __bt_rot_right<K, V>(mut n: __BNode<K, V>) -> __BNode<K, V> {
+    match n.left {
+        Some(mut l) => {
+            n.left = l.right;
+            __bt_fix(n);
+            l.right = Some(n);
+            __bt_fix(l);
+            l
+        }
+        None => n,
+    }
+}
+
+fn __bt_rot_left<K, V>(mut n: __BNode<K, V>) -> __BNode<K, V> {
+    match n.right {
+        Some(mut r) => {
+            n.right = r.left;
+            __bt_fix(n);
+            r.left = Some(n);
+            __bt_fix(r);
+            r
+        }
+        None => n,
+    }
+}
+
+// __bt_balance restores the AVL invariant at n (its subtrees are balanced
+// and their heights differ by at most 2).
+fn __bt_balance<K, V>(mut n: __BNode<K, V>) -> __BNode<K, V> {
+    __bt_fix(n);
+    let bal = __bt_height(&n.left) - __bt_height(&n.right);
+    if bal > 1 {
+        match n.left {
+            Some(l) => {
+                if __bt_height(&l.left) < __bt_height(&l.right) {
+                    n.left = Some(__bt_rot_left(l));
+                }
+            }
+            None => {}
+        }
+        return __bt_rot_right(n);
+    }
+    if bal < -1 {
+        match n.right {
+            Some(r) => {
+                if __bt_height(&r.right) < __bt_height(&r.left) {
+                    n.right = Some(__bt_rot_right(r));
+                }
+            }
+            None => {}
+        }
+        return __bt_rot_left(n);
+    }
+    n
+}
+
+// __bt_insert inserts (k, v) below n, returning the new subtree and the
+// previous value of k.
+fn __bt_insert<K: Ord, V>(n: Option<__BNode<K, V>>, k: K, v: V) -> (__BNode<K, V>, Option<V>) {
+    match n {
+        None => (__BNode { key: k, value: v, left: None, right: None, height: 1 }, None),
+        Some(mut x) => match k.cmp(&x.key) {
+            Ordering::Equal => {
+                let old = x.value;
+                x.value = v;
+                (x, Some(old))
+            }
+            Ordering::Less => {
+                let (l, old) = __bt_insert(x.left, k, v);
+                x.left = Some(l);
+                (__bt_balance(x), old)
+            }
+            Ordering::Greater => {
+                let (r, old) = __bt_insert(x.right, k, v);
+                x.right = Some(r);
+                (__bt_balance(x), old)
+            }
+        },
+    }
+}
+
+// __bt_remove_min removes the smallest node of n, returning the new
+// subtree and that node.
+fn __bt_remove_min<K, V>(mut n: __BNode<K, V>) -> (Option<__BNode<K, V>>, __BNode<K, V>) {
+    match n.left {
+        None => (n.right, n),
+        Some(l) => {
+            let (nl, m) = __bt_remove_min(l);
+            n.left = nl;
+            (Some(__bt_balance(n)), m)
+        }
+    }
+}
+
+fn __bt_remove_max<K, V>(mut n: __BNode<K, V>) -> (Option<__BNode<K, V>>, __BNode<K, V>) {
+    match n.right {
+        None => (n.left, n),
+        Some(r) => {
+            let (nr, m) = __bt_remove_max(r);
+            n.right = nr;
+            (Some(__bt_balance(n)), m)
+        }
+    }
+}
+
+// __bt_remove removes k below n, returning the new subtree and the removed
+// node.
+#[owned]
+fn __bt_remove<K: Ord, V>(
+    n: Option<__BNode<K, V>>,
+    k: &K,
+) -> (Option<__BNode<K, V>>, Option<__BNode<K, V>>) {
+    match n {
+        None => (None, None),
+        Some(mut x) => match k.cmp(&x.key) {
+            Ordering::Less => {
+                let (l, gone) = __bt_remove(x.left, k);
+                x.left = l;
+                (Some(__bt_balance(x)), gone)
+            }
+            Ordering::Greater => {
+                let (r, gone) = __bt_remove(x.right, k);
+                x.right = r;
+                (Some(__bt_balance(x)), gone)
+            }
+            Ordering::Equal => match x.right {
+                None => (x.left, Some(x)),
+                Some(r) => {
+                    let (nr, mut m) = __bt_remove_min(r);
+                    m.left = x.left;
+                    m.right = nr;
+                    (Some(__bt_balance(m)), Some(x))
+                }
+            },
+        },
+    }
+}
+
+// __bt_lower is the node with the smallest key satisfying the lower bound
+// b (k >= x or k > x).
+#[owned]
+fn __bt_lower<K: Ord, V>(root: &Option<__BNode<K, V>>, b: &Bound<K>) -> Option<__BNode<K, V>> {
+    let mut best = None;
+    let mut cur = *root;
+    while let Some(x) = cur {
+        let ok = match *b {
+            Bound::Included(lo) => x.key >= lo,
+            Bound::Excluded(lo) => x.key > lo,
+            Bound::Unbounded => true,
+        };
+        if ok {
+            best = Some(x);
+            cur = x.left;
+        } else {
+            cur = x.right;
+        }
+    }
+    best
+}
+
+// __bt_upper is the node with the largest key satisfying the upper bound.
+#[owned]
+fn __bt_upper<K: Ord, V>(root: &Option<__BNode<K, V>>, b: &Bound<K>) -> Option<__BNode<K, V>> {
+    let mut best = None;
+    let mut cur = *root;
+    while let Some(x) = cur {
+        let ok = match *b {
+            Bound::Included(hi) => x.key <= hi,
+            Bound::Excluded(hi) => x.key < hi,
+            Bound::Unbounded => true,
+        };
+        if ok {
+            best = Some(x);
+            cur = x.right;
+        } else {
+            cur = x.left;
+        }
+    }
+    best
+}
+
+fn __bt_below<K: Ord>(k: &K, b: &Bound<K>) -> Bool {
+    match *b {
+        Bound::Included(hi) => *k <= hi,
+        Bound::Excluded(hi) => *k < hi,
+        Bound::Unbounded => true,
+    }
+}
+
+fn __bt_above<K: Ord>(k: &K, b: &Bound<K>) -> Bool {
+    match *b {
+        Bound::Included(lo) => *k >= lo,
+        Bound::Excluded(lo) => *k > lo,
+        Bound::Unbounded => true,
+    }
+}
+
+impl<K, V> BTreeMap<K, V> {
+    fn new() -> BTreeMap<K, V> {
+        BTreeMap { __root: None, __len: 0 }
+    }
+
+    fn len(&self) -> Int {
+        self.__len
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.__len == 0
+    }
+
+    fn clear(&mut self) {
+        self.__root = None;
+        self.__len = 0;
+    }
+
+    // iter returns the (key, value) pairs in key order (both ends:
+    // `iter().rev()` is descending).
+    #[fresh]
+    fn iter(&self) -> BTreeMapIter<K, V> {
+        BTreeMapIter { __map: *self, __lo: Bound::Unbounded, __hi: Bound::Unbounded }
+    }
+
+    #[fresh]
+    fn keys(&self) -> BTreeMapKeys<K, V> {
+        BTreeMapKeys { __it: self.iter() }
+    }
+
+    #[fresh]
+    fn values(&self) -> BTreeMapValues<K, V> {
+        BTreeMapValues { __it: self.iter() }
+    }
+
+    #[fresh]
+    fn into_keys(self) -> BTreeMapKeys<K, V> {
+        self.keys()
+    }
+
+    #[fresh]
+    fn into_values(self) -> BTreeMapValues<K, V> {
+        self.values()
+    }
+
+    // first_key_value and last_key_value: the smallest and the largest key
+    // with its value.
+    fn first_key_value(&self) -> Option<(K, V)> {
+        let mut cur = self.__root;
+        let mut out = None;
+        while let Some(x) = cur {
+            out = Some((x.key, x.value));
+            cur = x.left;
+        }
+        out
+    }
+
+    fn last_key_value(&self) -> Option<(K, V)> {
+        let mut cur = self.__root;
+        let mut out = None;
+        while let Some(x) = cur {
+            out = Some((x.key, x.value));
+            cur = x.right;
+        }
+        out
+    }
+
+    // pop_first and pop_last remove and return the smallest / largest
+    // entry.
+    fn pop_first(&mut self) -> Option<(K, V)> {
+        match self.__root {
+            Some(r) => {
+                let (nr, m) = __bt_remove_min(r);
+                self.__root = nr;
+                self.__len = self.__len - 1;
+                Some((m.key, m.value))
+            }
+            None => None,
+        }
+    }
+
+    fn pop_last(&mut self) -> Option<(K, V)> {
+        match self.__root {
+            Some(r) => {
+                let (nr, m) = __bt_remove_max(r);
+                self.__root = nr;
+                self.__len = self.__len - 1;
+                Some((m.key, m.value))
+            }
+            None => None,
+        }
+    }
+}
+
+impl<K: Ord, V> BTreeMap<K, V> {
+    fn __node(&self, k: &K) -> Option<__BNode<K, V>> {
+        let mut cur = self.__root;
+        while let Some(x) = cur {
+            match k.cmp(&x.key) {
+                Ordering::Less => {
+                    cur = x.left;
+                }
+                Ordering::Greater => {
+                    cur = x.right;
+                }
+                Ordering::Equal => {
+                    return Some(x);
+                }
+            }
+        }
+        None
+    }
+
+    fn get(&self, k: &K) -> Option<V> {
+        match self.__node(k) {
+            Some(x) => Some(x.value),
+            None => None,
+        }
+    }
+
+    fn get_key_value(&self, k: &K) -> Option<(K, V)> {
+        match self.__node(k) {
+            Some(x) => Some((x.key, x.value)),
+            None => None,
+        }
+    }
+
+    fn contains_key(&self, k: &K) -> Bool {
+        self.__node(k).is_some()
+    }
+
+    // insert sets the value of k, returning its previous value.
+    fn insert(&mut self, k: K, v: V) -> Option<V> {
+        let (root, old) = __bt_insert(self.__root, k, v);
+        self.__root = Some(root);
+        if old.is_none() {
+            self.__len = self.__len + 1;
+        }
+        old
+    }
+
+    // remove removes k, returning its value.
+    fn remove(&mut self, k: &K) -> Option<V> {
+        match self.remove_entry(k) {
+            Some((_, v)) => Some(v),
+            None => None,
+        }
+    }
+
+    fn remove_entry(&mut self, k: &K) -> Option<(K, V)> {
+        let (root, gone) = __bt_remove(self.__root, k);
+        self.__root = root;
+        match gone {
+            Some(x) => {
+                self.__len = self.__len - 1;
+                Some((x.key, x.value))
+            }
+            None => None,
+        }
+    }
+
+    // range iterates over the entries whose keys are in r, in order:
+    // `m.range(2..5)`, `m.range((Bound::Excluded(k), Bound::Unbounded))`.
+    #[fresh]
+    fn range<R: RangeBounds<K>>(&self, r: R) -> BTreeMapIter<K, V> {
+        BTreeMapIter { __map: *self, __lo: r.start_bound(), __hi: r.end_bound() }
+    }
+
+    fn entry(&mut self, k: K) -> Entry<BTreeMap<K, V>, K, V> {
+        __entry_of(*self, k)
+    }
+
+    fn retain(&mut self, f: impl Fn(K, V) -> Bool) {
+        let mut drop = Vec::new();
+        for (k, v) in self.iter() {
+            if !f(k, v) {
+                drop.push(k);
+            }
+        }
+        for k in drop {
+            self.remove(&k);
+        }
+    }
+
+    fn extend<I: Iterator<Item = (K, V)>>(&mut self, mut iter: I) {
+        while let Some((k, v)) = iter.next() {
+            self.insert(k, v);
+        }
+    }
+
+    // append moves the entries of other into self (other's values win) and
+    // leaves other empty.
+    fn append(&mut self, other: &mut BTreeMap<K, V>) {
+        while let Some((k, v)) = other.pop_first() {
+            self.insert(k, v);
+        }
+    }
+}
+
+impl<K: Ord, V> __EntryMap<K, V> for BTreeMap<K, V> {
+    fn __entry_get(&self, k: &K) -> Option<V> {
+        self.get(k)
+    }
+
+    fn __entry_insert(&mut self, k: K, v: V) -> Option<V> {
+        self.insert(k, v)
+    }
+
+    fn __entry_remove(&mut self, k: &K) -> Option<V> {
+        self.remove(k)
+    }
+}
+
+// ---- iteration ----
+
+struct BTreeMapIter<K, V> {
+    __map: BTreeMap<K, V>,
+    mut __lo: Bound<K>,
+    mut __hi: Bound<K>,
+}
+
+impl<K: Ord, V> Iterator for BTreeMapIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<(K, V)> {
+        match __bt_lower(&self.__map.__root, &self.__lo) {
+            Some(x) => {
+                if !__bt_below(&x.key, &self.__hi) {
+                    return None;
+                }
+                self.__lo = Bound::Excluded(x.key);
+                Some((x.key, x.value))
+            }
+            None => None,
+        }
+    }
+}
+
+impl<K: Ord, V> DoubleEndedIterator for BTreeMapIter<K, V> {
+    fn next_back(&mut self) -> Option<(K, V)> {
+        match __bt_upper(&self.__map.__root, &self.__hi) {
+            Some(x) => {
+                if !__bt_above(&x.key, &self.__lo) {
+                    return None;
+                }
+                self.__hi = Bound::Excluded(x.key);
+                Some((x.key, x.value))
+            }
+            None => None,
+        }
+    }
+}
+
+struct BTreeMapKeys<K, V> {
+    __it: BTreeMapIter<K, V>,
+}
+
+impl<K: Ord, V> Iterator for BTreeMapKeys<K, V> {
+    type Item = K;
+
+    fn next(&mut self) -> Option<K> {
+        match self.__it.next() {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
+    }
+}
+
+impl<K: Ord, V> DoubleEndedIterator for BTreeMapKeys<K, V> {
+    fn next_back(&mut self) -> Option<K> {
+        match self.__it.next_back() {
+            Some((k, _)) => Some(k),
+            None => None,
+        }
+    }
+}
+
+struct BTreeMapValues<K, V> {
+    __it: BTreeMapIter<K, V>,
+}
+
+impl<K: Ord, V> Iterator for BTreeMapValues<K, V> {
+    type Item = V;
+
+    fn next(&mut self) -> Option<V> {
+        match self.__it.next() {
+            Some((_, v)) => Some(v),
+            None => None,
+        }
+    }
+}
+
+impl<K: Ord, V> DoubleEndedIterator for BTreeMapValues<K, V> {
+    fn next_back(&mut self) -> Option<V> {
+        match self.__it.next_back() {
+            Some((_, v)) => Some(v),
+            None => None,
+        }
+    }
+}
+
+impl<K: Ord, V> IntoIterator for BTreeMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = BTreeMapIter<K, V>;
+
+    fn into_iter(self) -> BTreeMapIter<K, V> {
+        self.iter()
+    }
+}
+
+impl<K: Ord, V> FromIterator<(K, V)> for BTreeMap<K, V> {
+    fn from_iter<I: Iterator<Item = (K, V)>>(iter: I) -> BTreeMap<K, V> {
+        let mut m = BTreeMap::new();
+        m.extend(iter);
+        m
+    }
+}
+
+impl<K: Ord + Clone, V: Clone> Clone for BTreeMap<K, V> {
+    fn clone(&self) -> BTreeMap<K, V> {
+        let mut m = BTreeMap::new();
+        for (k, v) in self.iter() {
+            m.insert(k.clone(), v.clone());
+        }
+        m
+    }
+}
+
+impl<K: Ord, V: PartialEq> PartialEq for BTreeMap<K, V> {
+    fn eq(&self, other: &BTreeMap<K, V>) -> Bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        let mut a = self.iter();
+        let mut b = other.iter();
+        while let Some((k, v)) = a.next() {
+            match b.next() {
+                Some((k2, v2)) => {
+                    if k != k2 || v != v2 {
+                        return false;
+                    }
+                }
+                None => {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+impl<K: Ord, V: Eq> Eq for BTreeMap<K, V> {}
+
+impl<K, V> Default for BTreeMap<K, V> {
+    fn default() -> BTreeMap<K, V> {
+        BTreeMap::new()
+    }
+}
+
+// ---- BTreeSet ----
+
+struct BTreeSet<T> {
+    __map: BTreeMap<T, ()>,
+}
+
+impl<T> BTreeSet<T> {
+    fn new() -> BTreeSet<T> {
+        BTreeSet { __map: BTreeMap::new() }
+    }
+
+    fn len(&self) -> Int {
+        self.__map.len()
+    }
+
+    fn is_empty(&self) -> Bool {
+        self.__map.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.__map.clear();
+    }
+
+    // iter returns the elements in order.
+    #[fresh]
+    fn iter(&self) -> BTreeMapKeys<T, ()> {
+        self.__map.keys()
+    }
+
+    fn first(&self) -> Option<T> {
+        match self.__map.first_key_value() {
+            Some((x, _)) => Some(x),
+            None => None,
+        }
+    }
+
+    fn last(&self) -> Option<T> {
+        match self.__map.last_key_value() {
+            Some((x, _)) => Some(x),
+            None => None,
+        }
+    }
+
+    fn pop_first(&mut self) -> Option<T> {
+        match self.__map.pop_first() {
+            Some((x, _)) => Some(x),
+            None => None,
+        }
+    }
+
+    fn pop_last(&mut self) -> Option<T> {
+        match self.__map.pop_last() {
+            Some((x, _)) => Some(x),
+            None => None,
+        }
+    }
+}
+
+impl<T: Ord> BTreeSet<T> {
+    // insert adds x, reporting whether it was new.
+    fn insert(&mut self, x: T) -> Bool {
+        self.__map.insert(x, ()).is_none()
+    }
+
+    fn contains(&self, x: &T) -> Bool {
+        self.__map.contains_key(x)
+    }
+
+    // remove removes x, reporting whether it was present.
+    fn remove(&mut self, x: &T) -> Bool {
+        self.__map.remove(x).is_some()
+    }
+
+    #[fresh]
+    fn range<R: RangeBounds<T>>(&self, r: R) -> BTreeMapKeys<T, ()> {
+        BTreeMapKeys { __it: self.__map.range(r) }
+    }
+
+    fn extend<I: Iterator<Item = T>>(&mut self, mut iter: I) {
+        while let Some(x) = iter.next() {
+            self.insert(x);
+        }
+    }
+
+    fn append(&mut self, other: &mut BTreeSet<T>) {
+        while let Some(x) = other.pop_first() {
+            self.insert(x);
+        }
+    }
+
+    fn retain(&mut self, f: impl Fn(T) -> Bool) {
+        let mut drop = Vec::new();
+        for x in self.iter() {
+            if !f(x) {
+                drop.push(x);
+            }
+        }
+        for x in drop {
+            self.remove(&x);
+        }
+    }
+
+    fn is_subset(&self, other: &BTreeSet<T>) -> Bool {
+        for x in self.iter() {
+            if !other.contains(&x) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn is_superset(&self, other: &BTreeSet<T>) -> Bool {
+        other.is_subset(self)
+    }
+
+    fn is_disjoint(&self, other: &BTreeSet<T>) -> Bool {
+        for x in self.iter() {
+            if other.contains(&x) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // union, intersection, difference and symmetric_difference return the
+    // resulting elements in order.
+    #[fresh]
+    fn union(&self, other: &BTreeSet<T>) -> Vec<T> {
+        let mut s: BTreeSet<T> = self.iter().collect();
+        s.extend(other.iter());
+        s.iter().collect()
+    }
+
+    #[fresh]
+    fn intersection(&self, other: &BTreeSet<T>) -> Vec<T> {
+        let mut out = Vec::new();
+        for x in self.iter() {
+            if other.contains(&x) {
+                out.push(x);
+            }
+        }
+        out
+    }
+
+    #[fresh]
+    fn difference(&self, other: &BTreeSet<T>) -> Vec<T> {
+        let mut out = Vec::new();
+        for x in self.iter() {
+            if !other.contains(&x) {
+                out.push(x);
+            }
+        }
+        out
+    }
+
+    #[fresh]
+    fn symmetric_difference(&self, other: &BTreeSet<T>) -> Vec<T> {
+        let mut s: BTreeSet<T> = BTreeSet::new();
+        for x in self.iter() {
+            if !other.contains(&x) {
+                s.insert(x);
+            }
+        }
+        for x in other.iter() {
+            if !self.contains(&x) {
+                s.insert(x);
+            }
+        }
+        s.iter().collect()
+    }
+}
+
+impl<T: Ord> IntoIterator for BTreeSet<T> {
+    type Item = T;
+    type IntoIter = BTreeMapKeys<T, ()>;
+
+    fn into_iter(self) -> BTreeMapKeys<T, ()> {
+        self.iter()
+    }
+}
+
+impl<T: Ord> FromIterator<T> for BTreeSet<T> {
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> BTreeSet<T> {
+        let mut s = BTreeSet::new();
+        s.extend(iter);
+        s
+    }
+}
+
+impl<T: Ord + Clone> Clone for BTreeSet<T> {
+    fn clone(&self) -> BTreeSet<T> {
+        let mut s = BTreeSet::new();
+        for x in self.iter() {
+            s.insert(x.clone());
+        }
+        s
+    }
+}
+
+impl<T: Ord> PartialEq for BTreeSet<T> {
+    fn eq(&self, other: &BTreeSet<T>) -> Bool {
+        self.__map == other.__map
+    }
+}
+
+impl<T: Ord> Eq for BTreeSet<T> {}
+
+impl<T> Default for BTreeSet<T> {
+    fn default() -> BTreeSet<T> {
+        BTreeSet::new()
+    }
+}

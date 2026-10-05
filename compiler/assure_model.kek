@@ -589,8 +589,8 @@ fn asr_model(l: DhLoaded) -> AsrState {
         if !fun.test {
             guars.push(asr_bool_guar("tested", tested.contains_key(d.name), "test"));
         }
-        // refine.*: every VC of the kind in the function is proved (only
-        // for functions that have some)
+        // refine.*: every VC of the kind in the function is proved (false
+        // when one is not; absent when the function has none of the kind)
         match ref_sum_find(rr, d.name) {
             Some(sum) => {
                 let mut kinds = Vec::new();
@@ -604,8 +604,14 @@ fn asr_model(l: DhLoaded) -> AsrState {
                 let mut i = 0;
                 for k in kinds {
                     let n = ref_sum_get(sum, k);
-                    if n > 0 && ref_sum_get(sum, k + "_ok") == n {
-                        guars.push(asr_bool_guar(names.get(i).unwrap_or(""), true, "smt"));
+                    if n > 0 {
+                        guars.push(
+                            asr_bool_guar(
+                                names.get(i).unwrap_or(""),
+                                ref_sum_get(sum, k + "_ok") == n,
+                                "smt",
+                            ),
+                        );
                     }
                     i = i + 1;
                 }

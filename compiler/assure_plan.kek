@@ -313,6 +313,22 @@ fn asr_diff_guar(pl: AsrPlan, pol: AsrPolicy, o: AsrDef, n: AsrDef, name: String
                 asr_none(),
                 "change tx.linear (no transaction any more)",
             );
+        } else if name.starts_with("refine.") && ng.is_none() {
+            // nothing of the kind is left to prove (the division or the
+            // index moved elsewhere): not a weaker guarantee
+            asr_change(
+                pl,
+                n,
+                "change",
+                "change",
+                name,
+                ev,
+                from,
+                to,
+                asr_none(),
+                asr_none(),
+                "change " + name + " (nothing of the kind to prove any more)",
+            );
         } else if name == "idempotent" && asr_effects_str(n) == "pure" {
             // pure now: trivially idempotent (the effects strengthen)
         } else {

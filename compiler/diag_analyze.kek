@@ -344,20 +344,9 @@ fn diag_token_len(a: DiagAnalysis, i: Int) -> Int {
     if t.kind == "EOF" {
         return 0;
     }
-    if t.kind == "IDENT" {
+    if t.kind == "IDENT" || t.kind == "INT" || t.kind == "LABEL" {
+        // spelled as written
         return t.text.to_bytes().len();
-    }
-    if t.kind == "INT" {
-        let mut j = off;
-        while j < n {
-            let c = diag_byte(a, j);
-            if c == 95 || (c >= 48 && c <= 57) {
-                j = j + 1;
-            } else {
-                break;
-            }
-        }
-        return j - off;
     }
     if t.kind == "STRING" {
         let mut j = off + 1;

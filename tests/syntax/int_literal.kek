@@ -1,0 +1,7 @@
+// Integer literals: a digit out of the radix (a syntax error).
+
+fn f() -> Int {
+    0b102 // ERROR "invalid digit `2` in binary literal `0b102`"
+}
+
+fn main() {}

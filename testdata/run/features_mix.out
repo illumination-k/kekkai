@@ -1,0 +1,7 @@
+Say("hi")
+bad command "jump"
+bye
+pos = V2(4, 1)
+56 0x38     56|ab  |
+[101, 3, 5, 9] 4 true
+lower,upper,digit,other,other

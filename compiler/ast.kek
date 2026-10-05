@@ -247,6 +247,12 @@ enum AstStmt {
 }
 
 // `let x = e;` or, with pat set, `let (a, b) = e;` (name is then "_").
+//
+// let_else marks the desugaring of `let P = e else { ... };`: it binds the
+// variables of P (in order) from `match e { P => (a, b), _ => { ... } }`
+// (one variable: `let a = match e { P => a, ... }`, none: `let _ = ...`
+// with `()`). The original is the match: x, arm 0's pattern and arm 1's
+// block.
 struct AstLetStmt {
     id: Int,
     pos: AstPos,
@@ -255,8 +261,11 @@ struct AstLetStmt {
     pat: Option<AstPattern>,
     ty: Option<AstType>,
     init: AstExpr,
+    let_else: Bool,
 }
 
+// `x = e;`. `x += e;` (and the other compound assignments) is `x = x + e;`
+// whose Binary value is marked compound.
 struct AstAssignStmt {
     id: Int,
     pos: AstPos,
@@ -264,6 +273,11 @@ struct AstAssignStmt {
     value: AstExpr,
 }
 
+// `s.f = e;` (`s.f += e;`: a compound Binary value as for AstAssignStmt).
+//
+// `v[i] = e;` is the statement `v.__index_set(i, e);` (a core method of
+// Vec with the bounds of `v[i]` as preconditions) and `v[i] += e;` is
+// `v.__index_set(i, v[i] + e);` with a compound Binary.
 struct AstFieldAssignStmt {
     id: Int,
     pos: AstPos,
@@ -282,12 +296,15 @@ struct AstContinueStmt {
 }
 
 // `while cond { }`, or `while let pat = cond { }` when pat is set.
+// `loop { }` is `while true { }` with is_loop set (the checker treats it
+// as diverging unless its body breaks out of it).
 struct AstWhileStmt {
     id: Int,
     pos: AstPos,
     pat: Option<AstPattern>,
     cond: AstExpr,
     body: AstBlock,
+    is_loop: Bool,
 }
 
 // `for x in start..end { }` (end is Some) or `for x in vec { }`. With pat
@@ -417,16 +434,19 @@ struct AstIdent {
     targs: Vec<AstType>,
 }
 
-// op is a token kind ("+", "==", "&&", ...).
+// op is the operator ("+", "==", "&&", "<<", ...). compound marks the
+// value of a compound assignment `x op= y` (x is then a copy of the
+// target, with fresh ids).
 struct AstBinary {
     id: Int,
     pos: AstPos,
     op: String,
     x: AstExpr,
     y: AstExpr,
+    compound: Bool,
 }
 
-// op is "-", "!", or one of "&", "&mut ", "*" (no-ops at run time:
+// op is "-", "!" (on Bool: not; on Int: bitwise not), or one of "&", "&mut ", "*" (no-ops at run time:
 // values of structs and collections are references already; `&` and
 // `&mut ` borrow shared or mutably for the mutability pass).
 struct AstUnary {

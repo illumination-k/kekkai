@@ -477,14 +477,20 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 ## 文と式
 
 - `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ。`s` が可変であること）
+- `let P = e else { ... };`（let-else）：`e` が反駁可能なパターン `P` に合えばその変数を束縛し、合わなければ `else` のブロックを実行する。ブロックは `return`・`break`・`continue`（またはそれで終わる `if`/`match`、`loop`）で終わらなければならない（構文として検査する）。型注釈は書けない。`let Some((a, mut b)) = o else { return 0; };`
+- 複合代入 `x += e;`（`-= *= /= %= &= |= ^= <<= >>=` も）は `x = x + e;` と同じ。`s.f += e;`、`v[i] += e;` も書ける。左辺は 2 回評価されるので、変数・フィールド・要素（添字は呼び出しを含まない式。`v.len()` は可）に限る
+- 要素の代入 `v[i] = e;`（`Vec` のみ）：読み出しの `v[i]` と同じく `0 <= i && i < v.len()` の証明が要り（[refinement.md](refinement.md)）、`v` は可変な経路であること（`push` と同じ）。core の `Vec::__index_set` の呼び出しになる
 - `if c { } else if d { } else { }`、`if let P = e { } else { }`（式）
 - `match e { pat => e, pat if guard => e, ... }`（式、網羅性検査あり、ネスト可）。ガード `if guard`（`Bool`）は腕の束縛を見られ、ガードのある腕は網羅性に数えない（Rust と同じ）
-- `while c { }`, `while let P = e { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
+- `while c { }`, `while let P = e { }`, `loop { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
+- `loop { }` は無限ループ（文）。`break` か `return` で抜ける。`break` のない `loop` は発散するので、`fn f() -> Int { loop { if c { return 1; } } }` は型が合う。値を返す `break e`・ラベル（`'a: loop`）は未対応
 - `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
 - `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
-- 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`
+- 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
+- 優先順位は Rust と同じ：単項 `- ! & *` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > 比較 > `&&` > `||`（比較は連鎖できない）。`kek fmt` は比較やほかのビット演算の中のビット演算、シフトの中の算術に括弧を付ける（`(a & b) == 0`、`1 << (n - 1)`）
+- 整数リテラル：`255`、`0xff`、`0o17`、`0b1010`、区切り `1_000_000`。`i64` の範囲を超えるとエラー。文字リテラル `'a'`、`'\n'`（`\r \t \\ \' \" \0 \x7f \u{1F600}`）はその Unicode のコードポイントの `Int`（文字の型はない）、バイトリテラル `b'a'`・`b'\xff'` はそのバイトの `Int`。パターンにも書ける。`kek fmt` は書いた綴りを保つ
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
-- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、整数の定数、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、構造体 `S { a, b: p, .. }`・`E::V { a, .. }`、タプル構造体 `S(p, q)`、ユニット構造体 `S`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
+- パターン：`_`、変数（`mut x`）、整数・文字・文字列・真偽値リテラル、整数の定数、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、構造体 `S { a, b: p, .. }`・`E::V { a, .. }`、タプル構造体 `S(p, q)`、ユニット構造体 `S`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
   - or パターンはネストでき（`Some(1 | 2)`）、`match` の腕・`if let`・`while let` の先頭には `|` を書いてもよい。どの選択肢も同じ名前を同じ型・同じ可変性で束縛すること。網羅性検査は選択肢ごとに展開して数える
   - 範囲は `Int` だけで、`lo > hi`（`lo..hi` では `lo >= hi`）はエラー。`Int` は範囲を並べても網羅とみなさない（`_` が要る）
   - `x @ p` は p に一致した値全体を x に束縛する。p が or パターンなら括弧が要る（`x @ (A | B)`）
@@ -556,7 +562,7 @@ for (i, w) in words.iter().enumerate() { ... }
 
 ### `Vec<T>`
 
-組み込み：`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `join(sep)`（`Vec<String>`）。core（`lib/core/vec.kek`・`iter.kek`）は Rust の `Vec`・スライスと同じ名前のメソッドを足している。
+組み込み：`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `join(sep)`（`Vec<String>`）。`v[i]` で読み、`v[i] = x` で書く（範囲の証明が要る）。core（`lib/core/vec.kek`・`iter.kek`）は Rust の `Vec`・スライスと同じ名前のメソッドを足している。
 
 - 生成・情報：`Vec::with_capacity(n)`（容量は持たないので `new` と同じ）, `iter`, `is_empty`, `first`, `last`, `slice(a, b)`（`v[a..b].to_vec()` に当たる新しい `Vec`）
 - 書き換え（`&mut self`）：`insert(i, x)`, `remove(i) -> Option<T>`, `swap_remove(i) -> Option<T>`, `swap(i, j)`, `reverse`, `truncate(n)`, `clear`, `extend(iter)`（`Iterator`。`Vec` は `v.iter()` を渡す）, `append(&mut other)`（`other` は空になる）, `split_off(at) -> Vec<T>`, `retain(|x| ..)`, `dedup_by(|a, b| ..)`, `dedup_by_key(|x| ..)`, `rotate_left(k)`, `rotate_right(k)`

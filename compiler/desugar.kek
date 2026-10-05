@@ -347,6 +347,7 @@ fn desugar_pred(cx: DsgCx, e: AstExpr) -> AstExpr {
             }
         }
         AstExpr::Binary(x) => AstExpr::Binary(AstBinary {
+            compound: x.compound,
             id: x.id,
             pos: x.pos,
             op: x.op,
@@ -419,6 +420,7 @@ fn desugar_stmt(cx: DsgCx, s0: AstStmt) -> AstStmt {
             }
             let name = if pat.is_some() { "_" } else { s.name };
             AstStmt::Let(AstLetStmt {
+                let_else: s.let_else,
                 id: s.id,
                 pos: s.pos,
                 mutable: s.mutable,
@@ -448,6 +450,7 @@ fn desugar_stmt(cx: DsgCx, s0: AstStmt) -> AstStmt {
         AstStmt::Break(_) => s0,
         AstStmt::Continue(_) => s0,
         AstStmt::While(s) => AstStmt::While(AstWhileStmt {
+            is_loop: s.is_loop,
             id: s.id,
             pos: s.pos,
             pat: desugar_opt_pat(cx, s.pat),
@@ -615,6 +618,7 @@ fn desugar_expr(cx: DsgCx, e0: AstExpr) -> AstExpr {
             })
         }
         AstExpr::Binary(e) => AstExpr::Binary(AstBinary {
+            compound: e.compound,
             id: e.id,
             pos: e.pos,
             op: e.op,
@@ -880,6 +884,7 @@ fn desugar_variant_lit(mut cx: DsgCx, e: AstStructLit) -> AstExpr {
         names.push(tn);
         stmts.push(
             AstStmt::Let(AstLetStmt {
+                let_else: false,
                 id: desugar_id(cx),
                 pos: f.pos,
                 mutable: false,

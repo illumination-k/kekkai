@@ -1,0 +1,46 @@
+struct S { mut n: Int, mut v: Vec<Int> }
+
+fn lits() -> Int {
+    let a = 0xFF_FF + 0o7_7 + 0b1010_1010 + 1_000;
+    let c = 'a' + '\n' + '\'' + '\\' + '\u{1F600}' + b'a' + b'\xff';
+    match c { 'a' => 1, 0x10 => 2, -0b1 => 3, _ => a }
+}
+
+fn bits(x: Int, y: Int) -> Bool {
+    let m = x&y|x^y;
+    let s = (1<<x)+(y>>2);
+    let t = 1 << x + 1;
+    let u = !x & 0xff;
+    (m & 1) == 0 || s & t != 0 && u > 0
+}
+
+fn assigns(mut s: S, mut x: Int) {
+    x+=1; x -= 2;x*=3;
+    x /= 4; x %= 5; x &= 6; x |= 7; x ^= 8; x <<= 1; x >>= 2;
+    s.n += x * 2;   // a field
+    if s.v.len() > 1 {
+        s.v[0] = x;
+        s.v[1] += s.v[0]
+            * 2;
+    }
+}
+
+fn loops(v: Vec<Int>) -> Int {
+    let mut i = 0;
+    loop { i += 1; if i > 10 { break; } }
+    loop {
+        // forever, until return
+        if v.len() > i { return i; }
+        i -= 1;
+    }
+}
+
+fn lets(o: Option<(Int, Int)>, r: Result<Int, String>) -> Int {
+    let Some((a, mut b)) = o else { return 0; };
+    let Ok(n) = r else {
+        // not ok
+        return -1;
+    };
+    b += n;
+    a + b
+}

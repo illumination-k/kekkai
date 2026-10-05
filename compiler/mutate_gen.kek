@@ -199,7 +199,15 @@ fn mut_token_len(w: CovW, pos: AstPos, str_lit: Bool) -> Int {
     let line = cov_src_line(w.lines, pos.file, pos.line);
     let start = cov_col_index(line, pos.col);
     let mut i = start;
-    if str_lit {
+    // a string, or a character literal `'a'` / `b'a'`
+    let mut quote = if str_lit { 34 } else { 0 };
+    if line.char_at(i).unwrap_or(0) == 98 && line.char_at(i + 1).unwrap_or(0) == 39 {
+        i = i + 1;
+    }
+    if line.char_at(i).unwrap_or(0) == 39 {
+        quote = 39;
+    }
+    if quote != 0 {
         i = i + 1;
         while i < line.len() {
             let c = line.char_at(i).unwrap_or(0);
@@ -208,7 +216,7 @@ fn mut_token_len(w: CovW, pos: AstPos, str_lit: Bool) -> Int {
                 continue;
             }
             i = i + 1;
-            if c == 34 {
+            if c == quote {
                 break;
             }
         }
@@ -293,7 +301,8 @@ fn mut_collect_expr(w: CovW, e: AstExpr) {
             }
         }
         AstExpr::Unary(x) => {
-            if x.op == "!" || (x.op == "-" && mut_is_int(w, x.x)) {
+            // (`!` on Int, a bitwise not, is left alone)
+            if (x.op == "!" && !mut_is_int(w, x.x)) || (x.op == "-" && mut_is_int(w, x.x)) {
                 let c = mut_add(w, x.id, "unary", x.pos, x.op, "", "drop " + mut_q(x.op), false);
                 mut_set_last(w, mut_snip(w, c, x.pos.col, 1, ""));
             }
@@ -425,7 +434,14 @@ fn mut_not(w: CovW, pos: AstPos, e: AstExpr) -> AstExpr {
 }
 
 fn mut_binary(w: CovW, b: AstBinary, op: String) -> AstExpr {
-    AstExpr::Binary(AstBinary { id: cov_id(w), pos: b.pos, op: op, x: b.x, y: b.y })
+    AstExpr::Binary(AstBinary {
+        id: cov_id(w),
+        pos: b.pos,
+        op: op,
+        x: b.x,
+        y: b.y,
+        compound: b.compound,
+    })
 }
 
 // mut_apply_expr rewrites expression e (its children already rewritten)

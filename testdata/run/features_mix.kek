@@ -1,0 +1,82 @@
+const MASK: Int = 0xff;
+
+#[derive(Debug, Clone, PartialEq)]
+struct V2(Int, Int);
+
+impl Add for V2 {
+    type Output = V2;
+
+    fn add(self, o: V2) -> V2 {
+        V2(self.0 + o.0, self.1 + o.1)
+    }
+}
+
+#[derive(Debug)]
+enum Cmd {
+    Move { dx: Int, dy: Int },
+    Say(String),
+    Quit,
+}
+
+fn parse(s: String) -> Option<Cmd> {
+    let Some((head, rest)) = s.split_once(" ") else {
+        return if s == "quit" { Some(Cmd::Quit) } else { None };
+    };
+    match head.as_str() {
+        "move" | "go" => {
+            let Some((a, b)) = rest.split_once(",") else {
+                return None;
+            };
+            Some(Cmd::Move { dx: a.parse_int()?, dy: b.parse_int()? })
+        }
+        "say" => Some(Cmd::Say(rest)),
+        _ => None,
+    }
+}
+
+fn classify(c: Int) -> String {
+    match c {
+        'a'..='z' => "lower",
+        'A'..='Z' => "upper",
+        d @ '0'..='9' if d != '0' => "digit",
+        _ => "other",
+    }
+}
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let mut pos = V2(0, 0);
+    let cmds = vec!["move 1,2", "go 3,-1", "say hi", "jump", "quit"];
+    for line in cmds.iter() {
+        match parse(line) {
+            Some(Cmd::Move { dx, dy }) => {
+                pos = pos + V2(dx, dy);
+            }
+            Some(c @ Cmd::Say(_)) => log.info(format!("{c:?}")),
+            Some(Cmd::Quit) => log.info("bye"),
+            None => log.info(format!("bad command {:?}", line)),
+        }
+    }
+    log.info(format!("pos = {:?}", pos));
+    let mut x = 0b1010;
+    x <<= 2;
+    x |= 1;
+    x += MASK & 0x0f;
+    log.info(format!("{x} {x:#x} {:>6}|{:<4}|", x, "ab"));
+    let mut v = vec![5, 3, 9, 1];
+    v.sort();
+    if v.len() > 2 {
+        v[0] += 100;
+    }
+    let mut n = 0;
+    loop {
+        n += 1;
+        if n == 4 {
+            break;
+        }
+    }
+    log.info(format!("{:?} {} {}", v, n, Int::MAX.checked_add(1).is_none()));
+    let kinds: Vec<String> = "aZ7_0".chars().map(classify).collect();
+    log.info(kinds.join(","));
+    0
+}

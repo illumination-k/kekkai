@@ -1,0 +1,156 @@
+// Integer and character literals, bit operators, compound and element
+// assignment, `loop` and `let ... else`.
+
+struct Counter {
+    mut n: Int,
+    mut hist: Vec<Int>,
+}
+
+fn find(v: Vec<Int>, x: Int) -> Int {
+    let mut i = 0;
+    loop {
+        if i >= v.len() {
+            return -1;
+        }
+        if v[i] == x {
+            return i;
+        }
+        i += 1;
+    }
+}
+
+fn first_even(v: Vec<Int>) -> Int {
+    let mut i = 0;
+    let mut found = -1;
+    loop {
+        if i >= v.len() {
+            break;
+        }
+        if v[i] % 2 == 0 {
+            found = v[i];
+            break;
+        }
+        i += 1;
+    }
+    found
+}
+
+fn get_or(o: Option<Int>, d: Int) -> Int {
+    let Some(x) = o else {
+        return d;
+    };
+    x
+}
+
+fn sum_pair(o: Option<(Int, Int)>) -> Int {
+    let Some((a, mut b)) = o else {
+        return 0;
+    };
+    b += a;
+    b
+}
+
+fn count_ok(rs: Vec<Result<Int, String>>) -> Int {
+    let mut n = 0;
+    for r in rs {
+        let Ok(_) = r else {
+            continue;
+        };
+        n += 1;
+    }
+    n
+}
+
+fn popcount(x: Int) -> Int {
+    let mut v = x;
+    let mut n = 0;
+    while v != 0 {
+        n += v & 1;
+        v = (v >> 1) & !(1 << 63);
+    }
+    n
+}
+
+fn is_digit(c: Int) -> Bool {
+    '0' <= c && c <= '9'
+}
+
+fn classify(c: Int) -> String {
+    match c {
+        'a' => "a",
+        '\n' => "newline",
+        0x20 => "space",
+        _ => if is_digit(c) { "digit" } else { "other" },
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    log.info((0xff + 0o17 + 0b1010 + 1_000_000 + 0xFF_FF).to_string());
+    log.info(('a' + '\n' + '\'' + '\\' + '\0' + '\x7f').to_string());
+    log.info(('\u{1F600}' + 'é' + '😀' + b'a' + b'\xff').to_string());
+    log.info(classify('a') + " " + classify(10) + " " + classify(' ') + " " + classify('7'));
+    let a = 0b1100;
+    let b = 0b1010;
+    log.info((a & b).to_string() + " " + (a | b).to_string() + " " + (a ^ b).to_string());
+    log.info((1 << 10).to_string() + " " + (-16 >> 2).to_string() + " " + (!0).to_string());
+    log.info(
+        ((1 + 2) << 3).to_string()
+            + " "
+            + ((6 & 3) == 2).to_string()
+            + " "
+            + (1 | (2 ^ (3 & 4))).to_string(),
+    );
+    log.info(popcount(255).to_string() + " " + popcount(-1).to_string());
+    let mut x = 10;
+    x += 5;
+    x -= 3;
+    x *= 2;
+    x /= 4;
+    x %= 4;
+    x |= 8;
+    x &= 12;
+    x ^= 1;
+    x <<= 2;
+    x >>= 1;
+    log.info(x.to_string());
+    let mut c = Counter { n: 1, hist: Vec::new() };
+    c.n += 41;
+    c.hist.push(0);
+    let mut s = "ab";
+    s += "cd";
+    log.info(c.n.to_string() + " " + s);
+    let mut v = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v[0] = 10;
+    if v.len() > 2 {
+        v[2] += 5;
+        v[v.len() - 1] *= 2;
+    }
+    log.info(v[0].to_string() + " " + v[1].to_string() + " " + v[2].to_string());
+    let mut grid = Vec::new();
+    grid.push(Vec::new());
+    grid[0].push(1);
+    let mut row = grid[0];
+    if row.len() > 0 {
+        row[0] = 9;
+    }
+    // a row is a reference: the grid sees the change
+    let first = grid[0];
+    if first.len() > 0 {
+        log.info(first[0].to_string());
+    }
+    log.info(
+        find(v, 2).to_string() + " " + find(v, 7).to_string() + " " + first_even(v).to_string(),
+    );
+    log.info(get_or(Some(3), 0).to_string() + " " + get_or(None, 9).to_string());
+    log.info(sum_pair(Some((2, 3))).to_string() + " " + sum_pair(None).to_string());
+    let mut rs = Vec::new();
+    rs.push(Ok(1));
+    rs.push(Err("x"));
+    rs.push(Ok(2));
+    log.info(count_ok(rs).to_string());
+    0
+}

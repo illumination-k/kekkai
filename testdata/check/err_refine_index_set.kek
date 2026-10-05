@@ -1,0 +1,45 @@
+// Refinement types: `v[i] = x` and `v[i] += x` need the proof of `v[i]`,
+// and a mutable path to `v`.
+
+fn set(mut v: Vec<Int>, i: Int) {
+    v[i] = 1; // ERROR "cannot prove the index is in bounds: `0 <= i && i < v.len()` (counterexample: i = 0, v.len() = 0)"
+}
+
+fn set_checked(mut v: Vec<Int>, i: Int) {
+    if 0 <= i && i < v.len() {
+        v[i] = 1;
+        v[i] %= 2;
+    }
+}
+
+fn add(mut v: Vec<Int>, i: Int) {
+    v[i] %= 3; // ERROR "cannot prove the index is in bounds: `0 <= i && i < v.len()`"
+}
+
+fn last(mut v: Vec<Int>) {
+    let n = v.len();
+    if n > 0 {
+        v[n - 1] = 0;
+    }
+}
+
+fn pushed(mut v: Vec<Int>) {
+    v.push(1);
+    v[v.len() - 1] /= 2;
+}
+
+// a mask `h & c` (c >= 0) is in 0..=c; other bit operations are unknown
+fn masked(mut v: Vec<Int>, h: Int) {
+    if v.len() == 8 {
+        v[h & 7] = 1;
+        v[h | 1] = 2; // ERROR "cannot prove the index is in bounds"
+    }
+}
+
+fn not_mut(v: Vec<Int>) {
+    if v.len() > 0 {
+        v[0] = 1; // ERROR "cannot borrow `v` as mutable"
+    }
+}
+
+fn main() {}

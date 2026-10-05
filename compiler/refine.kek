@@ -561,9 +561,9 @@ fn ref_mentions(e: AstExpr, name: String) -> Bool {
 fn ref_prec(e: AstExpr) -> Int {
     match e {
         AstExpr::Binary(b) => fmt_precedence(b.op),
-        AstExpr::Unary(_) => 6,
+        AstExpr::Unary(_) => 10,
         AstExpr::Range(_) => 0,
-        _ => 8,
+        _ => 12,
     }
 }
 
@@ -597,7 +597,7 @@ fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
         AstExpr::UnitLit(_) => "()",
         AstExpr::Ident(x) => if x.name == from { to } else { x.name },
         AstExpr::Path(x) => x.ty + "::" + x.name,
-        AstExpr::Unary(u) => u.op + ref_show_sub(u.x, ref_prec(u.x) < 6, from, to),
+        AstExpr::Unary(u) => u.op + ref_show_sub(u.x, ref_prec(u.x) < 10, from, to),
         AstExpr::Binary(b) => {
             let p = fmt_precedence(b.op);
             ref_show_sub(b.x, ref_prec(b.x) < p, from, to)
@@ -606,18 +606,27 @@ fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
                 + " "
                 + ref_show_sub(b.y, ref_prec(b.y) <= p, from, to)
         }
-        AstExpr::Call(c) => ref_show_sub(c.func, ref_prec(c.func) < 7, from, to)
+        AstExpr::Call(c) => ref_show_sub(c.func, ref_prec(c.func) < 11, from, to)
             + ref_show_args(c.args, from, to),
-        AstExpr::Method(m) => ref_show_sub(m.recv, ref_prec(m.recv) < 7, from, to)
-            + "."
-            + m.name
-            + ref_show_args(m.args, from, to),
-        AstExpr::Field(f) => ref_show_sub(f.x, ref_prec(f.x) < 7, from, to) + "." + f.name,
-        AstExpr::Index(x) => ref_show_sub(x.x, ref_prec(x.x) < 7, from, to)
+        AstExpr::Method(m) => if m.name == "__index_set" && m.args.len() == 2 {
+            // `v[i] = x` (see AstFieldAssignStmt)
+            ref_show_sub(m.recv, ref_prec(m.recv) < 11, from, to)
+                + "["
+                + ref_show_r(m.args.get(0).unwrap_or(m.recv), from, to)
+                + "] = "
+                + ref_show_r(m.args.get(1).unwrap_or(m.recv), from, to)
+        } else {
+            ref_show_sub(m.recv, ref_prec(m.recv) < 11, from, to)
+                + "."
+                + m.name
+                + ref_show_args(m.args, from, to)
+        },
+        AstExpr::Field(f) => ref_show_sub(f.x, ref_prec(f.x) < 11, from, to) + "." + f.name,
+        AstExpr::Index(x) => ref_show_sub(x.x, ref_prec(x.x) < 11, from, to)
             + "["
             + ref_show_r(x.index, from, to)
             + "]",
-        AstExpr::Try(t) => ref_show_sub(t.x, ref_prec(t.x) < 7, from, to) + "?",
+        AstExpr::Try(t) => ref_show_sub(t.x, ref_prec(t.x) < 11, from, to) + "?",
         AstExpr::Tuple(t) => ref_show_args(t.elems, from, to),
         AstExpr::Range(r) => ref_show_r(r.start, from, to)
             + if r.inclusive { "..=" } else { ".." }
@@ -2569,7 +2578,8 @@ fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
                 if v.kind == "bool" {
                     return ref_val_bool(SmtF::Not(v.f));
                 }
-                return ref_fresh(cx, st, ty_bool(), ref_show(e), u.pos);
+                // (on Int: bitwise not, not modeled)
+                return ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), u.pos);
             }
             v
         }
@@ -2797,6 +2807,36 @@ fn ref_binary(cx: RefCtx, mut st: RefSt, b: AstBinary, e: AstExpr) -> RefVal {
             None => {}
         }
         return r;
+    }
+    if op == "&" {
+        // a mask: `x & c` is in 0..=c for a constant c >= 0 (other bit
+        // operations are not modeled)
+        let mask = match ref_lconst(y) {
+            Some(k) => Some(k),
+            None => ref_lconst(x),
+        };
+        match mask {
+            Some(k) => {
+                if k >= 0 {
+                    let r = ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos);
+                    match ref_lscale(r.lin, -1) {
+                        Some(nr) => match ref_ladd(r.lin, ref_lc(k), -1) {
+                            Some(d) => ref_fact(
+                                cx,
+                                st,
+                                ref_and2(SmtF::Le(nr), SmtF::Le(d)),
+                                b.pos,
+                                "`" + ref_show(e) + "` is in `0..=" + k.to_string() + "`",
+                            ),
+                            None => {}
+                        },
+                        None => {}
+                    }
+                    return r;
+                }
+            }
+            None => {}
+        }
     }
     ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos)
 }
@@ -3193,6 +3233,29 @@ fn ref_len_of(cx: RefCtx, st: RefSt, v: RefVal, e: AstExpr) -> SmtLin {
 fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
     let bv = ref_expr(cx, st, x.x);
     let iv = ref_expr(cx, st, x.index);
+    ref_bounds(cx, st, x, bv, iv, "`" + ref_show(e) + "` is in bounds");
+    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), x.pos)
+}
+
+// ref_no_calls reports an expression of variables, fields, elements,
+// literals and operators (it changes no Vec).
+fn ref_no_calls(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::IntLit(_) => true,
+        AstExpr::BoolLit(_) => true,
+        AstExpr::StrLit(_) => true,
+        AstExpr::Ident(_) => true,
+        AstExpr::Field(f) => ref_no_calls(f.x),
+        AstExpr::Index(x) => ref_no_calls(x.x) && ref_no_calls(x.index),
+        AstExpr::Unary(u) => ref_no_calls(u.x),
+        AstExpr::Binary(b) => ref_no_calls(b.x) && ref_no_calls(b.y),
+        _ => false,
+    }
+}
+
+// ref_bounds checks that the index of x (values bv and iv) is in bounds
+// and then assumes it (fact: the label of the fact).
+fn ref_bounds(cx: RefCtx, st: RefSt, x: AstIndex, bv: RefVal, iv: RefVal, fact: String) {
     let n = ref_len_of(cx, st, bv, x.x);
     let i = ref_int_or_fresh(cx, st, iv, x.index);
     let lo = SmtF::Le(ref_lscale(i, -1).unwrap_or(ref_lc(1)));
@@ -3217,9 +3280,8 @@ fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
     );
     // past the access (it traps otherwise), the bounds hold
     if ref_lscale(i, -1).is_some() && ref_cmp("<", i, n).is_some() {
-        ref_fact(cx, st, goal, x.pos, "`" + ref_show(e) + "` is in bounds");
+        ref_fact(cx, st, goal, x.pos, fact);
     }
-    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), x.pos)
 }
 
 // ref_call checks a call of fun with argument values args (exprs: the
@@ -3388,6 +3450,32 @@ fn ref_method(cx: RefCtx, st: RefSt, m: AstMethodCall, e: AstExpr) -> RefVal {
         args.push(ref_expr(cx, st, a));
     }
     let mi = cx.info.methods.get(m.id);
+    if m.name == "__index_set" && m.args.len() == 2 && ref_is_vec(rt) {
+        // `v[i] = x`: the bounds of `v[i]` (the length does not change).
+        // `v[i] += x` read `v[i]` already (when x cannot change v).
+        let ix = AstIndex {
+            id: m.id,
+            pos: m.pos,
+            x: m.recv,
+            index: m.args.get(0).unwrap_or(m.recv),
+        };
+        let compound = match m.args.get(1) {
+            Some(AstExpr::Binary(b)) => b.compound && ref_no_calls(b.y),
+            _ => false,
+        };
+        if compound {
+            return ref_fresh(cx, st, ty_unit(), ref_show(e), m.pos);
+        }
+        ref_bounds(
+            cx,
+            st,
+            ix,
+            rv,
+            args.get(0).unwrap_or(ref_val_other()),
+            "`" + ref_show(AstExpr::Index(ix)) + "` is in bounds",
+        );
+        return ref_fresh(cx, st, ty_unit(), ref_show(e), m.pos);
+    }
     if m.name == "len" && m.args.len() == 0 && ref_is_seq(rt) {
         return ref_val_int(ref_len_of(cx, st, rv, m.recv));
     }

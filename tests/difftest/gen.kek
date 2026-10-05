@@ -245,7 +245,7 @@ fn prelude(g: Gen) {
 fn interesting(g: Gen) -> String {
     pick(
         g,
-        "0~1~2~3~7~10~100~255~65536~2147483647~4294967296~9223372036854775807~(-9223372036854775807 - 1)",
+        "0~1~2~3~7~10~100~255~65536~2147483647~4294967296~9223372036854775807~(-9223372036854775807 - 1)~0xff~0b1010~1_000~0x7fff_ffff_ffff_ffff~'a'~(!0)",
     )
 }
 
@@ -315,9 +315,17 @@ fn stmt(g: Gen, idx: Int, ind: String) {
         ln(g, ind + "let mut " + i + " = 0;");
         let saved = g.vars.len();
         add_var(g, acc, t_int(), true);
-        ln(g, ind + "while " + i + " < " + (1 + intn(g, 6)).to_string() + " {");
+        let n = (1 + intn(g, 6)).to_string();
+        if intn(g, 2) == 0 {
+            ln(g, ind + "while " + i + " < " + n + " {");
+        } else {
+            ln(g, ind + "loop {");
+            ln(g, ind + "    if " + i + " >= " + n + " {");
+            ln(g, ind + "        break;");
+            ln(g, ind + "    }");
+        }
         ln(g, ind + "    " + acc + " = " + int_expr(g, idx, 2) + ";");
-        ln(g, ind + "    " + i + " = " + i + " + 1;");
+        ln(g, ind + "    " + i + " += 1;");
         ln(g, ind + "}");
         truncate(g, saved);
         add_var(g, acc, t_int(), true);
@@ -325,7 +333,11 @@ fn stmt(g: Gen, idx: Int, ind: String) {
         let m = pick_var(g, t_int(), true);
         let e = int_expr(g, idx, 2);
         if m != "" {
-            ln(g, ind + m + " = " + e + ";");
+            if intn(g, 3) == 0 {
+                ln(g, ind + m + " " + pick(g, "+~-~*~/~%~&~|~^~<<~>>") + "= " + e + ";");
+            } else {
+                ln(g, ind + m + " = " + e + ";");
+            }
         } else {
             let v = declare(g, t_int(), "m", true);
             ln(g, ind + "let mut " + v + " = " + e + ";");
@@ -364,9 +376,21 @@ fn int_expr(g: Gen, idx: Int, d: Int) -> String {
     match k {
         0 => int_leaf(g),
         1 => int_leaf(g),
-        2 => paren(int_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~-"), int_expr(g, idx, d - 1)),
-        3 => paren(int_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~-"), int_expr(g, idx, d - 1)),
-        4 => paren(int_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~-"), int_expr(g, idx, d - 1)),
+        2 => paren(
+            int_expr(g, idx, d - 1),
+            pick(g, "+~-~*~/~%~+~-~&~|~^~<<~>>"),
+            int_expr(g, idx, d - 1),
+        ),
+        3 => paren(
+            int_expr(g, idx, d - 1),
+            pick(g, "+~-~*~/~%~+~-~&~|~^~<<~>>"),
+            int_expr(g, idx, d - 1),
+        ),
+        4 => paren(
+            int_expr(g, idx, d - 1),
+            pick(g, "+~-~*~/~%~+~-~&~|~^~<<~>>"),
+            int_expr(g, idx, d - 1),
+        ),
         5 => "(-" + int_expr(g, idx, d - 1) + ")",
         6 => {
             let c = bool_expr(g, idx, d - 1);

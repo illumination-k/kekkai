@@ -1,5 +1,7 @@
 #!/bin/sh
-# check: every testdata/check/*.kek is run through `./kek check`. Lines
+# check: every testdata/check/*.kek is run through `./kek check`, and so
+# is every tests/syntax/*.kek (syntax errors: kept out of testdata, whose
+# files the fmt suite round-trips). Lines
 # annotated with `// ERROR "substring"` (or `// WARN "substring"` for a
 # warning) must produce a matching diagnostic on that line; no other
 # diagnostics are allowed. Lines `// kekkai.toml: <line>` make up a
@@ -60,4 +62,4 @@ if [ "${1:-}" = --case ]; then
 	one "$2"
 	exit 0
 fi
-run_parallel "$0" testdata/check/*.kek
+run_parallel "$0" testdata/check/*.kek tests/syntax/*.kek

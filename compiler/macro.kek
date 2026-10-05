@@ -260,11 +260,12 @@ fn mac_not(p: ParseState, pos: AstPos, e: AstExpr) -> AstExpr {
 }
 
 fn mac_bin(p: ParseState, pos: AstPos, op: String, x: AstExpr, y: AstExpr) -> AstExpr {
-    AstExpr::Binary(AstBinary { id: parse_id(p), pos: pos, op: op, x: x, y: y })
+    AstExpr::Binary(AstBinary { id: parse_id(p), pos: pos, op: op, x: x, y: y, compound: false })
 }
 
 fn mac_let(p: ParseState, pos: AstPos, name: String, mutable: Bool, init: AstExpr) -> AstStmt {
     AstStmt::Let(AstLetStmt {
+        let_else: false,
         id: parse_id(p),
         pos: pos,
         mutable: mutable,

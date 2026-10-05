@@ -1,0 +1,10 @@
+// `let ... else`: the else block must diverge (a syntax error).
+
+fn f(o: Option<Int>) -> Int {
+    let Some(x) = o else { // ERROR "the `else` block of `let ... else` must diverge: end it with `return`, `break` or `continue`"
+        let y = 1;
+    };
+    x
+}
+
+fn main() {}

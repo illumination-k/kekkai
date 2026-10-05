@@ -1,0 +1,11 @@
+testdata/complexity/basic.kek:68:1  deep (Vec<Vec<Int>>) -> Int
+  cognitive 15 > 10, cyclomatic 6, nesting 5, 15 lines
+  hint: hard to follow: split the branches of `deep` into smaller functions
+
+testdata/complexity/basic.kek:86:1  shipping (Int, Bool, Bool, Int) -> Int
+  cognitive 12 > 10, cyclomatic 13, nesting 2, 38 lines > 30
+  hint: hard to follow: split the branches of `shipping` into smaller functions
+
+2 functions over the limits (cognitive 10, lines 30)
+1 allowed by #[allow(complexity)]
+--- exit 1

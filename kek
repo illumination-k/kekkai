@@ -16,6 +16,7 @@
 #   kek cover [flags] <file|dir>    coverage of the tests (.kek-cache/cover/)
 #   kek mutate [flags] <file|dir>   mutation testing (.kek-cache/mutate/)
 #   kek similar -diff <rev> ...     similar code, only what changed since a git revision
+#   kek complexity -diff <rev> ...  complex code, only what changed since a git revision
 #   KEK_STAGE=bootstrap kek ...     use the bootstrap compiler directly
 #
 # Results of `kek test` and the module.wasm of `kek build` / `kek run` are
@@ -368,6 +369,10 @@ Usage:
                                   the guarantee ledger kekkai.assure.lock (docs/assure.md)
   kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path | -diff rev] <file|dir>
                                   duplicate and similar definitions (exit 1 when found)
+  kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n]
+                 [-base path | -diff rev] <file|dir>
+                                  cognitive / cyclomatic complexity and nesting of each function
+                                  (exit 1 when one is over the limits)
 
 Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps
@@ -376,6 +381,10 @@ Compiler internals:
   kek mutate-build <file|dir> <outdir> [-base p] [-main] | kek mutate-report [-json] <outdir>
   kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
   kek embed-prelude lib/core compiler/core_src.kek -as core [-check]
+
+Editors:
+  kek lsp                         language server on stdin/stdout (diagnostics, hover,
+                                  definition, references, symbols; docs/tooling.md)
 
 Daemon:
   kek daemon start|stop|status|stats
@@ -1106,10 +1115,7 @@ cmd_test() {
 
 # ---- kek similar -diff <rev> ----
 
-# cmd_similar runs `similar`. With -diff <rev>, the program as of the git
-# revision rev is extracted into a temporary directory and passed as
-# -base, so that only findings with a new or changed definition are
-# reported (the CI mode for pull requests).
+# cmd_similar runs `similar` (-diff <rev>: with_diff).
 # similar_semantic <path> [-all] [-tests]: run the candidate pairs of the
 # semantic kind as property tests (each compares the two functions'
 # results on generated inputs) and print the path of the file listing the
@@ -1161,6 +1167,18 @@ cmd_similar() {
 		set -- -equiv "$_sem_dir/equiv.txt" "$@"
 		trap 'rm -rf "$_sem_dir"' EXIT
 	fi
+	with_diff similar "kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>" "$@"
+}
+
+# with_diff <cmd> <usage> [args...]: run the compiler command cmd (similar,
+# complexity). With -diff <rev>, the program as of the git revision rev is
+# extracted into a temporary directory and passed as -base, so that only
+# findings with a new or changed definition are reported (the CI mode for
+# pull requests).
+with_diff() {
+	_cmd=$1
+	_usage=$2
+	shift 2
 	_rev=
 	_has_rev=0
 	_path=
@@ -1178,12 +1196,12 @@ cmd_similar() {
 		esac
 	done
 	if [ $_has_rev -eq 0 ]; then
-		compiler similar "$@"
+		compiler "$_cmd" "$@"
 		return
 	fi
 	if [ $_skip -eq 1 ] || [ -z "$_rev" ]; then
 		echo "flag needs an argument: -diff" >&2
-		echo "usage: kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>" >&2
+		echo "usage: $_usage" >&2
 		exit 2
 	fi
 	# drop -diff <rev> from the arguments
@@ -1204,15 +1222,15 @@ cmd_similar() {
 		esac
 	done
 	if [ -z "$_path" ] || [ ! -e "$_path" ]; then
-		echo "kek similar -diff: no such file or directory: ${_path:-<file|dir>}" >&2
+		echo "kek $_cmd -diff: no such file or directory: ${_path:-<file|dir>}" >&2
 		exit 2
 	fi
 	_top=$(git rev-parse --show-toplevel 2>/dev/null) || {
-		echo "kek similar -diff: not in a git repository" >&2
+		echo "kek $_cmd -diff: not in a git repository" >&2
 		exit 2
 	}
 	git rev-parse --verify --quiet "$_rev^{commit}" >/dev/null || {
-		echo "kek similar -diff: unknown revision $_rev" >&2
+		echo "kek $_cmd -diff: unknown revision $_rev" >&2
 		exit 2
 	}
 	if [ -d "$_path" ]; then
@@ -1225,23 +1243,29 @@ cmd_similar() {
 	"$_top") _rel=. ;;
 	"$_top"/*) _rel=${_abs#"$_top"/} ;;
 	*)
-		echo "kek similar -diff: $_path is outside the repository $_top" >&2
+		echo "kek $_cmd -diff: $_path is outside the repository $_top" >&2
 		exit 2
 		;;
 	esac
-	_base=$(mktemp -d "${TMPDIR:-/tmp}/kek-similar-XXXXXX")
+	_base=$(mktemp -d "${TMPDIR:-/tmp}/kek-$_cmd-XXXXXX")
 	trap 'rm -rf "$_base" ${_sem_dir:+"$_sem_dir"}' EXIT
 	set +e
 	if git -C "$_top" archive --format=tar "$_rev" -- "$_rel" 2>/dev/null | tar -x -C "$_base" 2>/dev/null &&
 		[ -e "$_base/$_rel" ]; then
-		compiler similar -base "$_base/$_rel" -base_name "git:$_rev" "$@"
+		compiler "$_cmd" -base "$_base/$_rel" -base_name "git:$_rev" "$@"
 	else
 		# the path did not exist at rev: every definition is new
-		compiler similar "$@"
+		compiler "$_cmd" "$@"
 	fi
 	_code=$?
 	set -e
 	exit $_code
+}
+
+# ---- kek complexity -diff <rev> ----
+
+cmd_complexity() {
+	with_diff complexity "kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base path | -diff rev] <file|dir>" "$@"
 }
 
 # ---- kek cover / kek mutate ----
@@ -1788,6 +1812,13 @@ assure)
 	fi
 	;;
 similar) cmd_similar "$@" ;;
+complexity) cmd_complexity "$@" ;;
+lsp)
+	# the language server reads its standard input for as long as the
+	# editor runs: never through the daemon (compiler/lsp.kek)
+	stage_dir
+	wasm "$(stage_module "$_stage_memo")" lsp "$root"
+	;;
 help | -h | --help) usage ;;
 *) compiler "$cmd" "$@" ;;
 esac

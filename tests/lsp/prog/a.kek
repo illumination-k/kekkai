@@ -1,0 +1,10 @@
+// Point is a point on the grid.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+// norm1 is the L1 norm of a point.
+fn norm1(p: Point) -> Int {
+    p.x.abs() + p.y.abs()
+}

@@ -429,12 +429,13 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
         return;
     }
     if a.name == "allow" {
-        if !ast_attr_has(a, "similar") {
-            chk_errorf(c, a.pos, "`#[allow]` supports only `similar`");
+        if !ast_attr_has(a, "similar") && !ast_attr_has(a, "complexity") {
+            chk_errorf(c, a.pos, "`#[allow]` supports only `similar` and `complexity`");
             return;
         }
         for x in a.args {
             if x != "similar"
+                && x != "complexity"
                 && !x.starts_with("reason = \"")
                 && !x.starts_with("owner = \"")
                 && !x.starts_with("expires = \"") {

@@ -1,0 +1,4 @@
+--- stderr
+flag provided but not defined: -bogus
+usage: kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base <file|dir>] <file|dir>
+--- exit 2

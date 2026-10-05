@@ -1,0 +1,5 @@
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    log.info("two");
+    0
+}

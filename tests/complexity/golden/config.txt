@@ -1,0 +1,43 @@
+basic.kek:68:1  deep (Vec<Vec<Int>>) -> Int
+  cognitive 15 > 2, cyclomatic 6, nesting 5, 15 lines
+  hint: hard to follow: split the branches of `deep` into smaller functions
+
+basic.kek:86:1  shipping (Int, Bool, Bool, Int) -> Int
+  cognitive 12 > 2, cyclomatic 13, nesting 2, 38 lines
+  hint: hard to follow: split the branches of `shipping` into smaller functions
+
+basic.kek:23:1  in_range (Int, Int, Int, Bool) -> Bool
+  cognitive 3 > 2, cyclomatic 4, nesting 1, 6 lines
+  hint: hard to follow: split the branches of `in_range` into smaller functions
+
+basic.kek:36:1  count_kinds (Vec<Int>) -> Int
+  cognitive 3 > 2, cyclomatic 4, nesting 2, 15 lines
+  hint: hard to follow: split the branches of `count_kinds` into smaller functions
+
+basic.kek:10:1  classify (Int) -> String
+  cognitive 3 > 2, cyclomatic 3, nesting 1, 5 lines
+  hint: hard to follow: split the branches of `classify` into smaller functions
+
+basic.kek:17:1  fact (Int) -> Int
+  cognitive 3 > 2, cyclomatic 2, nesting 1, 3 lines
+  hint: hard to follow: split the branches of `fact` into smaller functions
+
+basic.kek:31:1  any_big (Vec<Int>) -> Bool
+  cognitive 3 > 2, cyclomatic 2, nesting 2, 3 lines
+  hint: hard to follow: split the branches of `any_big` into smaller functions
+
+7 functions over the limits (cognitive 2)
+1 allowed by #[allow(complexity)]
+--- exit 1
+--- with -cognitive 12
+basic.kek:68:1  deep (Vec<Vec<Int>>) -> Int
+  cognitive 15 > 12, cyclomatic 6, nesting 5, 15 lines
+  hint: hard to follow: split the branches of `deep` into smaller functions
+
+1 function over the limits (cognitive 12)
+1 allowed by #[allow(complexity)]
+--- exit 1
+--- bad kekkai.toml
+--- stderr
+kekkai.toml:1: expected `]`
+--- exit 2

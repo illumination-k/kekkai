@@ -1,0 +1,14 @@
+{
+  "name": "kekkai",
+  "description": "Claude Code plugins for working on Kekkai (.kek) code in this repository",
+  "owner": {
+    "name": "illumination-k"
+  },
+  "plugins": [
+    {
+      "name": "kekkai-lsp",
+      "source": "./editors/claude-code",
+      "description": "Kekkai language server (kek lsp): diagnostics, hover, definition, references and symbols for .kek files"
+    }
+  ]
+}

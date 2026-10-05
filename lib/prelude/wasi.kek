@@ -383,6 +383,36 @@ fn __fs_read_line(fs: __Any) -> Option<String> {
     Some(__mem_string(buf, len))
 }
 
+// __fs_read_stdin reads n bytes of standard input (fewer at its end) as
+// UTF-8; None when the input has ended. With read_line it reads framed
+// messages (a header line, then a body of known length: `kek lsp`).
+fn __fs_read_stdin(fs: __Any, n: Int) -> Option<String> {
+    let rt = __Rt::get();
+    __mem_reset(rt);
+    let iov = __mem_alloc(rt, 16);
+    let nread = __mem_alloc(rt, 8);
+    let buf = __mem_alloc(rt, if n > 0 { n } else { 1 });
+    let mut len = 0;
+    while len < n {
+        __Mem::store32(iov, buf + len);
+        __Mem::store32(iov + 4, n - len);
+        let e = __Wasi::fd_read(0, iov, 1, nread);
+        if e != 0 || __Mem::load32(nread) == 0 {
+            break;
+        }
+        len = len + __Mem::load32(nread);
+    }
+    if len == 0 && n > 0 {
+        return None;
+    }
+    Some(__mem_string(buf, len))
+}
+
+// __fs_write_stdout writes s to standard output as it is (no newline).
+fn __fs_write_stdout(fs: __Any, s: String) {
+    __write_fd(1, s)
+}
+
 // __fs_set_cwd sets the directory relative paths are resolved against.
 fn __fs_set_cwd(fs: __Any, dir: String) {
     let mut rt = __Rt::get();

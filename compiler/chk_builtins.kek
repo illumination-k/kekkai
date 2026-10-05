@@ -122,6 +122,10 @@ fn chk_new_builtins() -> ChkBuiltins {
     // a line of standard input (None at its end), and the directory that
     // relative paths are resolved against (for a long-running program)
     chk_ma(bs, "Fs", "read_line", chk_tys0(), Ty::Option(s));
+    // n bytes of standard input (None at its end), and text written to
+    // standard output without a newline (framed protocols: `kek lsp`)
+    chk_ma(bs, "Fs", "read_stdin", chk_tys1(i), Ty::Option(s));
+    chk_ma(bs, "Fs", "write_stdout", chk_tys1(s), u);
     chk_ma(bs, "Fs", "set_cwd", chk_tys1(s), u);
 
     // ---- pure data ----

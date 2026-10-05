@@ -1,0 +1,3 @@
+--- stderr
+kek complexity: a limit must be 0 (off) or more
+--- exit 2

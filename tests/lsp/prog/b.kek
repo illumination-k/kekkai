@@ -1,0 +1,6 @@
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let p = Point { x: 1, y: -2 };
+    log.info("é→" + norm1(p).to_string());
+    0
+}

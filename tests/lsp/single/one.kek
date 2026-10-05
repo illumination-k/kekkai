@@ -1,0 +1,6 @@
+// Each file of this directory is a program of its own: both define `main`.
+#[main]
+fn main(args: Vec<String>, log: &Log, clock: &Clock) -> Int {
+    log.info("one");
+    0
+}

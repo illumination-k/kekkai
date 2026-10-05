@@ -13,6 +13,8 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 - **時刻**：`Timestamp`・`Duration`・`Date`（core ライブラリ、RFC 3339）。時計を読むのは `Timestamp::now(&Clock)` だけ（[docs/time.md](docs/time.md)）
 - **コア計算の健全性を Lean で証明**（`lean/`）
 
+- **Rust / Go 相当の言語機能**：パターン（ガード・or・範囲・`@`・struct）、`const`、タプル struct・struct 形式の variant、`loop` の値とラベル、let-else、複合代入、ビット演算、`format!`・`vec!`・`assert!` などのマクロ、`Display`/`Debug`、演算子の多重定義、`?` の `From` 変換、`dyn Trait`・`impl Trait`、`Float`、モジュール（`pub`・`use`）、`BTreeMap`・`VecDeque`・entry API などのコレクション。対応状況は [docs/features.md](docs/features.md)
+
 設計は [docs/design.md](docs/design.md) を参照してください。
 
 ## クイックスタート

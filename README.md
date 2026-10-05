@@ -4,7 +4,8 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 
 - **capability 渡し**：`&Log` `&Net` `&Db` `&Clock` `&Random` を引数で受け取らない関数は副作用を持てない（第二級値なので保存も返却もできない）
 - **線形なトランザクション**：`db.transaction(|tx| ...)` の `Tx` は必ず一度だけ commit / rollback される。トランザクション内で取り消せない副作用は書けない（`tx.outbox` で commit 後に送る）
-- **個人情報の型**：`Pii<T>` に包んだ値は文字列にできず、ログ・レスポンス・ストアに渡すと型エラーになる。取り出す（格下げ）のは `mask()`・`hash()`・`expose_unchecked()` だけで、その呼び出しは `kek caps` と `kek assure` に記録される
+- **情報フロー型**：`Labeled<PII, T>` のようにラベルを付けた値は文字列にも比較にもできず、ログ・レスポンス・ストアに渡すと型エラーになる。中身の計算は `map`・`zip`・`and_then` のクロージャの中だけで、結果もラベル付き（分岐による暗黙の漏洩も防ぐ。非干渉性を Lean で証明）。取り出す（格下げ）のは `mask()`・`hash()`・`expose_unchecked()` だけで、その呼び出しは `kek caps` と `kek assure` に記録される（[docs/authz-flow.md](docs/authz-flow.md)）
+- **認可**：`Can<Edit, d>` は変数 `d` への権限で、`#[policy]` の関数だけが発行できる。`doc` の権限を `other` に使うと型エラー
 - **篩型（refinement types）**：`where 0 <= i, i < v.len()` のような線形の事前条件・事後条件（`result`）と、`type Port = Int where 0 < self && self < 65536;` のような述語付きの型の別名。`v[i]` は範囲内であることを証明できなければ型エラーで、反例（`i = 0, v.len() = 0`）を示す。証明は自作の QF\_LIA ソルバ（Omega test、Kekkai で実装）。ゼロ除算・オーバーフローは lint（`kekkai.toml` の `[refine]` でエラーにできる）
 - **冪等なハンドラ**：`#[handler(idempotent)]` のハンドラと、そこから呼ばれる関数は、冪等でない操作（`net.post`、`tx.outbox`、ファイルへの書き込み、乱数）を使えない
 - **可変性の追跡**：Rust と同じく、書き換えには `let mut`・`mut` 引数・`&mut T`・`&mut self` が要る。`&T`・`&self` からたどった値は深く読み取り専用で、保存・所有型での返却もできない（`clone()` で複製する）。足りない `mut` は `kek fix` が足す（[docs/mutability.md](docs/mutability.md)）
@@ -37,7 +38,7 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | コマンド | 内容 |
 | --- | --- |
 | `kek check [-v] [-json] <file>` | 型検査（capability、エフェクト、トランザクション、篩型）。篩型の違反は反例付きのエラー、ゼロ除算・オーバーフローは警告。`-v` は証明に使った事実と証明できた条件も表示 |
-| `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧。冪等か（`idempotent`）と個人情報の格下げ（`declassify`）も表示 |
+| `kek caps <file>` | 各関数が受け取る capability（＝起こしうる副作用）の一覧。冪等か（`idempotent`）、ラベル付きの値の格下げ（`declassify`）、認可のポリシー（`#[policy]`）と権限（`requires`・`grants`）も表示 |
 | `kek ir [-json] <file>` | 中間表現を表示（`-json` は Lean 参照インタプリタの入力形式） |
 | `kek build [-o dir] <file>` | `#[main]` なら WASI のコマンド、`#[handler]` なら Workers 向けモジュール（WasmGC + `worker.js`）を出力。`module.wasm` はプログラムの定義ハッシュをキーにキャッシュする（コメントや整形だけの変更では再コンパイルしない） |
 | `kek run <file> [args...]` | `#[main]` のプログラムをビルドして wasmtime で実行 |
@@ -122,7 +123,7 @@ test shapes_are_small ... FAILED (pure: hermetic, cacheable; 0.4ms)
 
 ### 保証の台帳（`kek assure`）
 
-コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、冪等性、入力を書き換えないこと（`readonly`）、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`・個人情報の格下げ `pii.declassify`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
+コンパイラが確立している保証（capability の集合、`&Net`・`tx.outbox` の通信先、トランザクションの線形性、冪等性、入力を書き換えないこと（`readonly`）、テストからの到達）と、コード側の前提（`#[allow(similar, ...)]`・`#[rare]`・認可のポリシー `#[policy]`・ラベル付きの値の格下げ `flow.declassify`）を関数ごとに `kekkai.assure.lock`（JSON。git に commit する正本）へ記録します。人間はコードではなく保証の変化だけをレビューします。
 
 ```sh
 ./kek assure plan app       # ロックとの差分（-json が基本の出力、-v で自動承認分も表示）
@@ -138,7 +139,7 @@ Needs review (1):
 Auto-approved (3): strengthen 1, allowed host 2
 ```
 
-ポリシーは `kekkai.toml` の `[net] allowed_hosts`・`[effects] forbid`・`[pii] max_declassify_per_module`／`declassify_requires`・`[auto_approve]`・`[escalate]`・`[module."path"]`（厳しくする方向にだけ上書きできる）・`[assure] extends`（組織の設定を継承）で書きます。詳細は [docs/assure.md](docs/assure.md)。
+ポリシーは `kekkai.toml` の `[net] allowed_hosts`・`[effects] forbid`・`[flow] max_declassify_per_module`／`declassify_requires`・`[auto_approve]`・`[escalate]`・`[module."path"]`（厳しくする方向にだけ上書きできる）・`[assure] extends`（組織の設定を継承）で書きます。詳細は [docs/assure.md](docs/assure.md)。
 ### 類似コードの検出（`kek similar`）
 
 LLM が既存の実装を探さずに似た関数を書き足すのを防ぐためのコマンドです（設計は [docs/design.md](docs/design.md) の「類似コードの検出」、JSON は [docs/tooling.md](docs/tooling.md)）。定義ハッシュ（`compiler/defhash.kek`）の上で、次の 3 種類を報告します。

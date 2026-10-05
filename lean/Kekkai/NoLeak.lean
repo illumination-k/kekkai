@@ -43,9 +43,13 @@ def Val.capIds : Val → List RCap
   | .bool _ => []
   | .int _ => []
   | .arr _ => []
+  | .lab v => v.capIds
+  | .labErr => []
 
 /-- Values never contain capabilities (trivial by construction of `Val`). -/
-theorem Val.capIds_nil (v : Val) : v.capIds = [] := by cases v <;> rfl
+theorem Val.capIds_nil : ∀ v : Val, v.capIds = []
+  | .unit | .bool _ | .int _ | .arr _ | .labErr => rfl
+  | .lab v => Val.capIds_nil v
 
 /-! ## Renaming of provided capabilities -/
 
@@ -101,6 +105,12 @@ theorem indexResult_rename {π : Nat → Nat} {xs : List Int} {k : Int} {σ : St
     (indexResult xs k σ).rename π = indexResult xs k σ := by
   unfold indexResult
   split <;> rfl
+
+theorem lbindResult_rename {π : Nat → Nat} (r : Result) :
+    lbindResult (r.rename π) = (lbindResult r).rename π := by
+  cases r with
+  | done o σ tr => cases o <;> rfl
+  | _ => rfl
 
 set_option linter.unusedSimpArgs false in
 /-- **Equivariance of evaluation.** Renaming the provided capabilities by `π`
@@ -209,6 +219,20 @@ theorem eval_rename (O O' : Oracle) (P : Prog) (π : Nat → Nat)
     | abort => rfl
     | len a => simp only [eval]; split <;> rfl
     | index a i => simp only [eval]; split <;> first | rfl | exact indexResult_rename.symm
+    | wrap e =>
+      simp only [eval]
+      rw [ih]
+      exact Result.bind_rename fun v σ₁ => rfl
+    | lbind e body =>
+      simp only [eval]
+      rw [ih]
+      refine Result.bind_rename fun v σ₁ => ?_
+      cases v with
+      | lab a =>
+        have := ih (a :: env) [] σ₁ body
+        simp only [List.map_nil] at this
+        simp only [this, lbindResult_rename]
+      | _ => rfl
 
 /-- **Theorem 5 (capability non-leakage, semantic form).** Running an entry
 point with provided capabilities `caps` or with renamed capabilities

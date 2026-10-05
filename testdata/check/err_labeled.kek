@@ -1,0 +1,133 @@
+// Labeled data cannot become a String, be compared or be hashed except
+// through a declassification (mask, hash, expose_unchecked).
+
+struct User {
+    name: String,
+    email: Labeled<PII, String>,
+}
+
+fn to_log(log: &Log, p: Labeled<PII, String>) {
+    log.info(p); // ERROR "expected `String`, found `Labeled<PII, String>` (labeled data"
+}
+
+fn concat(p: Labeled<PII, String>) -> String {
+    "x" + p // ERROR "string concatenation: expected `String`, found `Labeled<PII, String>`"
+}
+
+fn concat_left(p: Labeled<PII, String>) -> String {
+    p + "x" // ERROR "string concatenation: expected `String`, found `Labeled<PII, String>`"
+}
+
+fn respond(p: Labeled<PII, String>) -> Response {
+    Response::text(200, p) // ERROR "expected `String`, found `Labeled<PII, String>`"
+}
+
+fn render(p: Labeled<PII, String>) -> String {
+    p.to_string() // ERROR "no method named `to_string` found for `Labeled<PII, String>` (labeled data"
+}
+
+fn store(db: &Db, k: String, p: Labeled<PII, String>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.put(k, p)?; // ERROR "expected `String`, found `Labeled<PII, String>`"
+        tx.commit()
+    })
+}
+
+fn compare_plain(p: Labeled<PII, String>, s: String) -> Bool {
+    p == s // ERROR "cannot compare `Labeled<PII, String>` with `String` (labeled data"
+}
+
+fn compare_plain_left(p: Labeled<PII, String>, s: String) -> Bool {
+    s == p // ERROR "cannot compare `String` with `Labeled<PII, String>` (labeled data"
+}
+
+fn compare_labeled(p: Labeled<PII, String>, q: Labeled<PII, String>) -> Bool {
+    p == q // ERROR "cannot compare `Labeled<PII, String>` with `==` (labeled values are compared inside `zip`"
+}
+
+fn branch(p: Labeled<PII, Int>) -> Int {
+    if p.map(|x| *x > 3) { // ERROR "mismatched types in if condition: expected `Bool`, found `Labeled<PII, Bool>`"
+        1
+    } else {
+        0
+    }
+}
+
+struct Secret {}
+
+fn mix(p: Labeled<PII, Int>, s: Labeled<Secret, Int>) -> Labeled<PII, Int> {
+    p.zip(&s, |a, b| *a + *b) // ERROR "found `Labeled<Secret, Int>` (values labeled `Secret` and `PII` cannot be combined)"
+}
+
+fn ordered(a: Labeled<PII, Int>, b: Labeled<PII, Int>) -> Bool {
+    a < b // ERROR "binary operation `<` cannot be applied to type `Labeled<PII, Int>`"
+}
+
+fn as_int(p: Labeled<PII, Int>) -> Int {
+    p + 1 // ERROR "arithmetic: expected `Int`, found `Labeled<PII, Int>`"
+}
+
+fn user_line(u: User) -> String {
+    u.name + " " + u.email // ERROR "expected `String`, found `Labeled<PII, String>`"
+}
+
+fn hash_key(m: HashMap<Labeled<PII, String>, Int>, p: Labeled<PII, String>) -> Option<Int> {
+    m.get(&p) // ERROR "`Labeled<PII, String>: Hash` is not satisfied" ERROR "`Labeled<PII, String>: Eq` is not satisfied" ERROR "`Labeled<PII, String>: Ord` is not satisfied"
+}
+
+trait Show {
+    fn show(&self) -> String;
+}
+
+fn show_all<T: Show>(v: Vec<T>) -> Vec<String> {
+    v.iter().map(|x| x.show()).collect()
+}
+
+fn generic_leak(v: Vec<Labeled<PII, String>>) -> Vec<String> {
+    show_all(v) // ERROR "`Labeled<PII, String>: Show` is not satisfied"
+}
+
+fn joined(v: Vec<Labeled<PII, String>>) -> String {
+    v.join(",") // ERROR "join"
+}
+
+fn hashed_plain(p: Labeled<PII, Int>) -> Int {
+    let h = DefaultHasher::new();
+    p.hash(&mut h); // ERROR "takes 0 argument(s)"
+    h.finish()
+}
+
+#[derive(Clone)]
+struct Contact {
+    email: Labeled<PII, String>,
+}
+
+#[derive(Hash)] // ERROR "cannot derive `Hash` for `Account`: field `email` holds labeled data (`Labeled`)"
+struct Account {
+    id: Int,
+    email: Labeled<PII, String>,
+}
+
+#[derive(PartialOrd, Default)] // ERROR "cannot derive `PartialOrd` for `Person`" ERROR "cannot derive `Default` for `Person`"
+struct Person {
+    emails: Vec<Labeled<PII, String>>,
+}
+
+#[derive(PartialEq, Ord)] // ERROR "cannot derive `PartialEq` for `Who`" ERROR "cannot derive `Ord` for `Who`: variant `Known` holds labeled data"
+enum Who {
+    Anonymous,
+    Known(Labeled<PII, String>),
+}
+
+#[derive(PartialEq)] // ERROR "cannot derive `PartialEq` for `Pair`: field `email` holds labeled data (`Labeled`), which has no `PartialEq` (only `Clone` can be derived)"
+struct Pair {
+    email: Labeled<PII, String>,
+}
+
+// allowed: computing on labeled values, and the declassifications
+fn allowed(a: Contact, b: Contact, p: Labeled<PII, String>, log: &Log) -> Labeled<PII, Bool> {
+    log.info(p.mask() + " " + p.hash());
+    let raw: String = p.expose_unchecked();
+    let q = PII::label(raw);
+    a.email.zip(&b.email, |x, y| x == y).zip(&q, |eq, r| *eq && r.len() > 0)
+}

@@ -11,7 +11,7 @@ struct DiagDiag {
     end_line: Int,
     mut end_col: Int,
     severity: String, // "error" or "warning"
-    phase: String, // "parse", "type", "mut", "refine" or "lint"
+    phase: String, // "parse", "type", "mut", "flow", "refine" or "lint"
     message: String,
     // refinement diagnostics: the counterexample (source names) and the
     // facts the solver was given
@@ -92,18 +92,27 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
                 mu.insert(ast_pos_string(d.pos) + "\t" + d.msg, true);
             }
         }
+        // and the information-flow errors (phase "flow")
+        let mut fl: HashMap<String, Bool> = HashMap::new();
+        for e in res.mu.flow {
+            fl.insert(ast_pos_string(e.pos) + "\t" + e.msg, true);
+        }
         let mut errs = Vec::new();
         let mut mu_errs = Vec::new();
+        let mut flow_errs = Vec::new();
         for e in res.errs {
             let k = ast_pos_string(e.pos) + "\t" + e.msg;
             if mu.contains_key(k) {
                 mu_errs.push(e);
+            } else if fl.contains_key(k) {
+                flow_errs.push(e);
             } else if !skip.contains_key(k) {
                 errs.push(e);
             }
         }
         diag_add_errors(a, errs, "type");
         diag_add_errors(a, mu_errs, "mut");
+        diag_add_errors(a, flow_errs, "flow");
         diag_add_lints(a);
         for d in res.refine.diags {
             if d.severity == "note" {
@@ -122,7 +131,7 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
                 refine: true,
             });
         }
-        if res.refine.diags.len() > 0 || mu_errs.len() > 0 {
+        if res.refine.diags.len() > 0 || mu_errs.len() > 0 || flow_errs.len() > 0 {
             let sorted = diag_sort(a.diags);
             while a.diags.len() > 0 {
                 a.diags.pop();

@@ -145,7 +145,11 @@ fn ty_is_cap_name(name: String) -> Bool {
 fn ty_str(t: Ty) -> String {
     match t {
         Ty::Prim(n) => n,
-        Ty::Opaque(n) => n,
+        Ty::Opaque(n) => if n.starts_with("@") {
+            ty_path_name(n)
+        } else {
+            n
+        },
         Ty::Struct(s, args) => s.name + ty_args_str(args),
         Ty::Enum(e, args) => e.name + ty_args_str(args),
         Ty::Param(p) => p.name,
@@ -446,6 +450,8 @@ fn ty_write_key(mut b: Vec<String>, t: Ty) {
             b.push(")->");
             ty_write_key(b, r);
         }
+        // the resource of a permission has no run-time representation
+        Ty::Opaque(n) => b.push(if n.starts_with("@") { "@" } else { n }),
         _ => b.push(ty_str(t)),
     }
 }
@@ -459,6 +465,147 @@ fn ty_write_keys(mut b: Vec<String>, ts: Vec<Ty>) {
         ty_write_key(b, e);
         i = i + 1;
     }
+}
+
+// ---- resource paths ----
+//
+// The resource of a permission `Can<A, d>` (docs/authz-flow.md) is a
+// variable, written into the type as Ty::Opaque("@" + identity + ":" +
+// name): the identity of a parameter is "f:<function>#<index>", that of a
+// local variable "<binding id>". Two permissions are for the same
+// resource when the identities match; at a call, the parameters of the
+// callee are replaced by the arguments' paths (ty_subst_paths).
+
+fn ty_is_path(t: Ty) -> Bool {
+    match ty_prune(t) {
+        Ty::Opaque(n) => n.starts_with("@"),
+        _ => false,
+    }
+}
+
+// ty_path_name is the variable name of a path ("@f:edit#0:d" -> "d").
+fn ty_path_name(n: String) -> String {
+    let parts = n.split(":");
+    parts.get(parts.len() - 1).unwrap_or(n)
+}
+
+// ty_param_path is the path of parameter i (named name) of function fname.
+fn ty_param_path(fname: String, i: Int, name: String) -> Ty {
+    Ty::Opaque("@f:" + fname + "#" + i.to_string() + ":" + name)
+}
+
+// ty_path_param is the index of the parameter of fname that the path n
+// names, or -1.
+fn ty_path_param(n: String, fname: String) -> Int {
+    let pre = "@f:" + fname + "#";
+    if !n.starts_with(pre) {
+        return -1;
+    }
+    let rest = n.slice(pre.len(), n.len());
+    match rest.index_of(":") {
+        Some(j) => rest.slice(0, j).parse_int().unwrap_or(-1),
+        None => -1,
+    }
+}
+
+// ty_mentions_path reports whether t contains a resource path.
+fn ty_mentions_path(t0: Ty) -> Bool {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Opaque(n) => n.starts_with("@"),
+        Ty::Result(a, b) => ty_mentions_path(a) || ty_mentions_path(b),
+        Ty::Option(a) => ty_mentions_path(a),
+        Ty::Vec(a) => ty_mentions_path(a),
+        Ty::Tuple(ts) => ty_any_mentions_path(ts),
+        Ty::Struct(_, xs) => ty_any_mentions_path(xs),
+        Ty::Enum(_, xs) => ty_any_mentions_path(xs),
+        Ty::Fn(xs, r) => ty_any_mentions_path(xs) || ty_mentions_path(r),
+        _ => false,
+    }
+}
+
+// ty_mentions_labeled reports whether t contains Labeled<_, _>.
+fn ty_mentions_labeled(t0: Ty) -> Bool {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Struct(st, xs) => {
+            if st.name == "Labeled" {
+                return true;
+            }
+            for x in xs {
+                if ty_mentions_labeled(x) {
+                    return true;
+                }
+            }
+            false
+        }
+        Ty::Enum(_, xs) => {
+            for x in xs {
+                if ty_mentions_labeled(x) {
+                    return true;
+                }
+            }
+            false
+        }
+        Ty::Result(a, b) => ty_mentions_labeled(a) || ty_mentions_labeled(b),
+        Ty::Option(a) => ty_mentions_labeled(a),
+        Ty::Vec(a) => ty_mentions_labeled(a),
+        Ty::Tuple(ts) => {
+            for x in ts {
+                if ty_mentions_labeled(x) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn ty_any_mentions_path(ts: Vec<Ty>) -> Bool {
+    for t in ts {
+        if ty_mentions_path(t) {
+            return true;
+        }
+    }
+    false
+}
+
+// ty_subst_paths replaces the paths of the parameters of fname by paths
+// (one per parameter; ty_invalid() where the argument is not a variable).
+fn ty_subst_paths(t0: Ty, fname: String, paths: Vec<Ty>) -> Ty {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Opaque(n) => {
+            let i = ty_path_param(n, fname);
+            if i < 0 {
+                return t;
+            }
+            paths.get(i).unwrap_or(t)
+        }
+        Ty::Result(a, b) => {
+            let ra = ty_subst_paths(a, fname, paths);
+            Ty::Result(ra, ty_subst_paths(b, fname, paths))
+        }
+        Ty::Option(a) => Ty::Option(ty_subst_paths(a, fname, paths)),
+        Ty::Vec(a) => Ty::Vec(ty_subst_paths(a, fname, paths)),
+        Ty::Tuple(ts) => Ty::Tuple(ty_subst_paths_all(ts, fname, paths)),
+        Ty::Struct(st, xs) => Ty::Struct(st, ty_subst_paths_all(xs, fname, paths)),
+        Ty::Enum(en, xs) => Ty::Enum(en, ty_subst_paths_all(xs, fname, paths)),
+        Ty::Fn(xs, r) => {
+            let sxs = ty_subst_paths_all(xs, fname, paths);
+            Ty::Fn(sxs, ty_subst_paths(r, fname, paths))
+        }
+        _ => t,
+    }
+}
+
+fn ty_subst_paths_all(ts: Vec<Ty>, fname: String, paths: Vec<Ty>) -> Vec<Ty> {
+    let mut out = Vec::new();
+    for e in ts {
+        out.push(ty_subst_paths(e, fname, paths));
+    }
+    out
 }
 
 // ---- unification ----

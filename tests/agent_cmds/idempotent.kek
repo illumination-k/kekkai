@@ -6,7 +6,12 @@ fn profile_key(id: String) -> String {
     "profile:" + id
 }
 
-fn save_profile(db: &Db, log: &Log, id: String, email: Pii<String>) -> Result<(), TxError> {
+fn save_profile(
+    db: &Db,
+    log: &Log,
+    id: String,
+    email: Labeled<PII, String>,
+) -> Result<(), TxError> {
     db.transaction(|tx| {
         tx.put(profile_key(id), email.hash())?;
         tx.delete(profile_key(id) + ":draft")?;
@@ -22,7 +27,7 @@ fn notify(net: &Net, id: String) -> Result<String, NetError> {
 #[handler(idempotent)]
 fn handle(req: Request, db: &Db, log: &Log) -> Response {
     let id = req.segment(0).unwrap_or("");
-    let email = Pii::new(req.query("email").unwrap_or(""));
+    let email = PII::label(req.query("email").unwrap_or(""));
     if req.method() == "PUT" {
         return match save_profile(db, log, id, email) {
             Ok(_) => Response::no_content(),

@@ -1,6 +1,6 @@
 # Kekkai コア計算の Lean 形式化
 
-Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形なトランザクション）と P1 の篩型（事前条件・事後条件と、ゼロ除算・添字の範囲外・オーバーフローの排除）を、小さなコア計算として Lean 4 で形式化し、証明したものです。設計ドキュメント（`docs/design.md`）の「検証戦略」とロードマップ 1〜3 段階、`docs/refinement.md` の「Lean」の項に対応します。
+Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形なトランザクション）、P1 の篩型（事前条件・事後条件と、ゼロ除算・添字の範囲外・オーバーフローの排除）、P2 の情報フロー（`Labeled<L, T>` と非干渉性）を、小さなコア計算として Lean 4 で形式化し、証明したものです。設計ドキュメント（`docs/design.md`）の「検証戦略」とロードマップ 1〜3 段階、`docs/refinement.md` の「Lean」の項に対応します。
 
 - Lean 4.34.1、依存なし（Mathlib なし、core のみ）
 - `sorry` / 独自 `axiom` / `native_decide` なし。主要定理が依存する公理は Lean 標準の `propext`, `Quot.sound`, `Classical.choice` だけ
@@ -21,14 +21,16 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 | `Kekkai/NoLeak.lean` | 定理 5: capability の非漏洩 |
 | `Kekkai/Pred.lean` | 述語の意味（整数環境 `IEnv`）、意味論的な含意 `Entails`、de Bruijn の付け替え、実行時の環境から整数環境への写像 `toI` |
 | `Kekkai/Refine.lean` | 篩型の層: 検証条件の判断 `Ref`、`WTRefFun`/`WTRefProg`、定理 6〜8 |
-| `Kekkai/Examples.lean` | 例: 型付けの導出、インタプリタの実行結果（`rfl`）、型エラーになるプログラム。篩型: 添字の範囲を検査した配列の読み出しとその呼び出し元、`if d != 0` で守った除算、事後条件とオーバーフロー、検証条件が成り立たず拒否されるプログラム |
+| `Kekkai/Flow.lean` | 情報フロー: 低等価 `LowEq`・`OutLow`、定理 9（非干渉性） |
+| `Kekkai/Examples.lean` | 例: 型付けの導出、インタプリタの実行結果（`rfl`）、型エラーになるプログラム。篩型: 添字の範囲を検査した配列の読み出しとその呼び出し元、`if d != 0` で守った除算、事後条件とオーバーフロー、検証条件が成り立たず拒否されるプログラム。情報フロー: `Labeled` の `map` に相当する計算とその実行、非干渉性の適用例、ラベルつきの値での分岐・ログ出力・`lbind` の中からの暗黙のフローが型エラーになること |
 | `Kekkai/IR/*.lean`, `KekkaiRef.lean` | Kekkai IR の実行可能な参照インタプリタ `kekkai-ref`（下記） |
 
 ## コア計算
 
 ### 構文
 
-- 値の型 `Ty`: `unit | bool | int | arr`（`arr` は整数の固定長配列）。**capability 型は値の型に含めない**（第二級）
+- 値の型 `Ty`: `unit | bool | int | arr | lab τ`（`arr` は整数の固定長配列、`lab τ` はラベルつきの値 `Labeled<L, τ>`）。**capability 型は値の型に含めない**（第二級）。`lab _` 以外の型を公開型（`Ty.pub`）と呼ぶ
+- 値 `Val` には、ラベルつきの値 `lab v` と、中で `abort` したラベルつきの計算の結果 `labErr` がある
 - capability 種別 `CapKind`: `log`, `net`（取り消せない副作用）, `db`（抽象的なトランザクショナルストア）, `tx`（線形）
 - 値の変数と capability の変数は、別々の de Bruijn 文脈 `Γ`, `Δ` に置く
 - 式 `Expr`:
@@ -41,6 +43,8 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
   - `commit c`: `Bool` を返す（`true` は成功、`false` は競合などによる失敗）。**どちらの場合もトランザクションは終了する**
   - `rollback c`
   - `abort`: 早期脱出（`?` で `Err` を受けたときに相当）。生きているトランザクションの中では自動で rollback する
+  - `wrap e`: `Labeled::new(e)`。`e : τ` なら `lab τ`
+  - `lbind e body`: `e : lab τ` の中身を値変数 0 に束縛して `body : lab τ'` を計算する（`and_then`）。`map` は `lbind e (wrap …)`、`zip` は `lbind` の入れ子
 - プログラムはトップレベルの一階関数の列。`FunDef` は値引数・capability 引数・返り値の型・本体と、篩型の契約 `pre`・`post`（既定は `tt`）からなる。capability 引数を持たない関数は純粋
 
 `Db` は SQL に限らない抽象的なトランザクショナルストアです（実体は Durable Objects storage、D1、分散 KV、インメモリなどで、ランタイムアダプタが選ぶ）。ストア操作の応答（`get` の値）と commit の成否は `Oracle` が与え、どの定理も任意の oracle について成り立ちます。
@@ -55,6 +59,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
   - `abort` は `live → done` を許す（自動 rollback）
 - `transaction` の本体は `some tx :: mask Δ` で型付けする。`mask` は `Log` 以外（`Net`, `Db`, 外側の `Tx`）を隠すので、トランザクション内では `Net` を直接にも、関数呼び出し経由でも使えない。トランザクションの入れ子も起こらない
 - `len a`・`index a i` は `a : arr`（と `i : int`）を要求し `int` を返す。添字の範囲は型ではなく篩型の層が検査する
+- **ラベルつきの値**: `ite`・`bin`・`len`・`index` は公開型（`bool`, `int`, `arr`）を要求するので、`lab τ` の値では分岐も計算もできない。`log` のメッセージ、`fetch` の引数、`store` の引数は公開型でなければならない（ラベルつきの値は出力に渡せない）。`lbind` の本体は**空の capability 文脈** `[]` と状態 `none` で型付けする。したがって本体は capability を一切使えず（capability 引数を持つ関数も呼べない）、トランザクションも持たない純粋な計算になる。ラベルつきの計算の「pc」はラベルそのもので、その中の分岐は外から観測できない
 - 関数が well-typed であるとは `HasType P fd.params (fd.caps.map some) .none fd.body fd.ret .none` が成り立つこと
 
 ### 意味論 `eval O P fuel env ρ σ e : Result`
@@ -66,6 +71,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
   - 失敗した commit、明示的な rollback、`abort` による自動 rollback は、どれも `txRollback t` になる
 - インタプリタは防御的に作ってある。閉じたトランザクションへの操作や、`tx` を消費せずに本体が正常終了することは `stuck` になる
 - `runFun O P n f vs caps` はエントリ関数を `caps.map .res` と初期状態で実行する
+- `lbind e body` は `e` の値が `lab a` なら、`body` を `a :: env` と**空の capability 環境** `[]` で評価する。`body` の中の `abort`（呼び出した関数の中のものも含む）は `lbind` の外に出ず、結果は `labErr` になる（`lbindResult`）。`e` の値が `labErr` なら `body` を実行せず `labErr` を返す
 
 ### 篩型の層 `Ref P Φ e Ψ`（`Kekkai/Refine.lean`）
 
@@ -73,6 +79,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 - 意味は整数環境 `IEnv = Atom → Int` で与える。**`Entails Φ p` は意味論的な含意**（`Φ` をすべて満たすどの整数環境でも `p` が成り立つ）。証明はソルバのコードを一切信用せず、「ソルバが `smt_prove(Φ, p)` に `Valid` と答えたなら `Entails Φ p`」だけが信頼する仮定になる（ソルバの正しさは公理扱い、`docs/design.md`）
 - `Ref P Φ e Ψ`: 事実 `Φ`（`e` の文脈の上の述語）のもとで `e` の検証条件がすべて成り立ち、`e` が値 `r` を返したら `Ψ`（`r :: 文脈` の上の述語。番号 0 が結果）が成り立つ。途中の結果についての事実は含意で消去する（`conseq`、`ite`・`bin` の前提）ので、事実はいつも現在の文脈の述語になる。変数の束縛は de Bruijn 番号のずらし（`Pred.shift`, `Pred.up1`）で扱う
 - 関数の契約 `WTRefFun P fd`: `pre` は引数だけ、`post` は結果と引数だけに言及し（`Pred.wf`）、`Ref P [fd.pre] fd.body fd.post`。`WTRefProg P` はすべての関数がそうであること
+- `wrap`・`lbind` の結果については何も分からない（`.tt`）。`lbind` の本体の検証条件は、外側の事実（`Φ.shift`）だけのもとで、中身 `x` のどんな値についても成り立たなければならない
 - `HasType` とは独立した判断で、型付けの規則は変えていない。両方を仮定すると「`stuck` にも `fault` にもならない」（`refined_safety`）
 
 ## 表面言語との対応
@@ -89,6 +96,14 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 | `f(a + 1, b)` | `let` で A 正規形にしてから `call` |
 | `fn f(v: Vec<Int>, i: Int) -> Int where 0 <= i, i < v.len(), lo <= result` | `FunDef`（`pre`, `post`。`result` は `post` の番号 0） |
 | `v[i]`, `v.len()` | `index a i`, `len a`（配列は不変・固定長の `Val.arr`） |
+| `Labeled<PII, T>` | `lab τ`（ラベルは 1 つの秘密レベルにまとめる） |
+| `Labeled::new(x)`, `PII::label(x)` | `wrap e` |
+| `l.and_then(\|x\| ...)` | `lbind l body`（本体は空の capability 文脈で純粋） |
+| `l.map(\|x\| e)` | `lbind l (wrap e)` |
+| `l.zip(&m, \|x, y\| e)` | `lbind l (lbind m↑ (wrap e))`（`m↑` は 1 つずらした変数） |
+| `Labeled` は表示・比較・ハッシュできず、出力に渡せない | `ite`・`bin` などは公開型を要求し、`log`・`fetch`・`store` の引数は公開型 |
+| 閉包の中の `?` | `lbind` の本体の `abort` は外に出ず `labErr` になる |
+| 宣言的な秘匿解除 `mask`・`hash`・`expose_unchecked` | コアに含めない（使うプログラムは定理 9 の保証の外。`kek caps`・`kek assure` が列挙する） |
 
 ## 定理一覧
 
@@ -103,8 +118,17 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 | 6 | 篩型の安全性 | `Kekkai.refinement_safety`（コア補題 `Kekkai.eval_refine`）、個別に `Kekkai.no_div_by_zero`, `Kekkai.index_safe`, `Kekkai.no_overflow` | すべての関数が契約を満たす（`WTRefProg P`）なら、事前条件を満たす引数でどの関数を実行しても、どんな fuel・oracle・capability でも `fault`（ゼロ除算・添字の範囲外・オーバーフロー）にならない。型付けは仮定しない |
 | 7 | 事後条件 | `Kekkai.postcondition_holds` | 同じ仮定のもとで、返った値は事後条件を満たす（`fd.post.holds (toI (v :: vs))`） |
 | 8 | 型安全性 + 篩型の安全性 | `Kekkai.refined_safety` | `WTProg P` と `WTRefProg P` のもとで、型の合う引数が事前条件を満たせば、`stuck` にも `fault` にもならず、返った値は宣言された型を持ち事後条件を満たす |
+| 9 | 非干渉性（停止性を区別しない） | `Kekkai.noninterference`（コア補題 `Kekkai.eval_ni`）、系 `Kekkai.noninterference_public` | well-typed なプログラムのエントリ関数を、同じ oracle・同じ capability で、ラベルつきでない引数がすべて一致する（`PubAgree`）型の合う 2 組の引数で実行する。**両方が終了したなら**（fuel はそれぞれ任意）、トレース（ログ・fetch・トランザクションとストア操作・commit/rollback のすべて）と最終状態は等しく、結果は低等価（`OutLow`: どちらも値を返し、その値はラベルつきの部分を除いて等しいか、どちらも `abort`）。返り値の型が公開型なら結果そのものが等しい（`noninterference_public`） |
 
-定理 1〜5 の主張は P1 の拡張の前と同じです（`type_safety` の「`stuck` にならない」は、`fault` とは区別されるのでそのまま成り立ちます）。
+定理 1〜5 の主張は P1 の拡張の前と同じです（`type_safety` の「`stuck` にならない」は、`fault` とは区別されるのでそのまま成り立ちます）。P2 の拡張では `log`・`fetch`・`store` の型付け規則に「引数が公開型」という前提を足し、`wrap`・`lbind` の規則を足しました。定理 1〜8 の主張は変わらず、証明に新しい構文の場合を足しています。
+
+### 非干渉性（定理 9）
+
+- 低等価 `LowEq v w`: `v = w`、または `v` も `w` もラベルつき（`lab _` か `labErr`）。観測者はラベルつきの値の中身以外をすべて見られる
+- 鍵になる補題（`labRes_body`）: `lbind` の本体は空の capability 文脈で型付けされるので、イベントを出さず状態も変えず（`eval_no_caps`）、結果は必ずラベルつき（`abort` しても `labErr`）。したがって秘密の値で本体の中の分岐や計算が変わっても、外からは区別できない
+- `eval_ni` は fuel について帰納法で、2 つの実行が同じ分岐をたどることを示す。分岐（`ite`）や算術・添字・出力に使われる値は公開型なので、低等価なら等しい
+- **停止性を区別しない**（TINI）: どちらかの実行が `timeout` や `fault` になる場合は主張の外。ラベルつきの計算の中のループや `fault`（ゼロ除算など）は秘密に依存しうる観測可能な停止のチャネルで、この定式化では除外する。`fault` は篩型の層（定理 6）を通ったプログラムでは起こらない
+- 秘匿解除（`mask`, `hash`, `expose_unchecked`）はコアに含めない。保証されるのは「ラベルに従って流れたこと」で、秘匿解除を使うプログラムはこの定理の外にある
 
 定理 3・4 は、トレースモニタ `TxSafe`（`Kekkai/Monitor.lean`）を経由して証明しています。モニタは「開いているトランザクションは高々 1 つ」「`txBegin` の ID は未使用のもの」「`txOp`, `txCommit`, `txRollback` は開いているトランザクションに対してだけ」「`fetch` はトランザクションが開いていないときだけ」「最後には何も開いていない」を検査します。`run_txsafe` は、well-typed なプログラムのあらゆる実行（値で終わっても `abort` で終わっても）のトレースがモニタに受理されることを示します。
 
@@ -132,7 +156,8 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 - 関数は一階で、呼び出しは A 正規形
 - 同時に開けるトランザクションは 1 つ（`Db` もマスクされるので入れ子にできない）。`tx` を関数に渡すのは借用だけで、消費は所有する `transaction` ブロックの中でしか起こらない
 - `Outbox` はストア操作の一種（`outbox`）として記録するだけで、commit 後に実際に送る処理はモデル化していない
-- `Clock`, `Random`, 認可、PII、並行性は扱わない
+- `Clock`, `Random`, 認可、並行性は扱わない
+- 情報フローのラベルは 1 つの秘密レベルにまとめた（ラベルごとの格子はない。異なるラベルを `zip` できないことは、ラベルが 1 つなので現れない）。ラベルつきの値は `Ty.lab` だけで、構造体のフィールドなどに埋め込まれたものはない（コアに集成体がない）。`lbind` の本体は外側の値（ラベルつきのものも含む）を参照できるが、capability は参照できない。表面言語の閉包が可変な状態や関数値を捕捉できないことは、コアでは閉包がない（本体は式）ことで表している
 - capability の種類による権限（たとえば `fetch` は `Net` 種別の capability でしか起こらない）は、型安全性（`stuck` にならない）と型付け規則から従う。トレースに対する明示的な定理として述べているのは「渡された capability だけを使う」（定理 2）まで
 - 篩型の述語の言語は一般の `*` を含む（意味論上は問題ないが、ソルバが決めるのは線形の場合だけ。非線形の検証条件はソルバが `Unknown` を返し、コンパイラはそれを拒否する）。`/`・`%` の結果についての事実（`opFact`）は出さない
 - 整数のオーバーフローは「数学的な整数 + 範囲外で `fault`」としてモデル化した。入力の値そのものが 64bit に収まることは仮定していない（`Val.int` は任意の整数）。`%` はオーバーフローを検査しない（64bit の入力では起こらない）

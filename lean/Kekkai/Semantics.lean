@@ -147,6 +147,12 @@ def storeResult (O : Oracle) : StoreOp → Nat → List Val → Val
   | .get, t, vs => .int (O.get t vs)
   | _, _, _ => .unit
 
+/-- The result of an `lbind` body: an `abort` inside is caught and becomes the
+poisoned labeled value `labErr`; everything else is passed through. -/
+def lbindResult : Result → Result
+  | .done .err σ tr => .done (.ok .labErr) σ tr
+  | r => r
+
 /-- The interpreter. `eval O P n env ρ σ e` evaluates `e` with fuel `n`, value
 environment `env` (de Bruijn) and capability environment `ρ` (de Bruijn). -/
 def eval (O : Oracle) (P : Prog) : Nat → List Val → List RCap → St → Expr → Result
@@ -222,6 +228,13 @@ def eval (O : Oracle) (P : Prog) : Nat → List Val → List RCap → St → Exp
       match env[a]?, env[i]? with
       | some (.arr xs), some (.int k) => indexResult xs k σ
       | _, _ => .stuck
+    | .wrap e => (eval O P n env ρ σ e).bind fun v σ₁ => .done (.ok (.lab v)) σ₁ []
+    | .lbind e body =>
+      (eval O P n env ρ σ e).bind fun v σ₁ =>
+        match v with
+        | .lab a => lbindResult (eval O P n (a :: env) [] σ₁ body)
+        | .labErr => .done (.ok .labErr) σ₁ []
+        | _ => .stuck
 
 /-- Initial state for running an entry point. -/
 def St.init : St := ⟨0, false⟩
@@ -251,6 +264,18 @@ theorem indexResult_done {xs : List Int} {k : Int} {σ : St} {o σ' tr}
   split at h
   · cases h; exact ⟨rfl, rfl, _, rfl⟩
   · cases h
+
+theorem lbindResult_done {r : Result} {o σ tr} (h : lbindResult r = .done o σ tr) :
+    ∃ o', r = .done o' σ tr := by
+  cases r with
+  | done o' σ' tr' => cases o' <;> simp only [lbindResult] at h <;> cases h <;> exact ⟨_, rfl⟩
+  | _ => cases h
+
+theorem lbindResult_ok {r : Result} {o σ tr} (h : lbindResult r = .done o σ tr) :
+    ∃ v, o = .ok v := by
+  cases r with
+  | done o' σ' tr' => cases o' <;> simp only [lbindResult] at h <;> cases h <;> exact ⟨_, rfl⟩
+  | _ => cases h
 
 theorem Result.prepend_ne_stuck {tr : List Event} {r : Result} (h : r ≠ .stuck) :
     r.prepend tr ≠ .stuck := by

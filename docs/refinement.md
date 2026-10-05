@@ -164,6 +164,8 @@ goal: i < len(v)             // 省略すると false
 
 ## 個人情報の最小版（`Pii<T>`）（実装済み）
 
+**P2 で `Labeled<PII, T>` に統合した**（[authz-flow.md](authz-flow.md)）。`==` はなくなり（`zip` の中で比べる）、`#[derive]` は `Clone` だけ、前提の名前は `flow.declassify`、設定の節は `[flow]`（`[pii]` も読む）になった。以下は P1 の記録。
+
 - core の型 `Pii<T>`：`Pii::new(x)` で包む。`to_string`・連結・`==` 以外の比較・`Hash` はない（`String` として取り出せない）。
 - 格下げ：`mask() -> String`（`String` の場合、先頭 1 文字と `@` 以降を残す）、`hash() -> String`（固定のハッシュ）、`expose_unchecked() -> T`（脱出口）。格下げの呼び出しは `kek caps` に一覧され、`kek assure` に前提（`pii.declassify`）として記録され、`[pii] max_declassify_per_module` で上限を設けられる。
 - `#[derive]` は `Pii` のフィールドを持つ struct に `PartialEq`・`Eq` 以外を導出しない。

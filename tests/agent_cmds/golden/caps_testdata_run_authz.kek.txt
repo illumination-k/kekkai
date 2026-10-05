@@ -1,0 +1,11 @@
+can_edit #[policy]: pure
+    grants: Edit(d)
+rename: pure
+    requires: Edit(d)
+try_rename: pure
+main: log: &Log
+    direct effects: log.info
+    idempotent: true
+Doc::retitle: pure
+    requires: Edit(self)
+--- exit 0

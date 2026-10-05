@@ -31,6 +31,10 @@ least one error. Warnings do not change the exit status.
     (`&T`, `&self`), a borrowed value kept in an owning place or returned
     as an owned type. They are checked only when there are no type errors;
     `kek fix` adds the missing `mut` for many of them.
+  - `flow`: information-flow errors (docs/authz-flow.md): a closure given
+    to `Labeled`'s `map`, `zip` or `and_then` that captures mutable state
+    or a function value, or a function value passed there. Checked with
+    the mutability errors.
   - `refine`: refinement errors (docs/refinement.md): an index `v[i]` not
     proved in bounds, a precondition not proved at a call, a postcondition
     or a refined alias (`type Port = Int where ...`) not proved. They are
@@ -80,7 +84,8 @@ Prints one entry per function, in declaration order. The file must type-check.
    "caps": [{"name": "db", "type": "&Db", "used": true}, {"name": "log", "type": "&Log", "used": true}],
    "direct_effects": ["db.transaction", "log.info", "tx.commit", "..."],
    "unused_caps": [], "calls": ["balance_key", "read_balance"],
-   "declassify": [{"call": "mask", "line": 31, "col": 40}]}
+   "declassify": [{"call": "mask", "line": 31, "col": 40}],
+   "policy": false, "requires": [], "grants": []}
 ]}
 ```
 
@@ -92,7 +97,10 @@ asynchronous builtin, so it is compiled to a resumable state machine.
 through the call graph is idempotent (true for pure functions; a
 `#[handler(idempotent)]` must have it, see [language.md](language.md)).
 `declassify` lists the calls of `mask`, `hash` and `expose_unchecked` on
-personal data (`Pii`) in the function's body, at the method name.
+labeled data (`Labeled`) in the function's body, at the method name.
+`policy` marks a `#[policy]` function; `requires` and `grants` list the
+permissions (`Can<A, r>`, as `"Edit(d)"`) it takes as parameters and
+returns (docs/authz-flow.md).
 `readonly` means the function mutates none of its inputs: no parameter is
 `mut`, `&mut`, `mut self` or `&mut self`, and the body passes the
 mutability rules with its owned parameters taken as shared (it neither
@@ -134,6 +142,9 @@ format is a TOML subset: `[section]` / `[section."sub"]` headers and
 ## `kek fix [-w] <paths>`
 
 Adds the `mut` that the mutability rules (docs/mutability.md) ask for.
+First, in programs (not the core library or the prelude), the personal
+data of P1 is moved to labeled values (docs/authz-flow.md): `Pii<T>` →
+`Labeled<PII, T>`, `Pii::new(x)` → `PII::label(x)`.
 Each path is one program, like `kek check` (a file, or a directory of
 `.kek` files; `lib/core` and `lib/prelude` are checked as the core library
 and the prelude). The program is checked, and for every diagnostic of
@@ -330,11 +341,14 @@ PUT, or a `file://` directory). See [parallel-build.md](parallel-build.md).
 
 The guarantee ledger (design and policy reference: [assure.md](assure.md)).
 For every function it records the guarantees the compiler establishes
-(`effects`, `net.hosts`, `tx.linear`, `idempotent`, `tested`, and the
+(`effects`, `net.hosts`, `tx.linear`, `idempotent`, `readonly`, `tested`,
+`authz.requires.<A>(<r>)` for each permission taken, `flow.noninterference`
+for functions that handle labeled data, and the
 refinement proofs `refine.index_safe`, `refine.no_div_zero`,
 `refine.no_overflow` with evidence `smt`) and the
-assumptions written in the code (`#[allow(similar, ...)]`, `#[rare]`, and
-one `pii.declassify` per call of `mask`/`hash`/`expose_unchecked`, with its
+assumptions written in the code (`#[allow(similar, ...)]`, `#[rare]`,
+`#[policy(...)]`, and
+one `flow.declassify` per call of `mask`/`hash`/`expose_unchecked`, with its
 `call` and the reason/owner/expiry of the function's `#[declassify(...)]`)
 in `kekkai.assure.lock`.
 `plan` diffs the lock against the program and applies the policy in
@@ -381,17 +395,17 @@ expired escape hatches. The launcher passes today's date as `-today`
   `file`, `entry`, `async`, `name` (a rename: same definition hash),
   `assumption`, `definition` (added/removed) or `config` (the policy).
 - `from`/`to` are display strings; `added`/`removed` are the items of a
-  set guarantee (or the assumption: its kind, `pii.declassify(mask)` for a
+  set guarantee (or the assumption: its kind, `flow.declassify(mask)` for a
   declassification). The message of a declassification gives its position
-  (`new assumption pii.declassify mask() at 24:46`).
+  (`new assumption flow.declassify mask() at 24:46`).
 - `review` is true when the policy does not auto-approve the change;
   `escalate` is the role it is escalated to (approval then needs the
   metadata of `[assure] require`).
 - `violations[].rule` is `forbid`, `allowed_hosts`, `expires`,
   `declassify_requires` (a declassifying function whose `#[declassify]`
-  lacks a field of `[pii] declassify_requires`; `items` are the missing
+  lacks a field of `[flow] declassify_requires`; `items` are the missing
   fields) or `max_declassify_per_module` (a file with more
-  declassifications than `[pii] max_declassify_per_module`, reported at
+  declassifications than `[flow] max_declassify_per_module`, reported at
   the first one over the limit); violations cannot be approved. `expired[].source` is `code` (an
   attribute) or `lock` (a waiver recorded by `apply`).
 - `ok` is what `check` requires: a lock exists, no changes, no violations,

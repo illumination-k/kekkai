@@ -68,6 +68,9 @@ struct MuDiag {
 struct MuReport {
     ran: Bool,
     diags: Vec<MuDiag>,
+    // errors of the information-flow rules (closures given to Labeled's
+    // map, zip and and_then: mu_flow_closure), phase "flow"
+    flow: Vec<AstError>,
 }
 
 struct MuCx {
@@ -97,6 +100,7 @@ struct MuCx {
     mut seen: HashMap<String, Bool>,
     // readonly mode (mu_readonly): owned parameters are taken as shared
     mut ro: Bool,
+    flow: Vec<AstError>,
 }
 
 // mu_enforce reports whether the rules are errors. It was false while the
@@ -107,7 +111,7 @@ fn mu_enforce() -> Bool {
 }
 
 fn mu_empty_report() -> MuReport {
-    MuReport { ran: false, diags: Vec::new() }
+    MuReport { ran: false, diags: Vec::new(), flow: Vec::new() }
 }
 
 fn mu_max(a: Int, b: Int) -> Int {
@@ -137,7 +141,7 @@ fn mu_program(info: ChkInfo, f: AstFile) -> MuReport {
             mu_func(cx, fun);
         }
     }
-    MuReport { ran: true, diags: cx.diags }
+    MuReport { ran: true, diags: cx.diags, flow: cx.flow }
 }
 
 // mu_readonly tells, for the functions of the program (not of the
@@ -207,6 +211,7 @@ fn mu_new_cx(info: ChkInfo, f: AstFile) -> MuCx {
         lam_binds: HashMap::new(),
         seen: HashMap::new(),
         ro: false,
+        flow: Vec::new(),
     };
     mu_relevance(cx);
     for sd in f.structs {
@@ -1634,6 +1639,7 @@ fn mu_invoke(
     id: Int,
 ) -> MuVal {
     let lib = chk_is_lib(fun);
+    let flow = mu_is_flow_op(fun);
     let mut all = Vec::new();
     match recv {
         Some(r) => all.push(r),
@@ -1666,7 +1672,11 @@ fn mu_invoke(
             AstExpr::Closure(cl) => {
                 let mut pviews = Vec::new();
                 let mut pview = 0;
-                if lib {
+                if flow {
+                    // the contents of a labeled value are read only
+                    pview = 2;
+                    tsrc = "a labeled value";
+                } else if lib {
                     pview = if taint > 0 { 2 } else { 0 };
                 } else {
                     match fun.decl.params.get(i) {
@@ -1685,13 +1695,20 @@ fn mu_invoke(
                     }
                 }
                 let v = mu_closure(cx, cl, pviews, pview, tsrc);
+                if flow && !cx.ro {
+                    mu_flow_closure(cx, cl, name);
+                }
                 vals.set(i, v);
                 if v.view > taint {
                     taint = v.view;
                     tsrc = v.src;
                 }
             }
-            _ => {}
+            _ => {
+                if flow && !cx.ro && i > 0 {
+                    mu_flow_fn_arg(cx, a, name);
+                }
+            }
         }
     }
     let callee = "`" + name + "`";
@@ -1818,7 +1835,7 @@ fn mu_invoke(
     }
     // a function value (not a closure literal) passed where it receives
     // borrowed values must borrow them
-    if lib && taint > 0 && !cx.lib {
+    if lib && (taint > 0 || flow) && !cx.lib {
         for a in all {
             match a {
                 AstExpr::Closure(_) => {}
@@ -1988,4 +2005,148 @@ fn mu_fn_value_shared(cx: MuCx, a: AstExpr, callee: String) {
 
 fn mu_is_clone(cx: MuCx, fun: ChkFunc) -> Bool {
     fun.name == "Clone::clone" || cx.clones.contains_key(fun.name)
+}
+
+// ---- information flow (docs/authz-flow.md) ----
+
+// mu_is_flow_op reports whether fun is a method of the core Labeled that
+// runs a closure on the contents of a labeled value.
+fn mu_is_flow_op(fun: ChkFunc) -> Bool {
+    (fun.name == "Labeled::map" || fun.name == "Labeled::zip" || fun.name == "Labeled::and_then")
+        && chk_is_core(fun.decl.pos)
+}
+
+fn mu_flow_error(mut cx: MuCx, pos: AstPos, msg: String) {
+    let k = ast_pos_string(pos) + "\t" + msg;
+    if cx.seen.contains_key(k) {
+        return;
+    }
+    cx.seen.insert(k, true);
+    cx.flow.push(AstError { pos: pos, msg: msg });
+}
+
+// mu_flow_closure checks a closure given to Labeled's map, zip or
+// and_then: it runs with the label as its "program counter", so its only
+// effect must be its (labeled) result. It takes the contents as shared
+// values (mu_invoke), cannot capture capabilities (closures never can)
+// and must not capture state it could write the contents into: a value
+// with mutable state that it may mutate (one not borrowed as shared) or
+// move, or a function value (which may write to what it captured).
+fn mu_flow_closure(cx: MuCx, e: AstClosure, op: String) {
+    match cx.info.lambdas.get(e.id) {
+        Some(li) => {
+            for cb in li.captures {
+                let view = match cx.binds.get(cb.id) {
+                    Some(b) => b.view,
+                    None => 0,
+                };
+                let mut why = "";
+                let mut seen: HashMap<String, Bool> = HashMap::new();
+                if mu_flow_has_fn(cx, cb.ty, seen) {
+                    why = "it holds a function value, which may write to the state it captured (call it outside the closure)";
+                } else if mu_rel(cx, cb.ty) && view != 2 {
+                    why = "it has mutable state that the closure could write the labeled value to (take it as `&"
+                        + ty_str(cb.ty)
+                        + "`)";
+                }
+                if why != "" {
+                    mu_flow_error(
+                        cx,
+                        e.pos,
+                        "the closure given to `"
+                            + op
+                            + "` cannot capture `"
+                            + cb.name
+                            + ": "
+                            + ty_str(cb.ty)
+                            + "`: "
+                            + why,
+                    );
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+// mu_flow_fn_arg checks a function given to Labeled's map, zip or
+// and_then that is not a closure expression: it must be a named function
+// (which captures nothing), not a function value that may have captured
+// mutable state.
+fn mu_flow_fn_arg(cx: MuCx, a: AstExpr, op: String) {
+    match ty_prune(mu_type(cx, a)) {
+        Ty::Fn(_, _) => {}
+        _ => {
+            return;
+        }
+    }
+    match a {
+        AstExpr::Ident(id) => match cx.info.calls.get(id.id) {
+            Some(ci) => {
+                if ci.kind == "fnitem" {
+                    return;
+                }
+            }
+            None => {}
+        },
+        _ => {}
+    }
+    mu_flow_error(
+        cx,
+        ast_expr_pos(a),
+        "`"
+            + op
+            + "` takes a closure expression or a named function here: a function value may write the labeled value to state it captured",
+    );
+}
+
+// mu_flow_has_fn reports whether values of type t can hold a function
+// value (a closure), or are generic (could be one).
+fn mu_flow_has_fn(cx: MuCx, t0: Ty, mut seen: HashMap<String, Bool>) -> Bool {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Fn(_, _) => true,
+        Ty::Param(_) => true,
+        Ty::Assoc(_, _, _) => true,
+        Ty::Option(x) => mu_flow_has_fn(cx, x, seen),
+        Ty::Vec(x) => mu_flow_has_fn(cx, x, seen),
+        Ty::Result(a, b) => mu_flow_has_fn(cx, a, seen) || mu_flow_has_fn(cx, b, seen),
+        Ty::Tuple(ts) => {
+            for x in ts {
+                if mu_flow_has_fn(cx, x, seen) {
+                    return true;
+                }
+            }
+            false
+        }
+        Ty::Struct(st, args) => {
+            let k = ty_key(t);
+            if seen.contains_key(k) {
+                return false;
+            }
+            seen.insert(k, true);
+            for x in ty_struct_fields(st, args) {
+                if mu_flow_has_fn(cx, x, seen) {
+                    return true;
+                }
+            }
+            false
+        }
+        Ty::Enum(en, args) => {
+            let k = ty_key(t);
+            if seen.contains_key(k) {
+                return false;
+            }
+            seen.insert(k, true);
+            for v in en.variants {
+                for x in ty_variant_fields(en, args, v) {
+                    if mu_flow_has_fn(cx, x, seen) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }

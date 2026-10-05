@@ -25,7 +25,16 @@ inductive Ty where
   /-- arrays of integers; the length is fixed once the array is built, and the
   refinement layer reasons about it through the atom `len i` -/
   | arr
+  /-- `Labeled<L, τ>`: an opaque labeled value (information-flow control, P2).
+  All labels are collapsed into a single secret level. Its contents can only be
+  computed on inside `lbind`, whose body is pure. -/
+  | lab (τ : Ty)
   deriving DecidableEq, Repr
+
+/-- Public types: values of these types are observable. Only `lab _` is not. -/
+def Ty.pub : Ty → Bool
+  | .lab _ => false
+  | _ => true
 
 /-- Capability kinds.
 * `log` — revocable / harmless effect (logging).
@@ -47,7 +56,19 @@ inductive Val where
   | int (i : Int)
   /-- an array of integers (immutable, fixed length) -/
   | arr (xs : List Int)
+  /-- a labeled value `Labeled::new(v)` -/
+  | lab (v : Val)
+  /-- a labeled value whose computation aborted (an `abort` inside an `lbind`
+  body is local: it cannot escape the labeled computation, it poisons its
+  result instead) -/
+  | labErr
   deriving DecidableEq, Repr
+
+/-- Is the value a labeled one? -/
+def Val.isLab : Val → Bool
+  | .lab _ => true
+  | .labErr => true
+  | _ => false
 
 /-- Operations on an open transaction of the abstract transactional store
 (the store may be Durable Objects storage, D1, a distributed KV, in-memory, …;
@@ -158,6 +179,16 @@ inductive Expr where
   /-- `a[i]` : `Int` for an array variable `a` and an integer variable `i`;
   faults with `outOfBounds` unless `0 <= i < a.len()` -/
   | index (a i : Nat)
+  /-- `Labeled::new(e)` : `lab τ` for `e : τ` -/
+  | wrap (e : Expr)
+  /-- `l.and_then(|x| body)` : `lab τ'` for `l : lab τ`. `body` lives under one
+  more value binder (`x : τ`, the unwrapped contents) and must return `lab τ'`.
+  It is checked with an **empty capability context** and owns no transaction:
+  it is pure (no events, no change of state) and is evaluated with no runtime
+  capabilities at all. An `abort` in `body` (or in a function it calls) does not
+  escape: the result is `Val.labErr`. `l.map(f)` is `lbind l (wrap …)`,
+  `l.zip(m, f)` is `lbind l (lbind m↑ (wrap …))`. -/
+  | lbind (e body : Expr)
   deriving Repr
 
 /-- A top-level function: value parameters, capability parameters, return type

@@ -2,6 +2,7 @@ import Kekkai.Typing
 import Kekkai.Semantics
 import Kekkai.Monitor
 import Kekkai.Safety
+import Kekkai.Effects
 
 /-!
 # Theorems 3 and 4: linear transactions, no irrevocable effects inside them
@@ -290,6 +291,19 @@ theorem eval_txsafe (O : Oracle) {P : Prog} (hP : WTProg P) :
       simp only [eval]
       split
       · exact TxPost.of_noEvents hR fun _ _ _ h => indexResult_done h
+      · trivial
+    | wrap he =>
+      simp only [eval]
+      exact TxPost.bind (ih he hR) he.none_pres' fun _ _ _ _ _ _ hR₁ _ => TxPost.nil hR₁
+    | lbind he _ =>
+      simp only [eval]
+      refine TxPost.bind (ih he hR) he.none_pres' fun v σ₁ _ _ _ _ hR₁ _ => ?_
+      split
+      · refine TxPost.of_noEvents hR₁ fun out σ' tr h => ?_
+        obtain ⟨_, h'⟩ := lbindResult_done h
+        obtain ⟨rfl, rfl⟩ := eval_no_caps O P _ _ _ _ h'
+        exact ⟨rfl, rfl, lbindResult_ok h⟩
+      · exact TxPost.nil hR₁
       · trivial
 
 /-- **Transactional discipline of whole runs.** Running a well-typed entry

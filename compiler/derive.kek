@@ -92,12 +92,12 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
     }
 }
 
-// Personal data: Pii (lib/core/pii.kek) implements only PartialEq, Eq and
-// Clone, so only these can be derived for a type that holds one (a derived Hash,
-// order or default would need the same of Pii).
+// Labeled data: Labeled (lib/core/labeled.kek) implements only Clone, so
+// only Clone can be derived for a type that holds one (a derived equality,
+// Hash, order or default would need the same of Labeled, and would leak it).
 
 fn derive_pii_ok(tr: String) -> Bool {
-    tr == "PartialEq" || tr == "Eq" || tr == "Clone"
+    tr == "Clone"
 }
 
 fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstError {
@@ -109,9 +109,9 @@ fn derive_pii_error(pos: AstPos, tr: String, name: String, what: String) -> AstE
             + name
             + "`: "
             + what
-            + " holds personal data (`Pii`), which has no `"
+            + " holds labeled data (`Labeled`), which has no `"
             + tr
-            + "` (only `PartialEq`, `Eq` and `Clone` can be derived)",
+            + "` (only `Clone` can be derived)",
     }
 }
 
@@ -143,10 +143,11 @@ fn derive_mentions(t: AstType, n: String) -> Bool {
     }
 }
 
-// derive_pii_struct is the first field of sd that holds a Pii ("" if none).
+// derive_pii_struct is the first field of sd that holds a Labeled ("" if
+// none).
 fn derive_pii_struct(sd: AstStructDecl) -> String {
     for f in sd.fields {
-        if derive_mentions(f.ty, "Pii") {
+        if derive_mentions(f.ty, "Labeled") {
             return f.name;
         }
     }
@@ -156,7 +157,7 @@ fn derive_pii_struct(sd: AstStructDecl) -> String {
 fn derive_pii_enum(ed: AstEnumDecl) -> String {
     for v in ed.variants {
         for t in v.fields {
-            if derive_mentions(t, "Pii") {
+            if derive_mentions(t, "Labeled") {
                 return v.name;
             }
         }

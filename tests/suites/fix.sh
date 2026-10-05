@@ -110,4 +110,4 @@ if [ "${1:-}" = --case ]; then
 	one "$2"
 	exit 0
 fi
-run_parallel "$0" basic chain left check usage
+run_parallel "$0" basic chain left pii check usage

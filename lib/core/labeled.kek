@@ -1,0 +1,137 @@
+// Information flow (docs/authz-flow.md): a value labeled L, such as
+// personal data (`Labeled<PII, String>`), cannot reach an output that
+// takes plain values: a log, a response, the store, the network, an error
+// message.
+//
+// The field is private to the core library: identifiers starting with
+// `__` are reserved for the core library and the runtime prelude, so a
+// program can neither read `__value` nor build `Labeled { ... }`. Labeled
+// implements no trait that renders, compares, orders or hashes it, so it
+// cannot reach an output through `+`, `to_string`, `==`, a capability
+// argument or a generic function.
+//
+// Computing on the contents happens only inside the closures given to map,
+// zip and and_then, whose results are labeled again: a branch on a labeled
+// value can only be taken there (the "program counter" carries the label).
+// The type checker makes these closures unable to leak by side effects:
+// they take the contents as shared (read-only) values and capture no
+// mutable state and no function values (closures cannot capture
+// capabilities anyway). So a program that does not declassify satisfies
+// non-interference: its plain outputs do not depend on labeled inputs
+// (lean/Kekkai/Flow.lean).
+//
+// The only ways out are the declassifications below, which `kek caps`
+// lists and `kek assure` records (flow.declassify):
+//
+//   p.mask()              Labeled<L, String> -> String, for display
+//   p.hash()              a fixed (unseeded) hash as 16 hex digits
+//   p.expose_unchecked()  the value itself (the escape hatch)
+
+// PII labels personal data.
+struct PII {}
+
+impl PII {
+    // label labels x as personal data.
+    fn label<T>(x: T) -> Labeled<PII, T> {
+        Labeled { __value: x }
+    }
+}
+
+struct Labeled<L, T> {
+    __value: T,
+}
+
+impl<L, T> Labeled<L, T> {
+    // new labels x (the label comes from the expected type:
+    // `let e: Labeled<PII, String> = Labeled::new(s)`).
+    fn new(x: T) -> Labeled<L, T> {
+        Labeled { __value: x }
+    }
+
+    // map computes on the contents; the result keeps the label.
+    fn map<U>(&self, f: fn(&T) -> U) -> Labeled<L, U> {
+        Labeled { __value: f(&self.__value) }
+    }
+
+    // zip combines two values of the same label.
+    fn zip<U, V>(&self, other: &Labeled<L, U>, f: fn(&T, &U) -> V) -> Labeled<L, V> {
+        Labeled { __value: f(&self.__value, &other.__value) }
+    }
+
+    // and_then computes a labeled value from the contents.
+    fn and_then<U>(&self, f: fn(&T) -> Labeled<L, U>) -> Labeled<L, U> {
+        f(&self.__value)
+    }
+
+    // expose_unchecked returns the value: a declassification.
+    fn expose_unchecked(&self) -> T {
+        self.__value
+    }
+}
+
+impl<L, T: Hash> Labeled<L, T> {
+    // hash is the default hasher's (fixed, unseeded) hash of the value, as
+    // 16 lowercase hex digits: a declassification that keeps equality (to
+    // join or count records) but not the value.
+    fn hash(&self) -> String {
+        let mut h = DefaultHasher::new();
+        self.__value.hash(&mut h);
+        __labeled_hex(h.finish())
+    }
+}
+
+impl<L> Labeled<L, String> {
+    // mask keeps the first character and everything from the last `@` on
+    // (the domain of an e-mail address) and replaces every other
+    // character (code point) by `*`: "alice@example.com" ->
+    // "a****@example.com", "bob" -> "b**". When the part before the `@` is
+    // a single character it is masked too ("a@x.com" -> "*@x.com", "x" ->
+    // "*"), and "" stays "".
+    fn mask(&self) -> String {
+        let s = self.__value;
+        if s.len() == 0 {
+            return "";
+        }
+        let cs = s.split("");
+        let n = cs.len();
+        let mut at = n;
+        let mut i = 0;
+        while i < n {
+            if cs.get(i).unwrap_or("") == "@" {
+                at = i;
+            }
+            i = i + 1;
+        }
+        let mut parts = Vec::new();
+        for j in 0..at {
+            if j == 0 && at > 1 {
+                parts.push(cs.get(0).unwrap_or(""));
+            } else {
+                parts.push("*");
+            }
+        }
+        for j in at..n {
+            parts.push(cs.get(j).unwrap_or(""));
+        }
+        parts.join("")
+    }
+}
+
+impl<L, T: Clone> Clone for Labeled<L, T> {
+    fn clone(&self) -> Labeled<L, T> {
+        Labeled { __value: self.__value.clone() }
+    }
+}
+
+// __labeled_hex renders x as 16 lowercase hex digits (two's complement).
+fn __labeled_hex(x: Int) -> String {
+    let digits = "0123456789abcdef";
+    let mut parts = Vec::new();
+    let mut i = 15;
+    while i >= 0 {
+        let d = x.ushr(i * 4).bit_and(15);
+        parts.push(digits.slice(d, d + 1));
+        i = i - 1;
+    }
+    parts.join("")
+}

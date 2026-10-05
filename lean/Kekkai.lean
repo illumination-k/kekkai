@@ -9,6 +9,7 @@ import Kekkai.Linearity
 import Kekkai.NoLeak
 import Kekkai.Pred
 import Kekkai.Refine
+import Kekkai.Flow
 import Kekkai.Examples
 import Kekkai.IR.Arith
 import Kekkai.IR.Syntax

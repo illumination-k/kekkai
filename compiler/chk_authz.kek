@@ -1,0 +1,301 @@
+// Authorization in the type checker (docs/authz-flow.md).
+//
+// `Can<A, r>` (lib/core/can.kek) is an ordinary core struct whose second
+// type argument is a resource: a parameter or an immutable variable,
+// written into the type as a path (Ty::Opaque("@..."), compiler/chk_types.kek).
+// Two permissions are for the same resource when their paths are equal,
+// so a permission for `doc` cannot be used where one for `other` is
+// expected. At a call of a function whose signature names its parameters
+// as resources, the parameters are replaced by the paths of the
+// arguments (which must be variables). Only `#[policy]` functions can
+// call `Can::grant()`.
+
+// chk_resolve_path resolves the resource argument of `Can<A, r>`: a
+// parameter of the signature being declared, or a variable in scope
+// (in a type annotation inside a body).
+fn chk_resolve_path(mut c: Chk, te: AstType) -> Ty {
+    match te {
+        AstType::Named(nt) => {
+            if nt.args.len() == 0 && !nt.name.contains("::") {
+                // a generic parameter (`impl<A, R> Can<A, R>`)
+                match c.tscope.get(nt.name) {
+                    Some(t) => {
+                        return t;
+                    }
+                    None => {}
+                }
+                match c.paths.get(nt.name) {
+                    Some(p) => {
+                        return p;
+                    }
+                    None => {}
+                }
+                if c.infer_ok && c.scopes.len() > 0 {
+                    match chk_lookup(c, nt.name, nt.pos) {
+                        Some(b) => {
+                            return chk_binding_path(c, b, nt.pos);
+                        }
+                        None => {}
+                    }
+                }
+                let mut why = "";
+                if !c.infer_ok && c.paths.len() == 0 {
+                    why = " (a permission names a parameter of a function: it cannot be stored in a struct or an enum)";
+                }
+                chk_errorf(
+                    c,
+                    nt.pos,
+                    "the resource of a permission must be a parameter or a variable: there is no `"
+                        + nt.name
+                        + "` here"
+                        + why,
+                );
+                return ty_invalid();
+            }
+        }
+        _ => {}
+    }
+    chk_errorf(
+        c,
+        ast_type_pos(te),
+        "the resource of a permission `Can<A, r>` is a variable, not a type",
+    );
+    ty_invalid()
+}
+
+// chk_binding_path is the path of variable b used as a resource: the
+// variable must not be reassignable, or the permission could outlive the
+// value it was granted for.
+fn chk_binding_path(c: Chk, b: ChkBinding, pos: AstPos) -> Ty {
+    if b.mutable {
+        chk_errorf(
+            c,
+            pos,
+            "`"
+                + b.name
+                + "` cannot be the resource of a permission: it is declared `mut` and could be reassigned (bind the value with `let`)",
+        );
+        return ty_invalid();
+    }
+    if ty_is_cap(b.ty) {
+        chk_errorf(c, pos, "a capability cannot be the resource of a permission");
+        return ty_invalid();
+    }
+    let mut i = 0;
+    for p in c.cur.params {
+        if p.id == b.id {
+            return ty_param_path(c.cur.name, i, b.name);
+        }
+        i = i + 1;
+    }
+    Ty::Opaque("@" + b.id.to_string() + ":" + b.name)
+}
+
+// chk_path_params collects the indices of the parameters of fname that t
+// names as resources.
+fn chk_path_params(t0: Ty, fname: String, mut out: HashMap<Int, Bool>) {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Opaque(n) => {
+            let i = ty_path_param(n, fname);
+            if i >= 0 {
+                out.insert(i, true);
+            }
+        }
+        Ty::Result(a, b) => {
+            chk_path_params(a, fname, out);
+            chk_path_params(b, fname, out);
+        }
+        Ty::Option(a) => chk_path_params(a, fname, out),
+        Ty::Vec(a) => chk_path_params(a, fname, out),
+        Ty::Tuple(ts) => {
+            for x in ts {
+                chk_path_params(x, fname, out);
+            }
+        }
+        Ty::Struct(_, xs) => {
+            for x in xs {
+                chk_path_params(x, fname, out);
+            }
+        }
+        Ty::Enum(_, xs) => {
+            for x in xs {
+                chk_path_params(x, fname, out);
+            }
+        }
+        Ty::Fn(xs, r) => {
+            for x in xs {
+                chk_path_params(x, fname, out);
+            }
+            chk_path_params(r, fname, out);
+        }
+        _ => {}
+    }
+}
+
+// chk_call_paths is the path of each argument of a call of fun (all
+// starts with the receiver of a method call) that fun's signature names
+// as a resource; ty_invalid() for the others.
+fn chk_call_paths(c: Chk, fun: ChkFunc, all: Vec<AstExpr>, pos: AstPos) -> Vec<Ty> {
+    let mut used: HashMap<Int, Bool> = HashMap::new();
+    chk_path_params(fun.result, fun.name, used);
+    for b in fun.params {
+        chk_path_params(b.ty, fun.name, used);
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    for b in fun.params {
+        let mut p = ty_invalid();
+        if used.contains_key(i) {
+            match all.get(i) {
+                Some(a) => {
+                    p = chk_arg_path(c, a, fun, b.name);
+                }
+                None => {}
+            }
+        }
+        out.push(p);
+        i = i + 1;
+    }
+    out
+}
+
+// chk_arg_path is the path of an argument passed for the parameter pname
+// of fun, which fun's signature names as a resource.
+fn chk_arg_path(c: Chk, a0: AstExpr, fun: ChkFunc, pname: String) -> Ty {
+    let a = chk_strip_ref(a0);
+    match a {
+        AstExpr::Ident(id) => {
+            match chk_lookup(c, id.name, id.pos) {
+                Some(b) => {
+                    return chk_binding_path(c, b, id.pos);
+                }
+                None => {}
+            }
+        }
+        _ => {}
+    }
+    chk_errorf(
+        c,
+        ast_expr_pos(a),
+        "the argument for `"
+            + pname
+            + "` must be a variable: a permission in the signature of `"
+            + fun.name
+            + "` refers to it (bind the value with `let`)",
+    );
+    ty_invalid()
+}
+
+// chk_subst_paths replaces the resource parameters of fun in ts.
+fn chk_subst_paths(fun: ChkFunc, ts: Vec<Ty>, paths: Vec<Ty>) -> Vec<Ty> {
+    let mut out = Vec::new();
+    for t in ts {
+        out.push(ty_subst_paths(t, fun.name, paths));
+    }
+    out
+}
+
+// chk_is_grant reports whether fun is the core's Can::grant.
+fn chk_is_grant(fun: ChkFunc) -> Bool {
+    fun.name == "Can::grant" && chk_is_core(fun.decl.pos)
+}
+
+// chk_check_grant reports a permission granted outside a #[policy]
+// function.
+fn chk_check_grant(c: Chk, fun: ChkFunc, pos: AstPos) {
+    if chk_is_grant(fun) && !chk_is_lib(c.cur) && !ast_has_attr(c.cur.decl, "policy") {
+        chk_errorf(
+            c,
+            pos,
+            "only a `#[policy]` function can grant a permission: `"
+                + c.cur.name
+                + "` calls `Can::grant()`",
+        );
+    }
+}
+
+// chk_is_policy reports whether fun is a #[policy] function.
+fn chk_is_policy(fun: ChkFunc) -> Bool {
+    ast_has_attr(fun.decl, "policy")
+}
+
+// chk_can_hint explains a mismatch between two permissions.
+fn chk_can_hint(got: Ty, want: Ty) -> String {
+    let g = ty_prune(got);
+    let w = ty_prune(want);
+    match g {
+        Ty::Struct(gs, ga) => match w {
+            Ty::Struct(ws, wa) => {
+                if gs.name != "Can" || ws.name != "Can" || ga.len() != 2 || wa.len() != 2 {
+                    return "";
+                }
+                let gp = ty_prune(ga.get(1).unwrap_or(got));
+                let wp = ty_prune(wa.get(1).unwrap_or(want));
+                if !ty_is_path(gp)
+                    || !ty_is_path(wp)
+                    || ty_key(ga.get(0).unwrap_or(got)) != ty_key(wa.get(0).unwrap_or(want)) {
+                    return "";
+                }
+                let gn = ty_str(gp);
+                let wn = ty_str(wp);
+                if gn == wn {
+                    return " (the permission is for another variable named `" + gn + "`)";
+                }
+                " (the permission is for `" + gn + "`, not `" + wn + "`)"
+            }
+            _ => "",
+        },
+        _ => "",
+    }
+}
+
+// chk_perms_in lists the permissions in type t as "Action(resource)".
+fn chk_perms_in(t0: Ty, mut out: Vec<String>) {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Struct(st, xs) => {
+            if st.name == "Can" && xs.len() == 2 {
+                let r = ty_prune(xs.get(1).unwrap_or(t));
+                out.push(ty_str(xs.get(0).unwrap_or(t)) + "(" + ty_str(r) + ")");
+                return;
+            }
+            for x in xs {
+                chk_perms_in(x, out);
+            }
+        }
+        Ty::Enum(_, xs) => {
+            for x in xs {
+                chk_perms_in(x, out);
+            }
+        }
+        Ty::Result(a, b) => {
+            chk_perms_in(a, out);
+            chk_perms_in(b, out);
+        }
+        Ty::Option(a) => chk_perms_in(a, out),
+        Ty::Vec(a) => chk_perms_in(a, out),
+        Ty::Tuple(ts) => {
+            for x in ts {
+                chk_perms_in(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+// chk_requires lists the permissions fun takes as parameters.
+fn chk_requires(fun: ChkFunc) -> Vec<String> {
+    let mut out = Vec::new();
+    for b in fun.params {
+        chk_perms_in(b.ty, out);
+    }
+    out
+}
+
+// chk_grants lists the permissions fun returns.
+fn chk_grants(fun: ChkFunc) -> Vec<String> {
+    let mut out = Vec::new();
+    chk_perms_in(fun.result, out);
+    out
+}

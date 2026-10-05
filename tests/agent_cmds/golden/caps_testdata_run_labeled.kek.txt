@@ -1,0 +1,9 @@
+label: pure
+    declassify: mask (12:44)
+main: log: &Log
+    direct effects: log.info
+    idempotent: true
+    declassify: mask (29:26), hash (29:44), expose_unchecked (38:17), expose_unchecked (38:59), hash (39:17), hash (39:29), hash (39:60), hash (39:72), hash (40:29), hash (40:58), hash (40:87), expose_unchecked (55:20), mask (55:54), expose_unchecked (55:74), hash (59:19), expose_unchecked (63:25)
+vec_of: pure
+<Customer as Clone>::clone: pure
+--- exit 0

@@ -85,6 +85,7 @@ def valFact : Val → Pred
   | .bool b => .eq (v 0) (c (if b then 1 else 0))
   | .int k => .eq (v 0) (c k)
   | .arr xs => .eq (ln 0) (c xs.length)
+  | .lab _ | .labErr => .tt
 
 /-- The refinement judgment (verification conditions hold). -/
 inductive Ref (P : Prog) : Facts → Expr → Pred → Prop where
@@ -128,6 +129,12 @@ inductive Ref (P : Prog) : Facts → Expr → Pred → Prop where
   /-- indexing: the bounds check is a VC. -/
   | index {Φ a i} :
       Entails Φ (.and (.le (c 0) (v i)) (.lt (v i) (ln a))) → Ref P Φ (.index a i) .tt
+  /-- `Labeled::new(e)`: nothing is known about a labeled result. -/
+  | wrap {Φ e Ψ} : Ref P Φ e Ψ → Ref P Φ (.wrap e) .tt
+  /-- `lbind e body`: the VCs of `body` must hold for every contents `x`
+  (variable `0`, about which nothing is known), under the outer facts. -/
+  | lbind {Φ e body Ψe Ψb} :
+      Ref P Φ e Ψe → Ref P Φ.shift body Ψb → Ref P Φ (.lbind e body) .tt
 
 /-- A function satisfies its contract: its precondition and postcondition talk
 only about its parameters (and the result), and under the precondition the body's
@@ -328,6 +335,25 @@ theorem eval_refine (O : Oracle) {P : Prog} (hR : WTRefProg P) :
         simp only [Pred.holds, Term.eval, toI, hxs, hk, Val.toInt, Val.length] at this
         simp [indexResult, this, RefPost, Pred.holds]
       · trivial
+    | wrap he _ =>
+      intro hΦ
+      simp only [eval]
+      exact RefPost.bind (ih he hΦ) fun _ _ _ _ _ => trivial
+    | @lbind _ _ body _ _ he hb _ _ =>
+      intro hΦ
+      simp only [eval]
+      refine RefPost.bind (ih he hΦ) fun w σ₁ _ _ _ => ?_
+      cases w with
+      | lab a =>
+        simp only
+        have := ih hb (env := a :: env) (ρ := []) (σ := σ₁) (holdsAll_shift.mpr hΦ)
+        revert this
+        cases eval O P n (a :: env) [] σ₁ body with
+        | done o σ₂ tr => cases o <;> intro <;> simp [lbindResult, RefPost, Pred.holds]
+        | fault => exact id
+        | _ => intro; simp [lbindResult, RefPost]
+      | labErr => simp [RefPost, Pred.holds]
+      | _ => simp [RefPost]
 
 /-! ## Main theorems -/
 

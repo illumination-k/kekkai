@@ -1,0 +1,114 @@
+// Authorization: a permission Can<A, d> is granted only by a #[policy]
+// function and is for one variable d.
+
+struct Edit {}
+
+struct View {}
+
+struct User {
+    id: Int,
+}
+
+struct Doc {
+    id: Int,
+    owner: Int,
+}
+
+#[policy]
+fn can_edit(u: User, d: Doc) -> Option<Can<Edit, d>> {
+    if d.owner == u.id {
+        Some(Can::grant())
+    } else {
+        None
+    }
+}
+
+fn edit(d: Doc, _cap: Can<Edit, d>) -> Int {
+    d.id
+}
+
+fn view(d: Doc, _cap: Can<View, d>) -> Int {
+    d.id
+}
+
+fn forge(d: Doc) -> Can<Edit, d> {
+    Can::grant() // ERROR "only a `#[policy]` function can grant a permission: `forge` calls `Can::grant()`"
+}
+
+fn wrong_doc(u: User, a: Doc, b: Doc) -> Int {
+    match can_edit(u, a) {
+        Some(cap) => edit(b, cap), // ERROR "expected `Can<Edit, b>`, found `Can<Edit, a>` (the permission is for `a`, not `b`)"
+        None => 0,
+    }
+}
+
+fn wrong_action(u: User, a: Doc) -> Int {
+    match can_edit(u, a) {
+        Some(cap) => view(a, cap), // ERROR "expected `Can<View, a>`, found `Can<Edit, a>`"
+        None => 0,
+    }
+}
+
+fn not_a_variable(u: User) -> Int {
+    match can_edit(u, Doc { id: 1, owner: 1 }) { // ERROR "the argument for `d` must be a variable: a permission in the signature of `can_edit` refers to it"
+        Some(_) => 1,
+        None => 0,
+    }
+}
+
+fn shadowed(u: User, a: Doc, b: Doc) -> Int {
+    match can_edit(u, a) {
+        Some(cap) => {
+            let a = b;
+            edit(a, cap) // ERROR "(the permission is for another variable named `a`)"
+        }
+        None => 0,
+    }
+}
+
+fn reassignable(u: User) -> Int {
+    let mut d = Doc { id: 1, owner: 1 };
+    d = Doc { id: 2, owner: 1 };
+    match can_edit(u, d) { // ERROR "`d` cannot be the resource of a permission: it is declared `mut`"
+        Some(_) => 1,
+        None => 0,
+    }
+}
+
+fn escape(u: User) -> Option<Can<Edit, u>> {
+    let d = Doc { id: 1, owner: 1 };
+    can_edit(u, d) // ERROR "expected `Option<Can<Edit, u>>`, found `Option<Can<Edit, d>>`"
+}
+
+struct Holder {
+    c: Can<Edit, d>, // ERROR "there is no `d` here (a permission names a parameter of a function: it cannot be stored in a struct or an enum)"
+}
+
+fn as_value() -> Int {
+    let _f = edit; // ERROR "`edit` takes a permission for one of its parameters and cannot be used as a value"
+    0
+}
+
+fn not_a_type(d: Doc) -> Option<Can<Edit, Vec<Int>>> { // ERROR "the resource of a permission `Can<A, r>` is a variable, not a type"
+    None
+}
+
+// allowed: the permission for a parameter, passed on; a method on self;
+// an annotated local
+impl Doc {
+    fn edit_self(self, cap: Can<Edit, self>) -> Int {
+        edit(self, cap)
+    }
+}
+
+fn pass_on(d: Doc, cap: Can<Edit, d>) -> Int {
+    d.edit_self(cap)
+}
+
+fn annotated(u: User, d: Doc) -> Int {
+    let c: Option<Can<Edit, d>> = can_edit(u, d);
+    match c {
+        Some(cap) => pass_on(d, cap),
+        None => 0,
+    }
+}

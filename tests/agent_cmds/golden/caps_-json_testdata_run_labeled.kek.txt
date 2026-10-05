@@ -1,5 +1,5 @@
 {
-  "file": "testdata/run/pii.kek",
+  "file": "testdata/run/labeled.kek",
   "functions": [
     {
       "name": "label",
@@ -15,7 +15,7 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [
-        "Pii::mask"
+        "Labeled::mask"
       ],
       "declassify": [
         {
@@ -23,7 +23,10 @@
           "line": 12,
           "col": 44
         }
-      ]
+      ],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "main",
@@ -47,14 +50,20 @@
       ],
       "unused_caps": [],
       "calls": [
+        "<Customer as Clone>::clone",
+        "Clone::clone",
         "HashMap::get_or",
         "HashMap::insert",
         "HashMap::len",
         "HashMap::new",
-        "Pii::expose_unchecked",
-        "Pii::hash",
-        "Pii::mask",
-        "Pii::new",
+        "Labeled::and_then",
+        "Labeled::expose_unchecked",
+        "Labeled::hash",
+        "Labeled::map",
+        "Labeled::mask",
+        "Labeled::new",
+        "Labeled::zip",
+        "PII::label",
         "label",
         "vec_of"
       ],
@@ -70,56 +79,84 @@
           "col": 44
         },
         {
+          "call": "expose_unchecked",
+          "line": 38,
+          "col": 17
+        },
+        {
+          "call": "expose_unchecked",
+          "line": 38,
+          "col": 59
+        },
+        {
           "call": "hash",
-          "line": 36,
+          "line": 39,
           "col": 17
         },
         {
           "call": "hash",
-          "line": 36,
+          "line": 39,
           "col": 29
         },
         {
           "call": "hash",
-          "line": 36,
+          "line": 39,
           "col": 60
         },
         {
           "call": "hash",
-          "line": 36,
+          "line": 39,
           "col": 72
         },
         {
           "call": "hash",
-          "line": 37,
-          "col": 27
+          "line": 40,
+          "col": 29
         },
         {
           "call": "hash",
-          "line": 37,
+          "line": 40,
+          "col": 58
+        },
+        {
+          "call": "hash",
+          "line": 40,
+          "col": 87
+        },
+        {
+          "call": "expose_unchecked",
+          "line": 55,
+          "col": 20
+        },
+        {
+          "call": "mask",
+          "line": 55,
           "col": 54
         },
         {
-          "call": "hash",
-          "line": 37,
-          "col": 81
+          "call": "expose_unchecked",
+          "line": 55,
+          "col": 74
         },
         {
           "call": "hash",
-          "line": 47,
+          "line": 59,
           "col": 19
         },
         {
           "call": "expose_unchecked",
-          "line": 51,
+          "line": 63,
           "col": 25
         }
-      ]
+      ],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "vec_of",
-      "signature": "fn vec_of(a: Pii<String>, b: Pii<String>, c: Pii<String>) -> Vec<Pii<String>>",
-      "line": 56,
+      "signature": "fn vec_of(a: Labeled<PII, String>, b: Labeled<PII, String>, c: Labeled<PII, String>) -> Vec<Labeled<PII, String>>",
+      "line": 68,
       "col": 4,
       "handler": false,
       "pure": true,
@@ -130,11 +167,14 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
-      "name": "<Customer as PartialEq>::eq",
-      "signature": "fn <Customer as PartialEq>::eq(self: &Customer, other: &Customer) -> Bool",
+      "name": "<Customer as Clone>::clone",
+      "signature": "fn <Customer as Clone>::clone(self: &Customer) -> Customer",
       "line": 5,
       "col": 1,
       "handler": false,
@@ -145,8 +185,14 @@
       "caps": [],
       "direct_effects": [],
       "unused_caps": [],
-      "calls": [],
-      "declassify": []
+      "calls": [
+        "<Customer as Clone>::clone",
+        "Clone::clone"
+      ],
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     }
   ]
 }

@@ -47,7 +47,7 @@ struct・`Vec`・`HashMap` などは参照型で、代入や引数渡しは参�
 
 - core に `trait Clone { fn clone(&self) -> Self; }`。`#[derive(Clone)]` は全フィールドを `clone()` する。
 - `Int`・`Bool`・`String`・`()`・タプル・`Option`・`Result`・`Vec<T: Clone>`・`HashMap`・`HashSet` に実装する。`clone()` の結果は `own`（深い複製）。
-- `Pii<T>` は `T: Clone` なら `Clone`。
+- `Labeled<L, T>`（以前の `Pii<T>`）は `T: Clone` なら `Clone`。
 
 ## 移行
 

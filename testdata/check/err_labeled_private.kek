@@ -1,0 +1,14 @@
+// The field of Labeled is private: `__` identifiers are reserved for the core
+// library and the runtime prelude.
+
+fn read_field(p: Labeled<PII, String>) -> String {
+    p.__value // ERROR "identifiers starting with `__` are reserved"
+}
+
+fn forge(s: String) -> Labeled<PII, String> {
+    Labeled { __value: s } // ERROR "identifiers starting with `__` are reserved"
+}
+
+fn forge_can(d: Int) -> Can<Int, d> {
+    Can { __granted: true } // ERROR "identifiers starting with `__` are reserved"
+}

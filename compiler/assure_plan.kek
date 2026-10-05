@@ -107,7 +107,7 @@ fn asr_entry_str(e: String) -> String {
     e
 }
 
-// asr_assume_label names an assumption: `#[rare]`, `pii.declassify mask()`.
+// asr_assume_label names an assumption: `#[rare]`, `flow.declassify mask()`.
 fn asr_assume_label(a: AsrAssume) -> String {
     if a.call != "" {
         return a.kind + " " + a.call + "()";
@@ -820,10 +820,10 @@ fn asr_plan(
     pl
 }
 
-// ---- personal data ([pii]) ----
+// ---- labeled data ([flow]) ----
 
 // asr_declassify_requires reports the declassifications of d whose
-// function's #[declassify(...)] lacks a field of [pii] declassify_requires.
+// function's #[declassify(...)] lacks a field of [flow] declassify_requires.
 fn asr_declassify_requires(pl: AsrPlan, pol: AsrPolicy, d: AsrDef) {
     if pol.declass_requires.len() == 0 {
         return;
@@ -832,7 +832,7 @@ fn asr_declassify_requires(pl: AsrPlan, pol: AsrPolicy, d: AsrDef) {
     let mut calls = Vec::new();
     let mut line = 0;
     for a in d.assumes {
-        if a.kind != "pii.declassify" {
+        if a.kind != "flow.declassify" {
             continue;
         }
         for r in pol.declass_requires {
@@ -862,16 +862,16 @@ fn asr_declassify_requires(pl: AsrPlan, pol: AsrPolicy, d: AsrDef) {
         "declassify_requires",
         "assumption",
         missing,
-        "pii.declassify ("
+        "flow.declassify ("
             + calls.join(", ")
             + ") needs #[declassify("
             + args.join(", ")
-            + ")] ([pii] declassify_requires)",
+            + ")] ([flow] declassify_requires)",
     );
 }
 
 // asr_declassify_limit reports the files (modules) with more
-// declassifications than [pii] max_declassify_per_module, at the first
+// declassifications than [flow] max_declassify_per_module, at the first
 // one over the limit.
 fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
     if !pol.has_max_declass {
@@ -881,7 +881,7 @@ fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
     let mut files = Vec::new();
     for d in cur.defs {
         for a in d.assumes {
-            if a.kind == "pii.declassify" {
+            if a.kind == "flow.declassify" {
                 if !counts.contains_key(d.file) {
                     files.push(d.file);
                 }
@@ -900,7 +900,7 @@ fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
         for d in cur.defs {
             if d.file == f {
                 for a in d.assumes {
-                    if a.kind == "pii.declassify" {
+                    if a.kind == "flow.declassify" {
                         sites.push(asr_pad_line(a.line) + "\t" + d.name);
                     }
                 }
@@ -916,11 +916,11 @@ fn asr_declassify_limit(pl: AsrPlan, pol: AsrPolicy, cur: AsrState) {
                 at.get(0).unwrap_or("0").parse_int().unwrap_or(0),
                 "max_declassify_per_module",
                 "assumption",
-                asr_one("pii.declassify"),
+                asr_one("flow.declassify"),
                 f
-                    + " declassifies personal data "
+                    + " declassifies labeled data "
                     + n.to_string()
-                    + " times ([pii] max_declassify_per_module = "
+                    + " times ([flow] max_declassify_per_module = "
                     + pol.max_declass.to_string()
                     + ")",
             ),

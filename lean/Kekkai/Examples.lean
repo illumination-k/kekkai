@@ -2,6 +2,7 @@ import Kekkai.Typing
 import Kekkai.Semantics
 import Kekkai.Safety
 import Kekkai.Refine
+import Kekkai.Flow
 
 /-!
 # Examples
@@ -14,6 +15,11 @@ Refinements (P1): a bounds-checked array read and a caller that establishes its
 precondition with an `if`, a division guarded by `if d != 0`, a postcondition
 with an overflow check, and programs that are well typed but rejected because a
 verification condition fails.
+
+Labeled values (P2): a labeled computation that type checks, its run, the
+non-interference theorem instantiated on it, and programs that are rejected
+because they would let a labeled value influence an observable output (branching
+on it, logging it, an implicit flow from inside `lbind`).
 -/
 
 namespace Kekkai.Examples
@@ -38,8 +44,8 @@ def prog : Prog := [save]
 
 theorem save_wt : WTFun prog save := by
   unfold WTFun save
-  refine .let_ (.transaction rfl (.let_ (.store rfl rfl nofun) (.commit rfl)))
-    (.let_ (.log rfl (.var rfl)) (.var rfl))
+  refine .let_ (.transaction rfl (.let_ (.store rfl rfl nofun (by decide)) (.commit rfl)))
+    (.let_ (.log rfl (.var rfl) rfl) (.var rfl))
 
 theorem prog_wt : WTProg prog := by
   intro f fd h
@@ -317,5 +323,88 @@ theorem badGet_rejected : ¬ WTRefProg [badGet] := by
   intro hR
   exact refinement_safety okOracle hR (f := 0) (vs := [.arr [1, 2], .int 2]) rfl trivial [] 10
     .outOfBounds rfl
+
+/-! ## Labeled values (P2) -/
+
+/-- ```
+fn check_age(age: Labeled<PII, Int>, log: &Log) -> Labeled<PII, Bool> {
+  log.info(0);
+  age.map(|a| a < 18)
+}
+```
+After the `let`, variable 0 is the `()` of `log`, 1 is `age`; inside the `lbind`
+body, variable 0 is the unwrapped `a`. -/
+def checkAge : FunDef where
+  params := [.lab .int]
+  caps := [.log]
+  ret := .lab .bool
+  body := .let_ (.log 0 (.val (.int 0)))
+    (.lbind (.var 1) (.wrap (.bin .lt (.var 0) (.val (.int 18)))))
+
+def labProg : Prog := [checkAge]
+
+theorem labProg_wt : WTProg labProg := by
+  intro f fd h
+  match f, h with
+  | 0, h =>
+    cases h
+    exact .let_ (.log rfl (.val (.int 0)) rfl)
+      (.lbind (.var rfl) (.wrap (.bin (.var rfl) (.val (.int 18)))))
+
+example : runFun okOracle labProg 10 0 [.lab (.int 20)] [8] =
+    .done (.ok (.lab (.bool false))) St.init [.log 8 (.int 0)] := by
+  rfl
+
+/-- An `abort` inside a labeled computation does not escape it: the result is
+the poisoned labeled value. -/
+example : eval okOracle [] 10 [.lab (.int 1)] [] St.init (.lbind (.var 0) .abort) =
+    .done (.ok .labErr) St.init [] := by
+  rfl
+
+/-- Non-interference for `check_age`: whatever the two ages, two terminating runs
+have the same trace and final state. -/
+example (O : Oracle) (a b : Int) {n₁ n₂ : Nat} {o₁ o₂ : Outcome} {σ₁ σ₂ : St}
+    {tr₁ tr₂ : List Event}
+    (h₁ : runFun O labProg n₁ 0 [.lab (.int a)] [8] = .done o₁ σ₁ tr₁)
+    (h₂ : runFun O labProg n₂ 0 [.lab (.int b)] [8] = .done o₂ σ₂ tr₂) :
+    tr₁ = tr₂ ∧ σ₁ = σ₂ := by
+  have hpub : PubAgree checkAge.params [.lab (.int a)] [.lab (.int b)] := by
+    intro i τ hi hp
+    cases i with
+    | zero => simp [checkAge] at hi; subst hi; simp [Ty.pub] at hp
+    | succ i => simp [checkAge] at hi
+  have := noninterference O labProg_wt (f := 0) rfl (.cons (.lab (.int a)) .nil)
+    (.cons (.lab (.int b)) .nil) hpub [8] h₁ h₂
+  exact ⟨this.1, this.2.1⟩
+
+/-- Branching on a labeled value outside `lbind` is a type error. -/
+example (P : Prog) (Δ : List (Option CapKind)) (s s' : TxSt) (t e : Expr) (τ : Ty) :
+    ¬ HasType P [.lab .bool] Δ s (.ite (.var 0) t e) τ s' := by
+  intro h
+  cases h with
+  | ite hc _ _ => cases hc with
+    | var hi => simp at hi
+
+/-- Logging a labeled value is a type error. -/
+example (P : Prog) (s s' : TxSt) (τ : Ty) :
+    ¬ HasType P [.lab .int] [some .log] s (.log 0 (.var 0)) τ s' := by
+  intro h
+  cases h with
+  | log _ he hp => cases he with
+    | var hi => simp at hi; subst hi; simp [Ty.pub] at hp
+
+/-- An implicit flow — branching on the contents inside `lbind` and logging in
+one branch — is a type error: the body sees no capability. -/
+example (P : Prog) (s s' : TxSt) (τ : Ty) :
+    ¬ HasType P [.lab .bool] [some .log] s
+      (.lbind (.var 0)
+        (.ite (.var 0) (.let_ (.log 0 (.val .unit)) (.wrap (.val .unit))) (.wrap (.val .unit))))
+      τ s' := by
+  intro h
+  cases h with
+  | lbind _ hb => cases hb with
+    | ite _ ht _ => cases ht with
+      | let_ h₁ _ => cases h₁ with
+        | log hc _ _ => simp at hc
 
 end Kekkai.Examples

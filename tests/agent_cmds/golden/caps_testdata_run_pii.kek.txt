@@ -1,9 +1,0 @@
-label: pure
-    declassify: mask (12:44)
-main: log: &Log
-    direct effects: log.info
-    idempotent: true
-    declassify: mask (29:26), hash (29:44), hash (36:17), hash (36:29), hash (36:60), hash (36:72), hash (37:27), hash (37:54), hash (37:81), hash (47:19), expose_unchecked (51:25)
-vec_of: pure
-<Customer as PartialEq>::eq: pure
---- exit 0

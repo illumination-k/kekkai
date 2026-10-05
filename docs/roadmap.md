@@ -5,4 +5,4 @@
 3. 保証の台帳と `kek assure plan` — [assure.md](assure.md)
 4. generics・trait・コレクション・イテレータ — [generics.md](generics.md)
 
-言語機能のロードマップ（P1 以降：篩型、決定性、冪等性、認可、情報フロー）は [design.md](design.md) を参照。
+言語機能のロードマップ（P1 以降：篩型、決定性、冪等性、認可、情報フロー）は [design.md](design.md) を参照。P1 は [refinement.md](refinement.md)、P2（認可・情報フロー）は [authz-flow.md](authz-flow.md)。

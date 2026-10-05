@@ -15,7 +15,10 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "report",
@@ -48,7 +51,10 @@
       "calls": [
         "area"
       ],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "describe",
@@ -64,7 +70,10 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     }
   ]
 }

@@ -28,8 +28,10 @@ caps	-json	$bank
 caps	-json	$lint
 caps	tests/agent_cmds/idempotent.kek
 caps	-json	tests/agent_cmds/idempotent.kek
-caps	testdata/run/pii.kek
-caps	-json	testdata/run/pii.kek
+caps	testdata/run/labeled.kek
+caps	-json	testdata/run/labeled.kek
+caps	testdata/run/authz.kek
+caps	-json	testdata/run/authz.kek
 check	-json	$lint
 check	-json	$bank
 check	-json	tests/agent_cmds/parse_err.kek
@@ -37,6 +39,7 @@ check	-json	testdata/check/err_caps.kek
 check	-json	testdata/check/err_types.kek
 check	-json	testdata/check/err_tx.kek
 check	-json	testdata/check/err_idempotent.kek
+check	-json	testdata/check/err_flow.kek
 check	-json	examples/webhooks/net_in_tx.bad.kek
 check	-json=false	$bank
 ir	-json	testdata/run/collections.kek

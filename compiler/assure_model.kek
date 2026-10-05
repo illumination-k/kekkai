@@ -23,7 +23,7 @@ struct AsrGuar {
 }
 
 // An assumption written in the code: `#[allow(similar, ...)]`, `#[rare]`,
-// or a declassification of personal data (kind "pii.declassify", call
+// or a declassification of labeled data (kind "flow.declassify", call
 // "mask", "hash" or "expose_unchecked", with the reason, owner and expiry
 // of the function's `#[declassify(...)]`).
 struct AsrAssume {
@@ -387,6 +387,54 @@ fn asr_reach(p: DhProgram, name: String) -> Vec<String> {
     work
 }
 
+// ---- labeled data ----
+
+// asr_handles_labeled reports whether the function name, or a function it
+// can reach, takes or returns labeled data or declassifies.
+fn asr_handles_labeled(p: DhProgram, name: String) -> Bool {
+    for n in asr_reach(p, name) {
+        match asr_def_fun(p, n) {
+            Some(f) => {
+                if f.declass.len() > 0 || ty_mentions_labeled(f.result) {
+                    return true;
+                }
+                for b in f.params {
+                    if ty_mentions_labeled(b.ty) {
+                        return true;
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    false
+}
+
+// asr_reaches_declassify reports whether name or a function it can reach
+// declassifies labeled data.
+fn asr_reaches_declassify(p: DhProgram, name: String) -> Bool {
+    for n in asr_reach(p, name) {
+        match asr_def_fun(p, n) {
+            Some(f) => {
+                if f.declass.len() > 0 {
+                    return true;
+                }
+            }
+            None => {}
+        }
+    }
+    false
+}
+
+fn asr_def_fun(p: DhProgram, name: String) -> Option<ChkFunc> {
+    for d in p.defs {
+        if d.name == name {
+            return Some(d.fun);
+        }
+    }
+    None
+}
+
 // ---- assumptions ----
 
 fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
@@ -395,6 +443,18 @@ fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
         if a.name == "allow" && ast_attr_has(a, "similar") {
             out.push(AsrAssume {
                 kind: "allow(similar)",
+                call: "",
+                reason: ast_attr_value(a, "reason").unwrap_or(""),
+                owner: ast_attr_value(a, "owner").unwrap_or(""),
+                expires: ast_attr_value(a, "expires").unwrap_or(""),
+                line: a.pos.line,
+                col: 0,
+            });
+        }
+        if a.name == "policy" {
+            // an authorization policy: its decisions are trusted
+            out.push(AsrAssume {
+                kind: "policy",
                 call: "",
                 reason: ast_attr_value(a, "reason").unwrap_or(""),
                 owner: ast_attr_value(a, "owner").unwrap_or(""),
@@ -415,7 +475,7 @@ fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
             });
         }
     }
-    // declassifications of personal data, approved by #[declassify(...)]
+    // declassifications of labeled data, approved by #[declassify(...)]
     let meta = ast_find_attr(fun.decl.attrs, "declassify");
     for d in fun.declass {
         let mut reason = "";
@@ -430,7 +490,7 @@ fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
             None => {}
         }
         out.push(AsrAssume {
-            kind: "pii.declassify",
+            kind: "flow.declassify",
             call: d.call,
             reason: reason,
             owner: owner,
@@ -508,6 +568,19 @@ fn asr_model(l: DhLoaded) -> AsrState {
         // functions that take capabilities: a pure one trivially is)
         if d.caps.len() > 0 && chk_idem_violation(info, fun).is_none() {
             guars.push(asr_bool_guar("idempotent", true, "type"));
+        }
+        // authz.requires.A(r): it can only run with a permission for r
+        // (granted by a #[policy] function)
+        for perm in asr_sorted_set(chk_requires(fun)) {
+            guars.push(asr_bool_guar("authz.requires." + perm, true, "type"));
+        }
+        // flow.noninterference: it handles labeled data and nothing it can
+        // reach declassifies (its plain outputs do not depend on labeled
+        // inputs)
+        if asr_handles_labeled(p, d.name) {
+            guars.push(
+                asr_bool_guar("flow.noninterference", !asr_reaches_declassify(p, d.name), "type"),
+            );
         }
         // it takes values with mutable state and mutates none of them
         if ro.get(d.name).unwrap_or(0) == 2 {

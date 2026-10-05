@@ -142,6 +142,9 @@ struct ChkInfo {
     // skips the other functions quickly
     refine_fns: HashMap<String, Bool>,
     alias_structs: HashMap<String, Bool>,
+    // functions whose signature mentions a parameter as the resource of a
+    // permission (`Can<Edit, d>`): calls substitute the arguments' paths
+    path_fns: HashMap<String, Bool>,
 }
 
 // A closure's body is a scope with lambda set to the closure's id: a
@@ -182,6 +185,9 @@ struct Chk {
     mut tscope: HashMap<String, Ty>,
     // `_` may stand for a type (inside function bodies)
     mut infer_ok: Bool,
+    // the parameters that a permission `Can<A, d>` in the signature being
+    // declared can name, with their paths (docs/authz-flow.md)
+    mut paths: HashMap<String, Ty>,
     // trait obligations of the function being checked
     mut obls: Vec<ChkObl>,
     // set by chk_lookup: the variable found is captured by a closure
@@ -370,7 +376,7 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
         }
         return;
     }
-    if a.name == "declassify" {
+    if a.name == "declassify" || a.name == "policy" {
         for x in a.args {
             if !x.starts_with("reason = \"")
                 && !x.starts_with("owner = \"")
@@ -380,7 +386,9 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
                     a.pos,
                     "unknown argument `"
                         + x
-                        + "` of `#[declassify]` (expected reason, owner, expires)",
+                        + "` of `#["
+                        + a.name
+                        + "]` (expected reason, owner, expires)",
                 );
             }
         }
@@ -494,6 +502,7 @@ fn chk_check_full(
         alias_busy: HashMap::new(),
         refine_fns: HashMap::new(),
         alias_structs: HashMap::new(),
+        path_fns: HashMap::new(),
     };
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs, core);
@@ -508,6 +517,7 @@ fn chk_check_full(
         cur: chk_dummy_func(),
         tscope: HashMap::new(),
         infer_ok: false,
+        paths: HashMap::new(),
         obls: Vec::new(),
         captured: false,
         builtins: chk_new_builtins(),
@@ -536,6 +546,9 @@ fn chk_check_full(
             for d in mr.diags {
                 c.errs.push(AstError { pos: d.pos, msg: d.msg });
             }
+        }
+        for e in mr.flow {
+            c.errs.push(e);
         }
     }
     let mut rr = ref_report_empty();
@@ -1166,6 +1179,13 @@ fn chk_declare_func(
         }
         chk_check_attr(c, a);
     }
+    let mut paths: HashMap<String, Ty> = HashMap::new();
+    let mut pi = 0;
+    for p in fd.params {
+        paths.insert(p.name, ty_param_path(name, pi, p.name));
+        pi = pi + 1;
+    }
+    c.paths = paths;
     let mut seen: HashMap<String, Bool> = HashMap::new();
     for p in fd.params {
         if p.name != "_" && seen.contains_key(p.name) {
@@ -1212,6 +1232,16 @@ fn chk_declare_func(
             fun.result = chk_resolve_type(c, te, false);
         }
         None => {}
+    }
+    c.paths = HashMap::new();
+    let mut has_paths = ty_mentions_path(fun.result);
+    for b in fun.params {
+        if ty_mentions_path(b.ty) {
+            has_paths = true;
+        }
+    }
+    if has_paths {
+        c.info.path_fns.insert(name, true);
     }
     if fun.handler {
         chk_handler_sig(c, fun);
@@ -1574,6 +1604,12 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
             }
             match c.info.structs.get(n) {
                 Some(st) => {
+                    if n == "Can" && te.args.len() == 2 && c.info.lib_types.contains_key(n) {
+                        let mut a = Vec::new();
+                        a.push(chk_resolve_type(c, te.args.get(0).unwrap_or(te0), false));
+                        a.push(chk_resolve_path(c, te.args.get(1).unwrap_or(te0)));
+                        return Ty::Struct(st, a);
+                    }
                     return Ty::Struct(st, chk_type_args(c, te, st.params.len()));
                 }
                 None => {}
@@ -1602,7 +1638,9 @@ fn chk_expect(c: Chk, pos: AstPos, got: Ty, want: Ty, what: String) {
                 + "`, found `"
                 + ty_str(got)
                 + "`"
-                + chk_pii_hint(got, want),
+                + chk_pii_hint(got, want)
+                + chk_label_hint(got, want)
+                + chk_can_hint(got, want),
         );
     }
 }
@@ -2517,10 +2555,19 @@ fn chk_call_func(
     for t in chk_param_types(fun, targs) {
         ps.push(chk_norm(c.info, t));
     }
+    let mut paths = Vec::new();
+    if c.info.path_fns.contains_key(fun.name) {
+        paths = chk_call_paths(c, fun, args, pos);
+        ps = chk_subst_paths(fun, ps, paths);
+    }
+    chk_check_grant(c, fun, pos);
     chk_args(c, pos, "`" + fun.name + "`", args, ps);
     chk_oblige_bounds(c, pos, fun, targs);
     chk_note_call(c, fun, pos);
-    let result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
+    let mut result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
+    if paths.len() > 0 {
+        result = ty_subst_paths(result, fun.name, paths);
+    }
     let mut ci = chk_call_info("func", result);
     ci.func = Some(fun);
     ci.targs = targs;
@@ -2551,6 +2598,19 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
             return ty_bool();
         }
         let p = ty_prune(xt);
+        if chk_is_labeled(p) {
+            chk_errorf(
+                c,
+                e.pos,
+                "cannot compare `"
+                    + ty_str(xt)
+                    + "` with `"
+                    + op
+                    + "`"
+                    + chk_labeled_cmp_hint(xt, yt),
+            );
+            return ty_bool();
+        }
         if !chk_builtin_eq(p) {
             // PartialEq::eq (resolved when lowered: a type variable may
             // still become a primitive)
@@ -2840,6 +2900,15 @@ fn chk_closure(mut c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
 fn chk_fn_item(mut c: Chk, e: AstIdent, fun: ChkFunc) -> Ty {
     if fun.handler || fun.main || fun.test {
         chk_errorf(c, e.pos, "the entry point `" + fun.name + "` cannot be used as a value");
+    }
+    if c.info.path_fns.contains_key(fun.name) {
+        chk_errorf(
+            c,
+            e.pos,
+            "`"
+                + fun.name
+                + "` takes a permission for one of its parameters and cannot be used as a value",
+        );
     }
     let targs = chk_instantiate(c, fun.tparams);
     chk_turbofish(c, e.pos, fun, targs, e.targs);
@@ -3392,6 +3461,16 @@ fn chk_user_method(mut c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
     for t in chk_param_types(fun, targs) {
         ps.push(chk_norm(c.info, t));
     }
+    let mut paths = Vec::new();
+    if c.info.path_fns.contains_key(fun.name) {
+        let mut all = Vec::new();
+        all.push(e.recv);
+        for a in e.args {
+            all.push(a);
+        }
+        paths = chk_call_paths(c, fun, all, e.pos);
+        ps = chk_subst_paths(fun, ps, paths);
+    }
     let self_t = ps.get(0).unwrap_or(ty_unit());
     if !ty_unify(self_t, rt) {
         chk_errorf(
@@ -3422,7 +3501,11 @@ fn chk_user_method(mut c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
         func: Some(fun),
         targs: targs,
     });
-    chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs))
+    let mut result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
+    if paths.len() > 0 {
+        result = ty_subst_paths(result, fun.name, paths);
+    }
+    result
 }
 
 // chk_trait_method checks `recv.m(args)` resolved through a trait (rt

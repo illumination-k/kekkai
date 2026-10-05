@@ -1,0 +1,15 @@
+--- pii.kek
++++ pii.kek
+@@ -5 +5 @@
+-    email: Pii<String>, // the address
++    email: Labeled<PII, String>, // the address
+@@ -9 +9 @@
+-    let out = Vec::new();
++    let mut out = Vec::new();
+@@ -12 +12 @@
+-        out.push(User { id: i, email: Pii::new(s) });
++        out.push(User { id: i, email: PII::label(s) });
+@@ -18 +18 @@
+-fn first_masked(us: Vec<Pii<String>>) -> String {
++fn first_masked(us: Vec<Labeled<PII, String>>) -> String {
+--- exit 0

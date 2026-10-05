@@ -19,8 +19,13 @@ struct CapsReport {
     direct_effects: Vec<String>,
     unused_caps: Vec<String>,
     calls: Vec<String>,
-    // calls of mask / hash / expose_unchecked on personal data (Pii)
+    // calls of mask / hash / expose_unchecked on labeled data
     declassify: Vec<ChkDeclass>,
+    // a #[policy] function (it may grant permissions)
+    policy: Bool,
+    // the permissions it takes ("Edit(d)") and returns
+    requires: Vec<String>,
+    grants: Vec<String>,
 }
 
 // caps_func_signature renders `fn name(p: T, ...) -> R` (FuncSignature);
@@ -127,6 +132,9 @@ fn caps_reports(a: DiagAnalysis) -> Vec<CapsReport> {
             unused_caps: unused,
             calls: caps_sorted_keys(fun.calls),
             declassify: fun.declass,
+            policy: chk_is_policy(fun),
+            requires: chk_requires(fun),
+            grants: chk_grants(fun),
         });
     }
     out
@@ -164,12 +172,24 @@ fn caps_report_json(r: CapsReport) -> IrjVal {
         ds.push(irjson_val(dobj));
     }
     irjson_set(o, "declassify", IrjVal::Arr(ds));
+    irjson_set(o, "policy", irjson_bool(r.policy));
+    irjson_set(o, "requires", irjson_strs(r.requires));
+    irjson_set(o, "grants", irjson_strs(r.grants));
     irjson_val(o)
 }
 
-// caps_declassify_line lists the declassifications of personal data
-// (`    declassify: mask (12:9), expose_unchecked (20:5)`).
+// caps_declassify_line lists the declassifications of labeled data
+// (`    declassify: mask (12:9), expose_unchecked (20:5)`) and the
+// permissions taken and granted (`    requires: Edit(d)`).
 fn caps_declassify_line(mut lines: Vec<String>, fun: ChkFunc) {
+    let req = chk_requires(fun);
+    if req.len() > 0 {
+        lines.push("    requires: " + req.join(", "));
+    }
+    let gr = chk_grants(fun);
+    if gr.len() > 0 {
+        lines.push("    grants: " + gr.join(", "));
+    }
     if fun.declass.len() == 0 {
         return;
     }
@@ -236,6 +256,9 @@ fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
         if fun.test {
             tag = " #[test]";
+        }
+        if chk_is_policy(fun) {
+            tag = tag + " #[policy]";
         }
         if caps.len() == 0 {
             lines.push(fun.name + tag + ": pure");

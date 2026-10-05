@@ -2,7 +2,7 @@
 // reference (`&T`, `&self`, an element of a shared collection) cannot be
 // mutated or kept in an owning place; `x.clone()` is an owned deep copy
 // of it that can (docs/mutability.md). `#[derive(Clone)]` clones every
-// field; HashMap, HashSet and Pii implement it in their files, tuples
+// field; HashMap, HashSet and Labeled implement it in their files, tuples
 // with the other derived traits.
 
 trait Clone {

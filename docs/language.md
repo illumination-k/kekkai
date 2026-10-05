@@ -6,7 +6,7 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・個人情報の `Pii`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
@@ -22,7 +22,8 @@
 | `Option<T>`, `Result<T, E>` | `Some`/`None`, `Ok`/`Err` |
 | `Vec<T>` | 伸長可能な配列（参照型） |
 | `HashMap<K, V>`, `HashSet<T>` | core ライブラリのコレクション（下記） |
-| `Pii<T>` | 個人情報。文字列にできない（下記） |
+| `Labeled<L, T>` | ラベル付きの値（個人情報は `Labeled<PII, T>`）。文字列にできない（下記） |
+| `Can<A, r>` | 資源 `r`（変数）への操作 `A` の権限（下記） |
 | `struct S<T> { f: T, mut g: T }` | フィールドは既定で不変、`mut` を付けたものだけ代入できる（参照型） |
 | `enum E<T> { A, B(T, U) }` | 再帰的に定義してよい |
 | `fn(A, B) -> R` | 関数・クロージャの値（純粋） |
@@ -83,7 +84,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 - 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Pii` を含む型（フィールドの型に `Pii` が現れる）に導出できるのは `PartialEq`・`Eq`・`Clone` だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` だけ。
 
 ### 演算子と core の trait
 
@@ -96,7 +97,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 | `Clone` | `clone(&self) -> Self`：所有する深い複製（下記「可変性」） |
 | `Iterator`, `DoubleEndedIterator`, `IntoIterator`, `FromIterator<A>`, `Sum<A>`, `Product<A>` | 下記 |
 
-core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Pii` にも）。
+core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Labeled` にも）。
 
 ## クロージャ
 
@@ -164,12 +165,12 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response { ... }
 - `kek caps` は冪等なハンドラに `#[handler(idempotent)]`、capability を受け取る関数に `idempotent: true|false` を表示する（JSON は全関数の `idempotent`）。`kek assure` は `idempotent` の保証を記録する。
 - 実行時の動作は変えない。Workers 側のリトライの設定（Queues・Workflows の再試行など）に使う場合は、`kek caps -json` の `idempotent` を参照する（ビルド出力にはまだ含めない）。
 
-## 個人情報（`Pii<T>`）
+## ラベル付きの値（`Labeled<L, T>`）
 
 ```kek
 struct User {
     id: Int,
-    email: Pii<String>,
+    email: Labeled<PII, String>,
 }
 
 fn greet(log: &Log, u: User) {
@@ -177,23 +178,62 @@ fn greet(log: &Log, u: User) {
     log.info("user " + u.email.hash());        // 16 桁の16進数
     // log.info(u.email);                      // 型エラー
 }
+
+fn same_domain(a: User, b: User) -> Labeled<PII, Bool> {
+    let da = a.email.map(|e| e.split("@").get(1).unwrap_or(""));
+    da.zip(&b.email, |d, e| e.ends_with("@" + d))
+}
 ```
 
-`Pii<T>` は core の generic な struct（`lib/core/pii.kek`）で、値を包むだけで中身を文字列として取り出せない。フィールド `__value` は core の外から書けない名前なので、読むことも `Pii { ... }` で作ることもできない。
+`Labeled<L, T>` は core の generic な struct（`lib/core/labeled.kek`）で、ラベル `L` の付いた値を包む。`L` は型で、core に個人情報の `PII` がある（利用者は `struct Secret {}` のような任意の struct をラベルにできる）。フィールド `__value` は core の外から書けない名前なので、読むことも `Labeled { ... }` で作ることもできない。設計と実装の詳細は [authz-flow.md](authz-flow.md)。
 
 | 操作 | 内容 |
 | --- | --- |
-| `Pii::new(x)` | 包む |
-| `p.mask() -> String` | `Pii<String>` のみ。先頭の 1 文字と最後の `@` 以降を残し、ほかの文字（コードポイント）を `*` にする：`"alice@example.com"` → `"a****@example.com"`、`"bob"` → `"b**"`。`@` の前が 1 文字ならそれも隠す（`"a@x.com"` → `"*@x.com"`、`"x"` → `"*"`）。`""` は `""` |
-| `p.hash() -> String` | `T: Hash`。core の固定（seed なし）のハッシュ（`DefaultHasher`）を 16 桁の小文字の16進数で。等しい値は等しいハッシュになるので、突き合わせや集計のキーに使える |
-| `p.expose_unchecked() -> T` | 値そのもの（脱出口） |
-| `==`・`!=` | `Pii` どうしの比較（`PartialEq`・`Eq`）。`Pii<String>` と `String` の比較は型エラーで、`expose_unchecked` が要る |
+| `PII::label(x)`、`Labeled::new(x)` | 包む（`new` のラベルは期待される型から） |
+| `l.map(|x| ...)` | 中身（`&T`）を計算する。結果は同じラベルの `Labeled<L, U>` |
+| `l.zip(&m, |x, y| ...)` | 同じラベルの 2 つを組み合わせる（比較もここで：`a.zip(&b, |x, y| x == y)` は `Labeled<L, Bool>`） |
+| `l.and_then(|x| ...)` | 中身から `Labeled<L, U>` を作る |
+| `l.mask() -> String` | `Labeled<L, String>` のみ。先頭の 1 文字と最後の `@` 以降を残し、ほかの文字（コードポイント）を `*` にする：`"alice@example.com"` → `"a****@example.com"`、`"bob"` → `"b**"`。`@` の前が 1 文字ならそれも隠す（`"a@x.com"` → `"*@x.com"`、`"x"` → `"*"`）。`""` は `""` |
+| `l.hash() -> String` | `T: Hash`。core の固定（seed なし）のハッシュ（`DefaultHasher`）を 16 桁の小文字の16進数で。等しい値は等しいハッシュになるので、突き合わせや集計のキーに使える |
+| `l.expose_unchecked() -> T` | 値そのもの（脱出口） |
+| `clone()` | `T: Clone` なら |
 
-- `Pii` は表示・変換・順序・ハッシュの trait を実装しない。`to_string` も `+`（`Int`・`String` のみ）もなく、`log.info(p)`・`"x" + p`・`Response::text(200, p)`・`tx.put(k, p)`・`p.to_string()` はどれも型エラーになり、エラーには格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。
-- `Hash` を実装しない理由：`HashMap` のキーには `Hash + Eq + Ord` が要るが、`Ord` は `Pii::new(候補)` との比較で二分探索して値を割り出せるので実装しない。`Ord` がなければ `Hash` はキーとして役に立たず、`h.finish()` で整数として値が漏れる経路にしかならない。キーにしたいときは `p.hash()`（記録される格下げ）の結果を使う。
-- `==` は残るので、候補を `Pii::new` で包んで比べる総当たりは防げない（最小版の制限。本格版は情報フロー型）。
-- 格下げ（`mask`・`hash`・`expose_unchecked` の呼び出し）は `kek caps` に関数ごとに一覧され（`declassify`）、`kek assure` に前提 `pii.declassify` として記録される。関数に `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けると、その関数の格下げの承認者・理由・期限になる（`kekkai.toml` の `[pii] declassify_requires` で必須にでき、`[pii] max_declassify_per_module` でファイルごとの数を制限できる。[assure.md](assure.md)）。
-- `#[derive]` は `Pii` を含む型に `PartialEq`・`Eq` だけを導出できる。`kek test` は `Pii` の値を生成しない（ライブラリの型）。
+- `Labeled` は表示・変換・比較・順序・ハッシュの trait を実装しない。`log.info(l)`・`"x" + l`・`Response::text(200, l)`・`tx.put(k, l)`・`l.to_string()`・`l == m`・`if` の条件はどれも型エラーになり、エラーには `map`・`zip`・`and_then` と格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。違うラベルの値は `zip` で組み合わせられない。
+- **暗黙のフロー**：ラベル付きの値で分岐できるのは `map`・`zip`・`and_then` に渡すクロージャの中だけで、その結果は同じラベルで包まれる。クロージャは中身を読み取り専用で受け取り、書き換えられる状態（`&T` で借りていない `Vec` など）と関数の値を捕捉できない（capability はもともと捕捉できない）。関数を渡すときはクロージャ式か名前付きの関数（可変な状態に届く引数は `&T`）。違反は ``the closure given to `map` cannot capture `seen: Vec<Int>`: it has mutable state that the closure could write the labeled value to`` のように報告する（`kek check -json` の phase `flow`）。
+- そのため、格下げしないプログラムでは素の出力はラベル付きの入力に依存しない（非干渉性。終了と時間のチャネルは除く。コア計算での証明は `lean/Kekkai/Flow.lean`）。
+- 格下げ（`mask`・`hash`・`expose_unchecked` の呼び出し）は `kek caps` に関数ごとに一覧され（`declassify`）、`kek assure` に前提 `flow.declassify` として記録される。関数に `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けると、その関数の格下げの承認者・理由・期限になる（`kekkai.toml` の `[flow] declassify_requires` で必須にでき、`[flow] max_declassify_per_module` でファイルごとの数を制限できる。[assure.md](assure.md)）。
+- `#[derive]` は `Labeled` を含む型に `Clone` だけを導出できる。`kek test` は `Labeled` の値を生成しない（ライブラリの型）。
+- 以前の `Pii<T>` は `Labeled<PII, T>` になった。`kek fix` が `Pii<T>` と `Pii::new(x)` を書き換える（`Pii` どうしの `==` は `zip` に手で直す）。
+
+## 認可（`Can<A, r>`）
+
+```kek
+struct Edit {}
+
+#[policy]
+fn can_edit(u: User, d: Doc) -> Option<Can<Edit, d>> {
+    if d.owner == u.id { Some(Can::grant()) } else { None }
+}
+
+fn rename(mut d: Doc, t: String, _cap: Can<Edit, d>) {
+    d.title = t;
+}
+
+fn handle(u: User, doc: Doc, other: Doc) {
+    match can_edit(u, doc) {
+        Some(cap) => rename(doc, "new", cap),
+        // rename(other, "new", cap) は型エラー：the permission is for `doc`, not `other`
+        None => {}
+    }
+}
+```
+
+- `Can<A, r>` は「資源 `r` に操作 `A` をしてよい」という権限（`lib/core/can.kek`）。`A` は型（`struct Edit {}`）、`r` は**変数**：シグネチャではその関数の引数（`self` も可）、本体の型注釈ではスコープにある変数。資源は型の一部で、`doc` の権限を `other` に使うと型エラーになる（同名の別の変数も区別する）。
+- 呼び出しでは、シグネチャの資源が実引数で置き換わる。`can_edit(u, doc)` の結果は `Option<Can<Edit, doc>>`。資源として名指される位置の実引数は変数でなければならない（式なら `let` で束縛する）。`let mut` の変数は資源にできない。
+- 権限を作れるのは `#[policy]` を付けた関数の `Can::grant()` だけ（`#[policy(reason = "...", owner = "...", expires = "...")]` も可）。チェックを通らずに権限を要る関数へ到達する経路はない。ポリシー自体の正しさは保証しない。
+- 権限は引数・戻り値・局所変数・`Option` などに置けるが、struct・enum のフィールドには書けない（資源を名指せない）。局所変数の権限は関数の外に出ない。資源を名指す関数は値として使えない。
+- `kek caps` は `#[policy]`、`requires: Edit(d)`、`grants: Edit(d)` を表示し、`kek assure` はポリシーを前提 `policy`、受け取る権限を保証 `authz.requires.Edit(d)` として記録する。
+- 実行時には中身のない値で、資源は表現を持たない。
 
 ## 篩型（refinement types）
 

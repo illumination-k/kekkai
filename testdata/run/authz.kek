@@ -1,0 +1,62 @@
+// exit: 0
+// Authorization: a permission Can<Edit, d> is granted by a #[policy]
+// function for the variable d and used where the signature names it.
+struct Edit {}
+
+struct View {}
+
+struct User {
+    id: Int,
+    admin: Bool,
+}
+
+struct Doc {
+    id: Int,
+    owner: Int,
+    mut title: String,
+}
+
+#[policy]
+fn can_edit(u: User, d: Doc) -> Option<Can<Edit, d>> {
+    if d.owner == u.id || u.admin {
+        Some(Can::grant())
+    } else {
+        None
+    }
+}
+
+fn rename(mut d: Doc, t: String, _cap: Can<Edit, d>) {
+    d.title = t;
+}
+
+impl Doc {
+    fn retitle(mut self, t: String, cap: Can<Edit, self>) {
+        rename(self, t, cap);
+    }
+}
+
+fn try_rename(u: User, d: Doc, t: String) -> Bool {
+    match can_edit(u, d) {
+        Some(cap) => {
+            d.retitle(t, cap);
+            true
+        }
+        None => false,
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let alice = User { id: 1, admin: false };
+    let bob = User { id: 2, admin: false };
+    let d = Doc { id: 10, owner: 1, title: "a" };
+    log.info(try_rename(alice, d, "b").to_string() + " " + d.title);
+    log.info(try_rename(bob, d, "c").to_string() + " " + d.title);
+    let c: Option<Can<Edit, d>> = can_edit(alice, d);
+    match c {
+        Some(cap) => rename(d, "z", cap),
+        None => {}
+    }
+    log.info(d.title);
+    0
+}

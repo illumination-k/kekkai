@@ -1,15 +1,19 @@
-// Personal data and idempotency in the type checker (docs/refinement.md):
+// Information flow and idempotency in the type checker
+// (docs/authz-flow.md, docs/refinement.md):
 //
-// - Pii<T> (lib/core/pii.kek) is an ordinary core struct; what makes it
-//   opaque is that its field `__value` cannot be named outside the core
-//   library and the runtime prelude (the lexer reserves `__` identifiers),
-//   so a program can neither read it nor build `Pii { ... }`. Calls of its
-//   declassifying methods (mask, hash, expose_unchecked) are recorded per
-//   function (ChkFunc.declass) for `kek caps` and `kek assure`.
+// - Labeled<L, T> (lib/core/labeled.kek) is an ordinary core struct; what
+//   makes it opaque is that its field `__value` cannot be named outside
+//   the core library and the runtime prelude (the lexer reserves `__`
+//   identifiers), so a program can neither read it nor build
+//   `Labeled { ... }`. Calls of its declassifying methods (mask, hash,
+//   expose_unchecked) are recorded per function (ChkFunc.declass) for
+//   `kek caps` and `kek assure`. The closures given to map, zip and
+//   and_then are checked by the mutability pass (mu_flow_closure in
+//   compiler/chk_mut.kek).
 // - `#[handler(idempotent)]`: the handler, and every function it reaches
 //   through the call graph, may only use idempotent capability operations.
 
-// ---- Pii ----
+// ---- labeled values ----
 
 // chk_note_call records that the current function calls fun (at pos).
 fn chk_note_call(mut c: Chk, fun: ChkFunc, pos: AstPos) {
@@ -21,34 +25,65 @@ fn chk_note_call(mut c: Chk, fun: ChkFunc, pos: AstPos) {
 }
 
 // chk_declass_kind is "mask", "hash" or "expose_unchecked" when fun is a
-// declassifying method of the core Pii, else "".
+// declassifying method of the core Labeled, else "".
 fn chk_declass_kind(fun: ChkFunc) -> String {
     if !chk_is_core(fun.decl.pos) {
         return "";
     }
-    if fun.name == "Pii::mask" || fun.name == "Pii::hash" || fun.name == "Pii::expose_unchecked" {
-        return fun.name.slice(5, fun.name.len());
+    if fun.name == "Labeled::mask"
+        || fun.name == "Labeled::hash"
+        || fun.name == "Labeled::expose_unchecked" {
+        return fun.name.slice(9, fun.name.len());
     }
     ""
 }
 
-// chk_is_pii reports whether t is Pii<_>.
-fn chk_is_pii(t: Ty) -> Bool {
+// chk_is_labeled reports whether t is Labeled<_, _>.
+fn chk_is_labeled(t: Ty) -> Bool {
     match ty_prune(t) {
-        Ty::Struct(st, _) => st.name == "Pii",
+        Ty::Struct(st, _) => st.name == "Labeled",
         _ => false,
     }
 }
 
-// chk_pii_hint explains a type error involving personal data (got is the
+// chk_pii_hint explains a type error involving a labeled value (got is the
 // type found).
 fn chk_pii_hint(got: Ty, want: Ty) -> String {
-    if !chk_is_pii(got) || chk_is_pii(want) {
+    if !chk_is_labeled(got) || chk_is_labeled(want) {
         return "";
     }
-    " (personal data `"
+    " (labeled data `"
         + ty_str(got)
-        + "` cannot be used as a plain value: declassify it with `mask()`, `hash()` or `expose_unchecked()`)"
+        + "` cannot be used as a plain value: compute on it with `map`, `zip` or `and_then`, or declassify it with `mask()`, `hash()` or `expose_unchecked()`)"
+}
+
+// chk_label_hint explains a mismatch between values of different labels.
+fn chk_label_hint(got: Ty, want: Ty) -> String {
+    match ty_prune(got) {
+        Ty::Struct(gs, ga) => match ty_prune(want) {
+            Ty::Struct(ws, wa) => {
+                if gs.name != "Labeled" || ws.name != "Labeled" {
+                    return "";
+                }
+                let gl = ty_str(ty_resolve(ga.get(0).unwrap_or(got)));
+                let wl = ty_str(ty_resolve(wa.get(0).unwrap_or(want)));
+                if gl == wl {
+                    return "";
+                }
+                " (values labeled `" + gl + "` and `" + wl + "` cannot be combined)"
+            }
+            _ => "",
+        },
+        _ => "",
+    }
+}
+
+// chk_labeled_cmp_hint explains a comparison of two labeled values.
+fn chk_labeled_cmp_hint(a: Ty, b: Ty) -> String {
+    if !chk_is_labeled(a) || !chk_is_labeled(b) {
+        return "";
+    }
+    " (labeled values are compared inside `zip`: `a.zip(&b, |x, y| x == y)` is labeled too; a plain result would leak them)"
 }
 
 // ---- idempotency ----

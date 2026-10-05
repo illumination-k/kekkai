@@ -17,7 +17,7 @@
 //           "tested": {"value": true, "evidence": "test"}
 //         },
 //         "assumptions": [{"kind": "rare", "reason": "", "owner": "", "expires": ""},
-//                         {"kind": "pii.declassify", "call": "mask", "reason": "...", ...}],
+//                         {"kind": "flow.declassify", "call": "mask", "reason": "...", ...}],
 //         "waivers": [{"guarantee": "net.hosts", "items": ["cdn.example.com"],
 //                      "reason": "...", "owner": "...", "expires": "2027-01-01",
 //                      "approved": "2026-10-04"}]

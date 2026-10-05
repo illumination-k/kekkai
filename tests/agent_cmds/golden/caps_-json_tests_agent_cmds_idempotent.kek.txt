@@ -15,11 +15,14 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "save_profile",
-      "signature": "fn save_profile(db: &Db, log: &Log, id: String, email: Pii<String>) -> Result<(), TxError>",
+      "signature": "fn save_profile(db: &Db, log: &Log, id: String, email: Labeled<PII, String>) -> Result<(), TxError>",
       "line": 9,
       "col": 4,
       "handler": false,
@@ -48,27 +51,30 @@
       ],
       "unused_caps": [],
       "calls": [
-        "Pii::hash",
-        "Pii::mask",
+        "Labeled::hash",
+        "Labeled::mask",
         "profile_key"
       ],
       "declassify": [
         {
           "call": "hash",
-          "line": 11,
+          "line": 16,
           "col": 39
         },
         {
           "call": "mask",
-          "line": 13,
+          "line": 18,
           "col": 48
         }
-      ]
+      ],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "notify",
       "signature": "fn notify(net: &Net, id: String) -> Result<String, NetError>",
-      "line": 18,
+      "line": 23,
       "col": 4,
       "handler": false,
       "pure": false,
@@ -87,12 +93,15 @@
       ],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "handle",
       "signature": "fn handle(req: Request, db: &Db, log: &Log) -> Response",
-      "line": 23,
+      "line": 28,
       "col": 4,
       "handler": true,
       "pure": false,
@@ -116,11 +125,14 @@
       ],
       "unused_caps": [],
       "calls": [
-        "Pii::new",
+        "PII::label",
         "profile_key",
         "save_profile"
       ],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     }
   ]
 }

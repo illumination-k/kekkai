@@ -1,0 +1,67 @@
+{
+  "file": "testdata/check/err_flow.kek",
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "testdata/check/err_flow.kek",
+      "line": 17,
+      "col": 9,
+      "end_line": 17,
+      "end_col": 10,
+      "severity": "error",
+      "phase": "flow",
+      "message": "the closure given to `map` cannot capture `seen: Vec<Int>`: it has mutable state that the closure could write the labeled value to (take it as `&Vec<Int>`)"
+    },
+    {
+      "file": "testdata/check/err_flow.kek",
+      "line": 29,
+      "col": 20,
+      "end_line": 29,
+      "end_col": 21,
+      "severity": "error",
+      "phase": "flow",
+      "message": "the closure given to `map` cannot capture `seen: Vec<Int>`: it has mutable state that the closure could write the labeled value to (take it as `&Vec<Int>`)"
+    },
+    {
+      "file": "testdata/check/err_flow.kek",
+      "line": 40,
+      "col": 11,
+      "end_line": 40,
+      "end_col": 12,
+      "severity": "error",
+      "phase": "flow",
+      "message": "the closure given to `map` cannot capture `f: fn(Int) -> Int`: it holds a function value, which may write to the state it captured (call it outside the closure)"
+    },
+    {
+      "file": "testdata/check/err_flow.kek",
+      "line": 49,
+      "col": 20,
+      "end_line": 49,
+      "end_col": 21,
+      "severity": "error",
+      "phase": "flow",
+      "message": "`map` takes a closure expression or a named function here: a function value may write the labeled value to state it captured"
+    },
+    {
+      "file": "testdata/check/err_flow.kek",
+      "line": 55,
+      "col": 11,
+      "end_line": 55,
+      "end_col": 15,
+      "severity": "error",
+      "phase": "mut",
+      "message": "cannot mutate `v`: it is borrowed from a labeled value (clone it: `v.clone()`)"
+    },
+    {
+      "file": "testdata/check/err_flow.kek",
+      "line": 61,
+      "col": 11,
+      "end_line": 61,
+      "end_col": 15,
+      "severity": "error",
+      "phase": "mut",
+      "message": "cannot pass `grow` to `map` over borrowed values: it takes them by value (pass a closure literal, or take `&Vec<Int>`)"
+    }
+  ]
+}
+--- exit 1

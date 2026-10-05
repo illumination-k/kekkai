@@ -1,0 +1,30 @@
+// Authorization (docs/authz-flow.md): `Can<A, r>` is the permission to do
+// the action A (a type, such as `struct Edit {}`) on the resource r, an
+// immutable variable or parameter: `fn edit(d: Doc, cap: Can<Edit, d>)`.
+// The resource is part of the type, so a permission for one document
+// cannot be used for another (`edit(other, cap)` is a type error), and a
+// function's signature says which of its arguments a permission refers
+// to (at a call, `d` becomes the argument passed for it).
+//
+// Only a `#[policy]` function can grant a permission, so every call of a
+// function that takes one went through a policy check:
+//
+//   #[policy]
+//   fn authorize(u: User, d: Doc) -> Option<Can<Edit, d>> {
+//       if d.owner == u.id { Some(Can::grant()) } else { None }
+//   }
+//
+// The field is private to the core library (`__` is reserved), so a
+// program cannot build `Can { ... }` either. `kek caps` lists the policies
+// and the permissions each function requires; `kek assure` records them.
+
+struct Can<A, R> {
+    __granted: Bool,
+}
+
+impl<A, R> Can<A, R> {
+    // grant is the permission itself; only a #[policy] function can call it.
+    fn grant() -> Can<A, R> {
+        Can { __granted: true }
+    }
+}

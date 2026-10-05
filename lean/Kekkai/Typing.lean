@@ -51,6 +51,8 @@ inductive ValTy : Val → Ty → Prop where
   | bool (b : Bool) : ValTy (.bool b) .bool
   | int (i : Int) : ValTy (.int i) .int
   | arr (xs : List Int) : ValTy (.arr xs) .arr
+  | lab {v τ} : ValTy v τ → ValTy (.lab v) (.lab τ)
+  | labErr (τ : Ty) : ValTy .labErr (.lab τ)
 
 /-- Result type of a binary operator (both operands are `Int`). -/
 def BinOp.resTy : BinOp → Ty
@@ -104,18 +106,22 @@ inductive HasType (P : Prog) :
       lookupAll Δ cs = some (fd.caps.map some) →
       (CapKind.tx ∈ fd.caps → s ≠ .done) →
       HasType P Γ Δ s (.call f args cs) fd.ret s
+  /-- the message must be public (a labeled value cannot be logged) -/
   | log {Γ Δ s s₁ c e τ} :
-      Δ[c]? = some (some .log) → HasType P Γ Δ s e τ s₁ →
+      Δ[c]? = some (some .log) → HasType P Γ Δ s e τ s₁ → τ.pub = true →
       HasType P Γ Δ s (.log c e) .unit s₁
+  /-- the request must be public -/
   | fetch {Γ Δ s s₁ c e τ} :
-      Δ[c]? = some (some .net) → HasType P Γ Δ s e τ s₁ →
+      Δ[c]? = some (some .net) → HasType P Γ Δ s e τ s₁ → τ.pub = true →
       HasType P Γ Δ s (.fetch c e) .int s₁
   | transaction {Γ Δ s d body τ} :
       Δ[d]? = some (some .db) →
       HasType P Γ (some .tx :: mask Δ) .live body τ .done →
       HasType P Γ Δ s (.transaction d body) τ s
+  /-- the arguments must be public (they are sent to the store) -/
   | store {Γ Δ s op c args tys} :
       Δ[c]? = some (some .tx) → lookupAll Γ args = some tys → s ≠ .done →
+      (∀ t ∈ tys, t.pub = true) →
       HasType P Γ Δ s (.store op c args) op.resTy s
   | commit {Γ Δ c} :
       Δ[c]? = some (some .tx) → HasType P Γ Δ .live (.commit c) .bool .done
@@ -125,6 +131,14 @@ inductive HasType (P : Prog) :
   | len {Γ Δ s a} : Γ[a]? = some .arr → HasType P Γ Δ s (.len a) .int s
   | index {Γ Δ s a i} :
       Γ[a]? = some .arr → Γ[i]? = some .int → HasType P Γ Δ s (.index a i) .int s
+  /-- `Labeled::new(e)` -/
+  | wrap {Γ Δ s s₁ e τ} : HasType P Γ Δ s e τ s₁ → HasType P Γ Δ s (.wrap e) (.lab τ) s₁
+  /-- `l.and_then(|x| body)`: the body sees the unwrapped contents (variable `0`)
+  and the outer values, but **no capability** (empty `Δ`) and no transaction
+  (state `none`); so the "pc" inside is the label and the computation is pure. -/
+  | lbind {Γ Δ s s₁ e body τ τ'} :
+      HasType P Γ Δ s e (.lab τ) s₁ → HasType P (τ :: Γ) [] .none body (.lab τ') .none →
+      HasType P Γ Δ s (.lbind e body) (.lab τ') s₁
 
 /-- A function is well typed when its body has its return type, in the context of
 its parameters, *without owning a transaction* (state `none` → `none`). -/
@@ -143,7 +157,9 @@ theorem HasType.none_pres' {P Γ Δ s e τ s'} (h : HasType P Γ Δ s e τ s') :
   | let_ _ _ ih₁ ih₂ => exact fun hs => ih₂ (ih₁ hs)
   | ite _ _ _ ih₁ ih₂ _ => exact fun hs => ih₂ (ih₁ hs)
   | bin _ _ ih₁ ih₂ => exact fun hs => ih₂ (ih₁ hs)
-  | log _ _ ih | fetch _ _ ih => exact ih
+  | log _ _ _ ih | fetch _ _ _ ih => exact ih
+  | wrap _ ih => exact ih
+  | lbind _ _ ih _ => exact ih
   | commit | rollback => intro hs; cases hs
   | abort h =>
     intro hs

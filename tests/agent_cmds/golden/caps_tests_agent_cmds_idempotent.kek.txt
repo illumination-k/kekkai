@@ -2,7 +2,7 @@ profile_key: pure
 save_profile: db: &Db, log: &Log
     direct effects: db.transaction, log.info, tx.commit, tx.delete, tx.put
     idempotent: true
-    declassify: hash (11:39), mask (13:48)
+    declassify: hash (16:39), mask (18:48)
 notify: net: &Net
     direct effects: net.post
     idempotent: false (net.post)

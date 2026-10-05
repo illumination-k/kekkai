@@ -215,6 +215,22 @@ theorem eval_effects (O : Oracle) (P : Prog) :
       intro o σ' tr h; simp only [eval] at h; split at h
       · obtain ⟨rfl, rfl, _⟩ := indexResult_done h; simp
       · cases h
+    | wrap e =>
+      simp only [eval]
+      refine (ih _ _ _ _).bind fun v σ₁ _ _ => ?_
+      intro o σ' tr h; cases h; simp
+    | lbind e body =>
+      simp only [eval]
+      refine (ih _ _ _ _).bind fun v σ₁ _ _ => ?_
+      split
+      · intro o σ' tr h
+        obtain ⟨o', h'⟩ := lbindResult_done h
+        obtain ⟨m, a⟩ := ih _ [] σ₁ body _ _ _ h'
+        exact ⟨m, fun ev hev =>
+          Event.Authorized.mono (fun r hr => by simp at hr) (Nat.le_refl _) (Nat.le_refl _)
+            (a ev hev)⟩
+      · intro o σ' tr h; cases h; simp
+      · intro o σ' tr h; cases h
 
 /-- The provided resource capability an event uses, if any. -/
 def Event.resource : Event → Option Nat
@@ -317,6 +333,16 @@ theorem eval_no_caps (O : Oracle) (P : Prog) :
     | index a i =>
       simp only [eval] at h; split at h
       · obtain ⟨rfl, rfl, _⟩ := indexResult_done h; exact ⟨rfl, rfl⟩
+      · cases h
+    | wrap e =>
+      simp only [eval] at h
+      exact hb (fun h => ih _ _ _ h) (fun _ h => by cases h; exact ⟨rfl, rfl⟩) h
+    | lbind e body =>
+      simp only [eval] at h
+      refine hb (fun h => ih _ _ _ h) (fun _ h => ?_) h
+      split at h
+      · obtain ⟨_, h'⟩ := lbindResult_done h; exact ih _ _ _ h'
+      · cases h; exact ⟨rfl, rfl⟩
       · cases h
 
 /-- **Corollary (purity).** A well-typed call of a function that takes no

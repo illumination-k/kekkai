@@ -16,7 +16,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| 保証 | 成り立つ性質（pii.no_leak、net.hosts、契約など） |
+| 保証 | 成り立つ性質（flow.noninterference、authz.requires、net.hosts、契約など） |
 | 根拠 | 型検査／SMTによる証明／テスト／仮定 |
 | 前提 | SMTソルバ、外部境界の宣言、脱出口、declassify、`#[allow(similar)]`、`#[rare]` |
 | 脱出口の管理情報 | 理由、責任者、期限 |
@@ -55,7 +55,7 @@ Auto-approved (3): strengthen 1, allowed host 2
 [net]
 allowed_hosts = ["eutils.ncbi.nlm.nih.gov", "api.stripe.com"]
 
-[pii]
+[flow]
 max_declassify_per_module = 2
 declassify_requires = ["reason", "owner", "expires"]
 
@@ -87,7 +87,7 @@ new_extern_decl = "core"
 4. 設定ファイル（許可リストと「弱化は要承認」から始める）（実装済み）
 5. 設定の階層と継承（最小版を実装済み：`[assure] extends` と `[module."path"]`）
 
-kek サーバー、LSP、SMT の根拠、`new_extern_decl` は未実装。`[pii]` は最小版の個人情報の型（`Pii<T>`）に対して実装済み（下記）。
+kek サーバー、LSP、SMT の根拠、`new_extern_decl` は未実装。`[flow]`（旧名 `[pii]`）はラベル付きの値（`Labeled<L, T>`、[authz-flow.md](authz-flow.md)）の格下げに対して実装済み（下記）。
 
 ---
 
@@ -118,16 +118,18 @@ kek assure check [-json] <file|dir>
 | `refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow` | 真偽 | `smt` | 関数の `v[i]` の範囲・除数（0 でも `MIN / -1` でもない）・`+ - *` のオーバーフローの検証条件が、その種類について 1 つ以上あり、すべて篩型の検査器（`compiler/refine.kek`、ソルバは `compiler/smt.kek`）で証明できた。`kekkai.toml` の `[refine]` にかかわらず全関数で全種類を調べる。検証条件のない種類は省く。成り立たなくなると弱化。推論は数学的な整数で行うので、`refine.no_overflow` のない関数の他の証明はラップアラウンドがないことを前提にする（[refinement.md](refinement.md)） |
 | `idempotent` | 真偽 | `type` | capability を受け取る関数で、呼び出しグラフで到達できる capability の操作がすべて冪等（リトライしても状態が変わらない：読み取り、ログ、時計、`tx.put`・`tx.delete`、トランザクション）。偽なら省く。成り立たなくなると弱化（関数が純粋になった場合は除く）。`#[handler(idempotent)]` はこれを型エラーとして要求する |
 | `readonly` | 真偽 | `type` | 書き換えられる状態を持つ引数（`Vec`・`mut` フィールドのある struct など）を受け取り、そのどれも書き換えない：`mut`・`&mut`・`mut self`・`&mut self` の引数がなく、所有型の引数を共有の参照とみなしても可変性の規則（[mutability.md](mutability.md)）を満たす（書き換えも、可変な場所への移動もしない）。偽なら省く。成り立たなくなると弱化 |
+| `authz.requires.<A>(<r>)` | 真偽 | `type` | 権限 `Can<A, r>` を引数に取る関数（[authz-flow.md](authz-flow.md)）。`#[policy]` の関数が発行した権限なしには呼べない。権限を取らなくなると弱化 |
+| `flow.noninterference` | 真偽 | `type` | ラベル付きの値（`Labeled`）を受け取る・返す・格下げする関数（到達する関数を含む）で、到達する関数のどれも格下げしない（素の出力がラベル付きの入力に依存しない）。格下げを始めると弱化 |
 | `tested` | 真偽 | `test` | いずれかの `#[test]` から呼び出しグラフ（定義ハッシュの依存）で到達できる。`#[test]` 自身には付かない |
 
 保証のほかに次を持つ。
 
 - `hash`：定義ハッシュ（名前に依存しない。変数名の変更では変わらない）
 - `file`、`entry`（`handler`・`main`・`test`・空）、`async`（I/O に到達するのでステートマシンになる）
-- `assumptions`：コード側の前提。`#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` と `#[rare]`、個人情報の格下げ（`pii.declassify`：`Pii` の `mask`・`hash`・`expose_unchecked` の呼び出し 1 つにつき 1 つ。ロックには `call` を記録し、理由・責任者・期限はその関数の `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` から取る）。同じ種類の前提は順番で対応づけるので、格下げの追加・削除・`#[declassify]` の変更が plan に現れる（位置は `pii.declassify mask() at 24:46` のようにメッセージに出る）
+- `assumptions`：コード側の前提。`#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` と `#[rare]`、認可のポリシー（`policy`：`#[policy(reason = "...", owner = "...", expires = "...")]` の関数ごとに 1 つ）、ラベル付きの値の格下げ（`flow.declassify`：`Labeled` の `mask`・`hash`・`expose_unchecked` の呼び出し 1 つにつき 1 つ。ロックには `call` を記録し、理由・責任者・期限はその関数の `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` から取る）。同じ種類の前提は順番で対応づけるので、格下げの追加・削除・`#[declassify]` の変更が plan に現れる（位置は `flow.declassify mask() at 24:46` のようにメッセージに出る）
 - `waivers`：`apply` で承認した弱化の記録（理由・責任者・期限・承認日）
 
-集合の保証は「この範囲のことしかしない」という上限なので、要素が増えると弱化、減ると強化。真偽の保証は成り立たなくなると弱化。将来の保証（`pii.*`、契約）や根拠（`smt`）も同じ形（名前・種類・値・根拠）で追加できる。
+集合の保証は「この範囲のことしかしない」という上限なので、要素が増えると弱化、減ると強化。真偽の保証は成り立たなくなると弱化。将来の保証（契約など）や根拠（`smt`）も同じ形（名前・種類・値・根拠）で追加できる。
 
 ## ロックファイル `kekkai.assure.lock`
 
@@ -185,7 +187,7 @@ JSON。キーの順序は固定で、定義は名前順、配列の要素は1行
 
 ポリシーの判定とは別に、現在のプログラムの状態について次を調べる。
 
-- **ポリシー違反**（承認できない。コードかポリシーを直す）：その場所で禁止された capability（`forbid`）、`allowed_hosts` にないホスト（不明な `*` を含む）、日付として読めない `expires`、`[pii] declassify_requires` の項目が `#[declassify]` にない格下げ（`declassify_requires`）、`[pii] max_declassify_per_module` を超えて格下げするファイル（`max_declassify_per_module`、上限を超えた最初の格下げの位置に出す）
+- **ポリシー違反**（承認できない。コードかポリシーを直す）：その場所で禁止された capability（`forbid`）、`allowed_hosts` にないホスト（不明な `*` を含む）、日付として読めない `expires`、`[flow] declassify_requires` の項目が `#[declassify]` にない格下げ（`declassify_requires`）、`[flow] max_declassify_per_module` を超えて格下げするファイル（`max_declassify_per_module`、上限を超えた最初の格下げの位置に出す）
 - **期限切れ**：`expires` が今日より前の `#[allow(similar)]` と、ロックの `waivers`
 
 ## ポリシー（`kekkai.toml`）
@@ -217,7 +219,7 @@ config = false
 weaken = "owner"                         # 既定。外せない
 new_assumption = "security"              # 任意
 
-[pii]                                    # 個人情報（Pii）の格下げ（mask・hash・expose_unchecked）
+[flow]                                   # ラベル付きの値の格下げ（mask・hash・expose_unchecked）。旧名 [pii]
 max_declassify_per_module = 2            # 1 ファイル（モジュール）あたりの格下げの上限
 declassify_requires = ["reason", "owner"] # 格下げする関数の #[declassify(...)] に必須の項目
 
@@ -230,7 +232,7 @@ review = ["change", "added"]             # 上位で自動承認でも、ここ�
 - モジュールのパスはファイル（`app/rates.kek`）かディレクトリ（`app`）。入れ子のモジュールはすべて適用され、許可ホストは共通部分、禁止と要レビューは和集合になる。
 - `extends` は再帰的にたどる（深さ 8 まで）。下位の `allowed_hosts` は上位の部分集合、上位で要レビューの rule を下位で `true` にはできない。`forbid`・`escalate`・`require` は合わせる。
 - 知らないキー、知らない capability・rule、上記の「緩める」上書き、`[auto_approve] X = true` と `[escalate] X` の両立、`forbid` に `Net` があるのに `allowed_hosts` が空でないこと、は設定エラーとして報告する（plan・check・apply は終了コード 1）。
-- `[pii]` は `extends` で継承し、下位は `max_declassify_per_module` を小さくする方向にのみ変えられる（`declassify_requires` は合わせる）。`[pii]` を書かない設定のハッシュは変わらない。
+- `[flow]` は `extends` で継承し、下位は `max_declassify_per_module` を小さくする方向にのみ変えられる（`declassify_requires` は合わせる）。`[flow]` を書かない設定のハッシュは変わらない（`[pii]` と書いても同じ意味・同じハッシュ）。
 - ほかのツールのセクション（`[similar]` など）は無視する。
 
 ## apply

@@ -10,7 +10,10 @@
 // parameter that is mutated becomes `&mut T` (`&self` becomes `&mut self`)
 // unless it is part of a trait's signature, an argument `&e` given to a
 // `&mut T` parameter becomes `&mut e`, and the program is checked
-// again until nothing changes. The edits are textual (comments and
+// again until nothing changes. Before that, personal data of the minimal
+// version is moved to labeled values (docs/authz-flow.md): `Pii<T>`
+// becomes `Labeled<PII, T>` and `Pii::new(x)` becomes `PII::label(x)`.
+// The edits are textual (comments and
 // layout are kept). Without -w the changes are printed as a diff; the
 // errors left (which need `clone()` or `&T` by hand) are listed.
 
@@ -26,8 +29,9 @@ struct FixFile {
 struct FixEdit {
     file: String,
     off: Int,
-    // the text inserted at off
+    // the text inserted at off, replacing del characters
     text: String,
+    del: Int,
 }
 
 fn fix_usage(log: &Log) {
@@ -107,6 +111,13 @@ fn fix_program(path: String, write: Bool, fs: &Fs, log: &Log) -> Int {
         files.push(FixFile { path: s.name, name: name, text: s.text, orig: s.text });
     }
     let mut total = 0;
+    if kind == "" {
+        for f in files {
+            let edits = fix_pii_edits(f);
+            total = total + edits.len();
+            fix_apply(files, edits);
+        }
+    }
     let mut left: Vec<AstError> = Vec::new();
     let mut ambiguous: Vec<MuDiag> = Vec::new();
     let mut round = 0;
@@ -328,7 +339,7 @@ fn fix_edit(files: Vec<FixFile>, d: MuDiag) -> Option<FixEdit> {
     if at < 0 || f.text.slice(at, at + 4) == "mut " {
         return None;
     }
-    Some(FixEdit { file: f.name, off: at, text: "mut " })
+    Some(FixEdit { file: f.name, off: at, text: "mut ", del: 0 })
 }
 
 // fix_apply applies insertions (from the end of each file, so that the
@@ -363,7 +374,7 @@ fn fix_apply(files: Vec<FixFile>, edits: HashMap<String, FixEdit>) {
         let mut parts = Vec::new();
         let mut end = f.text.len();
         for ed in mine {
-            parts.push(f.text.slice(ed.off, end));
+            parts.push(f.text.slice(ed.off + ed.del, end));
             parts.push(ed.text);
             end = ed.off;
         }
@@ -379,7 +390,7 @@ fn fix_apply(files: Vec<FixFile>, edits: HashMap<String, FixEdit>) {
 }
 
 fn fix_edit_at(v: Vec<FixEdit>, i: Int) -> FixEdit {
-    v.get(i).unwrap_or(FixEdit { file: "", off: 0, text: "" })
+    v.get(i).unwrap_or(FixEdit { file: "", off: 0, text: "", del: 0 })
 }
 
 // fix_diff shows the changed lines of a file.
@@ -400,4 +411,48 @@ fn fix_diff(f: FixFile) -> String {
         }
     }
     out.join("\n")
+}
+
+// fix_pii_edits moves the personal data of the minimal version (`Pii<T>`,
+// removed) to labeled values: `Pii<` -> `Labeled<PII, ` and `Pii::new` ->
+// `PII::label`.
+fn fix_pii_edits(f: FixFile) -> HashMap<String, FixEdit> {
+    let mut edits: HashMap<String, FixEdit> = HashMap::new();
+    let lr = lex_file(f.name, f.text);
+    let n = lr.toks.len();
+    for i in 0..n {
+        let t = lr.toks.get(i).unwrap_or(Tok { kind: "EOF", text: "", pos: chk_dummy_pos() });
+        if t.kind != "IDENT" || t.text != "Pii" {
+            continue;
+        }
+        let next = lr.toks.get(i + 1).unwrap_or(t);
+        let off = fix_offset(f.text, t.pos.line, t.pos.col);
+        if next.kind == "<" {
+            let lt = fix_offset(f.text, next.pos.line, next.pos.col);
+            edits.insert(off.to_string(), FixEdit {
+                file: f.name,
+                off: off,
+                text: "Labeled",
+                del: 3,
+            });
+            edits.insert(lt.to_string(), FixEdit {
+                file: f.name,
+                off: lt + 1,
+                text: "PII, ",
+                del: 0,
+            });
+        } else if next.kind == "::" {
+            let m = lr.toks.get(i + 2).unwrap_or(t);
+            if m.kind == "IDENT" && m.text == "new" {
+                let mo = fix_offset(f.text, m.pos.line, m.pos.col);
+                edits.insert(off.to_string(), FixEdit {
+                    file: f.name,
+                    off: off,
+                    text: "PII::label",
+                    del: mo + 3 - off,
+                });
+            }
+        }
+    }
+    edits
 }

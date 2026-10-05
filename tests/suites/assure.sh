@@ -399,7 +399,7 @@ case_pii() {
 	note "notify_rate declassifies personal data twice: new assumptions"
 	cat >>"$d/w/app/rates.kek" <<'EOF'
 
-fn notify_rate(log: &Log, email: Pii<String>, cur: String) {
+fn notify_rate(log: &Log, email: Labeled<PII, String>, cur: String) {
     log.info("rate " + cur + " for " + email.mask());
     log.info("user " + email.hash());
 }
@@ -408,13 +408,13 @@ EOF
 	step assure plan -json app
 	step assure apply -yes app
 	note "the assumptions in the lock:"
-	grep -B 1 -A 4 '"kind": "pii.declassify"' "$d/w/kekkai.assure.lock" >>"$d/got"
+	grep -B 1 -A 4 '"kind": "flow.declassify"' "$d/w/kekkai.assure.lock" >>"$d/got"
 	echo >>"$d/got"
 	step assure check app
-	note "[pii]: at most one declassification per module, approved with a reason and an owner"
+	note "[flow]: at most one declassification per module, approved with a reason and an owner"
 	cat >>"$d/w/kekkai.toml" <<'EOF'
 
-[pii]
+[flow]
 max_declassify_per_module = 1
 declassify_requires = ["reason", "owner"]
 EOF
@@ -432,9 +432,9 @@ fn notify_rate/'
 	KEK_TODAY=2027-07-01
 	export KEK_TODAY
 	step assure check app
-	note "malformed [pii] settings, and loosening the limit of a parent"
+	note "malformed [flow] settings, and loosening the limit of a parent ([pii] is its old name)"
 	cat >"$d/w/bad.toml" <<'EOF'
-[pii]
+[flow]
 max_declassify_per_module = "two"
 declassify_requires = ["reason", "signature"]
 mask = true
@@ -456,6 +456,42 @@ EOF
 	step assure plan -config child.toml app
 }
 
+case_authz() {
+	note "a policy grants Edit on a document; retitle requires it; title_len keeps the title labeled"
+	cat >"$d/w/app/docs.kek" <<'EOF'
+struct Edit {}
+
+struct Doc {
+    id: Int,
+    owner: Int,
+    title: Labeled<PII, String>,
+}
+
+#[policy(reason = "owners edit their documents", owner = "shogo")]
+fn can_edit(user: Int, d: Doc) -> Option<Can<Edit, d>> {
+    if d.owner == user { Some(Can::grant()) } else { None }
+}
+
+fn retitle(d: Doc, t: Labeled<PII, String>, _cap: Can<Edit, d>) -> Doc {
+    Doc { id: d.id, owner: d.owner, title: t }
+}
+
+fn title_len(d: Doc) -> Labeled<PII, Int> {
+    d.title.map(|t| t.len())
+}
+EOF
+	step assure plan app
+	step assure apply -yes app
+	grep -A 22 '"retitle": {' "$d/w/kekkai.assure.lock" | sed '/"assumptions"/q' >>"$d/got"
+	echo >>"$d/got"
+	note "title_len starts to declassify: flow.noninterference is lost (a weakening)"
+	edit app/docs.kek 's/d.title.map(|t| t.len())/PII::label(d.title.mask().len())/'
+	step assure plan app
+	note "retitle no longer requires the permission (a weakening)"
+	edit app/docs.kek 's/, _cap: Can<Edit, d>) -> Doc/) -> Doc/'
+	step assure plan app
+}
+
 case_usage() {
 	step assure
 	step assure plan
@@ -469,7 +505,7 @@ case_usage() {
 
 cases="initial no_changes strengthen weaken_capability allowed_host forbidden_host unknown_host
 weaken_host_no_allowlist forbidden_capability expired_assumption tested_lost tx_and_body module_review
-config_errors extends idempotent_lost pii refine usage"
+config_errors extends idempotent_lost pii refine authz usage"
 
 one() {
 	name=$1

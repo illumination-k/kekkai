@@ -1,0 +1,78 @@
+// exit: 0
+// Labeled data: computed on inside map / zip / and_then (the results stay
+// labeled), and leaves only through mask, hash and expose_unchecked.
+
+#[derive(Clone)]
+struct Customer {
+    id: Int,
+    email: Labeled<PII, String>,
+}
+
+fn label(c: Customer) -> String {
+    "#" + c.id.to_string() + " " + c.email.mask()
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut inputs = Vec::new();
+    inputs.push("alice@example.com");
+    inputs.push("bob");
+    inputs.push("a@x.com");
+    inputs.push("x");
+    inputs.push("");
+    inputs.push("@example.com");
+    inputs.push("日本@例え.jp");
+    inputs.push("😀ab@c.d");
+    inputs.push("a@b@c.com");
+    for s in inputs {
+        let p = PII::label(s);
+        log.info("[" + p.mask() + "] " + p.hash());
+    }
+    // the hash is fixed: equal values have equal hashes
+    let a = PII::label("alice@example.com");
+    let b = PII::label("alice@example.com");
+    let c = PII::label("carol@example.com");
+    // comparisons are labeled too
+    let ab = a.zip(&b, |x, y| x == y);
+    let ac = a.zip(&c, |x, y| x == y);
+    log.info(ab.expose_unchecked().to_string() + " " + ac.expose_unchecked().to_string());
+    log.info((a.hash() == b.hash()).to_string() + " " + (a.hash() == c.hash()).to_string());
+    log.info(PII::label(42).hash() + " " + PII::label(7).hash() + " " + PII::label(0).hash());
+    let x = Customer { id: 1, email: a };
+    let y = x.clone();
+    log.info(label(y));
+    // computing on labeled values
+    let age: Labeled<PII, Int> = Labeled::new(41);
+    let next = age.map(|n| *n + 1);
+    let adult = age.map(|n| *n >= 18);
+    let shown = adult.zip(&next, |ok, n| if *ok {
+        "adult, " + n.to_string()
+    } else {
+        "minor"
+    });
+    let domain = x.email.map(|e| e.split("@").get(1).unwrap_or(""));
+    let both = domain.and_then(|d| age.map(|n| d + "/" + n.to_string()));
+    log.info(shown.expose_unchecked() + " " + domain.mask() + " " + both.expose_unchecked());
+    // in collections, keyed by the hash
+    let mut seen: HashMap<String, Int> = HashMap::new();
+    for p in vec_of(a, b, c) {
+        let k = p.hash();
+        seen.insert(k, seen.get_or(&k, 0) + 1);
+    }
+    log.info(seen.len().to_string() + " distinct");
+    let raw: String = c.expose_unchecked();
+    log.info(raw.len().to_string());
+    0
+}
+
+fn vec_of(
+    a: Labeled<PII, String>,
+    b: Labeled<PII, String>,
+    c: Labeled<PII, String>,
+) -> Vec<Labeled<PII, String>> {
+    let mut v = Vec::new();
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    v
+}

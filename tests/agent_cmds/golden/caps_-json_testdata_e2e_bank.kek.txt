@@ -15,7 +15,10 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "parse_amount",
@@ -31,7 +34,10 @@
       "direct_effects": [],
       "unused_caps": [],
       "calls": [],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "read_balance",
@@ -57,7 +63,10 @@
       "calls": [
         "balance_key"
       ],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "transfer",
@@ -94,7 +103,10 @@
         "balance_key",
         "read_balance"
       ],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "get_balance",
@@ -120,7 +132,10 @@
       "calls": [
         "balance_key"
       ],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     },
     {
       "name": "handle",
@@ -151,7 +166,10 @@
         "parse_amount",
         "transfer"
       ],
-      "declassify": []
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
     }
   ]
 }

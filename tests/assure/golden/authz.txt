@@ -1,0 +1,62 @@
+# a policy grants Edit on a document; retitle requires it; title_len keeps the title labeled
+$ kek assure plan app
+Needs review (1):
+  ! new assumption #[policy] (reason: "owners edit their documents", owner: shogo)   can_edit
+    -> app/docs.kek:10
+
+Auto-approved (3): added 3
+--- exit 0
+
+$ kek assure apply -yes app
+Needs review (1):
+  ! new assumption #[policy] (reason: "owners edit their documents", owner: shogo)   can_edit
+    -> app/docs.kek:10
+
+Auto-approved (3): added 3
+kekkai.assure.lock updated: 11 definitions, 4 change(s) approved
+--- exit 0
+
+    "retitle": {
+      "hash": "91d8e3805d993c48c2e90efef2b44c0c",
+      "file": "app/docs.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": false,
+          "evidence": "test"
+        },
+        "authz.requires.Edit(d)": {
+          "value": true,
+          "evidence": "type"
+        },
+        "flow.noninterference": {
+          "value": true,
+          "evidence": "type"
+        }
+      },
+
+# title_len starts to declassify: flow.noninterference is lost (a weakening)
+$ kek assure plan app
+Needs review (2):
+  ! weaken flow.noninterference (no longer holds)   title_len
+    -> app/docs.kek:18  escalate: owner (apply needs -reason, -owner, -expires)
+  ! new assumption flow.declassify mask() at 19:24   title_len
+    -> app/docs.kek:18
+--- exit 0
+
+# retitle no longer requires the permission (a weakening)
+$ kek assure plan app
+Needs review (3):
+  ! weaken authz.requires.Edit(d) (no longer holds)   retitle
+    -> app/docs.kek:14  escalate: owner (apply needs -reason, -owner, -expires)
+  ! weaken flow.noninterference (no longer holds)   title_len
+    -> app/docs.kek:18  escalate: owner (apply needs -reason, -owner, -expires)
+  ! new assumption flow.declassify mask() at 19:24   title_len
+    -> app/docs.kek:18
+--- exit 0
+

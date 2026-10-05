@@ -1,0 +1,71 @@
+// Information flow: the closures given to map, zip and and_then run with
+// the label as their "program counter", so their only effect is their
+// labeled result.
+
+fn grow(mut v: Vec<Int>) -> Int {
+    v.push(1);
+    0
+}
+
+fn size(v: &Vec<Int>) -> Int {
+    v.len()
+}
+
+fn leak_into_vec(e: Labeled<PII, String>) -> Int {
+    let mut seen = Vec::new();
+    let _x = e.map(
+        |s| { // ERROR "the closure given to `map` cannot capture `seen: Vec<Int>`: it has mutable state that the closure could write the labeled value to"
+            if s.len() > 3 {
+                seen.push(1);
+            }
+            0
+        },
+    );
+    seen.len()
+}
+
+fn leak_by_move(e: Labeled<PII, String>) -> Int {
+    let seen: Vec<Int> = Vec::new();
+    let _x = e.map(|s| { // ERROR "cannot capture `seen: Vec<Int>`"
+        let mut m = seen;
+        if s.len() > 3 {
+            m.push(1);
+        }
+        0
+    });
+    seen.len()
+}
+
+fn leak_through_fn(e: Labeled<PII, String>, f: fn(Int) -> Int) -> Labeled<PII, Int> {
+    e.map(|s| f(s.len())) // ERROR "cannot capture `f: fn(Int) -> Int`: it holds a function value"
+}
+
+fn leak_fn_value(e: Labeled<PII, String>) -> Int {
+    let mut seen = Vec::new();
+    let g = |s: &String| {
+        seen.push(s.len());
+        0
+    };
+    let _x = e.map(g); // ERROR "`map` takes a closure expression or a named function here"
+    seen.len()
+}
+
+fn write_contents(e: Labeled<PII, Vec<Int>>, s: Labeled<PII, Int>) -> Labeled<PII, Int> {
+    e.zip(&s, |v, x| {
+        v.push(*x); // ERROR "cannot mutate `v`: it is borrowed from a labeled value"
+        0
+    })
+}
+
+fn named_by_value(e: Labeled<PII, Vec<Int>>) -> Labeled<PII, Int> {
+    e.map(grow) // ERROR "cannot pass `grow` to `map` over borrowed values"
+}
+
+// allowed: shared captures, values without mutable state, named
+// functions over borrowed values, nesting
+fn allowed(e: Labeled<PII, String>, v: &Vec<Int>, n: Labeled<PII, Vec<Int>>) -> Labeled<PII, Int> {
+    let k = 3;
+    let a = e.map(|s| s.len() + v.len() + k);
+    let b = n.map(size);
+    a.zip(&b, |x, y| *x + *y).and_then(|t| e.map(|s| s.len() + *t))
+}

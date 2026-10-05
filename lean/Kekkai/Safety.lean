@@ -139,6 +139,26 @@ theorem callee_slot {Δ : List (Option CapKind)} {cs : List Nat} {ks : List CapK
   have := List.mem_of_getElem? hj
   simpa using this
 
+/-- The result of an `lbind` body (pure, typed in the empty capability context)
+seen from the enclosing code. -/
+theorem lbindResult_safe {Δ τ s₁ σ₁ r} (hinv₁ : TxInv Δ s₁ σ₁.live)
+    (h : SafePost [] (.lab τ) .none .none σ₁ r) : SafePost Δ (.lab τ) s₁ s₁ σ₁ (lbindResult r) := by
+  cases r with
+  | timeout | fault => trivial
+  | stuck => exact h
+  | done o σ₂ tr =>
+    obtain ⟨h1, h2⟩ := h
+    have hl := h1 rfl
+    cases o with
+    | err =>
+      refine ⟨fun _ => hl, fun v hv => ?_⟩
+      cases hv
+      exact ⟨.labErr _, hl ▸ hinv₁⟩
+    | ok w =>
+      refine ⟨fun _ => hl, fun v hv => ?_⟩
+      cases hv
+      exact ⟨(h2 w rfl).1, hl ▸ hinv₁⟩
+
 /-- **Type safety (core lemma).** For any fuel, a well-typed expression run in a
 well-typed environment never gets stuck, and a returned value has the expected
 type. -/
@@ -279,6 +299,21 @@ theorem eval_safe (O : Oracle) {P : Prog} (hP : WTProg P) :
       split
       · exact SafePost.done_ok (.int _) hinv
       · trivial
+    | wrap he =>
+      simp only [eval]
+      refine SafePost.bind (ih he henv hρ hinv) he.none_pres' ?_
+      intro v σ₁ _ _ hv hinv₁ _
+      exact SafePost.done_ok (.lab hv) hinv₁
+    | lbind he hb =>
+      simp only [eval]
+      refine SafePost.bind (ih he henv hρ hinv) he.none_pres' ?_
+      intro v σ₁ _ _ hv hinv₁ _
+      cases hv with
+      | labErr => exact SafePost.done_ok (.labErr _) hinv₁
+      | lab ha =>
+        have := ih hb (.cons ha henv) (ρ := []) .nil ⟨nofun, nofun, fun _ c hc => by simp at hc⟩
+          (σ := σ₁)
+        exact lbindResult_safe hinv₁ this
 
 /-- **Theorem 1 (type safety).** Running a well-typed entry function of a
 well-typed program, with well-typed arguments and capabilities of the declared

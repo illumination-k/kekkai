@@ -1,0 +1,126 @@
+{
+  "file": "testdata/run/authz.kek",
+  "functions": [
+    {
+      "name": "can_edit",
+      "signature": "fn can_edit(u: User, d: Doc) -> Option<Can<Edit, d>>",
+      "line": 20,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "readonly": true,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [
+        "Can::grant"
+      ],
+      "declassify": [],
+      "policy": true,
+      "requires": [],
+      "grants": [
+        "Edit(d)"
+      ]
+    },
+    {
+      "name": "rename",
+      "signature": "fn rename(d: Doc, t: String, _cap: Can<Edit, d>)",
+      "line": 28,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "readonly": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [],
+      "declassify": [],
+      "policy": false,
+      "requires": [
+        "Edit(d)"
+      ],
+      "grants": []
+    },
+    {
+      "name": "try_rename",
+      "signature": "fn try_rename(u: User, d: Doc, t: String) -> Bool",
+      "line": 38,
+      "col": 4,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "readonly": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [
+        "Doc::retitle",
+        "can_edit"
+      ],
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
+    },
+    {
+      "name": "main",
+      "signature": "fn main(log: &Log) -> Int",
+      "line": 49,
+      "col": 4,
+      "handler": false,
+      "pure": false,
+      "async": true,
+      "idempotent": true,
+      "readonly": true,
+      "caps": [
+        {
+          "name": "log",
+          "type": "&Log",
+          "used": true
+        }
+      ],
+      "direct_effects": [
+        "log.info"
+      ],
+      "unused_caps": [],
+      "calls": [
+        "can_edit",
+        "rename",
+        "try_rename"
+      ],
+      "declassify": [],
+      "policy": false,
+      "requires": [],
+      "grants": []
+    },
+    {
+      "name": "Doc::retitle",
+      "signature": "fn Doc::retitle(self: Doc, t: String, cap: Can<Edit, self>)",
+      "line": 33,
+      "col": 8,
+      "handler": false,
+      "pure": true,
+      "async": false,
+      "idempotent": true,
+      "readonly": false,
+      "caps": [],
+      "direct_effects": [],
+      "unused_caps": [],
+      "calls": [
+        "rename"
+      ],
+      "declassify": [],
+      "policy": false,
+      "requires": [
+        "Edit(self)"
+      ],
+      "grants": []
+    }
+  ]
+}
+--- exit 0

@@ -8,7 +8,8 @@
 # Suites (default: all, in this order):
 #   bootstrap     ./kek bootstrap-check (the self-hosting fixed point) and
 #                 compiler/prelude_src.kek up to date with lib/prelude
-#   check         testdata/check/*.kek against their `// ERROR "..."` annotations
+#   check         testdata/check/*.kek and tests/syntax/*.kek (syntax errors)
+#                 against their `// ERROR "..."` annotations
 #   bad-examples  examples/*/*.bad.kek are rejected (`// kek check: ...`)
 #   run           testdata/run/*.kek: stdout == .out, exit code == `// exit: N`
 #   kek-test      kek test: discovery, mocks, failures, flags

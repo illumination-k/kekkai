@@ -1,0 +1,12 @@
+// A compound assignment reads and writes its target: no calls in it (a
+// syntax error).
+
+fn f(mut v: Vec<Int>) {
+    v[g()] += 1; // ERROR "the target of `+=` must be a variable, a field or an element `v[i]` without calls"
+}
+
+fn g() -> Int {
+    0
+}
+
+fn main() {}

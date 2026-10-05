@@ -1,0 +1,15 @@
+// Character and byte literals: lexical errors.
+
+fn f() -> Int {
+    let a = ''; // ERROR "empty character literal"
+    let b = '\q'; // ERROR "unknown character escape \q"
+    let c = '\u{110000}'; // ERROR "invalid unicode escape: not a Unicode scalar value"
+    let d = '\u{}'; // ERROR "invalid unicode escape: write `\u{` and 1 to 6 hex digits `}`"
+    let e = '\x80'; // ERROR "`\x` escape out of range"
+    let g = b'é'; // ERROR "non-ASCII character in a byte literal"
+    let h = '1; // ERROR "unterminated character literal"
+    let k = 'ab'; // ERROR "a character literal holds one character"
+    a + b + c + d + e + g + h + k
+}
+
+fn main() {}

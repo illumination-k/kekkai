@@ -894,6 +894,9 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
     let col = ind * 4;
     match s {
         AstStmt::Let(x) => {
+            if x.let_else {
+                return fmt_let_else(p, x, ind);
+            }
             let mut h = "let ";
             if x.mutable {
                 h = h + "mut ";
@@ -912,10 +915,13 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             h + fmt_expr(p, x.init, ind, col + fmt_w(p, h), false) + ";"
         }
         AstStmt::Assign(x) => {
-            let h = x.name + " = ";
-            h + fmt_expr(p, x.value, ind, col + fmt_w(p, h), false) + ";"
+            let (h, v) = fmt_assign_rhs(x.name, x.value);
+            h + fmt_expr(p, v, ind, col + fmt_w(p, h), false) + ";"
         }
         AstStmt::While(x) => {
+            if x.is_loop {
+                return "loop " + fmt_block(p, x.body, ind);
+            }
             let h = "while " + fmt_let_pat(p, x.pat);
             h + fmt_expr(p, x.cond, ind, col + fmt_w(p, h), true) + " " + fmt_block(p, x.body, ind)
         }
@@ -936,8 +942,8 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             h + " " + fmt_block(p, x.body, ind)
         }
         AstStmt::FieldAssign(x) => {
-            let h = fmt_stmt_expr(p, AstExpr::Field(x.target), ind) + " = ";
-            h + fmt_expr(p, x.value, ind, fmt_advance(p, col, h), false) + ";"
+            let (h, v) = fmt_assign_rhs(fmt_stmt_expr(p, AstExpr::Field(x.target), ind), x.value);
+            h + fmt_expr(p, v, ind, fmt_advance(p, col, h), false) + ";"
         }
         AstStmt::Break(_) => "break;",
         AstStmt::Continue(_) => "continue;",
@@ -946,6 +952,17 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             None => "return;",
         },
         AstStmt::Expr(x) => {
+            match x.x {
+                AstExpr::Method(m) => if m.name == "__index_set" && m.args.len() == 2 {
+                    // `v[i] = e` (see AstFieldAssignStmt)
+                    let i = m.args.get(0).unwrap_or(m.recv);
+                    let b = fmt_stmt_expr(p, m.recv, ind);
+                    let t = b + "[" + fmt_expr(p, i, ind, fmt_advance(p, col, b) + 1, false) + "]";
+                    let (h, v) = fmt_assign_rhs(t, m.args.get(1).unwrap_or(m.recv));
+                    return h + fmt_expr(p, v, ind, fmt_advance(p, col, h), false) + ";";
+                },
+                _ => {}
+            }
             let t = fmt_stmt_expr(p, x.x, ind);
             if x.semi {
                 return t + ";";
@@ -953,6 +970,44 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             t
         }
     }
+}
+
+// fmt_assign_rhs returns the head `target = ` of an assignment and the
+// value to print after it (`target op= ` and the right operand for a
+// compound assignment).
+fn fmt_assign_rhs(target: String, value: AstExpr) -> (String, AstExpr) {
+    match value {
+        AstExpr::Binary(b) => if b.compound {
+            return (target + " " + b.op + "= ", b.y);
+        },
+        _ => {}
+    }
+    (target + " = ", value)
+}
+
+// fmt_let_else prints `let P = e else { ... };` from its desugaring (see
+// AstLetStmt).
+fn fmt_let_else(p: FmtPrinter, x: AstLetStmt, ind: Int) -> String {
+    let col = ind * 4;
+    match x.init {
+        AstExpr::Match(m) => match m.arms.get(0) {
+            Some(a0) => match m.arms.get(1) {
+                Some(a1) => {
+                    let h = "let " + fmt_pat(p, a0.pat) + " = ";
+                    let e = fmt_expr(p, m.x, ind, col + fmt_w(p, h), false);
+                    let els = match a1.body {
+                        AstExpr::Block(b) => fmt_block(p, b, ind),
+                        _ => "{}",
+                    };
+                    return h + e + " else " + els + ";";
+                }
+                None => {}
+            },
+            None => {}
+        },
+        _ => {}
+    }
+    "let _ = ();"
 }
 
 // fmt_stmt_expr prints an expression in statement position, where a
@@ -1010,14 +1065,14 @@ fn fmt_left_child(e: AstExpr) -> Option<AstExpr> {
         } else {
             Some(b.x)
         },
-        AstExpr::Method(m) => if fmt_prec(m.recv) < 7 {
+        AstExpr::Method(m) => if fmt_prec(m.recv) < 11 {
             None
         } else {
             Some(m.recv)
         },
-        AstExpr::Field(f) => if fmt_prec(f.x) < 7 { None } else { Some(f.x) },
-        AstExpr::Try(t) => if fmt_prec(t.x) < 7 { None } else { Some(t.x) },
-        AstExpr::Index(t) => if fmt_prec(t.x) < 7 { None } else { Some(t.x) },
+        AstExpr::Field(f) => if fmt_prec(f.x) < 11 { None } else { Some(f.x) },
+        AstExpr::Try(t) => if fmt_prec(t.x) < 11 { None } else { Some(t.x) },
+        AstExpr::Index(t) => if fmt_prec(t.x) < 11 { None } else { Some(t.x) },
         AstExpr::Call(c) => Some(c.func),
         _ => None,
     }
@@ -1056,24 +1111,10 @@ fn fmt_start_pos(e: AstExpr) -> AstPos {
 
 // ---- expressions ----
 
-// precedences: closure 0, binary 1..5, unary 6, postfix 7, primary 8
+// precedences: closure 0, binary 1..9 (parse_prec), unary 10, postfix 11,
+// primary 12
 fn fmt_precedence(op: String) -> Int {
-    if op == "||" {
-        return 1;
-    }
-    if op == "&&" {
-        return 2;
-    }
-    if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
-        return 3;
-    }
-    if op == "+" || op == "-" {
-        return 4;
-    }
-    if op == "*" || op == "/" || op == "%" {
-        return 5;
-    }
-    0
+    parse_prec(op)
 }
 
 fn fmt_prec(e: AstExpr) -> Int {
@@ -1081,13 +1122,13 @@ fn fmt_prec(e: AstExpr) -> Int {
         AstExpr::Closure(_) => 0,
         AstExpr::Range(_) => 0,
         AstExpr::Binary(b) => fmt_precedence(b.op),
-        AstExpr::Unary(_) => 6,
-        AstExpr::Call(_) => 7,
-        AstExpr::Method(_) => 7,
-        AstExpr::Field(_) => 7,
-        AstExpr::Try(_) => 7,
-        AstExpr::Index(_) => 7,
-        _ => 8,
+        AstExpr::Unary(_) => 10,
+        AstExpr::Call(_) => 11,
+        AstExpr::Method(_) => 11,
+        AstExpr::Field(_) => 11,
+        AstExpr::Try(_) => 11,
+        AstExpr::Index(_) => 11,
+        _ => 12,
     }
 }
 
@@ -1111,7 +1152,7 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
         AstExpr::Ident(x) => x.name + fmt_turbofish(x.targs),
         AstExpr::Path(x) => x.ty + fmt_turbofish(x.ty_args) + "::" + x.name + fmt_turbofish(x.targs),
         AstExpr::Binary(x) => fmt_binary(p, x, ind, col, ns),
-        AstExpr::Unary(x) => x.op + fmt_sub(p, x.x, ind, col + 1, ns, fmt_prec(x.x) < 6),
+        AstExpr::Unary(x) => x.op + fmt_sub(p, x.x, ind, col + 1, ns, fmt_prec(x.x) < 10),
         AstExpr::Call(x) => {
             // `(self.f)(x)` calls a field: without parentheses it would be a
             // method call
@@ -1119,18 +1160,18 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
                 AstExpr::Field(_) => true,
                 _ => false,
             };
-            let f = fmt_sub(p, x.func, ind, col, ns, fmt_prec(x.func) < 7 || field);
+            let f = fmt_sub(p, x.func, ind, col, ns, fmt_prec(x.func) < 11 || field);
             f + fmt_args(p, x.args, ind, fmt_advance(p, col, f))
         }
         AstExpr::Method(x) => {
-            let r = fmt_sub(p, x.recv, ind, col, ns, fmt_prec(x.recv) < 7);
+            let r = fmt_sub(p, x.recv, ind, col, ns, fmt_prec(x.recv) < 11);
             let h = r + "." + x.name + fmt_turbofish(x.targs);
             h + fmt_args(p, x.args, ind, fmt_advance(p, col, h))
         }
-        AstExpr::Field(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "." + x.name,
-        AstExpr::Try(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7) + "?",
+        AstExpr::Field(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 11) + "." + x.name,
+        AstExpr::Try(x) => fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 11) + "?",
         AstExpr::Index(x) => {
-            let b = fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 7);
+            let b = fmt_sub(p, x.x, ind, col, ns, fmt_prec(x.x) < 11);
             b + "[" + fmt_expr(p, x.index, ind, fmt_advance(p, col, b) + 1, false) + "]"
         }
         AstExpr::StructLit(x) => {
@@ -1569,7 +1610,25 @@ fn fmt_int_text(p: FmtPrinter, pos: AstPos) -> String {
         }
     }
     let mut j = i;
-    while j < n && (fmt_src_at(p, j) == 95 || lex_is_digit(fmt_src_at(p, j))) {
+    if i < n && fmt_src_at(p, i) == 98 {
+        // byte literal b'a'
+        j = j + 1;
+    }
+    if j < n && fmt_src_at(p, j) == 39 {
+        // character literal: up to the closing quote
+        j = j + 1;
+        while j < n && fmt_src_at(p, j) != 39 && fmt_src_at(p, j) != 10 {
+            if fmt_src_at(p, j) == 92 {
+                j = j + 1;
+            }
+            j = j + 1;
+        }
+        return neg + p.src.slice(i, j + 1);
+    }
+    while j < n
+        && (fmt_src_at(p, j) == 95
+            || lex_is_ident_start(fmt_src_at(p, j))
+            || lex_is_digit(fmt_src_at(p, j))) {
         j = j + 1;
     }
     neg + p.src.slice(i, j)
@@ -1595,9 +1654,20 @@ fn fmt_str_text(p: FmtPrinter, pos: AstPos) -> String {
 
 // fmt_mixed_logic reports an `&&` operand of `||`: parenthesized for
 // clarity (the AST does not record source parentheses).
+// Likewise, bit operations keep parentheses as operands of comparisons
+// and of other bit operations, and arithmetic as operands of shifts
+// (`(a & b) == 0`, `a | (b & c)`, `1 << (n - 1)`).
 fn fmt_mixed_logic(x: AstExpr, op: String) -> Bool {
     match x {
-        AstExpr::Binary(b) => op == "||" && b.op == "&&",
+        AstExpr::Binary(b) => {
+            let px = parse_prec(b.op);
+            let po = parse_prec(op);
+            let bits = px >= 4 && px <= 7;
+            (op == "||" && b.op == "&&")
+                || (po == 3 && bits)
+                || (po >= 4 && po <= 6 && bits && b.op != op)
+                || (po == 7 && px >= 8)
+        }
         _ => false,
     }
 }

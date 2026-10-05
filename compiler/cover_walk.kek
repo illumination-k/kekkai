@@ -167,7 +167,10 @@ fn cov_div_stmt(s: AstStmt, loops: Int) -> Bool {
         AstStmt::FieldAssign(a) => cov_div_expr(a.target.x, loops) || cov_div_expr(a.value, loops),
         AstStmt::Break(_) => loops == 0,
         AstStmt::Continue(_) => loops == 0,
-        AstStmt::While(x) => cov_div_expr(x.cond, loops) || cov_div_block(x.body, loops + 1),
+        // `loop` ends only by `break` (or never)
+        AstStmt::While(x) => x.is_loop
+            || cov_div_expr(x.cond, loops)
+            || cov_div_block(x.body, loops + 1),
         AstStmt::For(x) => {
             let e = match x.end {
                 Some(e) => cov_div_expr(e, loops),
@@ -360,6 +363,7 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
             pat: l.pat,
             ty: l.ty,
             init: cov_expr(w, l.init),
+            let_else: l.let_else,
         }),
         AstStmt::Assign(a) => AstStmt::Assign(AstAssignStmt {
             id: a.id,
@@ -379,13 +383,19 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
         AstStmt::Break(_) => s,
         AstStmt::Continue(_) => s,
         AstStmt::While(x) => {
-            let cond = mut_hook_cond(w, x.id, x.pat, x.cond, x.body.pos, cov_expr(w, x.cond));
+            // `loop` has no condition to mutate
+            let cond = if x.is_loop {
+                x.cond
+            } else {
+                mut_hook_cond(w, x.id, x.pat, x.cond, x.body.pos, cov_expr(w, x.cond))
+            };
             AstStmt::While(AstWhileStmt {
                 id: x.id,
                 pos: x.pos,
                 pat: x.pat,
                 cond: cond,
                 body: cov_block_k(w, x.body, "loop", 0, 0, 0, 0),
+                is_loop: x.is_loop,
             })
         }
         AstStmt::For(x) => {
@@ -438,6 +448,7 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
             op: x.op,
             x: cov_expr(w, x.x),
             y: cov_expr(w, x.y),
+            compound: x.compound,
         }),
         AstExpr::Unary(x) => AstExpr::Unary(AstUnary {
             id: x.id,

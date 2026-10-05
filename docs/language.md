@@ -379,14 +379,20 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 ## 文と式
 
 - `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ。`s` が可変であること）
+- `let P = e else { ... };`（let-else）：`e` が反駁可能なパターン `P` に合えばその変数を束縛し、合わなければ `else` のブロックを実行する。ブロックは `return`・`break`・`continue`（またはそれで終わる `if`/`match`、`loop`）で終わらなければならない（構文として検査する）。型注釈は書けない。`let Some((a, mut b)) = o else { return 0; };`
+- 複合代入 `x += e;`（`-= *= /= %= &= |= ^= <<= >>=` も）は `x = x + e;` と同じ。`s.f += e;`、`v[i] += e;` も書ける。左辺は 2 回評価されるので、変数・フィールド・要素（添字は呼び出しを含まない式。`v.len()` は可）に限る
+- 要素の代入 `v[i] = e;`（`Vec` のみ）：読み出しの `v[i]` と同じく `0 <= i && i < v.len()` の証明が要り（[refinement.md](refinement.md)）、`v` は可変な経路であること（`push` と同じ）。core の `Vec::__index_set` の呼び出しになる
 - `if c { } else if d { } else { }`、`if let P = e { } else { }`（式）
 - `match e { pat => e, ... }`（式、網羅性検査あり、ネスト可）
-- `while c { }`, `while let P = e { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
+- `while c { }`, `while let P = e { }`, `loop { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
+- `loop { }` は無限ループ（文）。`break` か `return` で抜ける。`break` のない `loop` は発散するので、`fn f() -> Int { loop { if c { return 1; } } }` は型が合う。値を返す `break e`・ラベル（`'a: loop`）は未対応
 - `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
 - `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
-- 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`
+- 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
+- 優先順位は Rust と同じ：単項 `- ! & *` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > 比較 > `&&` > `||`（比較は連鎖できない）。`kek fmt` は比較やほかのビット演算の中のビット演算、シフトの中の算術に括弧を付ける（`(a & b) == 0`、`1 << (n - 1)`）
+- 整数リテラル：`255`、`0xff`、`0o17`、`0b1010`、区切り `1_000_000`。`i64` の範囲を超えるとエラー。文字リテラル `'a'`、`'\n'`（`\r \t \\ \' \" \0 \x7f \u{1F600}`）はその Unicode のコードポイントの `Int`（文字の型はない）、バイトリテラル `b'a'`・`b'\xff'` はそのバイトの `Int`。パターンにも書ける。`kek fmt` は書いた綴りを保つ
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
-- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`
+- パターン：`_`、変数（`mut x`）、整数・文字・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`
 
 ## イテレータ
 
@@ -405,7 +411,7 @@ for (i, w) in words.iter().enumerate() { ... }
 
 ### `Vec<T>`
 
-`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `iter`, `join(sep)`（`Vec<String>`）
+`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `iter`, `join(sep)`（`Vec<String>`）。`v[i]` で読み、`v[i] = x` で書く（範囲の証明が要る）
 
 `for x in v` は毎回 `v.len()` を読み直す。本体で `v`（やその別名）に `push` すると終わらないので注意する。
 

@@ -744,13 +744,19 @@ fn lower_stmt(mut l: Lower, s0: AstStmt) {
             let exit = lower_new_block(l);
             lower_jump(l, head);
             lower_set_block(l, head);
-            let c = lower_expr(l, s.cond);
-            match s.pat {
-                Some(pat) => {
-                    lower_pattern(l, c, pat, exit);
-                    lower_jump(l, body);
+            if s.is_loop {
+                // `loop`: exit is reached only by `break` (unreachable
+                // blocks are pruned)
+                lower_jump(l, body);
+            } else {
+                let c = lower_expr(l, s.cond);
+                match s.pat {
+                    Some(pat) => {
+                        lower_pattern(l, c, pat, exit);
+                        lower_jump(l, body);
+                    }
+                    None => lower_br(l, c, body, exit),
                 }
-                None => lower_br(l, c, body, exit),
             }
             lower_set_block(l, body);
             l.loops.push(LowerLoop { cont: head, exit: exit });
@@ -1039,10 +1045,18 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
             if e.op == "&" || e.op == "&mut " || e.op == "*" {
                 return x;
             }
+            let t = lower_type_of(l, e0);
+            if e.op == "!" && t.kind == "int" {
+                // bitwise not: x ^ -1
+                let mut hx = lower_instr("host");
+                hx.name = "int.bit_xor";
+                hx.args = lower_args2(x, lower_intc(l, -1));
+                return lower_emit_to(l, t, hx);
+            }
             let mut ins = lower_instr("unop");
             ins.name = if e.op == "!" { "not" } else { "neg" };
             ins.args = lower_args1(x);
-            lower_emit_to(l, lower_type_of(l, e0), ins)
+            lower_emit_to(l, t, ins)
         }
         AstExpr::Binary(e) => lower_binary(l, e, e0),
         AstExpr::Block(b) => lower_block(l, b),
@@ -1189,6 +1203,27 @@ fn lower_binop_name(op: String) -> String {
     ""
 }
 
+// lower_bitop_name is the host operation of a bit operator ("" for the
+// others): `>>` is the arithmetic shift.
+fn lower_bitop_name(op: String) -> String {
+    if op == "&" {
+        return "int.bit_and";
+    }
+    if op == "|" {
+        return "int.bit_or";
+    }
+    if op == "^" {
+        return "int.bit_xor";
+    }
+    if op == "<<" {
+        return "int.shl";
+    }
+    if op == ">>" {
+        return "int.shr";
+    }
+    ""
+}
+
 fn lower_binary(l: Lower, e: AstBinary, e0: AstExpr) -> Int {
     let t = lower_type_of(l, e0);
     if e.op == "&&" || e.op == "||" {
@@ -1238,6 +1273,14 @@ fn lower_binary(l: Lower, e: AstBinary, e0: AstExpr) -> Int {
             }
         }
         None => {}
+    }
+    let bit = lower_bitop_name(e.op);
+    if bit != "" {
+        // the Int builtins (`x.bit_and(y)`, ...)
+        let mut hb = lower_instr("host");
+        hb.name = bit;
+        hb.args = lower_args2(x, y);
+        return lower_emit_to(l, t, hb);
     }
     let mut ins = lower_instr("binop");
     ins.name = lower_binop_name(e.op);

@@ -175,6 +175,9 @@ struct Chk {
     // (after the declarations)
     mut impl_idx: Option<HashMap<String, Vec<ChkFunc>>>,
     mut loops: Int,
+    // per enclosing loop, the number of `break`s seen in it (a `loop`
+    // without one diverges)
+    mut loop_breaks: Vec<Int>,
     info: ChkInfo,
     errs: Vec<AstError>,
     mut next_id: Int,
@@ -515,6 +518,7 @@ fn chk_check_full(
     let mut c = Chk {
         impl_idx: None,
         loops: 0,
+        loop_breaks: Vec::new(),
         info: info,
         errs: core_errs,
         next_id: 0,
@@ -1931,6 +1935,9 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
         AstStmt::Break(s) => {
             if c.loops == 0 {
                 chk_errorf(c, s.pos, "`break`/`continue` outside of a loop");
+            } else {
+                let n = c.loop_breaks.len();
+                c.loop_breaks.set(n - 1, c.loop_breaks.get(n - 1).unwrap_or(0) + 1);
             }
             true
         }
@@ -1950,11 +1957,18 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 None => chk_expect(c, ast_expr_pos(s.cond), ct, ty_bool(), "while condition"),
             }
             c.loops = c.loops + 1;
+            c.loop_breaks.push(0);
             let bt = chk_block(c, s.body);
+            let breaks = c.loop_breaks.pop().unwrap_or(0);
             c.loops = c.loops - 1;
             chk_pop(c);
-            chk_expect(c, s.body.end, bt, ty_unit(), "while body");
-            false
+            chk_expect(c, s.body.end, bt, ty_unit(), if s.is_loop {
+                "loop body"
+            } else {
+                "while body"
+            });
+            // `loop` without `break` ends only by `return`
+            s.is_loop && breaks == 0
         }
         AstStmt::For(s) => {
             let it = chk_expr(c, s.iter);
@@ -1985,7 +1999,9 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 None => chk_bind(c, b),
             }
             c.loops = c.loops + 1;
+            c.loop_breaks.push(0);
             let bt = chk_block(c, s.body);
+            c.loop_breaks.pop();
             c.loops = c.loops - 1;
             chk_expect(c, s.body.end, bt, ty_unit(), "for body");
             chk_pop(c);
@@ -2166,6 +2182,10 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
             let t = chk_expr(c, e.x);
             if e.op == "-" {
                 chk_expect(c, e.pos, t, ty_int(), "negation");
+                return chk_record(c, e.id, ty_int());
+            }
+            if ty_is_prim(ty_prune(t), "Int") {
+                // bitwise not
                 return chk_record(c, e.id, ty_int());
             }
             chk_expect(c, e.pos, t, ty_bool(), "`!`");
@@ -2661,8 +2681,19 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
         }
         _ => {}
     }
-    chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), "arithmetic");
-    chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), "arithmetic");
+    if e.compound && !ty_is_var(px) && !ty_is_prim(px, "Int") && !ty_is_prim(px, "<invalid>") {
+        // `x op= y` on a non-Int x: one error (not one per operand and
+        // one for the assignment)
+        chk_errorf(c, e.pos, "cannot apply `" + op + "=` to a value of type `" + ty_str(px) + "`");
+        return xt;
+    }
+    let what = if lower_bitop_name(op) != "" {
+        "bit operation"
+    } else {
+        "arithmetic"
+    };
+    chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), what);
+    chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), what);
     ty_int()
 }
 
@@ -3352,6 +3383,24 @@ fn chk_method(mut c: Chk, e: AstMethodCall) -> Ty {
         chk_exprs(c, e.args);
         return ty_invalid();
     }
+    if e.name == "__index_set" {
+        // `v[i] = x` (see AstFieldAssignStmt)
+        let vec = match rt {
+            Ty::Vec(_) => true,
+            _ => false,
+        };
+        if !vec {
+            chk_errorf(
+                c,
+                e.pos,
+                "cannot assign to an element of `"
+                    + ty_str(rt)
+                    + "`: only `Vec` elements can be assigned (`v[i] = x`)",
+            );
+            chk_exprs(c, e.args);
+            return ty_invalid();
+        }
+    }
     let mut is_cap = false;
     let mut borrowed = false;
     match rt {
@@ -3495,7 +3544,17 @@ fn chk_user_method(mut c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
     for i in 1..ps.len() {
         rest.push(ps.get(i).unwrap_or(ty_unit()));
     }
-    chk_args(c, e.pos, "`" + fun.name + "`", e.args, rest);
+    if e.name == "__index_set" && e.args.len() == 2 && rest.len() == 2 {
+        // `v[i] = x` (see AstFieldAssignStmt)
+        let a0 = e.args.get(0).unwrap_or(e.recv);
+        let a1 = e.args.get(1).unwrap_or(e.recv);
+        let w0 = rest.get(0).unwrap_or(ty_int());
+        let w1 = rest.get(1).unwrap_or(ty_int());
+        chk_expect(c, ast_expr_pos(a0), chk_expr(c, a0), w0, "index");
+        chk_expect(c, ast_expr_pos(a1), chk_expr_expect(c, a1, w1), w1, "element assignment");
+    } else {
+        chk_args(c, e.pos, "`" + fun.name + "`", e.args, rest);
+    }
     chk_oblige_bounds(c, e.pos, fun, targs);
     chk_note_call(c, fun, e.pos);
     c.info.methods.insert(e.id, ChkMethodInfo {

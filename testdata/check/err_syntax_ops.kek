@@ -1,0 +1,59 @@
+// Bit operators, compound and element assignment, `loop` and `let ...
+// else`: type errors.
+
+struct P {
+    n: Int,
+    mut m: Int,
+}
+
+fn bits(b: Bool) -> Int {
+    let x = b & 1; // ERROR "mismatched types in bit operation: expected `Int`, found `Bool`"
+    let y = 1 << "a"; // ERROR "mismatched types in bit operation: expected `Int`, found `String`"
+    let z: Bool = !5; // ERROR "expected `Bool`, found `Int`"
+    x + y
+}
+
+fn compound(p: P) {
+    let x = 1;
+    x += 1; // ERROR "cannot assign twice to immutable variable `x`"
+    let mut s = "a";
+    s -= "b"; // ERROR "cannot apply `-=` to a value of type `String`"
+    p.n += 1; // ERROR "cannot assign to field `n` of `P`: it is not declared `mut`"
+    p.m += true; // ERROR "mismatched types in arithmetic: expected `Int`, found `Bool`"
+}
+
+fn elements(mut v: Vec<Bool>, s: String) {
+    if v.len() > 0 {
+        v[0] = 1; // ERROR "mismatched types in element assignment: expected `Bool`, found `Int`"
+        v[true] = false; // ERROR "mismatched types in index: expected `Int`, found `Bool`"
+    }
+    s[0] = 1; // ERROR "cannot assign to an element of `String`: only `Vec` elements can be assigned"
+}
+
+fn loop_break() -> Int {
+    loop {
+        break;
+    }
+} // ERROR "mismatched types in function result: expected `Int`, found `()`"
+
+fn loop_return(n: Int) -> Int {
+    let mut i = 0;
+    loop {
+        if i * i >= n {
+            return i;
+        }
+        i += 1;
+    }
+}
+
+fn let_else(o: Option<Int>) -> Int {
+    let Some(x) = o else {
+        return "none"; // ERROR "mismatched types in return: expected `Int`, found `String`"
+    };
+    let Ok(y) = o else { // ERROR "pattern `Ok` does not match type `Option<Int>`" ERROR "unreachable pattern"
+        return 0;
+    };
+    x
+}
+
+fn main() {}

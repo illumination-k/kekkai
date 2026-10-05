@@ -268,7 +268,7 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
         AstStmt::Break(b) => ast_line(d, depth, "break @" + ast_dump_pos(b.pos)),
         AstStmt::Continue(c) => ast_line(d, depth, "continue @" + ast_dump_pos(c.pos)),
         AstStmt::While(w) => {
-            ast_line(d, depth, "while @" + ast_dump_pos(w.pos));
+            ast_line(d, depth, if w.is_loop { "loop @" } else { "while @" } + ast_dump_pos(w.pos));
             match w.pat {
                 Some(pt) => ast_dump_pattern(d, depth + 1, pt),
                 None => {}

@@ -652,6 +652,18 @@ impl<T> Vec<T> {
     fn iter(&self) -> Iter<T> {
         Iter { v: *self, i: 0, end: -1 }
     }
+
+    // `v[i] = x` is `v.__index_set(i, x)`: the bounds are proved as for
+    // reading `v[i]` (and checked at run time: out of bounds traps).
+    fn __index_set(&mut self, i: Int, x: T)
+    where
+        0 <= i,
+        i < self.len(),
+    {
+        if !self.set(i, x) {
+            let _ = self[i];
+        }
+    }
 }
 
 impl<T> Iterator for Iter<T> {

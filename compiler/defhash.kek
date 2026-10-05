@@ -348,7 +348,7 @@ fn dh_stmt_node(w: DhWalk, s: AstStmt) {
         AstStmt::Continue(_) => dh_emit(w, "continue"),
         AstStmt::While(s) => {
             let mark = dh_scope_mark(w);
-            dh_emit(w, "while");
+            dh_emit(w, if s.is_loop { "loop" } else { "while" });
             dh_expr(w, s.cond);
             match s.pat {
                 Some(p) => {

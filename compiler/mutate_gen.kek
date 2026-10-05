@@ -5,33 +5,52 @@
 // they list the candidates of a checked program, using the checker's
 // types so that every candidate can be well-typed:
 //
-//   arith     `+ - * / %` on Int: + ↔ -, * ↔ /, % → *
-//   boundary  `< <= > >=` on Int: < ↔ <=, > ↔ >=
+//   arith     `+ - * / %` on Int and Float: + ↔ -, * ↔ /, % → * (Int) or
+//             % → / (Float); in a compound assignment the same on the
+//             assignment (`s += x` → `s -= x`, `%=` → `/=`)
+//   bitwise   `& | ^ << >>` on Int: & ↔ |, ^ → & and ^ → |, << ↔ >>;
+//             compound: &= ↔ |=, ^= → |=, <<= ↔ >>=
+//   boundary  `< <= > >=` on Int and Float: < ↔ <=, > ↔ >=
 //   negate    comparisons: < → >=, == → != ... (any operand type)
 //   logic     && ↔ ||
 //   cond      the condition of `if` / `while` negated
-//   unary     `!x` → x, `-x` → x
+//   guard     a match guard negated (`if g =>` → `if !(g) =>`) or removed
+//   pattern   a bound of a range pattern ± 1 (`0..=9` → `0..=10`), one
+//             alternative of an or-pattern deleted (`A | B` → `A`)
+//   unary     `!x` (Bool, and bitwise on Int) → x, `-x` (Int, Float) → x
 //   int       integer literal n → n + 1, n → 0
+//   float     Float literal x → x + 1.0, x → 0.0
 //   bool      boolean literal flipped
 //   string    string literal → ""
+//   arm       a match arm deleted (when a final `_` arm catches the rest)
+//   jump      `break` ↔ `continue`
 //   stmt      a statement deleted (calls, assignments)
-//   result    a function's result replaced: 0, "", None, Vec::new(), or
-//             negated (Bool)
+//   result    a function's result replaced: 0, 0.0, "", None,
+//             Vec::new(), or negated (Bool)
+//
+// Code a macro expansion adds is not walked (only the macro's arguments
+// are: compiler/cover_walk.kek), derived implementations and dyn dispatch
+// are not user functions.
 //
 // In apply mode they rewrite the candidates' sites. As a schema, mutant k
 // becomes a call of a prelude function (lib/prelude/cover.kek) that
 // evaluates the operands once, in the original order, and picks the
 // original or mutated operation at run time (`__mut_iop(k, x, y, op,
 // alt)`, `__mut_flip(k, b)`, ...), or `if __mut_on(k) { mutated } else {
-// original }` where the original is not duplicated. Several mutants of one
-// node nest. Sites record that they were reached, which tells the launcher
-// which tests cover which mutants.
+// original }` where the original is not duplicated. A pattern or arm
+// mutant duplicates its match: `if __mut_on(k) { match x { mutated arms } } else
+// { match x { arms } }` (the copy with fresh ids). Several mutants of one
+// node nest. Sites record that they were reached, which tells the
+// launcher which tests cover which mutants.
 
 struct MutCand {
     id: Int,
     // the node rewritten: an expression, `if` / `while` (cond), statement
-    // (stmt) or function (result)
+    // (stmt), function (result) or match (guard, pattern)
     node: Int,
+    // more nodes rewritten the same way: copies of the same source (the
+    // target of a compound assignment `v[i + 1] += x` is evaluated twice)
+    also: Vec<Int>,
     kind: String,
     func: String,
     // position of the candidate in its function (stable across edits
@@ -39,10 +58,15 @@ struct MutCand {
     ord: Int,
     op: String,
     alt: String,
+    // the operand type of arith / bitwise / boundary / unary mutants
+    // ("Int", "Float"; "" for Bool), the pattern edited by a pattern
+    // mutant (sub)
+    ty: String,
+    sub: Int,
     pos: AstPos,
     desc: String,
     orig: String,
-    mutated: String,
+    mut mutated: String,
     // can be ill-typed: checked one by one before the schema is built
     mut risky: Bool,
     // cache identity: function trans hash + ord + description
@@ -53,7 +77,7 @@ struct MutCand {
 }
 
 fn mut_op_code(op: String) -> Int {
-    let ops = "+ - * / % < <= > >=".split(" ");
+    let ops = "+ - * / % < <= > >= & | ^ << >>".split(" ");
     let mut i = 0;
     for o in ops {
         i = i + 1;
@@ -64,16 +88,41 @@ fn mut_op_code(op: String) -> Int {
     0
 }
 
-fn mut_arith_alt(op: String) -> String {
+fn mut_is_bitop(op: String) -> Bool {
+    op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>"
+}
+
+// mut_bin_alts are the replacements of binary operator op on operands of
+// type ty ("Int" or "Float"), in a compound assignment or not.
+fn mut_bin_alts(op: String, ty: String, compound: Bool) -> Vec<String> {
+    let mut v = Vec::new();
     if op == "+" {
-        "-"
+        v.push("-");
     } else if op == "-" {
-        "+"
+        v.push("+");
     } else if op == "*" {
-        "/"
+        v.push("/");
     } else if op == "/" {
-        "*"
-    } else if op == "%" { "*" } else { "" }
+        v.push("*");
+    } else if op == "%" {
+        v.push(if ty == "Float" || compound { "/" } else { "*" });
+    } else if ty != "Int" {
+        return v;
+    } else if op == "&" {
+        v.push("|");
+    } else if op == "|" {
+        v.push("&");
+    } else if op == "^" {
+        if !compound {
+            v.push("&");
+        }
+        v.push("|");
+    } else if op == "<<" {
+        v.push(">>");
+    } else if op == ">>" {
+        v.push("<<");
+    }
+    v
 }
 
 fn mut_boundary_alt(op: String) -> String {
@@ -110,8 +159,16 @@ fn mut_ty(w: CovW, id: Int) -> Ty {
     }
 }
 
-fn mut_is_int(w: CovW, e: AstExpr) -> Bool {
-    ty_is_prim(mut_ty(w, ast_expr_id(e)), "Int")
+// mut_prim is the name of e's type when it is Int, Float or Bool ("").
+fn mut_prim(w: CovW, e: AstExpr) -> String {
+    match mut_ty(w, ast_expr_id(e)) {
+        Ty::Prim(n) => if n == "Int" || n == "Float" || n == "Bool" {
+            n
+        } else {
+            ""
+        },
+        _ => "",
+    }
 }
 
 fn mut_overloaded(w: CovW, id: Int) -> Bool {
@@ -121,11 +178,43 @@ fn mut_overloaded(w: CovW, id: Int) -> Bool {
     }
 }
 
+// mut_activate makes c active in apply mode (at all its nodes).
+fn mut_activate(mut w: CovW, c: MutCand) {
+    let mut nodes = Vec::new();
+    nodes.push(c.node);
+    for n in c.also {
+        nodes.push(n);
+    }
+    for n in nodes {
+        match w.active.get(n) {
+            Some(mut v) => v.push(c),
+            None => {
+                let mut v = Vec::new();
+                v.push(c);
+                w.active.insert(n, v);
+            }
+        }
+    }
+}
+
 // ---- collect ----
 
 // mut_add registers a candidate (collect mode); its mutated snippet is set
 // by mut_snip.
 fn mut_add(
+    w: CovW,
+    node: Int,
+    kind: String,
+    pos: AstPos,
+    op: String,
+    alt: String,
+    desc: String,
+    risky: Bool,
+) -> MutCand {
+    mut_add_t(w, node, kind, pos, op, alt, desc, risky, "", 0)
+}
+
+fn mut_add_t(
     mut w: CovW,
     node: Int,
     kind: String,
@@ -134,6 +223,8 @@ fn mut_add(
     alt: String,
     desc: String,
     risky: Bool,
+    ty: String,
+    sub: Int,
 ) -> MutCand {
     w.ord = w.ord + 1;
     let mut keyparts = Vec::new();
@@ -146,11 +237,14 @@ fn mut_add(
     let c = MutCand {
         id: w.cands.len() + 1,
         node: node,
+        also: Vec::new(),
         kind: kind,
         func: w.func,
         ord: w.ord,
         op: op,
         alt: alt,
+        ty: ty,
+        sub: sub,
         pos: pos,
         desc: desc,
         orig: line.trim(),
@@ -164,40 +258,59 @@ fn mut_add(
     c
 }
 
+fn mut_line(w: CovW, pos: AstPos) -> String {
+    cov_src_line(w.lines, pos.file, pos.line)
+}
+
 // mut_snip sets the mutated snippet: the source line with the text from
 // byte column col (len code units) replaced by repl.
 fn mut_snip(w: CovW, c: MutCand, col: Int, len: Int, repl: String) -> MutCand {
-    let line = cov_src_line(w.lines, c.pos.file, c.pos.line);
-    let i = cov_col_index(line, col);
-    let m = (line.slice(0, i) + repl + line.slice(i + len, line.len())).trim();
-    MutCand {
-        id: c.id,
-        node: c.node,
-        kind: c.kind,
-        func: c.func,
-        ord: c.ord,
-        op: c.op,
-        alt: c.alt,
-        pos: c.pos,
-        desc: c.desc,
-        orig: c.orig,
-        mutated: m,
-        risky: c.risky,
-        key: c.key,
-        status: c.status,
-        msg: c.msg,
+    let i = cov_col_index(mut_line(w, c.pos), col);
+    mut_snip_at(w, c, i, i + len, repl)
+}
+
+// mut_snip_at replaces the code units [i, j) of the candidate's line.
+fn mut_snip_at(w: CovW, mut c: MutCand, i: Int, j: Int, repl: String) -> MutCand {
+    let line = mut_line(w, c.pos);
+    c.mutated = (line.slice(0, i) + repl + line.slice(j, line.len())).trim();
+    c
+}
+
+// mut_set_last finishes the last candidate (after mut_snip). A candidate
+// equal to an earlier one of the function (the same mutation at the same
+// place: a copy of the same source) is merged into it.
+fn mut_set_last(mut w: CovW, c: MutCand) {
+    let n = w.cands.len();
+    let mut i = n - 2;
+    while i >= 0 {
+        let mut d = w.cands.get(i).unwrap_or(c);
+        if d.func != c.func {
+            break;
+        }
+        if d.kind == c.kind
+            && d.alt == c.alt
+            && d.mutated == c.mutated
+            && d.pos.file == c.pos.file
+            && d.pos.line == c.pos.line
+            && d.pos.col == c.pos.col
+            && d.ty == c.ty {
+            d.also.push(c.node);
+            w.cands.pop();
+            w.ord = w.ord - 1;
+            return;
+        }
+        i = i - 1;
     }
 }
 
-// mut_set_last replaces the last candidate (after mut_snip).
-fn mut_set_last(mut w: CovW, c: MutCand) {
-    w.cands.set(w.cands.len() - 1, c);
+fn mut_is_word(c: Int) -> Bool {
+    (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
 }
 
-// mut_token_len is the length of the literal token at col of the line.
-fn mut_token_len(w: CovW, pos: AstPos, str_lit: Bool) -> Int {
-    let line = cov_src_line(w.lines, pos.file, pos.line);
-    let start = cov_col_index(line, pos.col);
+// mut_tok_len is the length of the literal token at index start of line:
+// a string (str_lit), a character literal `'a'` / `b'a'`, or a word
+// (a number, with a leading `-`).
+fn mut_tok_len(line: String, start: Int, str_lit: Bool) -> Int {
     let mut i = start;
     // a string, or a character literal `'a'` / `b'a'`
     let mut quote = if str_lit { 34 } else { 0 };
@@ -222,88 +335,141 @@ fn mut_token_len(w: CovW, pos: AstPos, str_lit: Bool) -> Int {
         }
         return i - start;
     }
-    while i < line.len() {
-        let c = line.char_at(i).unwrap_or(0);
-        let word = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
-        if !word {
-            break;
-        }
+    if line.char_at(i).unwrap_or(0) == 45 {
+        i = i + 1;
+    }
+    while i < line.len() && mut_is_word(line.char_at(i).unwrap_or(0)) {
         i = i + 1;
     }
     i - start
+}
+
+// mut_token_len is the length of the literal token at col of the line.
+fn mut_token_len(w: CovW, pos: AstPos, str_lit: Bool) -> Int {
+    let line = mut_line(w, pos);
+    mut_tok_len(line, cov_col_index(line, pos.col), str_lit)
+}
+
+// mut_float_len is the length of the Float literal at col of the line
+// (`1_000.5`, `2.5e-3`).
+fn mut_float_len(w: CovW, pos: AstPos) -> Int {
+    let line = mut_line(w, pos);
+    let start = cov_col_index(line, pos.col);
+    let mut i = start;
+    while i < line.len() {
+        let c = line.char_at(i).unwrap_or(0);
+        let prev = line.char_at(i - 1).unwrap_or(0);
+        if mut_is_word(c) || c == 46 || ((c == 43 || c == 45) && (prev == 101 || prev == 69)) {
+            i = i + 1;
+        } else {
+            break;
+        }
+    }
+    i - start
+}
+
+// mut_float_text spells f as a Float literal.
+fn mut_float_text(f: Float) -> String {
+    let s = f.to_string();
+    if s.contains(".") || s.contains("e") {
+        s
+    } else {
+        s + ".0"
+    }
 }
 
 fn mut_q(s: String) -> String {
     "`" + s + "`"
 }
 
+// mut_find is the index of the first pat in s at or after from (-1).
+fn mut_find(s: String, pat: String, from: Int) -> Int {
+    match s.slice(from, s.len()).find(pat) {
+        Some(i) => from + i,
+        None => -1,
+    }
+}
+
+fn mut_collect_binary(w: CovW, x: AstBinary) {
+    let op = x.op;
+    if op == "&&" || op == "||" {
+        let alt = if op == "&&" { "||" } else { "&&" };
+        let c = mut_add(w, x.id, "logic", x.pos, op, alt, mut_q(op) + " → " + mut_q(alt), false);
+        mut_set_last(w, mut_snip(w, c, x.pos.col, 2, alt));
+        return;
+    }
+    let tx = mut_prim(w, x.x);
+    let num = if tx == mut_prim(w, x.y) && (tx == "Int" || tx == "Float") {
+        tx
+    } else {
+        ""
+    };
+    // (Float's `%` is core's Rem: builtin all the same)
+    let builtin = num == "Float" || (num == "Int" && !mut_overloaded(w, x.id));
+    if builtin {
+        let kind = if mut_is_bitop(op) { "bitwise" } else { "arith" };
+        let o = if x.compound { op + "=" } else { op };
+        for alt in mut_bin_alts(op, num, x.compound) {
+            let a = if x.compound { alt + "=" } else { alt };
+            let c = mut_add_t(
+                w,
+                x.id,
+                kind,
+                x.pos,
+                op,
+                alt,
+                mut_q(o) + " → " + mut_q(a),
+                false,
+                num,
+                0,
+            );
+            mut_set_last(w, mut_snip(w, c, x.pos.col, o.len(), a));
+        }
+        let b = mut_boundary_alt(op);
+        if b != "" {
+            let c = mut_add_t(
+                w,
+                x.id,
+                "boundary",
+                x.pos,
+                op,
+                b,
+                mut_q(op) + " → " + mut_q(b),
+                false,
+                num,
+                0,
+            );
+            mut_set_last(w, mut_snip(w, c, x.pos.col, op.len(), b));
+        }
+    }
+    let n = mut_negate_alt(op);
+    if n != "" {
+        let c = mut_add(w, x.id, "negate", x.pos, op, n, mut_q(op) + " → " + mut_q(n), false);
+        mut_set_last(w, mut_snip(w, c, x.pos.col, op.len(), n));
+    }
+}
+
 fn mut_collect_expr(w: CovW, e: AstExpr) {
     match e {
-        AstExpr::Binary(x) => {
-            let op = x.op;
-            if op == "&&" || op == "||" {
-                let alt = if op == "&&" { "||" } else { "&&" };
-                let c = mut_add(
-                    w,
-                    x.id,
-                    "logic",
-                    x.pos,
-                    op,
-                    alt,
-                    mut_q(op) + " → " + mut_q(alt),
-                    false,
-                );
-                mut_set_last(w, mut_snip(w, c, x.pos.col, 2, alt));
-                return;
-            }
-            let ints = mut_is_int(w, x.x) && mut_is_int(w, x.y) && !mut_overloaded(w, x.id);
-            let arith = mut_arith_alt(op);
-            if arith != "" && ints {
-                let c = mut_add(
-                    w,
-                    x.id,
-                    "arith",
-                    x.pos,
-                    op,
-                    arith,
-                    mut_q(op) + " → " + mut_q(arith),
-                    false,
-                );
-                mut_set_last(w, mut_snip(w, c, x.pos.col, op.len(), arith));
-            }
-            let b = mut_boundary_alt(op);
-            if b != "" && ints {
-                let c = mut_add(
-                    w,
-                    x.id,
-                    "boundary",
-                    x.pos,
-                    op,
-                    b,
-                    mut_q(op) + " → " + mut_q(b),
-                    false,
-                );
-                mut_set_last(w, mut_snip(w, c, x.pos.col, op.len(), b));
-            }
-            let n = mut_negate_alt(op);
-            if n != "" {
-                let c = mut_add(
-                    w,
-                    x.id,
-                    "negate",
-                    x.pos,
-                    op,
-                    n,
-                    mut_q(op) + " → " + mut_q(n),
-                    false,
-                );
-                mut_set_last(w, mut_snip(w, c, x.pos.col, op.len(), n));
-            }
-        }
+        AstExpr::Binary(x) => mut_collect_binary(w, x),
         AstExpr::Unary(x) => {
-            // (`!` on Int, a bitwise not, is left alone)
-            if (x.op == "!" && !mut_is_int(w, x.x)) || (x.op == "-" && mut_is_int(w, x.x)) {
-                let c = mut_add(w, x.id, "unary", x.pos, x.op, "", "drop " + mut_q(x.op), false);
+            let t = mut_prim(w, x.x);
+            let ok = (x.op == "!" && (t == "Bool" || t == "Int"))
+                || (x.op == "-" && (t == "Int" || t == "Float"));
+            if ok {
+                let ty = if t == "Bool" { "" } else { t };
+                let c = mut_add_t(
+                    w,
+                    x.id,
+                    "unary",
+                    x.pos,
+                    x.op,
+                    "",
+                    "drop " + mut_q(x.op),
+                    false,
+                    ty,
+                    0,
+                );
                 mut_set_last(w, mut_snip(w, c, x.pos.col, 1, ""));
             }
         }
@@ -335,6 +501,22 @@ fn mut_collect_expr(w: CovW, e: AstExpr) {
                 mut_set_last(w, mut_snip(w, c2, x.pos.col, len, "0"));
             }
         }
+        AstExpr::FloatLit(x) => {
+            let len = mut_float_len(w, x.pos);
+            let v = Float::from_bits(x.bits);
+            let mut alts = Vec::new();
+            let v1 = v + 1.0;
+            if v1.is_finite() && v1 != v {
+                alts.push(mut_float_text(v1));
+            }
+            if v != 0.0 {
+                alts.push("0.0");
+            }
+            for a in alts {
+                let c = mut_add(w, x.id, "float", x.pos, x.text, a, x.text + " → " + a, false);
+                mut_set_last(w, mut_snip(w, c, x.pos.col, len, a));
+            }
+        }
         AstExpr::BoolLit(x) => {
             let o = if x.value { "true" } else { "false" };
             let a = if x.value { "false" } else { "true" };
@@ -357,8 +539,261 @@ fn mut_collect_expr(w: CovW, e: AstExpr) {
                 mut_set_last(w, mut_snip(w, c, x.pos.col, len, "\"\""));
             }
         }
+        AstExpr::Match(m) => {
+            // with a final `_` arm, any other arm can be deleted
+            let n = m.arms.len();
+            let catchall = match m.arms.get(n - 1) {
+                Some(a) => a.pat.wildcard && a.guard.is_none(),
+                None => false,
+            };
+            let mut i = 0;
+            for a in m.arms {
+                mut_collect_pat(w, m, a.pat);
+                match a.guard {
+                    Some(g) => mut_collect_guard(w, m, i, g),
+                    None => {}
+                }
+                if catchall && i < n - 1 {
+                    let c = mut_add(
+                        w,
+                        m.id,
+                        "arm",
+                        a.pos,
+                        i.to_string(),
+                        "",
+                        "delete match arm",
+                        true,
+                    );
+                    mut_set_last(w, mut_snip_at(w, c, 0, mut_line(w, a.pos).len(), ""));
+                }
+                i = i + 1;
+            }
+        }
         _ => {}
     }
+}
+
+// mut_collect_guard lists the mutants of the guard g of arm i of m:
+// negated, and removed (which can make a later arm unreachable).
+fn mut_collect_guard(w: CovW, m: AstMatch, i: Int, g: AstExpr) {
+    let start = fmt_start_pos(g);
+    let line = mut_line(w, start);
+    let gi = cov_col_index(line, start.col);
+    let arrow = mut_find(line, "=>", gi);
+    let c = mut_add(w, m.id, "guard", start, i.to_string(), "negate", "negate guard", false);
+    if arrow > gi {
+        let inner = line.slice(gi, arrow).trim();
+        mut_set_last(w, mut_snip_at(w, c, gi, arrow, "!(" + inner + ") "));
+    }
+    let c2 = mut_add(w, m.id, "guard", start, i.to_string(), "remove", "remove guard", true);
+    let kw = match line.slice(0, gi).rfind("if") {
+        Some(k) => k,
+        None => -1,
+    };
+    if arrow > gi && kw >= 0 {
+        mut_set_last(w, mut_snip_at(w, c2, kw, arrow, ""));
+    }
+}
+
+// mut_bound_text spells bound v like the original token (a character
+// literal stays one when it can).
+fn mut_bound_text(orig: String, v: Int) -> String {
+    if orig.starts_with("'") && v > 32 && v < 127 && v != 39 && v != 92 {
+        return "'" + String::from_char(v) + "'";
+    }
+    v.to_string()
+}
+
+fn mut_pm1() -> Vec<Int> {
+    let mut v = Vec::new();
+    v.push(-1);
+    v.push(1);
+    v
+}
+
+fn mut_range_ok(lo: Option<Int>, hi: Option<Int>, incl: Bool) -> Bool {
+    match lo {
+        Some(l) => match hi {
+            Some(h) => if incl { l <= h } else { l < h },
+            None => true,
+        },
+        None => true,
+    }
+}
+
+// mut_collect_pat lists the pattern mutants of p (an arm's pattern of m,
+// or a part of one): the bounds of a range ± 1, and an or-pattern without
+// one of its alternatives. Both can leave the match non-exhaustive.
+fn mut_collect_pat(w: CovW, m: AstMatch, p: AstPattern) {
+    if p.range {
+        let line = mut_line(w, p.pos);
+        let pi = cov_col_index(line, p.pos.col);
+        let dots = mut_find(line, "..", pi);
+        match p.range_lo {
+            Some(l) => {
+                let len = mut_tok_len(line, pi, false);
+                let o = line.slice(pi, pi + len);
+                for d in mut_pm1() {
+                    let v = l + d;
+                    if mut_range_ok(Some(v), p.range_hi, p.range_incl) {
+                        let t = mut_bound_text(o, v);
+                        let c = mut_add_t(
+                            w,
+                            m.id,
+                            "pattern",
+                            p.pos,
+                            "lo",
+                            v.to_string(),
+                            "range bound " + o + " → " + t,
+                            true,
+                            "",
+                            p.id,
+                        );
+                        mut_set_last(w, mut_snip_at(w, c, pi, pi + len, t));
+                    }
+                }
+            }
+            None => {}
+        }
+        match p.range_hi {
+            Some(h) => {
+                if dots >= 0 {
+                    let mut hi = dots + 2;
+                    if line.char_at(hi).unwrap_or(0) == 61 {
+                        hi = hi + 1;
+                    }
+                    while line.char_at(hi).unwrap_or(0) == 32 {
+                        hi = hi + 1;
+                    }
+                    let len = mut_tok_len(line, hi, false);
+                    let o = line.slice(hi, hi + len);
+                    let hpos = AstPos {
+                        file: p.pos.file,
+                        line: p.pos.line,
+                        col: p.pos.col + hi - pi,
+                    };
+                    for d in mut_pm1() {
+                        let v = h + d;
+                        if mut_range_ok(p.range_lo, Some(v), p.range_incl) {
+                            let t = mut_bound_text(o, v);
+                            let c = mut_add_t(
+                                w,
+                                m.id,
+                                "pattern",
+                                hpos,
+                                "hi",
+                                v.to_string(),
+                                "range bound " + o + " → " + t,
+                                true,
+                                "",
+                                p.id,
+                            );
+                            mut_set_last(w, mut_snip_at(w, c, hi, hi + len, t));
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    if p.alts.len() >= 2 {
+        let line = mut_line(w, p.pos);
+        let n = p.alts.len();
+        let mut starts = Vec::new();
+        let mut ends = Vec::new();
+        let mut one_line = true;
+        for a in p.alts {
+            if a.pos.line != p.pos.line || a.pos.file != p.pos.file {
+                one_line = false;
+            }
+            let s = cov_col_index(line, a.pos.col);
+            starts.push(s);
+            ends.push(mut_pat_end(line, s));
+        }
+        let mut j = 0;
+        for a in p.alts {
+            let s = starts.get(j).unwrap_or(0);
+            let e = ends.get(j).unwrap_or(0);
+            let text = if one_line {
+                line.slice(s, e).trim()
+            } else {
+                ""
+            };
+            let c = mut_add_t(
+                w,
+                m.id,
+                "pattern",
+                a.pos,
+                "alt",
+                j.to_string(),
+                if text == "" {
+                    "delete alternative"
+                } else {
+                    "delete alternative " + mut_q(text)
+                },
+                true,
+                "",
+                p.id,
+            );
+            if one_line {
+                // `A | B | C` without B: from B to C, or from the end of the
+                // previous alternative for the last one
+                let c2 = if j + 1 < n {
+                    mut_snip_at(w, c, s, starts.get(j + 1).unwrap_or(e), "")
+                } else {
+                    mut_snip_at(w, c, ends.get(j - 1).unwrap_or(s), e, "")
+                };
+                mut_set_last(w, c2);
+            } else {
+                mut_set_last(w, c);
+            }
+            j = j + 1;
+        }
+    }
+    for q in p.args {
+        mut_collect_pat(w, m, q);
+    }
+    for q in p.alts {
+        mut_collect_pat(w, m, q);
+    }
+    for q in p.at {
+        mut_collect_pat(w, m, q);
+    }
+}
+
+// mut_pat_end is the end of the pattern that starts at index i of line:
+// the first `|`, `,`, `=>`, ` if ` or unbalanced closing bracket outside
+// brackets (trailing spaces excluded).
+fn mut_pat_end(line: String, i: Int) -> Int {
+    let mut depth = 0;
+    let mut k = i;
+    while k < line.len() {
+        let c = line.char_at(k).unwrap_or(0);
+        if c == 39 || c == 34 {
+            k = k + mut_tok_len(line, k, c == 34);
+            continue;
+        }
+        if c == 40 || c == 91 || c == 123 {
+            depth = depth + 1;
+        } else if c == 41 || c == 93 || c == 125 {
+            if depth == 0 {
+                break;
+            }
+            depth = depth - 1;
+        } else if depth == 0 {
+            if c == 124 || c == 44 || (c == 61 && line.char_at(k + 1).unwrap_or(0) == 62) {
+                break;
+            }
+            if c == 32 && line.slice(k, line.len()).starts_with(" if ") {
+                break;
+            }
+        }
+        k = k + 1;
+    }
+    while k > i && line.char_at(k - 1).unwrap_or(0) == 32 {
+        k = k - 1;
+    }
+    k
 }
 
 // mut_deletable reports whether an expression statement may be deleted
@@ -387,6 +822,28 @@ fn mut_stmt_id(s: AstStmt) -> Int {
 }
 
 fn mut_collect_stmt(w: CovW, s: AstStmt) {
+    // `break` ↔ `continue` (a `loop` with a value needs its `break value`)
+    let jump = match s {
+        AstStmt::Break(x) => if x.value.is_none() { "continue" } else { "" },
+        AstStmt::Continue(_) => "break",
+        _ => "",
+    };
+    if jump != "" {
+        let pos = fmt_stmt_pos(s);
+        let o = if jump == "break" { "continue" } else { "break" };
+        let c = mut_add(
+            w,
+            mut_stmt_id(s),
+            "jump",
+            pos,
+            o,
+            jump,
+            mut_q(o) + " → " + mut_q(jump),
+            true,
+        );
+        mut_set_last(w, mut_snip(w, c, pos.col, o.len(), jump));
+        return;
+    }
     let ok = match s {
         AstStmt::Assign(_) => true,
         AstStmt::FieldAssign(_) => true,
@@ -444,12 +901,22 @@ fn mut_binary(w: CovW, b: AstBinary, op: String) -> AstExpr {
     })
 }
 
+fn mut_float_lit(w: CovW, pos: AstPos, text: String) -> AstExpr {
+    AstExpr::FloatLit(AstFloatLit {
+        id: cov_id(w),
+        pos: pos,
+        text: text,
+        bits: flit_bits(text).unwrap_or(0),
+    })
+}
+
 // mut_apply_expr rewrites expression e (its children already rewritten)
-// for candidate c.
-fn mut_apply_expr(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
+// for candidate c; orig is the node as written (pattern mutants copy it).
+fn mut_apply_expr(w: CovW, c: MutCand, orig: AstExpr, e: AstExpr) -> AstExpr {
     let k = c.kind;
     let p = c.pos;
-    if k == "arith" || k == "boundary" || k == "logic" || (k == "negate" && w.real) {
+    let binop = k == "arith" || k == "bitwise" || k == "boundary";
+    if binop || k == "logic" || (k == "negate" && w.real) {
         let b = match e {
             AstExpr::Binary(b) => b,
             _ => {
@@ -486,17 +953,13 @@ fn mut_apply_expr(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
         rest.push(b.y);
         rest.push(cov_int(w, p, mut_op_code(c.op)));
         rest.push(cov_int(w, p, mut_op_code(c.alt)));
-        return mut_call(
-            w,
-            p,
-            if k == "arith" {
-                "__mut_iop"
-            } else {
-                "__mut_icmp"
-            },
-            c.id,
-            rest,
-        );
+        let f = if k == "boundary" { "cmp" } else { "op" };
+        let pre = if c.ty == "Float" {
+            "__mut_f"
+        } else {
+            "__mut_i"
+        };
+        return mut_call(w, p, pre + f, c.id, rest);
     }
     if k == "negate" || k == "bool" {
         if w.real && k == "bool" {
@@ -515,7 +978,13 @@ fn mut_apply_expr(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
             return x;
         }
         if c.op == "!" {
+            if c.ty == "Int" {
+                return mut_call(w, p, "__mut_bnot", c.id, mut_one(x));
+            }
             return mut_flip(w, c, e);
+        }
+        if c.ty == "Float" {
+            return mut_call(w, p, "__mut_fneg", c.id, mut_one(x));
         }
         return mut_call(w, p, "__mut_neg", c.id, mut_one(x));
     }
@@ -529,16 +998,510 @@ fn mut_apply_expr(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
         rest.push(cov_int(w, p, v));
         return mut_call(w, p, "__mut_int", c.id, rest);
     }
+    if k == "float" {
+        if w.real {
+            return mut_float_lit(w, p, c.alt);
+        }
+        let mut rest = Vec::new();
+        rest.push(e);
+        rest.push(mut_float_lit(w, p, c.alt));
+        return mut_call(w, p, "__mut_float", c.id, rest);
+    }
     if k == "string" {
         if w.real {
             return AstExpr::StrLit(AstStringLit { id: cov_id(w), pos: p, value: "" });
         }
         return mut_call(w, p, "__mut_str", c.id, mut_one(e));
     }
+    if k == "guard" {
+        return mut_apply_guard(w, c, e);
+    }
+    if k == "pattern" || k == "arm" {
+        return mut_apply_pattern(w, c, orig, e);
+    }
     e
 }
 
+fn mut_arm(a: AstMatchArm, pat: AstPattern, guard: Option<AstExpr>) -> AstMatchArm {
+    AstMatchArm { id: a.id, pos: a.pos, pat: pat, guard: guard, body: a.body, bare: a.bare }
+}
+
+// mut_apply_guard negates or removes the guard of arm c.op of match e.
+fn mut_apply_guard(w: CovW, c: MutCand, e: AstExpr) -> AstExpr {
+    let m = match e {
+        AstExpr::Match(m) => m,
+        _ => {
+            return e;
+        }
+    };
+    let n = c.op.parse_int().unwrap_or(-1);
+    let p = c.pos;
+    let mut arms = Vec::new();
+    let mut i = 0;
+    for a in m.arms {
+        let mut guard = a.guard;
+        if i == n {
+            match a.guard {
+                Some(g) => {
+                    guard = if c.alt == "negate" {
+                        Some(if w.real {
+                            mut_not(w, p, g)
+                        } else {
+                            mut_flip(w, c, g)
+                        })
+                    } else if w.real {
+                        None
+                    } else {
+                        // __mut_on(k) || g
+                        Some(
+                            AstExpr::Binary(AstBinary {
+                                id: cov_id(w),
+                                pos: p,
+                                op: "||",
+                                x: cov_call1(w, p, "__mut_on", c.id),
+                                y: g,
+                                compound: false,
+                            }),
+                        )
+                    };
+                }
+                None => {}
+            }
+        }
+        arms.push(mut_arm(a, a.pat, guard));
+        i = i + 1;
+    }
+    AstExpr::Match(AstMatch { id: m.id, pos: m.pos, x: m.x, arms: arms })
+}
+
+fn mut_edit_arms(c: MutCand, m: AstMatch) -> AstMatch {
+    let mut arms = Vec::new();
+    let del = if c.kind == "arm" {
+        c.op.parse_int().unwrap_or(-1)
+    } else {
+        -1
+    };
+    let mut i = 0;
+    for a in m.arms {
+        if i != del {
+            arms.push(mut_arm(a, mut_pat_edit(a.pat, c), a.guard));
+        }
+        i = i + 1;
+    }
+    AstMatch { id: m.id, pos: m.pos, x: m.x, arms: arms }
+}
+
+// mut_apply_pattern edits a pattern of match e: in place as plain code,
+// or in a copy of the original match chosen at run time.
+fn mut_apply_pattern(w: CovW, c: MutCand, orig: AstExpr, e: AstExpr) -> AstExpr {
+    if w.real {
+        return match e {
+            AstExpr::Match(m) => AstExpr::Match(mut_edit_arms(c, m)),
+            _ => e,
+        };
+    }
+    let om = match orig {
+        AstExpr::Match(m) => m,
+        _ => {
+            return e;
+        }
+    };
+    let p = c.pos;
+    let copy = mut_reid_expr(w, AstExpr::Match(mut_edit_arms(c, om)));
+    cov_if(
+        w,
+        p,
+        cov_call1(w, p, "__mut_on", c.id),
+        cov_block_of(w, p, Vec::new(), Some(copy)),
+        cov_block_of(w, p, Vec::new(), Some(e)),
+    )
+}
+
+fn mut_pat_with(
+    p: AstPattern,
+    args: Vec<AstPattern>,
+    alts: Vec<AstPattern>,
+    at: Vec<AstPattern>,
+    lo: Option<Int>,
+    hi: Option<Int>,
+    id: Int,
+) -> AstPattern {
+    AstPattern {
+        id: id,
+        pos: p.pos,
+        wildcard: p.wildcard,
+        tuple: p.tuple,
+        mutable: p.mutable,
+        bind: p.bind,
+        ty: p.ty,
+        ctor: p.ctor,
+        args: args,
+        int_value: p.int_value,
+        bool_lit: p.bool_lit,
+        str_value: p.str_value,
+        alts: alts,
+        range: p.range,
+        range_lo: lo,
+        range_hi: hi,
+        range_incl: p.range_incl,
+        at: at,
+        brace: p.brace,
+        fields: p.fields,
+        rest: p.rest,
+    }
+}
+
+fn mut_pats_edit(ps: Vec<AstPattern>, c: MutCand) -> Vec<AstPattern> {
+    let mut out = Vec::new();
+    for q in ps {
+        out.push(mut_pat_edit(q, c));
+    }
+    out
+}
+
+// mut_pat_edit is pattern p with the edit of pattern mutant c (a copy:
+// patterns are shared with the original tree).
+fn mut_pat_edit(p: AstPattern, c: MutCand) -> AstPattern {
+    if p.id != c.sub {
+        return mut_pat_with(
+            p,
+            mut_pats_edit(p.args, c),
+            mut_pats_edit(p.alts, c),
+            mut_pats_edit(p.at, c),
+            p.range_lo,
+            p.range_hi,
+            p.id,
+        );
+    }
+    let v = c.alt.parse_int().unwrap_or(0);
+    if c.op == "lo" {
+        return mut_pat_with(p, p.args, p.alts, p.at, Some(v), p.range_hi, p.id);
+    }
+    if c.op == "hi" {
+        return mut_pat_with(p, p.args, p.alts, p.at, p.range_lo, Some(v), p.id);
+    }
+    let mut alts = Vec::new();
+    let mut j = 0;
+    for a in p.alts {
+        if j != v {
+            alts.push(a);
+        }
+        j = j + 1;
+    }
+    if alts.len() == 1 {
+        return alts.get(0).unwrap_or(p);
+    }
+    mut_pat_with(p, p.args, alts, p.at, p.range_lo, p.range_hi, p.id)
+}
+
+// ---- copies with fresh ids (the duplicated match of a pattern mutant) ----
+
+fn mut_reid_pat(w: CovW, p: AstPattern) -> AstPattern {
+    mut_pat_with(
+        p,
+        mut_reid_pats(w, p.args),
+        mut_reid_pats(w, p.alts),
+        mut_reid_pats(w, p.at),
+        p.range_lo,
+        p.range_hi,
+        cov_id(w),
+    )
+}
+
+fn mut_reid_pats(w: CovW, ps: Vec<AstPattern>) -> Vec<AstPattern> {
+    let mut out = Vec::new();
+    for q in ps {
+        out.push(mut_reid_pat(w, q));
+    }
+    out
+}
+
+fn mut_reid_opt_pat(w: CovW, p: Option<AstPattern>) -> Option<AstPattern> {
+    match p {
+        Some(q) => Some(mut_reid_pat(w, q)),
+        None => None,
+    }
+}
+
+fn mut_reid_opt(w: CovW, e: Option<AstExpr>) -> Option<AstExpr> {
+    match e {
+        Some(x) => Some(mut_reid_expr(w, x)),
+        None => None,
+    }
+}
+
+fn mut_reid_exprs(w: CovW, es: Vec<AstExpr>) -> Vec<AstExpr> {
+    let mut out = Vec::new();
+    for e in es {
+        out.push(mut_reid_expr(w, e));
+    }
+    out
+}
+
+fn mut_reid_block(w: CovW, b: AstBlock) -> AstBlock {
+    let mut stmts = Vec::new();
+    for s in b.stmts {
+        stmts.push(mut_reid_stmt(w, s));
+    }
+    AstBlock { id: cov_id(w), pos: b.pos, stmts: stmts, tail: mut_reid_opt(w, b.tail), end: b.end }
+}
+
+fn mut_reid_stmt(w: CovW, s: AstStmt) -> AstStmt {
+    match s {
+        AstStmt::Let(l) => AstStmt::Let(AstLetStmt {
+            id: cov_id(w),
+            pos: l.pos,
+            mutable: l.mutable,
+            name: l.name,
+            pat: mut_reid_opt_pat(w, l.pat),
+            ty: l.ty,
+            init: mut_reid_expr(w, l.init),
+            let_else: l.let_else,
+        }),
+        AstStmt::Assign(a) => AstStmt::Assign(AstAssignStmt {
+            id: cov_id(w),
+            pos: a.pos,
+            name: a.name,
+            value: mut_reid_expr(w, a.value),
+        }),
+        AstStmt::FieldAssign(a) => {
+            let t = a.target;
+            AstStmt::FieldAssign(AstFieldAssignStmt {
+                id: cov_id(w),
+                pos: a.pos,
+                target: AstFieldExpr {
+                    id: cov_id(w),
+                    pos: t.pos,
+                    x: mut_reid_expr(w, t.x),
+                    name: t.name,
+                },
+                value: mut_reid_expr(w, a.value),
+            })
+        }
+        AstStmt::Break(x) => AstStmt::Break(AstBreakStmt {
+            id: cov_id(w),
+            pos: x.pos,
+            label: x.label,
+            value: mut_reid_opt(w, x.value),
+        }),
+        AstStmt::Continue(x) => AstStmt::Continue(AstContinueStmt {
+            id: cov_id(w),
+            pos: x.pos,
+            label: x.label,
+        }),
+        AstStmt::While(x) => AstStmt::While(AstWhileStmt {
+            id: cov_id(w),
+            pos: x.pos,
+            pat: mut_reid_opt_pat(w, x.pat),
+            cond: mut_reid_expr(w, x.cond),
+            body: mut_reid_block(w, x.body),
+            is_loop: x.is_loop,
+            label: x.label,
+            expr: x.expr,
+        }),
+        AstStmt::For(x) => AstStmt::For(AstForStmt {
+            id: cov_id(w),
+            pos: x.pos,
+            var: x.var,
+            pat: mut_reid_opt_pat(w, x.pat),
+            iter: mut_reid_expr(w, x.iter),
+            end: mut_reid_opt(w, x.end),
+            body: mut_reid_block(w, x.body),
+            label: x.label,
+        }),
+        AstStmt::Return(r) => AstStmt::Return(AstReturnStmt {
+            id: cov_id(w),
+            pos: r.pos,
+            value: mut_reid_opt(w, r.value),
+        }),
+        AstStmt::Expr(e) => AstStmt::Expr(AstExprStmt {
+            id: cov_id(w),
+            pos: e.pos,
+            x: mut_reid_expr(w, e.x),
+            semi: e.semi,
+        }),
+    }
+}
+
+fn mut_reid_expr(w: CovW, e: AstExpr) -> AstExpr {
+    match e {
+        AstExpr::IntLit(x) => AstExpr::IntLit(AstIntLit {
+            id: cov_id(w),
+            pos: x.pos,
+            value: x.value,
+        }),
+        AstExpr::FloatLit(x) => AstExpr::FloatLit(AstFloatLit {
+            id: cov_id(w),
+            pos: x.pos,
+            text: x.text,
+            bits: x.bits,
+        }),
+        AstExpr::BoolLit(x) => AstExpr::BoolLit(AstBoolLit {
+            id: cov_id(w),
+            pos: x.pos,
+            value: x.value,
+        }),
+        AstExpr::StrLit(x) => AstExpr::StrLit(AstStringLit {
+            id: cov_id(w),
+            pos: x.pos,
+            value: x.value,
+        }),
+        AstExpr::UnitLit(x) => AstExpr::UnitLit(AstUnitLit { id: cov_id(w), pos: x.pos }),
+        AstExpr::Ident(x) => AstExpr::Ident(AstIdent {
+            id: cov_id(w),
+            pos: x.pos,
+            name: x.name,
+            targs: x.targs,
+        }),
+        AstExpr::Binary(x) => AstExpr::Binary(AstBinary {
+            id: cov_id(w),
+            pos: x.pos,
+            op: x.op,
+            x: mut_reid_expr(w, x.x),
+            y: mut_reid_expr(w, x.y),
+            compound: x.compound,
+        }),
+        AstExpr::Unary(x) => AstExpr::Unary(AstUnary {
+            id: cov_id(w),
+            pos: x.pos,
+            op: x.op,
+            x: mut_reid_expr(w, x.x),
+        }),
+        AstExpr::Call(x) => AstExpr::Call(AstCall {
+            id: cov_id(w),
+            pos: x.pos,
+            func: mut_reid_expr(w, x.func),
+            args: mut_reid_exprs(w, x.args),
+        }),
+        AstExpr::Method(x) => AstExpr::Method(AstMethodCall {
+            id: cov_id(w),
+            pos: x.pos,
+            recv: mut_reid_expr(w, x.recv),
+            name: x.name,
+            targs: x.targs,
+            args: mut_reid_exprs(w, x.args),
+        }),
+        AstExpr::Field(x) => AstExpr::Field(AstFieldExpr {
+            id: cov_id(w),
+            pos: x.pos,
+            x: mut_reid_expr(w, x.x),
+            name: x.name,
+        }),
+        AstExpr::Path(x) => AstExpr::Path(AstPathExpr {
+            id: cov_id(w),
+            pos: x.pos,
+            ty: x.ty,
+            ty_args: x.ty_args,
+            name: x.name,
+            targs: x.targs,
+        }),
+        AstExpr::StructLit(x) => {
+            let mut fields = Vec::new();
+            for f in x.fields {
+                fields.push(AstFieldInit {
+                    id: cov_id(w),
+                    pos: f.pos,
+                    name: f.name,
+                    value: mut_reid_expr(w, f.value),
+                });
+            }
+            AstExpr::StructLit(AstStructLit {
+                id: cov_id(w),
+                pos: x.pos,
+                name: x.name,
+                fields: fields,
+            })
+        }
+        AstExpr::If(x) => AstExpr::If(AstIf {
+            id: cov_id(w),
+            pos: x.pos,
+            pat: mut_reid_opt_pat(w, x.pat),
+            cond: mut_reid_expr(w, x.cond),
+            then: mut_reid_block(w, x.then),
+            els: mut_reid_opt(w, x.els),
+        }),
+        AstExpr::Match(x) => {
+            let scrut = mut_reid_expr(w, x.x);
+            let mut arms = Vec::new();
+            for a in x.arms {
+                arms.push(AstMatchArm {
+                    id: cov_id(w),
+                    pos: a.pos,
+                    pat: mut_reid_pat(w, a.pat),
+                    guard: mut_reid_opt(w, a.guard),
+                    body: mut_reid_expr(w, a.body),
+                    bare: a.bare,
+                });
+            }
+            AstExpr::Match(AstMatch { id: cov_id(w), pos: x.pos, x: scrut, arms: arms })
+        }
+        AstExpr::Block(b) => AstExpr::Block(mut_reid_block(w, b)),
+        AstExpr::Try(x) => AstExpr::Try(AstTry {
+            id: cov_id(w),
+            pos: x.pos,
+            x: mut_reid_expr(w, x.x),
+        }),
+        AstExpr::Closure(x) => {
+            let mut params = Vec::new();
+            for q in x.params {
+                params.push(AstParam {
+                    id: cov_id(w),
+                    pos: q.pos,
+                    mutable: q.mutable,
+                    name: q.name,
+                    ty: q.ty,
+                });
+            }
+            AstExpr::Closure(AstClosure {
+                id: cov_id(w),
+                pos: x.pos,
+                is_move: x.is_move,
+                params: params,
+                result: x.result,
+                body: mut_reid_expr(w, x.body),
+            })
+        }
+        AstExpr::Tuple(x) => AstExpr::Tuple(AstTupleLit {
+            id: cov_id(w),
+            pos: x.pos,
+            elems: mut_reid_exprs(w, x.elems),
+        }),
+        AstExpr::Range(x) => AstExpr::Range(AstRange {
+            id: cov_id(w),
+            pos: x.pos,
+            start: mut_reid_expr(w, x.start),
+            end: mut_reid_expr(w, x.end),
+            inclusive: x.inclusive,
+        }),
+        AstExpr::Index(x) => AstExpr::Index(AstIndex {
+            id: cov_id(w),
+            pos: x.pos,
+            x: mut_reid_expr(w, x.x),
+            index: mut_reid_expr(w, x.index),
+        }),
+        AstExpr::Macro(x) => AstExpr::Macro(AstMacro {
+            id: cov_id(w),
+            pos: x.pos,
+            name: x.name,
+            delim: x.delim,
+            args: mut_reid_exprs(w, x.args),
+            arg_names: x.arg_names,
+            repeat: x.repeat,
+            pat: x.pat,
+            expansion: mut_reid_expr(w, x.expansion),
+            errs: x.errs,
+        }),
+    }
+}
+
 // ---- hooks called by the walker ----
+
+fn mut_dummy_cand(cs: Vec<MutCand>) -> MutCand {
+    match cs.get(0) {
+        Some(c) => c,
+        None => mut_dummy_cand(cs),
+    }
+}
 
 fn mut_hook_expr(w: CovW, e: AstExpr, e2: AstExpr) -> AstExpr {
     if w.mode == "collect" {
@@ -549,8 +1512,45 @@ fn mut_hook_expr(w: CovW, e: AstExpr, e2: AstExpr) -> AstExpr {
         return e2;
     }
     let mut out = e2;
-    for c in mut_active(w, ast_expr_id(e)) {
-        out = mut_apply_expr(w, c, out);
+    let cs = mut_active(w, ast_expr_id(e));
+    // two operator mutants of one node (`^` → `&` and `^` → `|`) share
+    // one call
+    let mut ops = Vec::new();
+    for c in cs {
+        if c.kind == "arith" || c.kind == "bitwise" {
+            ops.push(c);
+        }
+    }
+    let two = !w.real && ops.len() == 2;
+    if two {
+        match out {
+            AstExpr::Binary(b) => {
+                let c = ops.get(0).unwrap_or(mut_dummy_cand(cs));
+                let c2 = ops.get(1).unwrap_or(c);
+                let p = c.pos;
+                let mut rest = Vec::new();
+                rest.push(cov_int(w, p, c2.id));
+                rest.push(b.x);
+                rest.push(b.y);
+                rest.push(cov_int(w, p, mut_op_code(c.op)));
+                rest.push(cov_int(w, p, mut_op_code(c.alt)));
+                rest.push(cov_int(w, p, mut_op_code(c2.alt)));
+                out = mut_call(w, p, "__mut_iop2", c.id, rest);
+            }
+            _ => {}
+        }
+    }
+    // pattern mutants last: they wrap the match in an `if`
+    for c in cs {
+        let op = c.kind == "arith" || c.kind == "bitwise";
+        if c.kind != "pattern" && c.kind != "arm" && !(two && op) {
+            out = mut_apply_expr(w, c, e, out);
+        }
+    }
+    for c in cs {
+        if c.kind == "pattern" || c.kind == "arm" {
+            out = mut_apply_expr(w, c, e, out);
+        }
     }
     out
 }
@@ -604,6 +1604,36 @@ fn mut_hook_stmt(w: CovW, s: AstStmt, s2: AstStmt) -> AstStmt {
     let mut out = s2;
     for c in mut_active(w, mut_stmt_id(s)) {
         let p = c.pos;
+        if c.kind == "jump" {
+            let label = match s {
+                AstStmt::Break(x) => x.label,
+                AstStmt::Continue(x) => x.label,
+                _ => "",
+            };
+            let j = if c.alt == "break" {
+                AstStmt::Break(AstBreakStmt { id: cov_id(w), pos: p, label: label, value: None })
+            } else {
+                AstStmt::Continue(AstContinueStmt { id: cov_id(w), pos: p, label: label })
+            };
+            if w.real {
+                out = j;
+            } else {
+                // if __mut_on(k) { jump } else { s }
+                let mut js = Vec::new();
+                js.push(j);
+                let mut stmts = Vec::new();
+                stmts.push(out);
+                let e = cov_if(
+                    w,
+                    p,
+                    cov_call1(w, p, "__mut_on", c.id),
+                    cov_block_of(w, p, js, None),
+                    cov_block_of(w, p, stmts, None),
+                );
+                out = cov_expr_stmt(w, p, e, false);
+            }
+            continue;
+        }
         if w.real {
             out = cov_expr_stmt(w, p, AstExpr::UnitLit(AstUnitLit { id: cov_id(w), pos: p }), true);
         } else {
@@ -644,6 +1674,9 @@ fn mut_default_expr(w: CovW, d: String, pos: AstPos) -> AstExpr {
     if d == "0" {
         return cov_int(w, pos, 0);
     }
+    if d == "0.0" {
+        return mut_float_lit(w, pos, "0.0");
+    }
     if d == "None" {
         return cov_ident(w, pos, "None");
     }
@@ -665,6 +1698,7 @@ fn mut_default_expr(w: CovW, d: String, pos: AstPos) -> AstExpr {
 fn mut_trivial(t: AstExpr, d: String) -> Bool {
     match t {
         AstExpr::IntLit(x) => d == "0" && x.value == 0,
+        AstExpr::FloatLit(x) => d == "0.0" && x.bits == 0,
         AstExpr::StrLit(x) => d == "\"\"" && x.value == "",
         AstExpr::Ident(x) => d == "None" && x.name == "None",
         AstExpr::BoolLit(_) => d == "!",
@@ -672,32 +1706,68 @@ fn mut_trivial(t: AstExpr, d: String) -> Bool {
     }
 }
 
+// mut_open_end reports whether a line ends in the middle of an
+// expression (it goes on on the next line).
+fn mut_open_end(s: String) -> Bool {
+    let t = s.trim();
+    if t == "" {
+        return true;
+    }
+    let c = t.char_at(t.len() - 1).unwrap_or(0);
+    // ( [ { , + - * / % & | ^ = < > !
+    let open = "([{,+-*/%&|^=<>!";
+    let mut i = 0;
+    while i < open.len() {
+        if open.char_at(i).unwrap_or(0) == c {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn mut_collect_result(w: CovW, fd: AstFuncDecl, body: AstBlock, t: AstExpr) {
+    let d = mut_default(mut_ty(w, ast_expr_id(t)));
+    if d == "" || mut_trivial(t, d) {
+        return;
+    }
+    let start = fmt_start_pos(t);
+    let desc = if d == "!" {
+        "negate result"
+    } else {
+        "result → " + d
+    };
+    let c = mut_add(w, fd.id, "result", start, "", d, desc, true);
+    let line = mut_line(w, start);
+    let mut i = cov_col_index(line, start.col);
+    // `(a - b) * c` starts at `a`: from the parenthesis
+    while i > 0 && line.char_at(i - 1).unwrap_or(0) == 40 {
+        i = i - 1;
+    }
+    let j = if body.end.line == start.line {
+        cov_col_index(line, body.end.col)
+    } else {
+        line.len()
+    };
+    if d == "!" {
+        let inner = line.slice(i, j).trim();
+        if body.end.line == start.line || !mut_open_end(inner) {
+            let sp = if body.end.line == start.line { " " } else { "" };
+            mut_set_last(w, mut_snip_at(w, c, i, j, "!(" + inner + ")" + sp));
+        } else {
+            mut_set_last(w, mut_snip_at(w, c, i, i, "!"));
+        }
+    } else if body.end.line == start.line {
+        mut_set_last(w, mut_snip_at(w, c, i, j, d + " "));
+    } else {
+        mut_set_last(w, mut_snip_at(w, c, i, j, d));
+    }
+}
+
 fn mut_hook_result(w: CovW, fd: AstFuncDecl, body: AstBlock) -> AstBlock {
     if w.mode == "collect" {
         match body.tail {
-            Some(t) => {
-                let d = mut_default(mut_ty(w, ast_expr_id(t)));
-                if d != "" && !mut_trivial(t, d) {
-                    let start = fmt_start_pos(t);
-                    let desc = if d == "!" {
-                        "negate result"
-                    } else {
-                        "result → " + d
-                    };
-                    let c = mut_add(w, fd.id, "result", start, "", d, desc, true);
-                    let line = cov_src_line(w.lines, start.file, start.line);
-                    let repl = if d == "!" { "!" } else { d };
-                    let i = cov_col_index(line, start.col);
-                    if d == "!" {
-                        mut_set_last(w, mut_snip(w, c, start.col, 0, "!"));
-                    } else if body.end.line == start.line {
-                        let j = cov_col_index(line, body.end.col);
-                        mut_set_last(w, mut_snip(w, c, start.col, j - i, repl + " "));
-                    } else {
-                        mut_set_last(w, mut_snip(w, c, start.col, line.len() - i, repl));
-                    }
-                }
-            }
+            Some(t) => mut_collect_result(w, fd, body, t),
             None => {}
         }
         return body;

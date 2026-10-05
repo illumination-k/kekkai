@@ -27,6 +27,28 @@ fn __cov_hit(k: Int) {
     }
 }
 
+// `e?` is instrumented as `e.__cov_try(k0, k1)?`: probe k0 when the `?`
+// continues (Some / Ok), k1 when it returns early (None / Err). The value
+// is returned unchanged, so neither the types (the `From` conversion of
+// the error included) nor the order of evaluation change.
+trait __CovTry {
+    fn __cov_try(self, k0: Int, k1: Int) -> Self;
+}
+
+impl<T> __CovTry for Option<T> {
+    fn __cov_try(self, k0: Int, k1: Int) -> Option<T> {
+        __cov_hit(if self.is_some() { k0 } else { k1 });
+        self
+    }
+}
+
+impl<T, E> __CovTry for Result<T, E> {
+    fn __cov_try(self, k0: Int, k1: Int) -> Result<T, E> {
+        __cov_hit(if self.is_ok() { k0 } else { k1 });
+        self
+    }
+}
+
 // __cov_flush is called by __exit.
 fn __cov_flush() {
     let rt = __Rt::get();

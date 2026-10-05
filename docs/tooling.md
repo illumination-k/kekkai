@@ -267,9 +267,15 @@ Line and branch coverage of the program's `#[test]` functions. The
 compiler (`cover-build`, `compiler/cover_walk.kek`) inserts probes
 `__cov_hit(k);` into the AST of every user function (not `#[test]`
 functions) before type checking: at function entry, in both branches of
-every `if` (an implicit empty `else` included), in every `match` arm, in
-loop and closure bodies, and after every statement that can leave its block
-early (`return`, `?`, `break`, `continue`). Each test runs in its own
+every `if` (an implicit empty `else` included), in every `match` arm and
+both outcomes of its guard, in both outcomes of every `?` and `let ... else`,
+in loop and closure bodies, and after every statement that can leave its
+block early (`return`, `?`, `break`, `continue`, a labeled `break 'a` /
+`continue 'a` that leaves an outer loop). `e?` is instrumented as
+`e.__cov_try(k0, k1)?` (the value is passed through unchanged, so types,
+the `From` conversion of the error and the order of evaluation stay the
+same); the code a macro adds (the failing branch of `assert!`) is not
+instrumented, only its arguments. Each test runs in its own
 process; the probes it hit are written at exit to the file named by
 `KEK_COVER_OUT`. Functions marked `#[rare]` are reported separately and are
 not counted. The exit status is 1 when a test fails or the line coverage is
@@ -293,9 +299,19 @@ below `[cover] min_line` of `kekkai.toml`.
 
 - `status` of a test: `ok`, `failed` or `trapped`. `hits` is the number of
   tests that entered the function.
-- `kind` of a site: `fn`, `then`, `else`, `arm`, `loop`, `closure`, `seq`
-  (after an early exit). Branch sites (`then`, `else`, `arm`) carry their
-  index in the decision and the decision's line.
+- `kind` of a site: `fn`, `then`, `else`, `arm`, `guard`, `let-else`,
+  `try`, `loop`, `closure`, `seq` (after an early exit). Branch sites
+  carry their index in the decision (`branch`) and the decision's line:
+  `then` 0 / `else` 1; `arm` i; `guard` 0 (true) / 1 (false), at the
+  guard; `let-else` 0 (the pattern matched) at the pattern / 1 (the `else`
+  block ran) at `else`; `try` 0 (continued: `Ok` / `Some`) / 1 (returned
+  early: `Err` / `None`), at the `?`. `guard` and `try` sites cover no
+  lines of their own.
+- Functions are named as in diagnostics: `area`, `Type::method`,
+  `<Type as Trait>::method`, and `a::b::f` for items of submodules
+  (`kek cover` takes a directory program; its tests in submodules run
+  too). The dispatch functions of `dyn Trait` are not the program's and
+  are not reported.
 - `-lcov file` writes an lcov tracefile (`SF`, `FN`/`FNDA`, `BRDA`, `DA`,
   `LF`/`LH`); counts are numbers of tests.
 - Results are cached per test in `.kek-cache/cover/`, keyed by the

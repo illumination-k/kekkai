@@ -73,6 +73,9 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `Vec` の操作（`sort` `contains` `insert` `remove` `dedup` `binary_search` …） | ✅ | |
 | `Int` の操作（`pow` `checked_*` `saturating_*` `rem_euclid` …） | ✅ | |
 | `String` の操作（`chars` `lines` `split_once` `strip_prefix` `repeat` …） | ✅ | |
-| イテレータの追加のアダプタ（`flat_map` `scan` `partition` `unzip` …） | 🚧 | |
-| `HashMap` の entry API | 🚧 | |
-| `BTreeMap` / `BTreeSet` / `VecDeque` | 🚧 | |
+| イテレータのアダプタ（`flat_map` `flatten` `scan` `inspect` `map_while` `fuse` `cycle` `cloned`） | ✅ | `scan` のクロージャは `Option<(状態, 要素)>` を返す |
+| イテレータの消費（`reduce` `try_fold` `partition` `unzip` `min_by` `max_by` `is_sorted` `eq` `cmp` …） | ✅ | `try_fold` は `Option` / `Result`。`partition` / `unzip` は `Vec` を返す |
+| `collect` / `sum` で `Option<Vec<T>>`・`Result<Vec<T>, E>`、コードポイントから `String` | ✅ | |
+| `HashMap` の entry API（`or_insert` `or_insert_with` `or_default` `and_modify` `Occupied` / `Vacant`） | ✅ | `&mut V` の代わりに値を返し、`and_modify` は `fn(V) -> V` |
+| `BTreeMap` / `BTreeSet`（順序付き、`range` `first_key_value` `pop_first` entry API） | ✅ | AVL 木で O(log n)。反復は生きたビュー |
+| `VecDeque`（`push_front` `pop_front` `push_back` `pop_back` …） | ✅ | リングバッファ |

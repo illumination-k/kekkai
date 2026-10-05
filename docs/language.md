@@ -6,7 +6,7 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn`・`type`・`const` のみ。グローバル変数はない（＝暗黙の権限がない）。`const` は純粋な値で、使うたびに評価される（下記「定数」）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`Vec`／`Int`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`Vec`／`Int`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`／`BTreeMap`／`BTreeSet`／`VecDeque`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
@@ -21,7 +21,7 @@
 | `(A, B, ...)` | タプル（不変の値）。要素は `t.0`、`(A,)` は 1 要素 |
 | `Option<T>`, `Result<T, E>` | `Some`/`None`, `Ok`/`Err` |
 | `Vec<T>` | 伸長可能な配列（参照型） |
-| `HashMap<K, V>`, `HashSet<T>` | core ライブラリのコレクション（下記） |
+| `HashMap<K, V>`, `HashSet<T>`, `BTreeMap<K, V>`, `BTreeSet<T>`, `VecDeque<T>` | core ライブラリのコレクション（下記） |
 | `Labeled<L, T>` | ラベル付きの値（個人情報は `Labeled<PII, T>`）。文字列にできない（下記） |
 | `Can<A, r>` | 資源 `r`（変数）への操作 `A` の権限（下記） |
 | `struct S<T> { f: T, mut g: T }` | フィールドは既定で不変、`mut` を付けたものだけ代入できる（参照型） |
@@ -139,7 +139,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 ```
 
 - trait は必須メソッド（`;` で終わる宣言）と既定メソッドを持つ。スーパートレイト（`trait Ord: Eq + PartialOrd`）、関連型（`type Item;`、`Self::Item`、`T::Item`）、型パラメータ（`trait From<T>`）を書ける。
-- 境界は `<T: A + B>`、`where T: A, Self::Item: Ord`、関連型の指定は `I: Iterator<Item = Int>`。
+- 境界は `<T: A + B>`、`where T: A, Self::Item: Ord`、関連型の指定は `I: Iterator<Item = Int>`（`where Self::Item: IntoIterator<IntoIter = J>` のように `where` にも書け、本体での関連型の解決と呼び出し側の型引数の推論に使われる）。
 - 呼び出しは静的に解決する（trait object 経由の呼び出しも、プログラム全体で使われる型への分岐になる。下記）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
@@ -158,7 +158,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 | `Add<Rhs>`, `Sub<Rhs>`, `Mul<Rhs>`, `Div<Rhs>`, `Rem<Rhs>`, `Neg` | `+ - * / %` と単項 `-`（下記「演算子のオーバーロード」） |
 | `Iterator`, `DoubleEndedIterator`, `IntoIterator`, `FromIterator<A>`, `Sum<A>`, `Product<A>` | 下記 |
 
-core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Labeled` にも。`Display` は `Int`・`Bool`・`String`・`()` と時刻の型だけ、`Debug` は `HashMap`・`HashSet`・`Ordering`・時刻の型にも）。
+core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone`・`PartialEq`・`Debug` は `HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque` にも、`Clone` は `Labeled` にも。`Display` は `Int`・`Bool`・`String`・`()` と時刻の型だけ、`Debug` は `Ordering`・時刻の型にも）。
 
 ### 表示（`Display`・`Debug`）
 
@@ -504,7 +504,7 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 
 ### `Clone`
 
-`trait Clone { fn clone(&self) -> Self; }`（core）。`clone()` の結果は所有する深い複製で、共有の参照から得た値もこれで書き換えたり保存したりできる。`#[derive(Clone)]` は全フィールド（enum はペイロード）を複製する。core は `Int`・`Bool`・`String`・`()`・タプル・`Option`・`Result`・`Vec`・`HashMap`・`HashSet`・`Pii`（`T: Clone` のとき）に実装している。
+`trait Clone { fn clone(&self) -> Self; }`（core）。`clone()` の結果は所有する深い複製で、共有の参照から得た値もこれで書き換えたり保存したりできる。`#[derive(Clone)]` は全フィールド（enum はペイロード）を複製する。core は `Int`・`Bool`・`String`・`()`・タプル・`Option`・`Result`・`Vec`・`HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque`・`Pii`（`T: Clone` のとき）に実装している。
 
 ### `kek fix`
 
@@ -520,7 +520,7 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 - `match e { pat => e, pat if guard => e, ... }`（式、網羅性検査あり、ネスト可）。ガード `if guard`（`Bool`）は腕の束縛を見られ、ガードのある腕は網羅性に数えない（Rust と同じ）
 - `while c { }`, `while let P = e { }`, `loop { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
 - `loop { }` は無限ループ（文）。`break` か `return` で抜ける。`break` のない `loop` は発散するので、`fn f() -> Int { loop { if c { return 1; } } }` は型が合う。値を返す `break e`・ラベル（`'a: loop`）は未対応
-- `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
+- `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet`・`BTreeMap`・`VecDeque`・`Option` など）を回る
 - `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
 - 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
 - 優先順位は Rust と同じ：単項 `- ! & *` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > 比較 > `&&` > `||`（比較は連鎖できない）。`kek fmt` は比較やほかのビット演算の中のビット演算、シフトの中の算術に括弧を付ける（`(a & b) == 0`、`1 << (n - 1)`）
@@ -590,8 +590,16 @@ for (i, w) in words.iter().enumerate() { ... }
 ```
 
 - `Iterator` は `type Item;` と `fn next(&mut self) -> Option<Self::Item>` を持つ。自分の型に実装すれば `for` やアダプタが使える。
-- アダプタ：`map`, `filter`, `filter_map`, `enumerate`, `zip`, `chain`, `take`, `skip`, `take_while`, `skip_while`, `step_by`, `peekable`（`peek`）, `rev`（`DoubleEndedIterator`）
-- 消費：`count`, `last`, `nth`, `fold`, `for_each`, `any`, `all`, `find`, `find_map`, `position`, `collect`（`Vec`・`String`・`HashMap`・`HashSet` へ）, `sum`, `product`, `max`, `min`, `max_by_key`, `min_by_key`
+- アダプタ：`map`, `filter`, `filter_map`, `enumerate`, `zip`, `chain`, `take`, `skip`, `take_while`, `skip_while`, `step_by`, `peekable`（`peek`）, `rev`（`DoubleEndedIterator`）, `flat_map`, `flatten`, `scan`, `inspect`, `map_while`, `fuse`, `cycle`, `copied`, `cloned`
+- 消費：`count`, `last`, `nth`, `fold`, `for_each`, `any`, `all`, `find`, `find_map`, `position`, `collect`, `sum`, `product`, `max`, `min`, `max_by_key`, `min_by_key`, `max_by`, `min_by`, `reduce`, `try_fold`, `try_for_each`, `partition`, `unzip`, `is_sorted`, `is_sorted_by`, `is_sorted_by_key`, 比較 `eq`・`ne`・`lt`・`le`・`gt`・`ge`・`cmp`（辞書順。相手は `Iterator`：`(1..4).eq(v.iter())`）
+- `collect` の行き先：`Vec`・`HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque`・`String`（`String` の要素か、コードポイントの `Int`：`s.chars().rev().collect::<String>()`。U+FFFF を超えるものはサロゲートペアに、スカラー値でないものは U+FFFD にする）、`Option<C>`（最初の `None` で `None`）、`Result<C, E>`（最初の `Err`）。`sum`・`product` も `Option`・`Result` の要素を受け取る。
+- `flat_map` と `flatten` は要素を `IntoIterator`（`Vec`・`Option`・`Result`・`HashMap` など）として展開する。範囲（`Range`）はイテレータだが `IntoIterator` ではないので、`flat_map(|x| (0..x).collect::<Vec<Int>>())` のように `Vec` にする。
+- Rust との違い（値は借用されないため）：
+  - `scan(init, |st, x| ...)` のクロージャは `&mut St` を書き換えるのではなく、`Option<(次の状態, 出す要素)>` を返す（`None` で止まる）。
+  - `try_fold(init, |acc, x| ...)` と `try_for_each` のクロージャは `Option` か `Result` を返し、最初の `None`・`Err` で止まってそれを返す。
+  - `partition` は `(Vec<T>, Vec<T>)`、`unzip` は `(Vec<A>, Vec<B>)` を返す（行き先の型は選べない）。
+  - `copied` は何もしない（要素はもともと値）。`cloned` は各要素を `clone()` するので、共有の参照から回しても要素は所有する値になる（`items.iter().filter(..).cloned().collect()` を `Vec<Item>` として返せる）。
+  - `cycle` はイテレータを複製せず、1 周目の要素を覚えて繰り返す（クロージャは純粋なので結果は同じ）。
 - `v.iter()` は `Vec` を添字で回る。`for x in v` と同じく、回っている間に `push` された要素も見える。
 
 ## コレクション
@@ -619,11 +627,50 @@ panic はしない。要素の間の位置（`insert`・`split_off`・`truncate`
 
 キーは `Hash + Eq + Ord`。
 
-- `HashMap`：`new`, `with_capacity`, `insert(k, v) -> Option<V>`（古い値）, `get(&k) -> Option<V>`, `get_or(&k, d)`, `contains_key`, `remove(&k) -> Option<V>`, `len`, `is_empty`, `clear`, `iter`（`(K, V)`）, `keys`, `values`, `retain`, `extend`
-- `HashSet`：`new`, `insert(x) -> Bool`, `contains`, `remove -> Bool`, `len`, `is_empty`, `clear`, `iter`, `extend`, `retain`, `is_subset`, `union`・`intersection`・`difference`（`Vec<T>` を返す）
+- `HashMap`：`new`, `with_capacity`, `insert(k, v) -> Option<V>`（古い値）, `get(&k) -> Option<V>`, `get_or(&k, d)`, `get_key_value`, `contains_key`, `remove(&k) -> Option<V>`, `remove_entry(&k) -> Option<(K, V)>`, `len`, `is_empty`, `clear`, `iter`（`(K, V)`）, `keys`, `values`, `into_keys`, `into_values`, `retain`, `extend`, `entry`（下記）。`==` は順序によらずキーと値で比べる
+- `HashSet`：`new`, `insert(x) -> Bool`, `contains`, `remove -> Bool`, `len`, `is_empty`, `clear`, `iter`, `extend`, `retain`, `is_subset`, `is_superset`, `is_disjoint`, `union`・`intersection`・`difference`・`symmetric_difference`（`Vec<T>` を返す）
 - 反復は**挿入順**（既存のキーへの `insert` は位置を保ち、`remove` の後の `insert` は末尾）。ハッシュは固定（seed なし）なので結果は決定的。
 - 反復は**生きたビュー**で、反復中に追加されたエントリも見え、削除されたエントリは飛ばす。
 - 同じバケットへの衝突が 8 を超えると、そのバケットはキーの順序で並べた木になる。わざと衝突させる入力（HashDoS）でも各操作は O(log n)。
+
+### entry API
+
+```kek
+let mut counts: HashMap<String, Int> = HashMap::new();
+for w in text.split_whitespace() {
+    counts.entry(w).and_modify(|n| n + 1).or_insert(1);
+}
+groups.entry(key).or_insert(Vec::new()).push(item);   // 格納された Vec に足す
+match m.entry(k) {
+    Entry::Occupied(mut o) => { let old = o.insert(o.get() + 1); }
+    Entry::Vacant(v) => { v.insert(0); }
+}
+```
+
+`HashMap` と `BTreeMap` の `entry(k)` は Rust と同じ形の `Entry`（`Entry::Occupied(OccupiedEntry)`・`Entry::Vacant(VacantEntry)`）を返す（`lib/core/entry.kek`。型は `Entry<M, K, V>` で、`M` は元のマップ）。`entry` は `&mut self` なので、共有の参照（`&HashMap`）からは呼べない。
+
+- `Entry`：`or_insert(v)`, `or_insert_with(|| v)`, `or_insert_with_key(|k| v)`, `or_default()`（`V: Default`）, `and_modify(|v| 新しい値)`, `key()`, `insert_entry(v)`
+- `OccupiedEntry`：`key`, `get`, `insert(v) -> V`（古い値）, `remove() -> V`, `remove_entry() -> (K, V)`
+- `VacantEntry`：`key`, `into_key`, `insert(v) -> V`
+- Rust との違い：値は借用されないので、`&mut V` の代わりに値 `V` を返す。struct や `Vec` の値は参照型なので、返された値はマップの中の値そのもの（`or_insert(Vec::new()).push(x)` は格納された `Vec` に足す）。`Int` などの値は書き換えられないので、`and_modify` は `FnMut(&mut V)` ではなく `fn(V) -> V` を取り、結果を格納し直す。
+
+### `BTreeMap<K, V>` と `BTreeSet<T>`
+
+キーは `Ord` で、**キーの順**に並ぶ（`lib/core/btree.kek`）。実装は AVL 木で（名前と API は Rust に合わせた）、`insert`・`get`・`remove`・`first_key_value`・`pop_first` などは O(log n)。
+
+- `BTreeMap`：`new`, `insert(k, v) -> Option<V>`, `get`, `get_key_value`, `contains_key`, `remove`, `remove_entry`, `len`, `is_empty`, `clear`, `iter`・`keys`・`values`（キーの昇順。`DoubleEndedIterator` なので `rev()` で降順）, `into_keys`, `into_values`, `first_key_value`, `last_key_value`, `pop_first`, `pop_last`, `range(r)`, `entry`, `retain`, `extend`, `append(&mut other)`
+- `BTreeSet`：`new`, `insert -> Bool`, `contains`, `remove -> Bool`, `len`, `is_empty`, `clear`, `iter`, `first`, `last`, `pop_first`, `pop_last`, `range(r)`, `retain`, `extend`, `append`, `is_subset`, `is_superset`, `is_disjoint`, `union`・`intersection`・`difference`・`symmetric_difference`（昇順の `Vec<T>`）
+- `range` は `RangeBounds<K>` を受け取る：`Int` のキーなら `m.range(2..5)`・`m.range(2..=5)`、どのキーでも `Bound` の組 `m.range((Bound::Excluded(lo), Bound::Included(hi)))`（`Bound::Included`・`Excluded`・`Unbounded`）。片側が `Bound::Unbounded` のときは型を推論できないので `Bound::<String>::Unbounded` か `let hi: Bound<String> = Bound::Unbounded;` と書く。`k..`・`..k` の範囲式はない。
+- 反復は `HashMap` と同じく**生きたビュー**：イテレータは最後に返したキーを覚え、次のキーを根から探す（1 歩 O(log n)）。反復中に挿入されたキーも（まだ通っていなければ）見え、削除されたキーは飛ばす。
+- `FromIterator`・`IntoIterator`・`Clone`・`PartialEq`・`Eq`・`Debug`（`{1: "a"}`・`{1, 2}`）・`Default` を実装している。
+
+### `VecDeque<T>`
+
+両端キュー（`lib/core/vecdeque.kek`）。リングバッファで、両端の `push`・`pop` は償却 O(1)、`get(i)` は O(1)。
+
+- `new`, `with_capacity(n)`, `capacity`, `len`, `is_empty`, `push_back`, `push_front`, `pop_back`, `pop_front`, `front`, `back`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `swap`, `insert(i, x)`（`[0, len]` に丸める）, `remove(i) -> Option<T>`, `truncate`, `retain`, `rotate_left`, `rotate_right`, `append(&mut other)`, `extend`, `clear`, `contains`（`T: PartialEq`）, `iter`（前から。`rev()` できる）, `make_contiguous`（前からの `Vec<T>`）
+- `Vec` と同じく panic しない（範囲外の添字は `None` か何もしない）。`v[i]` の添字の構文は `Vec` だけ。
+- `FromIterator`・`IntoIterator`・`Clone`・`PartialEq`・`Eq`・`Debug`（`[1, 2]`）・`Default` を実装している。
 
 ## 組み込みメソッド（抜粋）
 

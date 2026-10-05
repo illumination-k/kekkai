@@ -1,0 +1,15 @@
+{"the": 3, "cat": 1, "and": 2, "hat": 1, "bat": 1}
+{"and": 2, "bat": 1, "cat": 1, "hat": 1, "the": 3}
+{}
+group {4: ["pear", "kiwi"], 3: ["fig", "yam"], 5: ["apple"]}
+values 10 2 0 10 {"a": 10, "bb": 2, "c": 0} key zz
+occupied a 10 -> 20
+vacant q inserted 7
+removed ("bb", 2)
+removed 0
+insert_entry new 5 {"a": 20, "q": 7, "new": 5}
+missing false
+Some(("q", 7)) None Some(("q", 7)) None
+["a", "new"] [20, 5] true false
+[1, 2, 3, 6, 7, 8] true false false true true
+seat ann

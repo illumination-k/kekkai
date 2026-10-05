@@ -23,6 +23,9 @@
   - `default.kek`：`Default`
   - `iter.kek`：`Iterator` とアダプタ、`Range`・`RangeInclusive`、`Vec` のイテレータ、`FromIterator`・`Sum`・`Product`
   - `hashmap.kek`：`HashMap`・`HashSet`
+  - `entry.kek`：`HashMap`・`BTreeMap` の entry API（`Entry`・`OccupiedEntry`・`VacantEntry`）
+  - `btree.kek`：`BTreeMap`・`BTreeSet`（AVL 木）、`Bound`・`RangeBounds`
+  - `vecdeque.kek`：`VecDeque`（リングバッファ）
   - タプル（1〜8 要素）の比較・ハッシュの実装は、`#[derive]` と同じ生成器（`compiler/derive.kek`）が作る
   - core の関数は使われたものだけが IR に入る（`lower` は利用者の関数を根にして、generic な関数と core を必要に応じて下ろす）。core の自由関数は `__` で始まる名前にして利用者の名前空間を汚さない。
 - **単相化**：generics は IR の手前で具体化する（`Lower.queue`、インスタンス名は `name<Int,String>`）。IR に型変数は現れない。
@@ -49,7 +52,7 @@
 - `Box<T>` は `T` と同じ（値はもともと参照）。`dyn Trait` はサイズのない型ではなく普通の値の型で、`Vec<dyn Shape>` とも書ける。trait object への変換は、期待される型が `dyn` のときの値そのものだけで、`Option<Circle>` から `Option<dyn Shape>` のような中身の変換はしない（Rust と同じ）。`if`・`match`・ブロックの分岐、`vec![..]` の要素には期待される型を伝える。
 - オブジェクト安全でない既定メソッドは `where Self: Sized` を書かなくても trait object で呼べる（trait object 自身を `Self` として既定の本体を使う）。必須メソッドがオブジェクト安全でない trait は trait object にできない。`dyn A + B`、`dyn Trait` のライフタイム、trait のメソッドの戻り値の `impl Trait`（RPITIT）はない。
 - 演算子 `+ - * /` は `Int`（と `String` の `+`）だけで、`Add` などの trait はない。
-- `HashMap` に `entry` API はない（`get_or` を使う）。`HashSet` の集合演算は `Vec` を返す。
+- `HashMap`・`BTreeMap` の `entry` API は `&mut V` の代わりに値を返す（[language.md](language.md#entry-api)）。`HashSet`・`BTreeSet` の集合演算は `Vec` を返す。
 
 ## 残課題
 

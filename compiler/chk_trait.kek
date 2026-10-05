@@ -72,6 +72,19 @@ fn chk_oblige_wheres(c: Chk, pos: AstPos, ws: Vec<ChkWhere>, ps: Vec<TyParam>, t
                 t,
                 "",
             );
+            // associated type bindings `where Self::Item: IntoIterator<IntoIter = J>`
+            for j in 0..w.bound.assoc_names.len() {
+                let want = ty_subst(w.bound.assoc_tys.get(j).unwrap_or(ty_unit()), ps, targs);
+                chk_assoc_eq(
+                    c,
+                    pos,
+                    t,
+                    w.bound.trait_name,
+                    w.bound.assoc_names.get(j).unwrap_or(""),
+                    want,
+                    true,
+                );
+            }
         }
     }
 }
@@ -1135,6 +1148,22 @@ fn chk_norm(info: ChkInfo, t0: Ty) -> Ty {
 // chk_norm_impl_assoc resolves `<s as tr>::n` from the implementation for
 // s (the trait declaring n may be a supertrait of tr).
 fn chk_norm_impl_assoc(info: ChkInfo, s: Ty, tr: String, n: String) -> Ty {
+    // a `where` binding of the function being checked:
+    // `where Self::Item: Trait<Name = T>`
+    for w in info.wheres {
+        if w.bound.trait_name == tr && ty_identical(w.ty, s) {
+            for i in 0..w.bound.assoc_names.len() {
+                if w.bound.assoc_names.get(i).unwrap_or("") == n {
+                    match w.bound.assoc_tys.get(i) {
+                        Some(x) => {
+                            return chk_norm(info, x);
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+    }
     for t2 in chk_trait_closure(info, tr) {
         match chk_find_impl(info, t2, s, Vec::new(), 0) {
             Some(m) => {

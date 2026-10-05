@@ -1,0 +1,157 @@
+// The entry API of HashMap and BTreeMap (Rust's `map.entry(k)`), shared
+// by both maps through __EntryMap.
+//
+// Values are not borrowed in Kekkai, so where Rust hands out `&mut V` the
+// methods here return the value V (for a struct or a Vec that is the very
+// value in the map, so `m.entry(k).or_insert(Vec::new()).push(x)` adds to
+// the stored Vec), and `and_modify` takes `fn(V) -> V` instead of
+// `FnMut(&mut V)`: `m.entry(w).and_modify(|n| n + 1).or_insert(1)`.
+
+// __EntryMap is what an entry needs of its map.
+trait __EntryMap<K, V> {
+    fn __entry_get(&self, k: &K) -> Option<V>;
+
+    fn __entry_insert(&mut self, k: K, v: V) -> Option<V>;
+
+    fn __entry_remove(&mut self, k: &K) -> Option<V>;
+}
+
+enum Entry<M, K, V> {
+    Occupied(OccupiedEntry<M, K, V>),
+    Vacant(VacantEntry<M, K, V>),
+}
+
+// An entry whose key is in the map.
+struct OccupiedEntry<M, K, V> {
+    __map: M,
+    __key: K,
+    mut __value: V,
+}
+
+// An entry whose key is not in the map.
+struct VacantEntry<M, K, V> {
+    __map: M,
+    __key: K,
+    __value: Option<V>,
+}
+
+fn __entry_of<M: __EntryMap<K, V>, K, V>(m: M, k: K) -> Entry<M, K, V> {
+    match m.__entry_get(&k) {
+        Some(v) => Entry::Occupied(OccupiedEntry { __map: m, __key: k, __value: v }),
+        None => Entry::Vacant(VacantEntry { __map: m, __key: k, __value: None }),
+    }
+}
+
+impl<M: __EntryMap<K, V>, K, V> Entry<M, K, V> {
+    fn key(&self) -> K {
+        match *self {
+            Entry::Occupied(e) => e.__key,
+            Entry::Vacant(e) => e.__key,
+        }
+    }
+
+    // or_insert returns the value of the key, first inserting d if the key
+    // is absent.
+    fn or_insert(self, d: V) -> V {
+        match self {
+            Entry::Occupied(e) => e.__value,
+            Entry::Vacant(e) => e.insert(d),
+        }
+    }
+
+    fn or_insert_with(self, f: impl Fn() -> V) -> V {
+        match self {
+            Entry::Occupied(e) => e.__value,
+            Entry::Vacant(e) => e.insert(f()),
+        }
+    }
+
+    fn or_insert_with_key(self, f: impl Fn(K) -> V) -> V {
+        match self {
+            Entry::Occupied(e) => e.__value,
+            Entry::Vacant(e) => {
+                let v = f(e.__key);
+                e.insert(v)
+            }
+        }
+    }
+
+    // and_modify replaces the value of a present key by f(value).
+    fn and_modify(self, f: impl Fn(V) -> V) -> Entry<M, K, V> {
+        match self {
+            Entry::Occupied(mut e) => {
+                e.insert(f(e.__value));
+                Entry::Occupied(e)
+            }
+            Entry::Vacant(e) => Entry::Vacant(e),
+        }
+    }
+
+    // insert_entry sets the value (present or not).
+    fn insert_entry(self, v: V) -> OccupiedEntry<M, K, V> {
+        match self {
+            Entry::Occupied(mut e) => {
+                e.insert(v);
+                e
+            }
+            Entry::Vacant(mut e) => {
+                e.__map.__entry_insert(e.__key, v);
+                OccupiedEntry { __map: e.__map, __key: e.__key, __value: v }
+            }
+        }
+    }
+}
+
+impl<M: __EntryMap<K, V>, K, V: Default> Entry<M, K, V> {
+    fn or_default(self) -> V {
+        match self {
+            Entry::Occupied(e) => e.__value,
+            Entry::Vacant(e) => e.insert(V::default()),
+        }
+    }
+}
+
+impl<M: __EntryMap<K, V>, K, V> OccupiedEntry<M, K, V> {
+    fn key(&self) -> K {
+        self.__key
+    }
+
+    fn get(&self) -> V {
+        self.__value
+    }
+
+    // insert sets the value, returning the old one.
+    fn insert(&mut self, v: V) -> V {
+        let old = self.__value;
+        self.__map.__entry_insert(self.__key, v);
+        self.__value = v;
+        old
+    }
+
+    // remove removes the entry from the map, returning its value.
+    fn remove(mut self) -> V {
+        let _old: Option<V> = self.__map.__entry_remove(&self.__key);
+        self.__value
+    }
+
+    fn remove_entry(mut self) -> (K, V) {
+        let _old: Option<V> = self.__map.__entry_remove(&self.__key);
+        (self.__key, self.__value)
+    }
+}
+
+impl<M: __EntryMap<K, V>, K, V> VacantEntry<M, K, V> {
+    fn key(&self) -> K {
+        self.__key
+    }
+
+    fn into_key(self) -> K {
+        self.__key
+    }
+
+    // insert adds the key with value v, returning v.
+    fn insert(mut self, v: V) -> V {
+        self.__map.__entry_insert(self.__key, v);
+        v
+    }
+}

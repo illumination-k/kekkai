@@ -1,0 +1,204 @@
+// Iterator adapters and consumers of core (lib/core/iter.kek) beyond the
+// basic ones: flat_map, flatten, scan, inspect, map_while, fuse, cycle,
+// partition, unzip, min_by / max_by, reduce, try_fold, is_sorted,
+// comparisons, cloned, and collect / sum into Option and Result.
+
+#[derive(Clone, Debug)]
+struct Person {
+    name: String,
+    mut age: Int,
+}
+
+// cloned gives owned elements even from a borrowed Vec.
+fn adults(ps: &Vec<Person>) -> Vec<Person> {
+    ps.iter().filter(|p| p.age >= 18).cloned().collect()
+}
+
+fn parse_all(v: &Vec<String>) -> Result<Vec<Int>, String> {
+    v.iter().map(|s| s.parse_int().ok_or("bad: " + s)).collect()
+}
+
+fn halves(v: Vec<Int>) -> Option<Vec<Int>> {
+    v.iter().map(|x| if x % 2 == 0 { Some(x / 2) } else { None }).collect()
+}
+
+struct Countdown {
+    mut n: Int,
+}
+
+impl Iterator for Countdown {
+    type Item = Int;
+
+    fn next(&mut self) -> Option<Int> {
+        if self.n <= 0 {
+            return None;
+        }
+        self.n -= 1;
+        Some(self.n + 1)
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    // flat_map into Vec, Option and a HashMap; flatten
+    let fm: Vec<Int> = (1..4).flat_map(|x| vec![x, x * 10]).collect();
+    let fo: Vec<Int> = (0..6).flat_map(|x| if x % 2 == 0 { Some(x) } else { None }).collect();
+    let nested = vec![vec![1, 2], vec![], vec![3], vec![]];
+    let flat: Vec<Int> = nested.iter().flatten().collect();
+    let somes: Vec<String> = vec![Some("a"), None, Some("b")].iter().flatten().collect();
+    let empty: Vec<Int> = Vec::<Vec<Int>>::new().iter().flatten().collect();
+    log.info(format!("flat_map {:?} {:?} flatten {:?} {:?} {:?}", fm, fo, flat, somes, empty));
+    let words = vec!["ab", "", "cde"];
+    let letters: String = words.iter().flat_map(|w| w.chars().collect::<Vec<Int>>()).collect();
+    log.info(format!("letters {}", letters));
+
+    // scan: running sums until they pass 10
+    let sums: Vec<Int> = (1..10).scan(0, |acc, x| if acc + x > 10 {
+        None
+    } else {
+        Some((acc + x, acc + x))
+    }).collect();
+    log.info(format!("scan {:?}", sums));
+
+    // map_while stops at the first None; take_while for comparison
+    let mw: Vec<Int> = vec![2, 4, -1, 6].iter().map_while(|x| if x > 0 {
+        Some(x * 10)
+    } else {
+        None
+    }).collect();
+    log.info(format!("map_while {:?}", mw));
+
+    // inspect, fuse, copied
+    let n = (1..4).inspect(|x| {}).fuse().copied().count();
+    let mut fz = Countdown { n: 2 }.fuse();
+    log.info(
+        format!(
+            "inspect {} fuse {:?} {:?} {:?} {:?}",
+            n,
+            fz.next(),
+            fz.next(),
+            fz.next(),
+            fz.next(),
+        ),
+    );
+
+    // cycle
+    let cy: Vec<Int> = (1..4).cycle().take(8).collect();
+    let none: Vec<Int> = (0..0).cycle().take(3).collect();
+    log.info(format!("cycle {:?} {:?}", cy, none));
+
+    // partition and unzip
+    let (even, odd) = (1..10).partition(|x| x % 2 == 0);
+    log.info(format!("partition {:?} {:?}", even, odd));
+    let pairs = vec![(1, "one"), (2, "two"), (3, "three")];
+    let (nums, names) = pairs.iter().unzip();
+    log.info(format!("unzip {:?} {:?}", nums, names));
+
+    // min_by / max_by (ties: max_by takes the last, min_by the first)
+    let ws = vec!["pear", "fig", "kiwi", "banana", "date"];
+    log.info(
+        format!(
+            "max_by {:?} min_by {:?} max_by_key {:?} empty {:?}",
+            ws.iter().max_by(|a, b| a.len().cmp(&b.len())),
+            ws.iter().min_by(|a, b| (a.len() % 4).cmp(&(b.len() % 4))),
+            ws.iter().max_by_key(|w| w.len() % 5),
+            Vec::<Int>::new().iter().max_by(|a, b| a.cmp(b)),
+        ),
+    );
+
+    // reduce
+    log.info(
+        format!(
+            "reduce {:?} {:?} {:?}",
+            (1..6).reduce(|a, b| a * b),
+            (0..0).reduce(|a, b| a + b),
+            ws.iter().reduce(|a, b| if b.len() > a.len() { b } else { a }),
+        ),
+    );
+
+    // try_fold and try_for_each with Option and Result
+    let big = Int::max_value() - 1;
+    log.info(
+        format!(
+            "try_fold {:?} {:?} {:?} {:?}",
+            (1..5).try_fold(0, |a, x| a.checked_add(x)),
+            vec![1, big, 3].iter().try_fold(0, |a, x| a.checked_add(x)),
+            vec!["1", "2", "x", "y"].iter().try_fold(0, |a, s| match s.parse_int() {
+                Some(v) => Ok(a + v),
+                None => Err("not a number: " + s),
+            }),
+            (1..4).try_for_each(|x| if x < 5 { Ok(()) } else { Err(x) }),
+        ),
+    );
+    let mut it = 1..10;
+    let r = it.try_for_each(|x| if x < 3 { Some(()) } else { None });
+    log.info(format!("try_for_each {:?} then {:?}", r, it.next()));
+
+    // is_sorted
+    log.info(
+        format!(
+            "is_sorted {} {} {} {} {}",
+            vec![1, 2, 2, 9].iter().is_sorted(),
+            vec![3, 1].iter().is_sorted(),
+            Vec::<Int>::new().iter().is_sorted(),
+            vec![5, 3, 1].iter().is_sorted_by(|a, b| a >= b),
+            ws.iter().is_sorted_by_key(|w| w.len()),
+        ),
+    );
+
+    // comparing iterators
+    log.info(
+        format!(
+            "cmp {} {} {} {:?} {:?} {}",
+            (1..4).eq(vec![1, 2, 3].iter()),
+            (1..4).ne(1..3),
+            (1..3).lt(1..4),
+            (1..3).cmp(vec![1, 3].iter()),
+            "abc".chars().cmp("abd".chars()),
+            (0..0).le(0..0),
+        ),
+    );
+
+    // cloned
+    let people = vec![Person { name: "ann", age: 30 }, Person { name: "bob", age: 12 }];
+    let mut grown = adults(&people);
+    if let Some(mut p) = grown.get(0) {
+        p.age += 1;
+    }
+    log.info(format!("cloned {:?} original {:?}", grown, people.get(0)));
+
+    // collect into Result and Option
+    log.info(
+        format!(
+            "collect {:?} {:?} {:?} {:?}",
+            parse_all(&vec!["1", "22"]),
+            parse_all(&vec!["1", "x", "y"]),
+            halves(vec![2, 4]),
+            halves(vec![2, 3]),
+        ),
+    );
+    let ok_empty: Result<Vec<Int>, String> = Vec::<Result<Int, String>>::new().iter().collect();
+    log.info(format!("collect empty {:?}", ok_empty));
+
+    // collect code points into a String
+    let s: String = vec!['h', 'i', ' ', 0x1F600].iter().collect();
+    let rev: String = "stressed".chars().rev().collect();
+    let bad: String = vec![-1, 0xD800, 0x110000, 'k'].iter().collect();
+    log.info(
+        format!(
+            "string {} {} {}",
+            s,
+            rev,
+            bad.chars().map(|c| c.to_string()).collect::<Vec<String>>().join(","),
+        ),
+    );
+
+    // sum and product of Option / Result
+    let so: Option<Int> = vec![Some(1), Some(2), Some(3)].iter().sum();
+    let sn: Option<Int> = vec![Some(1), None].iter().sum();
+    let oks: Vec<Result<Int, String>> = vec![Ok(2), Ok(5)];
+    let pr: Result<Int, String> = oks.iter().product();
+    let pe: Result<Int, String> = vec![Ok(2), Err("e1"), Err("e2")].iter().product();
+    log.info(format!("sum {:?} {:?} product {:?} {:?}", so, sn, pr, pe));
+    0
+}

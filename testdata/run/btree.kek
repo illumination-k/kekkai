@@ -1,0 +1,208 @@
+// BTreeMap and BTreeSet (lib/core/btree.kek): sorted maps and sets.
+
+#[derive(Clone, Debug, PartialEq)]
+struct Job {
+    name: String,
+    mut tries: Int,
+}
+
+fn pairs(m: &BTreeMap<Int, Int>) -> String {
+    let parts: Vec<String> = m.iter().map(|kv| kv.0.to_string() + "=" + kv.1.to_string()).collect();
+    "[" + parts.join(" ") + "]"
+}
+
+// a small deterministic pseudo-random sequence
+fn lcg(x: Int) -> Int {
+    (x * 1103515245 + 12345) % 2147483648
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    // insert, get, contains_key, remove, len in key order
+    let mut m: BTreeMap<String, Int> = BTreeMap::new();
+    log.info(
+        format!(
+            "empty {:?} {} {} {:?} {:?} {:?} {:?}",
+            m,
+            m.len(),
+            m.is_empty(),
+            m.get(&"x"),
+            m.first_key_value(),
+            m.last_key_value(),
+            m.pop_first(),
+        ),
+    );
+    for (i, w) in vec!["pear", "apple", "fig", "kiwi", "banana"].iter().enumerate() {
+        m.insert(w, i);
+    }
+    log.info(
+        format!(
+            "{:?} {} {:?} {:?} {}",
+            m,
+            m.len(),
+            m.insert("fig", 20),
+            m.get(&"fig"),
+            m.contains_key(&"grape"),
+        ),
+    );
+    log.info(
+        format!(
+            "{:?} {:?} {:?}",
+            m.keys().collect::<Vec<String>>(),
+            m.values().collect::<Vec<Int>>(),
+            m.iter().rev().map(|kv| kv.0).collect::<Vec<String>>(),
+        ),
+    );
+    log.info(
+        format!(
+            "{:?} {:?} {:?} {:?} {}",
+            m.remove(&"apple"),
+            m.remove(&"apple"),
+            m.first_key_value(),
+            m.last_key_value(),
+            m.len(),
+        ),
+    );
+    log.info(format!("pop {:?} {:?} {:?}", m.pop_first(), m.pop_last(), m));
+
+    // range
+    let mut n: BTreeMap<Int, Int> = BTreeMap::new();
+    for i in 0..20 {
+        n.insert(i * 7 % 20, i);
+    }
+    log.info(
+        format!(
+            "range {:?} {:?} {:?} {:?}",
+            n.range(3..6).collect::<Vec<(Int, Int)>>(),
+            n.range(17..=30).map(|kv| kv.0).collect::<Vec<Int>>(),
+            n.range(8..8).count(),
+            n.range(4..9).rev().map(|kv| kv.0).collect::<Vec<Int>>(),
+        ),
+    );
+    let lo: Bound<Int> = Bound::Excluded(15);
+    let hi: Bound<Int> = Bound::Unbounded;
+    log.info(
+        format!(
+            "bounds {:?} {:?}",
+            n.range((lo, hi)).map(|kv| kv.0).collect::<Vec<Int>>(),
+            n.range((Bound::<Int>::Unbounded, Bound::Included(2))).map(|kv| kv.0).collect::<Vec<Int>>(),
+        ),
+    );
+
+    // the iterator is a live view: it sees later inserts and skips removals
+    let mut seen = Vec::new();
+    let mut it = n.range(0..10);
+    while let Some((k, _)) = it.next() {
+        seen.push(k);
+        if k == 2 {
+            n.remove(&3);
+            n.insert(100, 0);
+        }
+        if k == 5 {
+            n.insert(6, -1);
+        }
+    }
+    log.info(format!("live {:?} {}", seen, pairs(&n.range(5..7).collect())));
+
+    // entry API, retain, extend, append
+    let mut jobs: BTreeMap<String, Job> = BTreeMap::new();
+    for name in vec!["b", "a", "b", "c", "b"] {
+        let mut j = jobs.entry(name).or_insert(Job { name: name, tries: 0 });
+        j.tries += 1;
+    }
+    log.info(format!("jobs {:?}", jobs));
+    jobs.retain(|k, j| j.tries > 1);
+    log.info(format!("retain {:?}", jobs.keys().collect::<Vec<String>>()));
+    let mut x: BTreeMap<Int, Int> = (0..3).map(|i| (i, i * i)).collect();
+    x.extend(vec![(10, 100), (1, -1)].iter());
+    let mut y: BTreeMap<Int, Int> = BTreeMap::new();
+    y.insert(5, 25);
+    y.insert(0, 7);
+    x.append(&mut y);
+    log.info(format!("append {} {} {}", pairs(&x), y.len(), x.contains_key(&5)));
+
+    // Clone, PartialEq, Default, IntoIterator
+    let c = x.clone();
+    x.insert(99, 0);
+    let d: BTreeMap<Int, Int> = BTreeMap::default();
+    let mut total = 0;
+    for (k, v) in c {
+        total += k * v;
+    }
+    log.info(format!("{} {} {} {}", c == x, c == c.clone(), d.is_empty(), total));
+
+    // many keys in a scrambled order: still sorted, and removal keeps it
+    let mut big: BTreeMap<Int, Int> = BTreeMap::new();
+    let mut r = 7;
+    let mut want = Vec::new();
+    for i in 0..500 {
+        r = lcg(r);
+        let k = r % 1000;
+        if big.insert(k, i).is_none() {
+            want.push(k);
+        }
+    }
+    want.sort();
+    let got: Vec<Int> = big.keys().collect();
+    let mut removed = 0;
+    for k in 0..1000 {
+        if k % 3 == 0 && big.remove(&k).is_some() {
+            removed += 1;
+        }
+    }
+    let rest: Vec<Int> = big.keys().collect();
+    log.info(
+        format!(
+            "big {} {} {} {} {}",
+            got == want,
+            big.len() + removed == want.len(),
+            rest.iter().is_sorted(),
+            rest.iter().all(|k| k % 3 != 0),
+            big.keys().rev().collect::<Vec<Int>>().iter().is_sorted_by(|a, b| a > b),
+        ),
+    );
+
+    // BTreeSet
+    let mut s: BTreeSet<Int> = vec![5, 1, 4, 1, 3].iter().collect();
+    log.info(format!("set {:?} {} {} {}", s, s.insert(2), s.insert(2), s.len()));
+    log.info(
+        format!(
+            "{:?} {:?} {:?} {} {} {:?}",
+            s.first(),
+            s.last(),
+            s.range(2..=4).collect::<Vec<Int>>(),
+            s.contains(&4),
+            s.remove(&4),
+            s.iter().rev().collect::<Vec<Int>>(),
+        ),
+    );
+    let t: BTreeSet<Int> = (3..7).collect();
+    log.info(
+        format!(
+            "{:?} {:?} {:?} {:?}",
+            s.union(&t),
+            s.intersection(&t),
+            s.difference(&t),
+            s.symmetric_difference(&t),
+        ),
+    );
+    let sub: BTreeSet<Int> = vec![1, 2].iter().collect();
+    log.info(
+        format!(
+            "{} {} {} {} {}",
+            sub.is_subset(&s),
+            s.is_superset(&sub),
+            sub.is_disjoint(&t),
+            s.is_disjoint(&t),
+            s == s.clone(),
+        ),
+    );
+    let mut words: BTreeSet<String> = "b a c a b".split_whitespace().iter().collect();
+    words.retain(|w| w != "b");
+    log.info(
+        format!("{:?} {:?} {:?} {:?}", words, words.pop_first(), words.pop_last(), words.pop_last()),
+    );
+    let e: BTreeSet<Int> = BTreeSet::new();
+    log.info(format!("{:?} {:?} {:?} {}", e, e.first(), e.last(), e.iter().count()));
+    0
+}

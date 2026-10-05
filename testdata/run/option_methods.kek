@@ -1,0 +1,15 @@
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let o = Some(3);
+    let r: Result<Int, String> = o.map(|x| x + 1).ok_or("none");
+    log.info(r.unwrap_or(0).to_string());
+    log.info(
+        o.and_then(|x| if x > 2 { Some(x * 10) } else { None }).unwrap_or_else(|| 0).to_string(),
+    );
+    let e: Result<Int, String> = Err("bad");
+    log.info(e.map_err(|s| s + "!").err().unwrap_or(""));
+    log.info(true.then_some(5).unwrap_or_default().to_string());
+    let n: Option<Option<Int>> = Some(None);
+    log.info(n.flatten().is_none().to_string());
+    0
+}

@@ -423,7 +423,8 @@ for (i, w) in words.iter().enumerate() { ... }
 
 - `Int`：`to_string`, `abs`, `min`, `max`, `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, `cmp`
 - `String`：`len`, `char_at(i) -> Option<Int>`（UTF-16）, `slice(a, b)`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`, `replace`, `trim`, `to_upper`, `to_lower`, `parse_int`, `to_bytes`；`String::from_char(c)`, `String::from_bytes(v)`
-- `Option`/`Result`：`is_some`, `is_none`, `is_ok`, `is_err`, `unwrap_or`
+- `Option`/`Result`：`is_some`, `is_none`, `is_ok`, `is_err`, `unwrap_or`（組み込み）と core の `map`, `and_then`, `and`, `or`, `or_else`, `xor`, `filter`, `unwrap_or_else`, `unwrap_or_default`, `map_or`, `map_or_else`, `ok_or`, `ok_or_else`, `is_some_and`, `is_none_or`, `zip`, `inspect`, `iter`, `flatten`, `transpose`（`Result` は `map_err`, `ok`, `err`, `is_ok_and`, `is_err_and`, `inspect_err` も）。`unwrap`・`expect` はない
+- `Bool`：`then(|| x)`, `then_some(x)`
 - `Request`：`method`, `path`, `segment(i)`, `query(k)`, `header(k)`, `body`
 - `Response::text(status, body)`, `json`, `empty`, `no_content`, `not_found`, `bad_request`, `.with_header(k, v)`
 

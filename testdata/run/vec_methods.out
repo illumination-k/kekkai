@@ -1,0 +1,32 @@
+true None None Some(2)
+insert [7,0,9,1,2,8]
+remove Some(7) None None [0,9,1,2,8]
+swap_remove Some(0) [8,9,1,2]
+swap [2,9,1,8]
+reverse [4,3,2,1,0] [3,2,1,0] []
+truncate [4,3,2,1,0]
+truncate [4,3]
+truncate []
+clear [] 0
+extend [0,1,5,6,0,1,0,1,2] []
+split_off [0,1,2] [3,4] [] [0,1,2]
+slice [1,2] [0,1,2,3,4] []
+retain [0,3,6,9]
+dedup [1,2,3,1]
+dedup_by_key [0,4,8]
+sort [-8,-3,0,1,2,2,4,5,6,7,9]
+sort_by [9,7,6,5,4,2,2,1,0,-3,-8]
+sort_by_key [0,1,2,2,-3,4,5,6,7,-8,9]
+stable bob,dan,ann,cid
+sort 100 true Some(0) Some(100)
+binary_search Ok(6) Err(6) Err(0) Err(11) Err(0)
+partition_point 4
+contains true false true false true true
+chunks [0,1,2] [3,4,5] [6] | 
+windows [0,1] [1,2] [2,3] | 
+concat [0,1,2,3,4]
+fill [7,7,7]
+resize [7,7,7,1,1]
+resize [7] repeat [0,1,0,1,0,1] []
+rotate_left [2,3,4,0,1]
+rotate_right [0,1,2,3,4]

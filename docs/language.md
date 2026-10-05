@@ -6,7 +6,7 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`Vec`／`Int`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
@@ -405,7 +405,20 @@ for (i, w) in words.iter().enumerate() { ... }
 
 ### `Vec<T>`
 
-`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `iter`, `join(sep)`（`Vec<String>`）
+組み込み：`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `join(sep)`（`Vec<String>`）。core（`lib/core/vec.kek`・`iter.kek`）は Rust の `Vec`・スライスと同じ名前のメソッドを足している。
+
+- 生成・情報：`Vec::with_capacity(n)`（容量は持たないので `new` と同じ）, `iter`, `is_empty`, `first`, `last`, `slice(a, b)`（`v[a..b].to_vec()` に当たる新しい `Vec`）
+- 書き換え（`&mut self`）：`insert(i, x)`, `remove(i) -> Option<T>`, `swap_remove(i) -> Option<T>`, `swap(i, j)`, `reverse`, `truncate(n)`, `clear`, `extend(iter)`（`Iterator`。`Vec` は `v.iter()` を渡す）, `append(&mut other)`（`other` は空になる）, `split_off(at) -> Vec<T>`, `retain(|x| ..)`, `dedup_by(|a, b| ..)`, `dedup_by_key(|x| ..)`, `rotate_left(k)`, `rotate_right(k)`
+- 整列：`sort_by(|a, b| Ordering)`, `sort_by_key(|x| k)` は安定なマージソート（O(n log n)）。`sort_unstable_by`・`sort_unstable_by_key` は同じもの。`binary_search_by(|x| Ordering) -> Result<Int, Int>`、`binary_search_by_key(&k, |x| ..)`、`partition_point(|x| ..)`
+- 分割：`chunks(n)`, `windows(n)`（`Vec<Vec<T>>`。`n < 1` は空）
+- `T: PartialEq`：`contains(&x)`, `starts_with(&v)`, `ends_with(&v)`, `dedup`（連続する重複を除く）
+- `T: Ord`：`sort`, `sort_unstable`, `binary_search(&x) -> Result<Int, Int>`（`Ok(一致した位置)` か `Err(順序を保って挿入できる位置)`）
+- `T: Clone`：`fill(x)`, `resize(n, x)`, `extend_from_slice(&v)`, `repeat(n)`（要素は複製する）
+- `Vec<Vec<T>>`：`concat`
+
+panic はしない。要素の間の位置（`insert`・`split_off`・`truncate`・`resize`・`slice` の範囲）は `[0, len]` に丸め（`insert(100, x)` は末尾に足す）、要素の添字（`remove`・`swap_remove`・`swap`）が範囲外なら `None` か何もしない。
+
+`extend` と `append` は要素を共有する（参照型の要素は複製しない）。`extend_from_slice` は `clone()` した要素を足す。
 
 `for x in v` は毎回 `v.len()` を読み直す。本体で `v`（やその別名）に `push` すると終わらないので注意する。
 
@@ -421,8 +434,23 @@ for (i, w) in words.iter().enumerate() { ... }
 
 ## 組み込みメソッド（抜粋）
 
-- `Int`：`to_string`, `abs`, `min`, `max`, `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, `cmp`
-- `String`：`len`, `char_at(i) -> Option<Int>`（UTF-16）, `slice(a, b)`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`, `replace`, `trim`, `to_upper`, `to_lower`, `parse_int`, `to_bytes`；`String::from_char(c)`, `String::from_bytes(v)`
+- `Int`：`to_string`, `abs`, `min`, `max`, `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, `cmp`（組み込み）と core（`lib/core/int.kek`）の
+  - `Int::max_value()`・`Int::min_value()`（関連定数はまだないので `Int::MAX`・`Int::MIN` の代わり）
+  - `pow(e)`（ラップアラウンド。負の `e` は整数除算と同じく切り捨て：`1` は 1、`-1` は ±1、ほかは 0）
+  - `checked_add`, `checked_sub`, `checked_mul`, `checked_div`, `checked_rem`, `checked_pow`, `checked_neg`, `checked_abs` は `Option<Int>`（オーバーフロー・0 での除算・`MIN / -1`・負の指数で `None`）
+  - `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`（演算子と同じ）、`saturating_add`, `saturating_sub`, `saturating_mul`, `saturating_pow`（範囲の端で止まる）
+  - `signum`, `is_positive`, `is_negative`, `abs_diff`（`Int` を返し、`Int::MAX` を超えるとラップする）, `clamp(lo, hi)`（`lo > hi` なら `hi`）
+  - `rem_euclid`, `div_euclid`（余りは `[0, |b|)`。`%`・`/` と同じく 0 で割ると `x` と `0`）
+  - `count_ones`, `count_zeros`, `leading_zeros`, `trailing_zeros`（64bit の 2 の補数。0 は 64）, `is_power_of_two`
+- `String`：`len`, `char_at(i) -> Option<Int>`（UTF-16）, `slice(a, b)`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`, `replace`, `trim`, `to_upper`, `to_lower`, `parse_int`, `to_bytes`；`String::from_char(c)`, `String::from_bytes(v)`（組み込み）と core（`lib/core/string.kek`）の
+  - `String::new()`, `is_empty`, `to_string`・`to_owned`・`as_str`（そのまま返す）
+  - `chars()`：コードポイント（`Int`）のイテレータ（`DoubleEndedIterator` なので `rev()` できる。サロゲートペアは 1 つ、孤立したサロゲートは U+FFFD）。`char_indices()` は `(UTF-16 の位置, コードポイント)`。文字数は `chars().count()`
+  - `bytes()`：UTF-8 のバイトのイテレータ（`Vec` は `to_bytes`）
+  - `find(pat)`（= `index_of`）, `rfind(pat)` は `Option<Int>`
+  - `strip_prefix`, `strip_suffix` は `Option<String>`、`split_once`, `rsplit_once` は `Option<(String, String)>`
+  - `trim_start`, `trim_end`（`trim` と同じ空白）, `trim_start_matches(pat)`, `trim_end_matches(pat)`
+  - `lines()`（`\n` と `\r\n` で分ける。末尾の改行の後に空行は数えない）, `split_whitespace()`, `splitn(n, sep)`（最大 `n` 個、最後に残り）は `Vec<String>`
+  - `repeat(n)`, `eq_ignore_ascii_case(s)`
 - `Option`/`Result`：`is_some`, `is_none`, `is_ok`, `is_err`, `unwrap_or`（組み込み）と core の `map`, `and_then`, `and`, `or`, `or_else`, `xor`, `filter`, `unwrap_or_else`, `unwrap_or_default`, `map_or`, `map_or_else`, `ok_or`, `ok_or_else`, `is_some_and`, `is_none_or`, `zip`, `inspect`, `iter`, `flatten`, `transpose`（`Result` は `map_err`, `ok`, `err`, `is_ok_and`, `is_err_and`, `inspect_err` も）。`unwrap`・`expect` はない
 - `Bool`：`then(|| x)`, `then_some(x)`
 - `Request`：`method`, `path`, `segment(i)`, `query(k)`, `header(k)`, `body`

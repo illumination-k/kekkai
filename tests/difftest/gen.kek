@@ -67,6 +67,8 @@ struct Gen {
     mut loops: Int,
     // inside `for x in vec`: no pushes (the loop re-reads the length)
     mut no_push: Bool,
+    // labels of the enclosing `for` loops ("" for an unlabeled one)
+    labels: Vec<String>,
 }
 
 // ---- random source ----
@@ -98,6 +100,7 @@ fn new_gen(seed: Int) -> Gen {
         fresh: 0,
         loops: 0,
         no_push: false,
+        labels: Vec::new(),
     };
     // warm up
     for i in 0..4 {
@@ -316,7 +319,21 @@ fn stmt(g: Gen, idx: Int, ind: String) {
         let saved = g.vars.len();
         add_var(g, acc, t_int(), true);
         let n = (1 + intn(g, 6)).to_string();
-        if intn(g, 2) == 0 {
+        let form = intn(g, 3);
+        if form == 2 {
+            // `loop` as an expression: `break value`
+            ln(g, ind + acc + " = loop {");
+            ln(g, ind + "    if " + i + " >= " + n + " {");
+            ln(g, ind + "        break " + int_expr(g, idx, 2) + ";");
+            ln(g, ind + "    }");
+            ln(g, ind + "    " + acc + " = " + int_expr(g, idx, 2) + ";");
+            ln(g, ind + "    " + i + " += 1;");
+            ln(g, ind + "};");
+            truncate(g, saved);
+            add_var(g, acc, t_int(), true);
+            return;
+        }
+        if form == 0 {
             ln(g, ind + "while " + i + " < " + n + " {");
         } else {
             ln(g, ind + "loop {");
@@ -660,38 +677,45 @@ fn for_loop(mut g: Gen, idx: Int, ind: String) {
     let init = int_expr(g, idx, 1);
     let acc = fresh(g, "acc");
     ln(g, ind + "let mut " + acc + " = " + init + ";");
+    let mut label = "";
+    let mut lp = "";
+    if intn(g, 2) == 0 {
+        label = "'" + fresh(g, "l");
+        lp = label + ": ";
+    }
     let saved = g.vars.len();
     let saved_no_push = g.no_push;
     let x = fresh(g, "k");
     let v = pick_var(g, t_vec(), false);
     let a = pick_var(g, t_acc(), false);
     if v != "" && intn(g, 2) == 0 {
-        ln(g, ind + "for " + x + " in " + v + " {");
+        ln(g, ind + lp + "for " + x + " in " + v + " {");
         g.no_push = true;
     } else if a != "" && intn(g, 3) == 0 {
-        ln(g, ind + "for " + x + " in " + a + ".log {");
+        ln(g, ind + lp + "for " + x + " in " + a + ".log {");
         g.no_push = true;
     } else {
         let mut lo = pick(g, "0~1~-2~");
         if lo == "" {
             lo = int_leaf(g);
         }
-        ln(g, ind + "for " + x + " in " + lo + "..(" + lo + " + " + small_int(g, idx) + ") {");
+        ln(g, ind + lp + "for " + x + " in " + lo + "..(" + lo + " + " + small_int(g, idx) + ") {");
     }
     add_var(g, x, t_int(), false);
     add_var(g, acc, t_int(), true);
     g.loops = g.loops + 1;
+    g.labels.push(label);
     let inner = ind + "    ";
     let n = 1 + intn(g, 3);
     for i in 0..n {
         let k = intn(g, 5);
         if k == 0 {
             ln(g, inner + "if " + bool_expr(g, idx, 1) + " {");
-            ln(g, inner + "    continue;");
+            ln(g, inner + "    continue" + jump_label(g) + ";");
             ln(g, inner + "}");
         } else if k == 1 {
             ln(g, inner + "if " + bool_expr(g, idx, 1) + " {");
-            ln(g, inner + "    break;");
+            ln(g, inner + "    break" + jump_label(g) + ";");
             ln(g, inner + "}");
         } else {
             stmt(g, idx, inner);
@@ -699,6 +723,7 @@ fn for_loop(mut g: Gen, idx: Int, ind: String) {
     }
     ln(g, inner + acc + " = " + int_expr(g, idx, 2) + ";");
     g.loops = g.loops - 1;
+    g.labels.pop();
     ln(g, ind + "}");
     // variables declared in the body are dropped; outer collections may
     // have been mutated
@@ -935,4 +960,15 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     }
     0
+}
+
+// jump_label is the label of a `break` / `continue`: " 'l3" for one of the
+// labeled enclosing loops, or "" (the innermost loop).
+fn jump_label(g: Gen) -> String {
+    let k = intn(g, g.labels.len() + 1);
+    let l = g.labels.get(k).unwrap_or("");
+    if l == "" {
+        return "";
+    }
+    " " + l
 }

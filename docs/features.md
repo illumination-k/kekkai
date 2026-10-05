@@ -15,8 +15,12 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | ビット演算子 `& \| ^ << >>`、`!x` | 両方 | ✅ | `Int` のみ |
 | 16進・8進・2進・`_` 区切りのリテラル | 両方 | ✅ | |
 | 文字リテラル `'a'`、`b'a'` | 両方 | ✅ | `char` 型はなく、コードポイントの `Int` |
-| ラベル付きの `break` / `continue` | 両方 | 🚧 | |
-| `break value`（式としての `loop`） | Rust | 🚧 | |
+| ラベル付きの `break` / `continue` | 両方 | ✅ | `'a: for` / `'a: while` / `'a: loop`。ラベルの隠蔽はエラー |
+| `break value`（式としての `loop`） | Rust | ✅ | `loop` だけ。ブロック末尾の `loop` はその値 |
+| match の腕の本体に代入・`break` など | Rust | ✅ | `Some(x) => total += x,`、`None => break,` |
+| `?` のエラー型の `From` 変換 | Rust | ✅ | core の `From<T>`（`Into` はない） |
+| ラベル付きのブロック `'a: { }` | Rust | 🚧 | |
+| let チェーン `if let P = e && c` | Rust 2024 | 🚧 | |
 | `as` によるキャスト | 両方 | ⛔ | 数値型が `Int` だけなので不要 |
 | `defer` | Go | ⛔ | 線形な `Tx` と RAII 的な後始末は型で表す |
 

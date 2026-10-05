@@ -1,0 +1,44 @@
+// Transactions and labeled loops: a `break 'a` / `continue 'a` leaves the
+// loop 'a, so the transaction must be as it was when that loop started.
+
+fn break_outer(db: &Db, v: Vec<Int>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        'outer: for x in v { // ERROR "cannot be committed or rolled back inside a loop"
+            tx.commit();
+            loop {
+                break 'outer; // ERROR "cannot be committed or rolled back inside a loop"
+            }
+        }
+        Ok(()) // ERROR "never committed or rolled back"
+    })
+}
+
+fn continue_outer(db: &Db, v: Vec<Int>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        'outer: for x in v {
+            for y in v {
+                if y > x {
+                    tx.rollback();
+                    continue 'outer; // ERROR "cannot be committed or rolled back inside a loop"
+                }
+            }
+        }
+        tx.commit()
+    })
+}
+
+fn fine(db: &Db, v: Vec<Int>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let n = 'outer: loop {
+            for x in v {
+                if x > 2 {
+                    break 'outer x;
+                }
+            }
+            break 0;
+        };
+        tx.commit()
+    })
+}
+
+fn main() {}

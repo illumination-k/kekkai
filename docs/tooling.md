@@ -579,7 +579,7 @@ src/fees.kek:68:1  deep (Vec<Vec<Int>>) -> Int
 
 | Metric | How | Default limit |
 | --- | --- | --- |
-| `cognitive` | SonarSource's cognitive complexity: +1 for each `if`, `else if`, `else`, `match`, `while`, `for`, sequence of like boolean operators (`a && b && c` is 1, `a && b \|\| c` is 2) and direct recursive call. `if`, `match` and loops also add their nesting level. | 15 |
+| `cognitive` | SonarSource's cognitive complexity: +1 for each `if`, `else if`, `else`, `match`, `while`, `for`, sequence of like boolean operators (`a && b && c` is 1, `a && b \|\| c` is 2), `break 'label` / `continue 'label` and direct recursive call. `if`, `match` and loops also add their nesting level. | 15 |
 | `cyclomatic` | McCabe: 1 + each `if`, `while`, `for`, `match` arm beyond the first, `&&`, `\|\|` and `?`. | 10 |
 | `nesting` | The deepest nesting of `if` / `match` / loop bodies and closures. `deepest` is where it starts. | 4 |
 | `lines` | From the `fn` line to the closing brace. | 0 (off) |

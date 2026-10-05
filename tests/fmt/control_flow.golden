@@ -1,0 +1,80 @@
+fn labels(v: Vec<Vec<Int>>) -> Int {
+    let mut n = 0;
+    'rows: for row in v {
+        'cols: for x in row {
+            if x < 0 {
+                continue 'rows;
+            }
+            if x == 0 {
+                break 'cols;
+            }
+            n += x;
+        }
+    }
+    'w: while n > 100 {
+        n -= 1;
+        if n % 7 == 0 {
+            break 'w;
+        }
+    }
+    n
+}
+
+fn values(limit: Int) -> Int {
+    let mut i = 0;
+    let sq = loop {
+        i += 1;
+        if i * i > limit {
+            break i * i;
+        }
+    };
+    let found = 'outer: loop {
+        loop { // inner
+            i -= 1;
+            if i < 0 {
+                break 'outer -1;
+            }
+            if i % 3 == 0 {
+                break 'outer i;
+            }
+        }
+    };
+    let x = loop {
+        break;
+    };
+    sq + found + loop {
+        break 1;
+    }.max(2)
+}
+
+fn tail(m: Int) -> Int {
+    let mut n = m;
+    loop {
+        if n > 10 {
+            break n;
+        }
+        n += 3;
+    }
+}
+
+fn arms(xs: Vec<Option<Int>>) -> Int {
+    let mut total = 0;
+    let mut nones = 0;
+    for x in xs {
+        match x {
+            Some(n) if n > 100 => break,
+            Some(n) => total += n,
+            None => nones = nones + 1,
+        }
+        let y = match x {
+            Some(n) => n,
+            None => continue,
+        };
+        match y {
+            0 => return total,
+            1 => total = 0,
+            _ => {}
+        }
+    }
+    total + nones
+}

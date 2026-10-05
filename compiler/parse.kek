@@ -898,116 +898,45 @@ fn parse_block(mut p: ParseState) -> AstBlock {
             );
             continue;
         }
-        if k == "loop" {
-            parse_next(p);
-            let body = parse_block(p);
-            b.stmts.push(
-                AstStmt::While(AstWhileStmt {
-                    id: parse_id(p),
-                    pos: sp,
-                    pat: None,
-                    cond: AstExpr::BoolLit(AstBoolLit { id: parse_id(p), pos: sp, value: true }),
-                    body: body,
-                    is_loop: true,
-                }),
-            );
+        if k == "LABEL" && parse_peek_at(p, ":") {
+            b.stmts.push(parse_loop(p));
             continue;
         }
-        if k == "while" {
-            parse_next(p);
-            let mut pat = None;
-            if parse_accept(p, "let") {
-                pat = Some(parse_top_pattern(p));
-                parse_expect(p, "=");
-            }
-            p.no_struct = true;
-            let cond = parse_expr(p);
-            p.no_struct = false;
-            let body = parse_block(p);
-            b.stmts.push(
-                AstStmt::While(AstWhileStmt {
-                    id: parse_id(p),
-                    pos: sp,
-                    pat: pat,
-                    cond: cond,
-                    body: body,
-                    is_loop: false,
-                }),
-            );
-            continue;
-        }
-        if k == "for" {
-            parse_next(p);
-            let mut var = "_";
-            let mut pat = None;
-            if parse_at(p, "(")
-                || parse_at(p, "mut")
-                || (parse_at(p, "IDENT")
-                    && (parse_peek_at(p, "(") || parse_peek_at(p, "::") || parse_peek_at(p, "{"))) {
-                pat = Some(parse_pattern(p));
-            } else if !parse_accept(p, "_") {
-                var = parse_expect(p, "IDENT").text;
-            }
-            parse_expect(p, "in");
-            p.no_struct = true;
-            let mut iter = parse_expr(p);
-            let mut end = None;
-            match iter {
-                AstExpr::Range(r) => {
-                    if !r.inclusive {
-                        iter = r.start;
-                        end = Some(r.end);
-                    }
+        if k == "loop" || k == "while" || k == "for" {
+            let st = parse_loop(p);
+            if k == "loop" && (parse_at(p, ".") || parse_at(p, "?")) {
+                // `loop { ... }.f()`: the loop is an operand
+                let e0 = AstExpr::Block(parse_loop_block(p, st));
+                let e = parse_binary_rest(p, parse_postfix(p, e0), 0);
+                if parse_accept(p, ";") {
+                    b.stmts.push(
+                        AstStmt::Expr(AstExprStmt { id: parse_id(p), pos: sp, x: e, semi: true }),
+                    );
+                    continue;
                 }
-                _ => {}
+                if parse_at(p, "}") {
+                    b.tail = Some(e);
+                    break;
+                }
+                parse_fail(
+                    p,
+                    parse_tok(p).pos,
+                    "expected `;` or `}`, found " + parse_describe(parse_tok(p)),
+                );
             }
-            p.no_struct = false;
-            let body = parse_block(p);
-            b.stmts.push(
-                AstStmt::For(AstForStmt {
-                    id: parse_id(p),
-                    pos: sp,
-                    var: var,
-                    pat: pat,
-                    iter: iter,
-                    end: end,
-                    body: body,
-                }),
-            );
+            b.stmts.push(st);
             continue;
         }
-        if k == "return" {
-            parse_next(p);
-            let mut value = None;
-            if !parse_at(p, ";") && !parse_at(p, "}") {
-                value = Some(parse_expr(p));
-            }
+        if k == "return" || k == "break" || k == "continue" {
+            let st = parse_jump(p, sp);
             if !parse_accept(p, ";") && !parse_at(p, "}") {
                 parse_fail(
                     p,
                     parse_tok(p).pos,
-                    "expected `;` after return, found " + parse_describe(parse_tok(p)),
+                    "expected `;` after `" + k + "`, found " + parse_describe(parse_tok(p)),
                 );
             }
-            b.stmts.push(AstStmt::Return(AstReturnStmt { id: parse_id(p), pos: sp, value: value }));
-            continue;
-        }
-        if k == "break" || k == "continue" {
-            parse_next(p);
-            if !parse_accept(p, ";") && !parse_at(p, "}") {
-                let mut msg = "expected `;`, found " + parse_describe(parse_tok(p));
-                if parse_at(p, "LABEL") {
-                    msg = "labels are not supported: `" + k + "` leaves the innermost loop";
-                } else if k == "break" {
-                    msg = msg + " (`break` with a value is not supported)";
-                }
-                parse_fail(p, parse_tok(p).pos, msg);
-            }
-            if k == "break" {
-                b.stmts.push(AstStmt::Break(AstBreakStmt { id: parse_id(p), pos: sp }));
-            } else {
-                b.stmts.push(AstStmt::Continue(AstContinueStmt { id: parse_id(p), pos: sp }));
-            }
+            b.stmts.push(st);
             continue;
         }
         let mut e = AstExpr::UnitLit(AstUnitLit { id: 0, pos: sp });
@@ -1056,6 +985,162 @@ fn parse_block(mut p: ParseState) -> AstBlock {
     b.end = parse_expect(p, "}").pos;
     p.no_struct = saved;
     b
+}
+
+// parse_loop parses `loop { }`, `while ... { }` or `for ... { }`, with an
+// optional label `'a:` before it.
+fn parse_loop(mut p: ParseState) -> AstStmt {
+    let sp = parse_tok(p).pos;
+    let mut label = "";
+    if parse_at(p, "LABEL") {
+        label = parse_next(p).text;
+        parse_expect(p, ":");
+        if !parse_at(p, "loop") && !parse_at(p, "while") && !parse_at(p, "for") {
+            let msg = if parse_at(p, "{") {
+                "labeled blocks are not supported: a label names a `loop`, `while` or `for`"
+            } else {
+                "expected `loop`, `while` or `for` after a label, found "
+                    + parse_describe(parse_tok(p))
+            };
+            parse_fail(p, parse_tok(p).pos, msg);
+        }
+    }
+    let k = parse_tok(p).kind;
+    if k == "loop" {
+        parse_next(p);
+        let body = parse_block(p);
+        return AstStmt::While(AstWhileStmt {
+            id: parse_id(p),
+            pos: sp,
+            pat: None,
+            cond: AstExpr::BoolLit(AstBoolLit { id: parse_id(p), pos: sp, value: true }),
+            body: body,
+            is_loop: true,
+            label: label,
+            expr: false,
+        });
+    }
+    if k == "while" {
+        parse_next(p);
+        let mut pat = None;
+        if parse_accept(p, "let") {
+            pat = Some(parse_top_pattern(p));
+            parse_expect(p, "=");
+        }
+        let saved = p.no_struct;
+        p.no_struct = true;
+        let cond = parse_expr(p);
+        p.no_struct = saved;
+        let body = parse_block(p);
+        return AstStmt::While(AstWhileStmt {
+            id: parse_id(p),
+            pos: sp,
+            pat: pat,
+            cond: cond,
+            body: body,
+            is_loop: false,
+            label: label,
+            expr: false,
+        });
+    }
+    parse_expect(p, "for");
+    let mut var = "_";
+    let mut pat = None;
+    if parse_at(p, "(")
+        || parse_at(p, "mut")
+        || (parse_at(p, "IDENT")
+            && (parse_peek_at(p, "(") || parse_peek_at(p, "::") || parse_peek_at(p, "{"))) {
+        pat = Some(parse_pattern(p));
+    } else if !parse_accept(p, "_") {
+        var = parse_expect(p, "IDENT").text;
+    }
+    parse_expect(p, "in");
+    let saved = p.no_struct;
+    p.no_struct = true;
+    let mut iter = parse_expr(p);
+    let mut end = None;
+    match iter {
+        AstExpr::Range(r) => {
+            if !r.inclusive {
+                iter = r.start;
+                end = Some(r.end);
+            }
+        }
+        _ => {}
+    }
+    p.no_struct = saved;
+    let body = parse_block(p);
+    AstStmt::For(AstForStmt {
+        id: parse_id(p),
+        pos: sp,
+        var: var,
+        pat: pat,
+        iter: iter,
+        end: end,
+        body: body,
+        label: label,
+    })
+}
+
+// parse_loop_block wraps a `loop` statement in expression position into
+// the block that is its value (marked expr for the formatter).
+fn parse_loop_block(p: ParseState, st: AstStmt) -> AstBlock {
+    let mut s = st;
+    let mut pos = parse_tok(p).pos;
+    match st {
+        AstStmt::While(w) => {
+            pos = w.pos;
+            s = AstStmt::While(AstWhileStmt {
+                id: w.id,
+                pos: w.pos,
+                pat: w.pat,
+                cond: w.cond,
+                body: w.body,
+                is_loop: w.is_loop,
+                label: w.label,
+                expr: true,
+            });
+        }
+        _ => {}
+    }
+    let mut stmts = Vec::new();
+    stmts.push(s);
+    AstBlock { id: parse_id(p), pos: pos, stmts: stmts, tail: None, end: pos }
+}
+
+// parse_jump parses `return`, `break` or `continue` (with a label or a
+// value) up to its end, without the `;`.
+fn parse_jump(mut p: ParseState, sp: AstPos) -> AstStmt {
+    let k = parse_next(p).kind;
+    if k == "return" {
+        let mut value = None;
+        if !parse_jump_end(p) {
+            value = Some(parse_expr(p));
+        }
+        return AstStmt::Return(AstReturnStmt { id: parse_id(p), pos: sp, value: value });
+    }
+    let mut label = "";
+    if parse_at(p, "LABEL") {
+        label = parse_next(p).text;
+    }
+    if k == "continue" {
+        return AstStmt::Continue(AstContinueStmt { id: parse_id(p), pos: sp, label: label });
+    }
+    let mut value = None;
+    if !parse_jump_end(p) {
+        value = Some(parse_expr(p));
+    }
+    AstStmt::Break(AstBreakStmt { id: parse_id(p), pos: sp, label: label, value: value })
+}
+
+// parse_jump_end reports whether a `return` / `break` ends here (no value).
+fn parse_jump_end(p: ParseState) -> Bool {
+    parse_at(p, ";")
+        || parse_at(p, "}")
+        || parse_at(p, ",")
+        || parse_at(p, ")")
+        || parse_at(p, "]")
+        || parse_at(p, "EOF")
 }
 
 fn parse_block_like(e: AstExpr) -> Bool {
@@ -1391,13 +1476,21 @@ fn parse_let_else(
         lpat = Some(tp);
         body = AstExpr::Tuple(AstTupleLit { id: parse_id(p), pos: pat.pos, elems: elems });
     }
-    arms.push(AstMatchArm { id: parse_id(p), pos: pat.pos, pat: pat, guard: None, body: body });
+    arms.push(AstMatchArm {
+        id: parse_id(p),
+        pos: pat.pos,
+        pat: pat,
+        guard: None,
+        body: body,
+        bare: false,
+    });
     arms.push(AstMatchArm {
         id: parse_id(p),
         pos: ep,
         pat: parse_wild(p, ep),
         guard: None,
         body: AstExpr::Block(els),
+        bare: false,
     });
     let m = AstExpr::Match(AstMatch { id: parse_id(p), pos: sp, x: init, arms: arms });
     AstStmt::Let(AstLetStmt {
@@ -1790,12 +1883,22 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
     if k == "match" {
         return parse_match(p);
     }
-    if k == "loop" {
+    if k == "loop" || (k == "LABEL" && parse_peek_at(p, ":")) {
+        let st = parse_loop(p);
+        match st {
+            AstStmt::While(w) => {
+                if w.is_loop {
+                    return AstExpr::Block(parse_loop_block(p, st));
+                }
+            }
+            _ => {}
+        }
         parse_fail(
             p,
             t.pos,
-            "`loop` is a statement: it cannot be used as a value (`break value` is not supported)",
+            "a labeled `while` or `for` is a statement: only `loop` can be used as a value",
         );
+        return AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: t.pos });
     }
     if k == "|"
         || k == "||"
@@ -1964,10 +2067,44 @@ fn parse_match(mut p: ParseState) -> AstExpr {
             guard = Some(parse_expr(p));
         }
         parse_expect(p, "=>");
-        let body = parse_expr(p);
-        m.arms.push(AstMatchArm { id: parse_id(p), pos: ap, pat: pat, guard: guard, body: body });
+        let bp = parse_tok(p).pos;
+        let mut bare = false;
+        let mut body = AstExpr::UnitLit(AstUnitLit { id: 0, pos: bp });
+        if parse_at(p, "return") || parse_at(p, "break") || parse_at(p, "continue") {
+            // `None => break,`: a statement as the arm's body
+            let mut blk = AstBlock { id: parse_id(p), pos: bp, stmts: Vec::new(), tail: None, end: bp };
+            blk.stmts.push(parse_jump(p, bp));
+            body = AstExpr::Block(blk);
+            bare = true;
+        } else {
+            body = parse_expr(p);
+            let aop = parse_op(p);
+            if aop == "=" || (aop.ends_with("=") && parse_prec(aop.slice(0, aop.len() - 1)) >= 4) {
+                // `Some(x) => total += x,`: an assignment as the arm's body
+                let op_pos = parse_tok(p).pos;
+                parse_skip_op(p, aop);
+                let val = parse_expr(p);
+                let op = if aop == "=" {
+                    ""
+                } else {
+                    aop.slice(0, aop.len() - 1)
+                };
+                let blk = AstBlock { id: parse_id(p), pos: bp, stmts: Vec::new(), tail: None, end: bp };
+                parse_assign(p, blk, bp, body, op, op_pos, val);
+                body = AstExpr::Block(blk);
+                bare = true;
+            }
+        }
+        m.arms.push(AstMatchArm {
+            id: parse_id(p),
+            pos: ap,
+            pat: pat,
+            guard: guard,
+            body: body,
+            bare: bare,
+        });
         if !parse_accept(p, ",") {
-            if parse_block_like(body) && !p.failed {
+            if parse_block_like(body) && !bare && !p.failed {
                 continue;
             }
             break;

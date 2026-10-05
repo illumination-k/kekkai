@@ -997,6 +997,8 @@ struct RefScan {
     fresh: HashMap<Int, Bool>,
     escaped: HashMap<Int, Bool>,
     loops: Vec<Int>,
+    // the label of each loop (by id)
+    labels: HashMap<Int, String>,
     mut closure: Int,
 }
 
@@ -1008,6 +1010,7 @@ fn ref_scan_new() -> RefScan {
         fresh: HashMap::new(),
         escaped: HashMap::new(),
         loops: Vec::new(),
+        labels: HashMap::new(),
         closure: 0,
     }
 }
@@ -1110,8 +1113,17 @@ fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
             ref_scan_expr(cx, sc, s.target.x, false);
             ref_scan_expr(cx, sc, s.value, false);
         }
-        AstStmt::Break(_) => {
-            match sc.loops.get(sc.loops.len() - 1) {
+        AstStmt::Break(s) => {
+            match s.value {
+                Some(v) => ref_scan_expr(cx, sc, v, false),
+                None => {}
+            }
+            // the loop it leaves has no exit fact
+            let mut labels = Vec::new();
+            for id in sc.loops {
+                labels.push(sc.labels.get(id).unwrap_or(""));
+            }
+            match sc.loops.get(ast_loop_target(labels, s.label)) {
                 Some(id) => {
                     cx.loop_break.insert(id, true);
                 }
@@ -1121,6 +1133,7 @@ fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             cx.loop_touch.insert(s.id, HashMap::new());
+            sc.labels.insert(s.id, s.label);
             sc.loops.push(s.id);
             ref_scan_expr(cx, sc, s.cond, false);
             ref_scan_block(cx, sc, s.body);
@@ -1133,6 +1146,7 @@ fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
                 None => {}
             }
             cx.loop_touch.insert(s.id, HashMap::new());
+            sc.labels.insert(s.id, s.label);
             sc.loops.push(s.id);
             ref_scan_block(cx, sc, s.body);
             sc.loops.pop();
@@ -2059,7 +2073,13 @@ fn ref_stmt(cx: RefCtx, mut st: RefSt, s0: AstStmt) {
                 None => {}
             }
         }
-        AstStmt::Break(_) => {
+        AstStmt::Break(s) => {
+            match s.value {
+                Some(v) => {
+                    ref_expr(cx, st, v);
+                }
+                None => {}
+            }
             st.dead = true;
         }
         AstStmt::Continue(_) => {

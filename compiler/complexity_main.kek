@@ -364,8 +364,22 @@ fn cx_stmt(mut w: CxWalk, s: AstStmt) {
             cx_expr(w, a.target.x);
             cx_expr(w, a.value);
         }
-        AstStmt::Break(_) => {}
-        AstStmt::Continue(_) => {}
+        // a jump to a label is a fundamental increment (as in Sonar's
+        // cognitive complexity)
+        AstStmt::Break(b) => {
+            if b.label != "" {
+                w.cognitive = w.cognitive + 1;
+            }
+            match b.value {
+                Some(v) => cx_expr(w, v),
+                None => {}
+            }
+        }
+        AstStmt::Continue(c) => {
+            if c.label != "" {
+                w.cognitive = w.cognitive + 1;
+            }
+        }
         AstStmt::While(s) => {
             cx_structure(w);
             w.cyclomatic = w.cyclomatic + 1;

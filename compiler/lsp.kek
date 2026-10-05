@@ -1119,7 +1119,10 @@ fn lsp_walk_stmt(mut w: LspWalk, fs: &Fs, s0: AstStmt) {
             lsp_walk_expr(w, fs, AstExpr::Field(s.target));
             lsp_walk_expr(w, fs, s.value);
         }
-        AstStmt::Break(_) => {}
+        AstStmt::Break(s) => match s.value {
+            Some(v) => lsp_walk_expr(w, fs, v),
+            None => {}
+        },
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             match s.pat {

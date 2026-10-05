@@ -1,0 +1,7 @@
+// Conversions, as in Rust's core::convert. `e?` on a `Result` converts
+// its error into the function's error type with `From::from` when the two
+// differ (`impl From<ParseError> for AppError`).
+
+trait From<T> {
+    fn from(value: T) -> Self;
+}

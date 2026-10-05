@@ -10,8 +10,9 @@ struct LinState {
 struct LinChecker {
     info: ChkInfo,
     errs: Vec<AstError>,
-    // states at the entry of enclosing loops
+    // states at the entry of enclosing loops, and their labels
     mut loops: Vec<LinState>,
+    mut labels: Vec<String>,
 }
 
 fn lin_new_state() -> LinState {
@@ -35,7 +36,7 @@ fn lin_copy(st: LinState) -> LinState {
 }
 
 fn lin_check(info: ChkInfo, fun: ChkFunc, errs: Vec<AstError>) {
-    let lc = LinChecker { info: info, errs: errs, loops: Vec::new() };
+    let lc = LinChecker { info: info, errs: errs, loops: Vec::new(), labels: Vec::new() };
     lin_block(lc, fun.decl.body, Some(lin_new_state()));
 }
 
@@ -110,10 +111,12 @@ fn lin_block(lc: LinChecker, b: AstBlock, s0: Option<LinState>) -> Option<LinSta
 }
 
 // lin_loop_check reports linear bindings whose state changed in a loop body.
-fn lin_loop_body(mut lc: LinChecker, pos: AstPos, body: AstBlock, s: LinState) {
+fn lin_loop_body(mut lc: LinChecker, pos: AstPos, label: String, body: AstBlock, s: LinState) {
     lc.loops.push(lin_copy(s));
+    lc.labels.push(label);
     let after = lin_block(lc, body, Some(lin_copy(s)));
     lc.loops.pop();
+    lc.labels.pop();
     match after {
         Some(a) => {
             for k in a.m.keys() {
@@ -132,12 +135,15 @@ fn lin_loop_body(mut lc: LinChecker, pos: AstPos, body: AstBlock, s: LinState) {
     }
 }
 
-fn lin_break(lc: LinChecker, pos: AstPos, s: Option<LinState>) -> Option<LinState> {
+// lin_break checks a `break` / `continue` (to the loop with the given
+// label): the state must be that at the entry of the loop it leaves.
+fn lin_break(lc: LinChecker, pos: AstPos, label: String, s: Option<LinState>) -> Option<LinState> {
     let n = lc.loops.len();
-    if n > 0 {
+    let k = ast_loop_target(lc.labels, label);
+    if n > 0 && k >= 0 {
         match s {
             Some(st) => {
-                match lc.loops.get(n - 1) {
+                match lc.loops.get(k) {
                     Some(entry) => {
                         for k in st.m.keys() {
                             match entry.m.get(k) {
@@ -175,14 +181,22 @@ fn lin_stmt(lc: LinChecker, st0: AstStmt, s0: Option<LinState>) -> Option<LinSta
             s = lin_expr(lc, AstExpr::Field(st.target), s);
             lin_expr(lc, st.value, s)
         }
-        AstStmt::Break(st) => lin_break(lc, st.pos, s),
-        AstStmt::Continue(st) => lin_break(lc, st.pos, s),
+        AstStmt::Break(st) => {
+            match st.value {
+                Some(v) => {
+                    s = lin_expr(lc, v, s);
+                }
+                None => {}
+            }
+            lin_break(lc, st.pos, st.label, s)
+        }
+        AstStmt::Continue(st) => lin_break(lc, st.pos, st.label, s),
         AstStmt::While(st) => {
             s = lin_expr(lc, st.cond, s);
             match s {
                 None => None,
                 Some(ss) => {
-                    lin_loop_body(lc, st.pos, st.body, ss);
+                    lin_loop_body(lc, st.pos, st.label, st.body, ss);
                     s
                 }
             }
@@ -198,7 +212,7 @@ fn lin_stmt(lc: LinChecker, st0: AstStmt, s0: Option<LinState>) -> Option<LinSta
             match s {
                 None => None,
                 Some(ss) => {
-                    lin_loop_body(lc, st.pos, st.body, ss);
+                    lin_loop_body(lc, st.pos, st.label, st.body, ss);
                     s
                 }
             }
@@ -489,8 +503,11 @@ fn lin_transaction(
     inner.m.insert(tx.id, false);
     inner.names.insert(tx.id, tx.name);
     let saved = lc.loops;
+    let saved_labels = lc.labels;
     lc.loops = Vec::new();
+    lc.labels = Vec::new();
     let after = lin_expr(lc, cl.body, Some(inner));
+    lc.labels = saved_labels;
     lc.loops = saved;
     match after {
         Some(a) => {

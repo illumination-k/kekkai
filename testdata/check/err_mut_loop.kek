@@ -1,0 +1,31 @@
+// The value of a `loop` is that of its `break`s: a borrowed value cannot
+// leave through it as an owned one.
+
+struct S {
+    v: Vec<Int>,
+}
+
+impl S {
+    fn tail(&self) -> Vec<Int> {
+        loop {
+            break self.v; // ERROR "cannot return a borrowed value as `Vec<Int>`: it comes from `&self`"
+        }
+    }
+
+    fn bound(&self) -> Vec<Int> {
+        let x = 'a: loop {
+            loop {
+                break 'a self.v;
+            }
+        };
+        x // ERROR "cannot return a borrowed value as `Vec<Int>`: it comes from `&self`"
+    }
+
+    fn cloned(&self) -> Vec<Int> {
+        loop {
+            break self.v.clone();
+        }
+    }
+}
+
+fn main() {}

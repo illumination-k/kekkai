@@ -151,6 +151,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 | `PartialOrd`, `Ord` | `<`・`<=`・`>`・`>=`（`Int` は組み込み）、`cmp -> Ordering`、`max`・`min` |
 | `Hash`, `Hasher` | `x.hash(&mut h)`、`DefaultHasher::new()`、`h.finish()` |
 | `Default` | `default() -> Self` |
+| `From<T>` | `from(value: T) -> Self`：`?` がエラー型の変換に使う（下記「文と式」） |
 | `Clone` | `clone(&self) -> Self`：所有する深い複製（下記「可変性」） |
 | `Display`, `Debug` | `fmt(&self, f: &mut Formatter)`：`{}`・`to_string()` と `{:?}`（下記「表示」） |
 | `Add<Rhs>`, `Sub<Rhs>`, `Mul<Rhs>`, `Div<Rhs>`, `Rem<Rhs>`, `Neg` | `+ - * / %` と単項 `-`（下記「演算子のオーバーロード」） |
@@ -483,9 +484,15 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 - `if c { } else if d { } else { }`、`if let P = e { } else { }`（式）
 - `match e { pat => e, pat if guard => e, ... }`（式、網羅性検査あり、ネスト可）。ガード `if guard`（`Bool`）は腕の束縛を見られ、ガードのある腕は網羅性に数えない（Rust と同じ）
 - `while c { }`, `while let P = e { }`, `loop { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
-- `loop { }` は無限ループ（文）。`break` か `return` で抜ける。`break` のない `loop` は発散するので、`fn f() -> Int { loop { if c { return 1; } } }` は型が合う。値を返す `break e`・ラベル（`'a: loop`）は未対応
+- `loop { }` は無限ループで、`break` か `return` で抜ける。`loop` は式で、値は `break e` の `e`（`break;` は `()`）。すべての `break` の値は同じ型でなければならない。`break` のない `loop` は発散する（型は `!`）ので、`fn f() -> Int { loop { if c { return 1; } } }` は型が合う。式の位置に書ける（`let x = loop { ... break 42; };`、引数、末尾）。ブロックの最後の文が `loop` なら（Rust と同じく）ブロックの値はその `loop` の値になる：`fn f() -> Int { loop { if c { break 1; } } }`
+- ラベル：`'outer: for ...`、`'a: while ...`、`'a: loop { }` と `break 'a;`・`continue 'a;`・`break 'a e;`（`loop` のみ）。ラベルのない `break`・`continue` はいちばん内側のループに働く
+  - 知らないラベル（`use of undeclared label`）、外側のループと同じ名前のラベル（Rust の警告。Kekkai ではエラー）はエラー。クロージャの中から外のループのラベルには飛べない
+  - ラベルはループにだけ付けられる（ラベル付きのブロック `'a: { }` はない）ので、`continue 'a` の行き先はいつもループ
+  - 値を持つ `break e` は `loop` だけ（`while`・`for` から値付きで抜けるとエラー。Rust と同じ）
+  - 篩型の検査は、`break 'a` で抜けるループ `'a` には出口の事実（条件の否定）を付けない。トランザクションの線形性は、`break 'a`・`continue 'a` の時点の状態を `'a` の開始時と比べる
+- match の腕の本体には、波括弧なしで文を書ける：代入・複合代入 `Some(x) => total += x,`、`None => break,`、`None => continue,`、`_ => return 0,`。値は `()`（`break`・`continue`・`return` は `!`）。`kek fmt` は波括弧を付けずに出力する。クロージャの本体には書けない（クロージャは捕捉した変数に代入できない）
 - `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
-- `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
+- `e?`：`Result` / `Option` の早期リターン。`Result<T, E2>` に `?` を使う関数の戻り値が `Result<U, E>` で `E2` と `E` が違うときは、`impl From<E2> for E` があればエラーを `From::from` で変換して返す（Rust と同じ。実装がなければ `` `?` cannot convert the error type `E2` into `E` `` で、`From` の実装か `map_err` を勧める）。`From` は core の trait。`Into` はない。`Option` の `?` は `Option` を返す関数の中だけ
 - 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
 - 優先順位は Rust と同じ：単項 `- ! & *` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > 比較 > `&&` > `||`（比較は連鎖できない）。`kek fmt` は比較やほかのビット演算の中のビット演算、シフトの中の算術に括弧を付ける（`(a & b) == 0`、`1 << (n - 1)`）
 - 整数リテラル：`255`、`0xff`、`0o17`、`0b1010`、区切り `1_000_000`。`i64` の範囲を超えるとエラー。文字リテラル `'a'`、`'\n'`（`\r \t \\ \' \" \0 \x7f \u{1F600}`）はその Unicode のコードポイントの `Int`（文字の型はない）、バイトリテラル `b'a'`・`b'\xff'` はそのバイトの `Int`。パターンにも書ける。`kek fmt` は書いた綴りを保つ

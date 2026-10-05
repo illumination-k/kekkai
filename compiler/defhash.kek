@@ -154,6 +154,21 @@ fn dh_declare(mut w: DhWalk, name: String) {
     w.next_local = w.next_local + 1;
 }
 
+// dh_declare_label numbers a loop label like a local (labels start with
+// `'`, so they never meet a variable): renamed labels hash alike.
+fn dh_declare_label(w: DhWalk, label: String) {
+    if label != "" {
+        dh_declare(w, label);
+    }
+}
+
+// dh_label emits the loop a `break` / `continue` names.
+fn dh_label(w: DhWalk, label: String) {
+    if label != "" {
+        dh_emit(w, "label#" + dh_lookup(w, label).to_string());
+    }
+}
+
 fn dh_scope_mark(w: DhWalk) -> Int {
     w.scope_names.len()
 }
@@ -378,11 +393,22 @@ fn dh_stmt_node(w: DhWalk, s: AstStmt) {
             dh_expr(w, a.target.x);
             dh_expr(w, a.value);
         }
-        AstStmt::Break(_) => dh_emit(w, "break"),
-        AstStmt::Continue(_) => dh_emit(w, "continue"),
+        AstStmt::Break(b) => {
+            dh_emit(w, "break");
+            dh_label(w, b.label);
+            match b.value {
+                Some(v) => dh_expr(w, v),
+                None => {}
+            }
+        }
+        AstStmt::Continue(c) => {
+            dh_emit(w, "continue");
+            dh_label(w, c.label);
+        }
         AstStmt::While(s) => {
             let mark = dh_scope_mark(w);
             dh_emit(w, if s.is_loop { "loop" } else { "while" });
+            dh_declare_label(w, s.label);
             dh_expr(w, s.cond);
             match s.pat {
                 Some(p) => {
@@ -397,6 +423,7 @@ fn dh_stmt_node(w: DhWalk, s: AstStmt) {
         AstStmt::For(s) => {
             let mark = dh_scope_mark(w);
             dh_emit(w, "for");
+            dh_declare_label(w, s.label);
             dh_expr(w, s.iter);
             match s.end {
                 Some(e) => {
@@ -645,6 +672,17 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
         AstExpr::Block(b) => dh_block(w, b),
         AstExpr::Try(x) => {
             dh_emit(w, "try");
+            match w.info.tries.get(x.id) {
+                // the error converted with `From::from`
+                Some(ti) => match ti.conv {
+                    Some(mi) => {
+                        dh_emit(w, "from");
+                        dh_func_dep(w, mi.func);
+                    }
+                    None => {}
+                },
+                None => {}
+            }
             dh_expr(w, x.x);
         }
         AstExpr::Closure(x) => {

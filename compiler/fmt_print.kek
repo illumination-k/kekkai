@@ -363,7 +363,11 @@ fn fmt_unit_at(units: Vec<FmtUnit>, i: Int) -> FmtUnit {
         None => FmtUnit {
             start: AstPos { file: "", line: 0, col: 0 },
             kind: FmtUnitKind::Stmt(
-                AstStmt::Break(AstBreakStmt { id: 0, pos: AstPos { file: "", line: 0, col: 0 } }),
+                AstStmt::Continue(AstContinueStmt {
+                    id: 0,
+                    pos: AstPos { file: "", line: 0, col: 0 },
+                    label: "",
+                }),
             ),
         },
     }
@@ -512,6 +516,19 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
                 None => {}
             }
             h = h + " => ";
+            if a.bare {
+                // `x => n += x,` (see AstMatchArm)
+                match a.body {
+                    AstExpr::Block(b) => match b.stmts.get(0) {
+                        Some(st) => {
+                            let t = fmt_stmt(p, st, ind);
+                            return h + t.slice(0, t.len() - 1) + ",";
+                        }
+                        None => {}
+                    },
+                    _ => {}
+                }
+            }
             let body = fmt_expr(p, a.body, ind, ind * 4 + fmt_w(p, h), false);
             match a.body {
                 AstExpr::Block(_) => h + body,
@@ -964,10 +981,11 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             h + fmt_expr(p, v, ind, col + fmt_w(p, h), false) + ";"
         }
         AstStmt::While(x) => {
+            let lb = fmt_label(x.label);
             if x.is_loop {
-                return "loop " + fmt_block(p, x.body, ind);
+                return lb + "loop " + fmt_block(p, x.body, ind);
             }
-            let h = "while " + fmt_let_pat(p, x.pat);
+            let h = lb + "while " + fmt_let_pat(p, x.pat);
             h + fmt_expr(p, x.cond, ind, col + fmt_w(p, h), true) + " " + fmt_block(p, x.body, ind)
         }
         AstStmt::For(x) => {
@@ -975,7 +993,7 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
                 Some(pt) => fmt_pat(p, pt),
                 None => x.var,
             };
-            let mut h = "for " + v + " in ";
+            let mut h = fmt_label(x.label) + "for " + v + " in ";
             h = h + fmt_expr(p, x.iter, ind, col + fmt_w(p, h), true);
             match x.end {
                 Some(e) => {
@@ -990,8 +1008,22 @@ fn fmt_stmt(p: FmtPrinter, s: AstStmt, ind: Int) -> String {
             let (h, v) = fmt_assign_rhs(fmt_stmt_expr(p, AstExpr::Field(x.target), ind), x.value);
             h + fmt_expr(p, v, ind, fmt_advance(p, col, h), false) + ";"
         }
-        AstStmt::Break(_) => "break;",
-        AstStmt::Continue(_) => "continue;",
+        AstStmt::Break(x) => {
+            let h = "break" + if x.label == "" {
+                ""
+            } else {
+                " " + x.label
+            };
+            match x.value {
+                Some(v) => h + " " + fmt_expr(p, v, ind, col + fmt_w(p, h) + 1, false) + ";",
+                None => h + ";",
+            }
+        }
+        AstStmt::Continue(x) => if x.label == "" {
+            "continue;"
+        } else {
+            "continue " + x.label + ";"
+        },
         AstStmt::Return(x) => match x.value {
             Some(v) => "return " + fmt_expr(p, v, ind, col + 7, false) + ";",
             None => "return;",
@@ -1242,7 +1274,10 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
             }
             fmt_args(p, x.elems, ind, col)
         }
-        AstExpr::Block(x) => fmt_block(p, x, ind),
+        AstExpr::Block(x) => match fmt_loop_expr(x) {
+            Some(w) => fmt_stmt(p, AstStmt::While(w), ind),
+            None => fmt_block(p, x, ind),
+        },
         AstExpr::Macro(x) => fmt_macro(p, x, ind, col),
         AstExpr::Closure(x) => {
             let mut h = if x.is_move { "move ||" } else { "||" };
@@ -1850,4 +1885,28 @@ fn fmt_left_paren(x: AstExpr, op: String) -> Bool {
 // parentheses.
 fn fmt_right_paren(y: AstExpr, op: String) -> Bool {
     fmt_prec(y) <= fmt_precedence(op) || fmt_mixed_logic(y, op)
+}
+
+// fmt_label is the label `'a: ` before a loop ("" without one).
+fn fmt_label(l: String) -> String {
+    if l == "" {
+        return "";
+    }
+    l + ": "
+}
+
+// fmt_loop_expr returns the `loop` of a block that stands for a `loop` in
+// expression position (see AstWhileStmt).
+fn fmt_loop_expr(b: AstBlock) -> Option<AstWhileStmt> {
+    if b.stmts.len() != 1 {
+        return None;
+    }
+    match ast_block_loop(b) {
+        Some(w) => if w.expr {
+            Some(w)
+        } else {
+            None
+        },
+        None => None,
+    }
 }

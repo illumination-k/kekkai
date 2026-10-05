@@ -445,6 +445,7 @@ fn mac_matches(p: ParseState, m: AstMacro) -> AstExpr {
         pat: pat,
         guard: None,
         body: mac_bool(p, pos, true),
+        bare: false,
     });
     if !pat.wildcard {
         let mut wild = ast_new_pattern(parse_id(p), pos);
@@ -455,6 +456,7 @@ fn mac_matches(p: ParseState, m: AstMacro) -> AstExpr {
             pat: wild,
             guard: None,
             body: mac_bool(p, pos, false),
+            bare: false,
         });
     }
     AstExpr::Match(AstMatch { id: parse_id(p), pos: pos, x: mac_arg(m, 0), arms: arms })

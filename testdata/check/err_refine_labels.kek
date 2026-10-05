@@ -1,0 +1,40 @@
+// Refinement facts and labeled loops: a loop left by a `break 'a` from an
+// inner loop has no exit fact, and `break value` is checked.
+
+// the loop condition is false after the loop (no `break` leaves it)
+fn scan_all(v: Vec<Int>) -> Int where result >= v.len() {
+    let mut i = 0;
+    'o: while i < v.len() {
+        for k in 0..1 {
+            if k > 5 {
+                continue 'o;
+            }
+        }
+        i += 1;
+    }
+    i
+}
+
+// `break 'o` from the inner loop leaves 'o with `i < v.len()`
+fn scan_zero(v: Vec<Int>) -> Int where result >= v.len() {
+    let mut i = 0;
+    'o: while i < v.len() {
+        for k in 0..1 {
+            if v[i] == 0 {
+                break 'o;
+            }
+        }
+        i += 1;
+    }
+    i // ERROR "postcondition"
+}
+
+// the index in a `break` value is checked
+fn first(v: Vec<Int>) -> Int {
+    let x = loop {
+        break v[0]; // ERROR "cannot prove the index is in bounds"
+    };
+    x
+}
+
+fn main() {}

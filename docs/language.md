@@ -6,7 +6,7 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
@@ -84,7 +84,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 - 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
 
 ### 演算子と core の trait
 
@@ -234,6 +234,25 @@ fn handle(u: User, doc: Doc, other: Doc) {
 - 権限は引数・戻り値・局所変数・`Option` などに置けるが、struct・enum のフィールドには書けない（資源を名指せない）。局所変数の権限は関数の外に出ない。資源を名指す関数は値として使えない。
 - `kek caps` は `#[policy]`、`requires: Edit(d)`、`grants: Edit(d)` を表示し、`kek assure` はポリシーを前提 `policy`、受け取る権限を保証 `authz.requires.Edit(d)` として記録する。
 - 実行時には中身のない値で、資源は表現を持たない。
+
+## シリアライズ（`Serialize`・`Deserialize`）
+
+```kek
+#[derive(Serialize, Deserialize)]
+struct Server {
+    name: String,
+    port: Port,               // type Port = Int where 0 < self && self < 65536
+    backup: Option<Port>,
+}
+
+let s: Server = Json::from_str(text)?;     // Toml::from_str も同じ
+Json::to_string(&s)
+```
+
+- 型は共通のデータモデル `Value` と変換し（`to_value`・`from_value`）、形式（`Json`・`Toml`）は `Value` と文字列を変換する。エラーは `SerdeError`（`message()` は `servers[1].port: the value is not a valid `Port`` のように場所と形だけを示し、データを含まない）。
+- `Labeled<L, T>` は読めるが書けない（`Deserialize` だけを実装する）。`Can` と capability はどちらも実装しない。
+- derive した `Deserialize` は篩型の別名の述語を調べる（`Option`・`Vec` の要素も）。
+- 詳細は [serde.md](serde.md)。
 
 ## 篩型（refinement types）
 

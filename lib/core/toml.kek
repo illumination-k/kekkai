@@ -1,0 +1,1199 @@
+// TOML (v1.0.0) for Value (lib/core/serde.kek).
+//
+//   Toml::parse(s) -> Result<Value, SerdeError>          the document is a Map
+//   Toml::render(&v) -> Result<String, SerdeError>       v must be a Map
+//   Toml::from_str::<T>(s) -> Result<T, SerdeError>
+//   Toml::to_string(&x) -> Result<String, SerdeError>
+//
+// Floats (also inf and nan) become Value::Float as written (without `_`);
+// dates and times become Value::Str as written. TOML has no null: render
+// leaves out the keys whose value is null and refuses null elsewhere.
+// Tables keep the order in which their keys first appear.
+
+struct Toml {}
+
+impl Toml {
+    fn parse(s: String) -> Result<Value, SerdeError> {
+        let root = __toml_table(false);
+        let mut p = __TomlParser { s: s, n: s.len(), i: 0 };
+        let mut cur = root;
+        while true {
+            p.blank();
+            if p.i >= p.n {
+                break;
+            }
+            let c = p.peek();
+            if c == 10 || c == 13 || c == 35 {
+                p.end_of_line()?;
+                continue;
+            }
+            if c == 91 {
+                cur = p.header(root)?;
+            } else {
+                p.key_value(cur)?;
+            }
+            p.end_of_line()?;
+        }
+        Ok(__toml_value(root))
+    }
+
+    fn render(v: &Value) -> Result<String, SerdeError> {
+        match v {
+            Value::Map(es) => {
+                let mut out = Vec::new();
+                __toml_render_table(&mut out, "", es)?;
+                Ok(out.join(""))
+            }
+            _ => Err(v.mismatch("a map (a TOML document is a table)")),
+        }
+    }
+
+    fn from_str<T: Deserialize>(s: String) -> Result<T, SerdeError> {
+        T::from_value(&Toml::parse(s)?)
+    }
+
+    fn to_string<T: Serialize>(x: &T) -> Result<String, SerdeError> {
+        Toml::render(&x.to_value())
+    }
+}
+
+// ---- the document while it is parsed ----
+
+// A table: header is set once a `[header]` defined it, dotted when dotted
+// keys created it, closed for an inline table (it cannot be extended).
+struct __TomlTable {
+    keys: Vec<String>,
+    items: HashMap<String, __TomlItem>,
+    mut header: Bool,
+    mut dotted: Bool,
+    mut closed: Bool,
+}
+
+enum __TomlItem {
+    Val(Value),
+    Table(__TomlTable),
+    // `[[name]]`
+    Tables(Vec<__TomlTable>),
+}
+
+fn __toml_table(dotted: Bool) -> __TomlTable {
+    __TomlTable {
+        keys: Vec::new(),
+        items: HashMap::new(),
+        header: false,
+        dotted: dotted,
+        closed: false,
+    }
+}
+
+fn __toml_put(mut t: __TomlTable, k: String, it: __TomlItem) {
+    if !t.items.contains_key(k) {
+        t.keys.push(k);
+    }
+    t.items.insert(k, it);
+}
+
+fn __toml_value(t: __TomlTable) -> Value {
+    let mut es = Vec::new();
+    for k in t.keys.iter() {
+        match t.items.get(k) {
+            Some(__TomlItem::Val(v)) => es.push((k, v)),
+            Some(__TomlItem::Table(x)) => es.push((k, __toml_value(x))),
+            Some(__TomlItem::Tables(xs)) => {
+                let mut seq = Vec::new();
+                for x in xs.iter() {
+                    seq.push(__toml_value(x));
+                }
+                es.push((k, Value::Seq(seq)));
+            }
+            None => {}
+        }
+    }
+    Value::Map(es)
+}
+
+struct __TomlParser {
+    s: String,
+    n: Int,
+    mut i: Int,
+}
+
+impl __TomlParser {
+    fn peek(&self) -> Int {
+        self.at(self.i)
+    }
+
+    fn at(&self, j: Int) -> Int {
+        if j < self.n {
+            self.s.char_at(j).unwrap_or(-1)
+        } else {
+            -1
+        }
+    }
+
+    fn fail(&self, msg: String) -> SerdeError {
+        __serde_at(self.s, self.i, msg)
+    }
+
+    fn fail_at(&self, j: Int, msg: String) -> SerdeError {
+        __serde_at(self.s, j, msg)
+    }
+
+    // blank skips spaces and tabs.
+    fn blank(&mut self) {
+        while self.peek() == 32 || self.peek() == 9 {
+            self.i = self.i + 1;
+        }
+    }
+
+    // end_of_line accepts blanks, a comment and the end of the line.
+    fn end_of_line(&mut self) -> Result<(), SerdeError> {
+        self.blank();
+        if self.peek() == 35 {
+            while self.i < self.n && self.peek() != 10 {
+                let c = self.peek();
+                if (c < 32 && c != 9) || c == 127 {
+                    if !(c == 13 && self.at(self.i + 1) == 10) {
+                        return Err(self.fail("control character in a comment"));
+                    }
+                }
+                self.i = self.i + 1;
+            }
+        }
+        if self.peek() == 13 && self.at(self.i + 1) == 10 {
+            self.i = self.i + 2;
+            return Ok(());
+        }
+        if self.peek() == 10 {
+            self.i = self.i + 1;
+            return Ok(());
+        }
+        if self.i >= self.n {
+            return Ok(());
+        }
+        Err(self.fail("expected the end of the line"))
+    }
+
+    // skip_ws skips blanks, newlines and comments (inside arrays).
+    fn skip_ws(&mut self) -> Result<(), SerdeError> {
+        while true {
+            self.blank();
+            let c = self.peek();
+            if c == 10 || c == 35 || (c == 13 && self.at(self.i + 1) == 10) {
+                self.end_of_line()?;
+            } else {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    // ---- keys ----
+
+    fn simple_key(&mut self) -> Result<String, SerdeError> {
+        let c = self.peek();
+        if c == 34 {
+            if self.at(self.i + 1) == 34 && self.at(self.i + 2) == 34 {
+                return Err(self.fail("a key cannot be a multi-line string"));
+            }
+            return self.basic_string();
+        }
+        if c == 39 {
+            if self.at(self.i + 1) == 39 && self.at(self.i + 2) == 39 {
+                return Err(self.fail("a key cannot be a multi-line string"));
+            }
+            return self.literal_string();
+        }
+        let start = self.i;
+        while __toml_bare(self.peek()) {
+            self.i = self.i + 1;
+        }
+        if self.i == start {
+            return Err(self.fail("expected a key"));
+        }
+        Ok(self.s.slice(start, self.i))
+    }
+
+    // key is a dotted key `a.b."c"`.
+    fn key(&mut self) -> Result<Vec<String>, SerdeError> {
+        let mut parts = Vec::new();
+        while true {
+            self.blank();
+            parts.push(self.simple_key()?);
+            self.blank();
+            if self.peek() != 46 {
+                return Ok(parts);
+            }
+            self.i = self.i + 1;
+        }
+        Ok(parts)
+    }
+
+    // ---- tables ----
+
+    // header parses `[a.b]` or `[[a.b]]` and returns the table that the
+    // following keys go to.
+    fn header(&mut self, root: __TomlTable) -> Result<__TomlTable, SerdeError> {
+        let start = self.i;
+        let array = self.at(self.i + 1) == 91;
+        self.i = self.i + if array { 2 } else { 1 };
+        let path = self.key()?;
+        if array {
+            if !(self.peek() == 93 && self.at(self.i + 1) == 93) {
+                return Err(self.fail("expected `]]`"));
+            }
+            self.i = self.i + 2;
+        } else {
+            if self.peek() != 93 {
+                return Err(self.fail("expected `]`"));
+            }
+            self.i = self.i + 1;
+        }
+        let mut t = root;
+        let last = path.len() - 1;
+        let mut k = 0;
+        for name in path.iter() {
+            if k == last {
+                break;
+            }
+            t = self.descend(t, name, start)?;
+            k = k + 1;
+        }
+        let name = path.get(last).unwrap_or("");
+        if array {
+            let mut fresh = __toml_table(false);
+            fresh.header = true;
+            match t.items.get(name) {
+                None => {
+                    if t.closed {
+                        return Err(self.fail_at(start, "cannot extend an inline table"));
+                    }
+                    let mut xs = Vec::new();
+                    xs.push(fresh);
+                    __toml_put(t, name, __TomlItem::Tables(xs));
+                }
+                Some(__TomlItem::Tables(xs)) => {
+                    let mut ys = xs;
+                    ys.push(fresh);
+                }
+                Some(_) => {
+                    return Err(
+                        self.fail_at(
+                            start,
+                            "`" + name + "` is already defined and not an array of tables",
+                        ),
+                    );
+                }
+            }
+            return Ok(fresh);
+        }
+        match t.items.get(name) {
+            None => {
+                if t.closed {
+                    return Err(self.fail_at(start, "cannot extend an inline table"));
+                }
+                let mut fresh = __toml_table(false);
+                fresh.header = true;
+                __toml_put(t, name, __TomlItem::Table(fresh));
+                Ok(fresh)
+            }
+            Some(__TomlItem::Table(x)) => {
+                if x.header || x.dotted || x.closed {
+                    return Err(self.fail_at(start, "table `" + name + "` is defined twice"));
+                }
+                let mut y = x;
+                y.header = true;
+                Ok(y)
+            }
+            Some(_) => Err(self.fail_at(start, "`" + name + "` is already defined and not a table")),
+        }
+    }
+
+    // descend is the table name inside t on the path of a header: created
+    // if missing, the last one of an array of tables.
+    fn descend(
+        &self,
+        mut t: __TomlTable,
+        name: String,
+        at: Int,
+    ) -> Result<__TomlTable, SerdeError> {
+        match t.items.get(name) {
+            None => {
+                if t.closed {
+                    return Err(self.fail_at(at, "cannot extend an inline table"));
+                }
+                let fresh = __toml_table(false);
+                __toml_put(t, name, __TomlItem::Table(fresh));
+                Ok(fresh)
+            }
+            Some(__TomlItem::Table(x)) => {
+                if x.closed {
+                    return Err(self.fail_at(at, "cannot extend an inline table"));
+                }
+                Ok(x)
+            }
+            Some(__TomlItem::Tables(xs)) => match xs.get(xs.len() - 1) {
+                Some(x) => Ok(x),
+                None => Err(self.fail_at(at, "empty array of tables")),
+            },
+            Some(__TomlItem::Val(_)) => Err(self.fail_at(at, "`" + name + "` is not a table")),
+        }
+    }
+
+    // key_value parses `a.b = v` into t.
+    fn key_value(&mut self, t: __TomlTable) -> Result<(), SerdeError> {
+        let start = self.i;
+        let path = self.key()?;
+        if self.peek() != 61 {
+            return Err(self.fail("expected `=` after a key"));
+        }
+        self.i = self.i + 1;
+        self.blank();
+        let v = self.value(0)?;
+        let mut cur = t;
+        let last = path.len() - 1;
+        let mut k = 0;
+        for name in path.iter() {
+            if k == last {
+                break;
+            }
+            match cur.items.get(name) {
+                None => {
+                    let fresh = __toml_table(true);
+                    __toml_put(cur, name, __TomlItem::Table(fresh));
+                    cur = fresh;
+                }
+                Some(__TomlItem::Table(x)) => {
+                    if !x.dotted || x.closed {
+                        return Err(
+                            self.fail_at(
+                                start,
+                                "cannot add to table `" + name + "` with a dotted key",
+                            ),
+                        );
+                    }
+                    cur = x;
+                }
+                Some(_) => {
+                    return Err(self.fail_at(start, "`" + name + "` is not a table"));
+                }
+            }
+            k = k + 1;
+        }
+        let name = path.get(last).unwrap_or("");
+        if cur.items.contains_key(name) {
+            return Err(self.fail_at(start, "duplicate key `" + name + "`"));
+        }
+        __toml_put(cur, name, v);
+        Ok(())
+    }
+
+    // ---- values ----
+
+    fn value(&mut self, depth: Int) -> Result<__TomlItem, SerdeError> {
+        if depth > 128 {
+            return Err(self.fail("nested too deeply"));
+        }
+        let c = self.peek();
+        if c == 34 {
+            if self.at(self.i + 1) == 34 && self.at(self.i + 2) == 34 {
+                return Ok(__TomlItem::Val(Value::Str(self.ml_basic_string()?)));
+            }
+            return Ok(__TomlItem::Val(Value::Str(self.basic_string()?)));
+        }
+        if c == 39 {
+            if self.at(self.i + 1) == 39 && self.at(self.i + 2) == 39 {
+                return Ok(__TomlItem::Val(Value::Str(self.ml_literal_string()?)));
+            }
+            return Ok(__TomlItem::Val(Value::Str(self.literal_string()?)));
+        }
+        if c == 91 {
+            return self.array(depth);
+        }
+        if c == 123 {
+            return self.inline_table(depth);
+        }
+        Ok(__TomlItem::Val(self.scalar()?))
+    }
+
+    fn array(&mut self, depth: Int) -> Result<__TomlItem, SerdeError> {
+        self.i = self.i + 1;
+        let mut out = Vec::new();
+        while true {
+            self.skip_ws()?;
+            if self.peek() == 93 {
+                self.i = self.i + 1;
+                return Ok(__TomlItem::Val(Value::Seq(out)));
+            }
+            out.push(__toml_item_value(self.value(depth + 1)?));
+            self.skip_ws()?;
+            let c = self.peek();
+            if c == 44 {
+                self.i = self.i + 1;
+            } else if c == 93 {
+                self.i = self.i + 1;
+                return Ok(__TomlItem::Val(Value::Seq(out)));
+            } else {
+                return Err(self.fail("expected `,` or `]` in an array"));
+            }
+        }
+        Err(self.fail("unterminated array"))
+    }
+
+    fn inline_table(&mut self, depth: Int) -> Result<__TomlItem, SerdeError> {
+        self.i = self.i + 1;
+        let mut t = __toml_table(false);
+        self.blank();
+        if self.peek() == 125 {
+            self.i = self.i + 1;
+            t.closed = true;
+            return Ok(__TomlItem::Table(t));
+        }
+        while true {
+            self.blank();
+            let start = self.i;
+            let path = self.key()?;
+            if self.peek() != 61 {
+                return Err(self.fail("expected `=` after a key"));
+            }
+            self.i = self.i + 1;
+            self.blank();
+            let v = self.value(depth + 1)?;
+            let mut cur = t;
+            let last = path.len() - 1;
+            let mut k = 0;
+            for name in path.iter() {
+                if k == last {
+                    break;
+                }
+                match cur.items.get(name) {
+                    None => {
+                        let fresh = __toml_table(true);
+                        __toml_put(cur, name, __TomlItem::Table(fresh));
+                        cur = fresh;
+                    }
+                    Some(__TomlItem::Table(x)) => {
+                        if !x.dotted {
+                            return Err(self.fail_at(start, "`" + name + "` is already defined"));
+                        }
+                        cur = x;
+                    }
+                    Some(_) => {
+                        return Err(self.fail_at(start, "`" + name + "` is not a table"));
+                    }
+                }
+                k = k + 1;
+            }
+            let name = path.get(last).unwrap_or("");
+            if cur.items.contains_key(name) {
+                return Err(self.fail_at(start, "duplicate key `" + name + "`"));
+            }
+            __toml_put(cur, name, v);
+            self.blank();
+            let c = self.peek();
+            if c == 44 {
+                self.i = self.i + 1;
+            } else if c == 125 {
+                self.i = self.i + 1;
+                __toml_close(t);
+                return Ok(__TomlItem::Table(t));
+            } else {
+                return Err(self.fail("expected `,` or `}` in an inline table"));
+            }
+        }
+        Err(self.fail("unterminated inline table"))
+    }
+
+    // ---- strings ----
+
+    fn basic_string(&mut self) -> Result<String, SerdeError> {
+        self.i = self.i + 1;
+        let mut parts = Vec::new();
+        let mut start = self.i;
+        while true {
+            let c = self.peek();
+            if c == 34 {
+                parts.push(self.s.slice(start, self.i));
+                self.i = self.i + 1;
+                return Ok(parts.join(""));
+            }
+            if c < 0 || c == 10 || c == 13 {
+                return Err(self.fail("unterminated string"));
+            }
+            if (c < 32 && c != 9) || c == 127 {
+                return Err(self.fail("control character in a string"));
+            }
+            if c == 92 {
+                parts.push(self.s.slice(start, self.i));
+                self.escape(&mut parts)?;
+                start = self.i;
+            } else {
+                self.i = self.i + 1;
+            }
+        }
+        Err(self.fail("unterminated string"))
+    }
+
+    // escape reads the escape at self.i (a backslash) into parts.
+    fn escape(&mut self, mut parts: Vec<String>) -> Result<(), SerdeError> {
+        let e = self.at(self.i + 1);
+        let mut len = 2;
+        if e == 34 {
+            parts.push("\"");
+        } else if e == 92 {
+            parts.push("\\");
+        } else if e == 98 {
+            parts.push(String::from_char(8));
+        } else if e == 116 {
+            parts.push("\t");
+        } else if e == 110 {
+            parts.push("\n");
+        } else if e == 102 {
+            parts.push(String::from_char(12));
+        } else if e == 114 {
+            parts.push("\r");
+        } else if e == 117 || e == 85 {
+            let nd = if e == 117 { 4 } else { 8 };
+            let mut x = 0;
+            for k in 0..nd {
+                let d = __serde_hex_value(self.at(self.i + 2 + k));
+                if d < 0 {
+                    return Err(self.fail("bad unicode escape"));
+                }
+                x = x * 16 + d;
+            }
+            if x > 1114111 || (x >= 55296 && x <= 57343) {
+                return Err(self.fail("the escape is not a Unicode scalar value"));
+            }
+            __serde_code_point(parts, x);
+            len = 2 + nd;
+        } else {
+            return Err(self.fail("bad escape"));
+        }
+        self.i = self.i + len;
+        Ok(())
+    }
+
+    // newline_at is the length of the newline at j (0 if none).
+    fn newline_at(&self, j: Int) -> Int {
+        if self.at(j) == 10 {
+            1
+        } else if self.at(j) == 13 && self.at(j + 1) == 10 {
+            2
+        } else {
+            0
+        }
+    }
+
+    fn ml_basic_string(&mut self) -> Result<String, SerdeError> {
+        self.i = self.i + 3;
+        self.i = self.i + self.newline_at(self.i);
+        let mut parts = Vec::new();
+        let mut start = self.i;
+        while true {
+            let c = self.peek();
+            if c < 0 {
+                return Err(self.fail("unterminated string"));
+            }
+            if c == 34 && self.at(self.i + 1) == 34 && self.at(self.i + 2) == 34 {
+                // up to two more quotes belong to the string
+                let mut end = self.i;
+                while self.at(end + 3) == 34 && end < self.i + 2 {
+                    end = end + 1;
+                }
+                parts.push(self.s.slice(start, end));
+                self.i = end + 3;
+                return Ok(parts.join(""));
+            }
+            if c == 92 {
+                parts.push(self.s.slice(start, self.i));
+                // a backslash at the end of a line trims the whitespace
+                let mut j = self.i + 1;
+                while self.at(j) == 32 || self.at(j) == 9 {
+                    j = j + 1;
+                }
+                if self.newline_at(j) > 0 {
+                    while self.at(j) == 32 || self.at(j) == 9 || self.newline_at(j) > 0 {
+                        j = j + if self.newline_at(j) > 0 {
+                            self.newline_at(j)
+                        } else {
+                            1
+                        };
+                    }
+                    self.i = j;
+                } else {
+                    self.escape(&mut parts)?;
+                }
+                start = self.i;
+                continue;
+            }
+            if (c < 32 && c != 9 && c != 10 && c != 13) || c == 127 {
+                return Err(self.fail("control character in a string"));
+            }
+            if c == 13 && self.at(self.i + 1) != 10 {
+                return Err(self.fail("bare carriage return in a string"));
+            }
+            self.i = self.i + 1;
+        }
+        Err(self.fail("unterminated string"))
+    }
+
+    fn literal_string(&mut self) -> Result<String, SerdeError> {
+        self.i = self.i + 1;
+        let start = self.i;
+        while true {
+            let c = self.peek();
+            if c == 39 {
+                let s = self.s.slice(start, self.i);
+                self.i = self.i + 1;
+                return Ok(s);
+            }
+            if c < 0 || c == 10 || c == 13 {
+                return Err(self.fail("unterminated string"));
+            }
+            if (c < 32 && c != 9) || c == 127 {
+                return Err(self.fail("control character in a string"));
+            }
+            self.i = self.i + 1;
+        }
+        Err(self.fail("unterminated string"))
+    }
+
+    fn ml_literal_string(&mut self) -> Result<String, SerdeError> {
+        self.i = self.i + 3;
+        self.i = self.i + self.newline_at(self.i);
+        let start = self.i;
+        while true {
+            let c = self.peek();
+            if c < 0 {
+                return Err(self.fail("unterminated string"));
+            }
+            if c == 39 && self.at(self.i + 1) == 39 && self.at(self.i + 2) == 39 {
+                let mut end = self.i;
+                while self.at(end + 3) == 39 && end < self.i + 2 {
+                    end = end + 1;
+                }
+                let s = self.s.slice(start, end);
+                self.i = end + 3;
+                return Ok(s);
+            }
+            if (c < 32 && c != 9 && c != 10 && c != 13) || c == 127 {
+                return Err(self.fail("control character in a string"));
+            }
+            self.i = self.i + 1;
+        }
+        Err(self.fail("unterminated string"))
+    }
+
+    // ---- numbers, booleans, dates ----
+
+    fn scalar(&mut self) -> Result<Value, SerdeError> {
+        let start = self.i;
+        while __toml_scalar_char(self.peek()) {
+            self.i = self.i + 1;
+        }
+        // `1979-05-27 07:32:00`: a space may separate a date and a time
+        if self.peek() == 32
+            && self.i - start == 10
+            && __toml_is_date(self.s.slice(start, self.i))
+            && __toml_digit(self.at(self.i + 1))
+            && __toml_digit(self.at(self.i + 2))
+            && self.at(self.i + 3) == 58 {
+            self.i = self.i + 1;
+            while __toml_scalar_char(self.peek()) {
+                self.i = self.i + 1;
+            }
+        }
+        let t = self.s.slice(start, self.i);
+        if t == "" {
+            return Err(self.fail("expected a value"));
+        }
+        if t == "true" {
+            return Ok(Value::Bool(true));
+        }
+        if t == "false" {
+            return Ok(Value::Bool(false));
+        }
+        if t == "inf" || t == "+inf" || t == "-inf" || t == "nan" || t == "+nan" || t == "-nan" {
+            return Ok(Value::Float(t));
+        }
+        if __toml_is_date(t.slice(0, 10)) || (t.len() >= 8 && t.char_at(2).unwrap_or(0) == 58) {
+            if __toml_datetime_ok(t) {
+                return Ok(Value::Str(t));
+            }
+            return Err(self.fail_at(start, "bad date or time"));
+        }
+        match __toml_number(t) {
+            Some(v) => Ok(v),
+            None => Err(self.fail_at(start, "bad value `" + t + "`")),
+        }
+    }
+}
+
+fn __toml_close(mut t: __TomlTable) {
+    t.closed = true;
+    for k in t.keys.iter() {
+        match t.items.get(k) {
+            Some(__TomlItem::Table(x)) => __toml_close(x),
+            _ => {}
+        }
+    }
+}
+
+fn __toml_item_value(it: __TomlItem) -> Value {
+    match it {
+        __TomlItem::Val(v) => v,
+        __TomlItem::Table(t) => __toml_value(t),
+        __TomlItem::Tables(xs) => {
+            let mut seq = Vec::new();
+            for x in xs.iter() {
+                seq.push(__toml_value(x));
+            }
+            Value::Seq(seq)
+        }
+    }
+}
+
+fn __toml_bare(c: Int) -> Bool {
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 || c == 45
+}
+
+fn __toml_digit(c: Int) -> Bool {
+    c >= 48 && c <= 57
+}
+
+fn __toml_scalar_char(c: Int) -> Bool {
+    __toml_bare(c) || c == 43 || c == 46 || c == 58
+}
+
+fn __toml_digits(s: String, a: Int, b: Int) -> Bool {
+    if a >= b || b > s.len() {
+        return false;
+    }
+    for j in a..b {
+        if !__toml_digit(s.char_at(j).unwrap_or(0)) {
+            return false;
+        }
+    }
+    true
+}
+
+// __toml_is_date: `YYYY-MM-DD`.
+fn __toml_is_date(s: String) -> Bool {
+    s.len() == 10
+        && __toml_digits(s, 0, 4)
+        && s.char_at(4).unwrap_or(0) == 45
+        && __toml_digits(s, 5, 7)
+        && s.char_at(7).unwrap_or(0) == 45
+        && __toml_digits(s, 8, 10)
+}
+
+// __toml_is_time: `HH:MM:SS` with an optional fraction.
+fn __toml_is_time(s: String) -> Bool {
+    if s.len() < 8 {
+        return false;
+    }
+    if !(__toml_digits(s, 0, 2)
+        && s.char_at(2).unwrap_or(0) == 58
+        && __toml_digits(s, 3, 5)
+        && s.char_at(5).unwrap_or(0) == 58
+        && __toml_digits(s, 6, 8)) {
+        return false;
+    }
+    if s.len() == 8 {
+        return true;
+    }
+    s.char_at(8).unwrap_or(0) == 46 && __toml_digits(s, 9, s.len())
+}
+
+// __toml_datetime_ok accepts the four date and time forms.
+fn __toml_datetime_ok(t: String) -> Bool {
+    if __toml_is_time(t) {
+        return true;
+    }
+    if !__toml_is_date(t.slice(0, 10)) {
+        return false;
+    }
+    if t.len() == 10 {
+        return true;
+    }
+    let sep = t.char_at(10).unwrap_or(0);
+    if !(sep == 84 || sep == 116 || sep == 32) {
+        return false;
+    }
+    let rest = t.slice(11, t.len());
+    // an offset: Z, or +HH:MM / -HH:MM
+    let n = rest.len();
+    let mut time = rest;
+    if n > 0 && (rest.char_at(n - 1).unwrap_or(0) == 90 || rest.char_at(n - 1).unwrap_or(0) == 122) {
+        time = rest.slice(0, n - 1);
+    } else if n >= 6 {
+        let o = rest.char_at(n - 6).unwrap_or(0);
+        if (o == 43 || o == 45)
+            && __toml_digits(rest, n - 5, n - 3)
+            && rest.char_at(n - 3).unwrap_or(0) == 58
+            && __toml_digits(rest, n - 2, n) {
+            time = rest.slice(0, n - 6);
+        }
+    }
+    __toml_is_time(time)
+}
+
+// __toml_clean checks that every `_` in s is between two digits of the
+// given base and removes them; "" if s is not well formed.
+fn __toml_clean(s: String, base: Int) -> String {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let n = s.len();
+    for j in 0..n {
+        if s.char_at(j).unwrap_or(0) == 95 {
+            if j == 0 || j == n - 1 {
+                return "";
+            }
+            if __toml_digit_value(s.char_at(j - 1).unwrap_or(0)) < 0
+                || __toml_digit_value(s.char_at(j + 1).unwrap_or(0)) < 0 {
+                return "";
+            }
+            parts.push(s.slice(start, j));
+            start = j + 1;
+        }
+    }
+    parts.push(s.slice(start, n));
+    let out = parts.join("");
+    if base == 16 {
+        for j in 0..out.len() {
+            if __serde_hex_value(out.char_at(j).unwrap_or(0)) < 0 {
+                return "";
+            }
+        }
+    }
+    out
+}
+
+fn __toml_digit_value(c: Int) -> Int {
+    __serde_hex_value(c)
+}
+
+// __toml_radix parses the digits of s in base b (no sign).
+fn __toml_radix(s: String, b: Int) -> Option<Int> {
+    if s == "" {
+        return None;
+    }
+    let mut x = 0;
+    for j in 0..s.len() {
+        let d = __serde_hex_value(s.char_at(j).unwrap_or(0));
+        if d < 0 || d >= b {
+            return None;
+        }
+        // overflow: x * b + d must stay below 2^63
+        if x > (9223372036854775807 - d) / b {
+            return None;
+        }
+        x = x * b + d;
+    }
+    Some(x)
+}
+
+fn __toml_number(t: String) -> Option<Value> {
+    if t.starts_with("0x") || t.starts_with("0o") || t.starts_with("0b") {
+        let b = if t.starts_with("0x") {
+            16
+        } else if t.starts_with("0o") { 8 } else { 2 };
+        let digits = __toml_clean(t.slice(2, t.len()), b);
+        return match __toml_radix(digits, b) {
+            Some(x) => Some(Value::Int(x)),
+            None => None,
+        };
+    }
+    let mut body = t;
+    if t.starts_with("+") || t.starts_with("-") {
+        body = t.slice(1, t.len());
+    }
+    if body == "" || !__toml_digit(body.char_at(0).unwrap_or(0)) {
+        return None;
+    }
+    let float = body.contains(".") || body.contains("e") || body.contains("E");
+    // no leading zeros in the integer part
+    let int_end = match body.index_of(".") {
+        Some(k) => k,
+        None => match body.index_of("e") {
+            Some(k) => k,
+            None => match body.index_of("E") {
+                Some(k) => k,
+                None => body.len(),
+            },
+        },
+    };
+    if int_end > 1 && body.char_at(0).unwrap_or(0) == 48 {
+        return None;
+    }
+    if !float {
+        let d = __toml_clean(body, 10);
+        if !__toml_digits(d, 0, d.len()) {
+            return None;
+        }
+        let sign = if t.starts_with("-") { "-" } else { "" };
+        return match (sign + d).parse_int() {
+            Some(x) => Some(Value::Int(x)),
+            None => None,
+        };
+    }
+    // a float: int [. digits] [e [+-] digits], `_` between digits
+    let mut clean = Vec::new();
+    let mut j = 0;
+    let n = body.len();
+    let mut start = 0;
+    while j < n {
+        let c = body.char_at(j).unwrap_or(0);
+        if c == 95 {
+            if !(j > 0
+                && __toml_digit(body.char_at(j - 1).unwrap_or(0))
+                && __toml_digit(body.char_at(j + 1).unwrap_or(0))) {
+                return None;
+            }
+            clean.push(body.slice(start, j));
+            start = j + 1;
+        }
+        j = j + 1;
+    }
+    clean.push(body.slice(start, n));
+    let f = clean.join("");
+    if !__toml_float_ok(f) {
+        return None;
+    }
+    let sign = if t.starts_with("-") {
+        "-"
+    } else if t.starts_with("+") { "+" } else { "" };
+    Some(Value::Float(sign + f))
+}
+
+fn __toml_float_ok(f: String) -> Bool {
+    let mut j = 0;
+    let n = f.len();
+    while j < n && __toml_digit(f.char_at(j).unwrap_or(0)) {
+        j = j + 1;
+    }
+    if j == 0 {
+        return false;
+    }
+    if j < n && f.char_at(j).unwrap_or(0) == 46 {
+        j = j + 1;
+        let a = j;
+        while j < n && __toml_digit(f.char_at(j).unwrap_or(0)) {
+            j = j + 1;
+        }
+        if j == a {
+            return false;
+        }
+    }
+    if j < n && (f.char_at(j).unwrap_or(0) == 101 || f.char_at(j).unwrap_or(0) == 69) {
+        j = j + 1;
+        if j < n && (f.char_at(j).unwrap_or(0) == 43 || f.char_at(j).unwrap_or(0) == 45) {
+            j = j + 1;
+        }
+        let a = j;
+        while j < n && __toml_digit(f.char_at(j).unwrap_or(0)) {
+            j = j + 1;
+        }
+        if j == a {
+            return false;
+        }
+    }
+    j == n
+}
+
+// ---- rendering ----
+
+fn __toml_key(k: String) -> String {
+    if k == "" {
+        return "\"\"";
+    }
+    for j in 0..k.len() {
+        if !__toml_bare(k.char_at(j).unwrap_or(0)) {
+            return __serde_quote(k);
+        }
+    }
+    k
+}
+
+// __toml_tables reports whether v is rendered as `[[name]]` sections: a
+// non-empty sequence of maps.
+fn __toml_tables(v: &Value) -> Bool {
+    match v {
+        Value::Seq(xs) => {
+            if xs.len() == 0 {
+                return false;
+            }
+            for x in xs.iter() {
+                match x {
+                    Value::Map(_) => {}
+                    _ => {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+// __toml_render_table writes the entries of the table at path (dotted,
+// "" for the document): plain keys first, then sub-tables and arrays of
+// tables.
+fn __toml_render_table(
+    mut out: Vec<String>,
+    path: String,
+    es: &Vec<(String, Value)>,
+) -> Result<(), SerdeError> {
+    for e in es.iter() {
+        match &e.1 {
+            Value::Null => {}
+            Value::Map(_) => {}
+            v => {
+                if !__toml_tables(v) {
+                    out.push(__toml_key(e.0) + " = ");
+                    match __toml_inline(&mut out, v) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            return Err(err.in_field(e.0));
+                        }
+                    }
+                    out.push("\n");
+                }
+            }
+        }
+    }
+    for e in es.iter() {
+        let sub = if path == "" {
+            __toml_key(e.0)
+        } else {
+            path + "." + __toml_key(e.0)
+        };
+        match &e.1 {
+            Value::Map(inner) => {
+                // a table of tables only needs the headers of its tables
+                if __toml_has_plain(inner) || !__toml_has_tables(inner) {
+                    if out.len() > 0 {
+                        out.push("\n");
+                    }
+                    out.push("[" + sub + "]\n");
+                }
+                match __toml_render_table(out, sub, inner) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        return Err(err.in_field(e.0));
+                    }
+                }
+            }
+            Value::Seq(xs) => {
+                if __toml_tables(&e.1) {
+                    let mut i = 0;
+                    for x in xs.iter() {
+                        match x {
+                            Value::Map(inner) => {
+                                if out.len() > 0 {
+                                    out.push("\n");
+                                }
+                                out.push("[[" + sub + "]]\n");
+                                match __toml_render_table(out, sub, inner) {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        return Err(err.in_index(i).in_field(e.0));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        i = i + 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn __toml_has_plain(es: &Vec<(String, Value)>) -> Bool {
+    for e in es.iter() {
+        match &e.1 {
+            Value::Null => {}
+            Value::Map(_) => {}
+            v => {
+                if !__toml_tables(v) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn __toml_has_tables(es: &Vec<(String, Value)>) -> Bool {
+    for e in es.iter() {
+        match &e.1 {
+            Value::Map(_) => {
+                return true;
+            }
+            v => {
+                if __toml_tables(v) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// __toml_inline writes v as an inline value (arrays and inline tables).
+fn __toml_inline(mut out: Vec<String>, v: &Value) -> Result<(), SerdeError> {
+    match v {
+        Value::Null => {
+            return Err(SerdeError::new("TOML has no null"));
+        }
+        Value::Bool(b) => out.push(if b { "true" } else { "false" }),
+        Value::Int(n) => out.push(n.to_string()),
+        Value::Float(f) => out.push(f),
+        Value::Str(s) => out.push(__serde_quote(s)),
+        Value::Seq(xs) => {
+            out.push("[");
+            let mut i = 0;
+            for x in xs.iter() {
+                if i > 0 {
+                    out.push(", ");
+                }
+                match __toml_inline(out, x) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        return Err(err.in_index(i));
+                    }
+                }
+                i = i + 1;
+            }
+            out.push("]");
+        }
+        Value::Map(es) => {
+            out.push("{");
+            let mut first = true;
+            for e in es.iter() {
+                match &e.1 {
+                    Value::Null => {}
+                    x => {
+                        out.push(if first { " " } else { ", " });
+                        first = false;
+                        out.push(__toml_key(e.0) + " = ");
+                        match __toml_inline(out, x) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                return Err(err.in_field(e.0));
+                            }
+                        }
+                    }
+                }
+            }
+            out.push(if first { "}" } else { " }" });
+        }
+    }
+    Ok(())
+}

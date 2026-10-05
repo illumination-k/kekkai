@@ -394,14 +394,19 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
         }
         return;
     }
-    if a.name == "fresh" {
+    if a.name == "fresh" || a.name == "owned" {
         // a core function whose result is a new container (shared
-        // contents, not shared) when it is given shared values
+        // contents, not shared) when it is given shared values (`fresh`),
+        // or an owned value built from what it reads (`owned`)
         if !chk_is_lib_pos(a.pos) {
-            chk_errorf(c, a.pos, "`#[fresh]` is only allowed in the core library and the prelude");
+            chk_errorf(
+                c,
+                a.pos,
+                "`#[" + a.name + "]` is only allowed in the core library and the prelude",
+            );
         }
         if a.args.len() > 0 {
-            chk_errorf(c, a.pos, "`#[fresh]` takes no arguments");
+            chk_errorf(c, a.pos, "`#[" + a.name + "]` takes no arguments");
         }
         return;
     }
@@ -1173,7 +1178,7 @@ fn chk_declare_func(
         declass: Vec::new(),
     };
     for a in fd.attrs {
-        if scope.contains_key("Self") && a.name != "fresh" {
+        if scope.contains_key("Self") && a.name != "fresh" && a.name != "owned" {
             chk_errorf(c, a.pos, "attributes are not allowed on methods");
             continue;
         }

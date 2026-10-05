@@ -1,0 +1,106 @@
+ok {"a":[1,2.5,-3e2,true,null,"x\nyé😀"],"b":{}}
+  pretty round trip true
+err line 1, column 7: unexpected character
+err line 1, column 10: duplicate key
+err line 1, column 1: integer out of range
+err line 1, column 5: control character in a string
+ok {"k":[]}
+  pretty round trip true
+err line 1, column 2: leading zero in a number
+err line 1, column 6: expected `:`
+err line 1, column 4: bad escape
+{
+  "b": [],
+  "a": 1
+}
+ok {"name":"web","port":80,"backup":null,"extra":[1,2],"proto":"Http"}
+ok {"name":"web","port":80,"backup":8080,"extra":[],"proto":{"Tcp":443}}
+err port: the value is not a valid `Port`
+err name: the value is not a valid `Name`
+err backup: the value is not a valid `Port`
+err extra[1]: the value is not a valid `Port`
+err proto.Tcp: the value is not a valid `Port`
+ok {"name":"w","port":1,"backup":null,"extra":[],"proto":{"Pair":[1,"x"]}}
+err proto.Pair: expected 2 elements, found 1
+err proto: unknown variant `Udp` of `Proto`
+err missing field `port`
+err port: expected an integer, found a string
+err expected a map (`Server`), found a sequence
+{"items":[]}
+wrap 2 true
+login a h*******
+err password: expected a string, found an integer
+{"title":"TOML éx","nums":[1,31,15,5,1000,-3,4],"floats":[1.5,-2e3,6.626e-34,null,null],"when":"1979-05-27T07:32:00-08:00","day":"1979-05-27","local":"1979-05-27 07:32:00","lit":"C:\\path","ml":"line1\nline2 cont","mll":"raw \\n","owner":{"name":"Tom","a":{"b":{"c":1}},"quoted key":true},"database":{"connection":{"ports":[8000,8001,8002],"inline":{"x":1,"y":{"z":"q"}}}},"products":[{"name":"Hammer"},{"name":"Nail","dims":{"w":2}}]}
+title = "TOML éx"
+nums = [1, 31, 15, 5, 1000, -3, 4]
+floats = [1.5, -2e3, 6.626e-34, inf, nan]
+when = "1979-05-27T07:32:00-08:00"
+day = "1979-05-27"
+local = "1979-05-27 07:32:00"
+lit = "C:\\path"
+ml = "line1\nline2 cont"
+mll = "raw \\n"
+
+[owner]
+name = "Tom"
+"quoted key" = true
+
+[owner.a.b]
+c = 1
+
+[database.connection]
+ports = [8000, 8001, 8002]
+
+[database.connection.inline]
+x = 1
+
+[database.connection.inline.y]
+z = "q"
+
+[[products]]
+name = "Hammer"
+
+[[products]]
+name = "Nail"
+
+[products.dims]
+w = 2
+
+round trip true
+err line 2, column 1: duplicate key `a`
+err line 2, column 1: table `t` is defined twice
+err line 2, column 1: table `a` is defined twice
+err line 1, column 5: bad value `01`
+err line 1, column 5: bad value `1__0`
+err line 1, column 18: unterminated string
+err line 3, column 1: table `b` is defined twice
+err line 1, column 5: bad value `9223372036854775808`
+err line 1, column 5: bad date or time
+err line 1, column 8: expected a value
+err line 2, column 1: duplicate key `a`
+err line 1, column 7: expected the end of the line
+err line 2, column 1: `a` is already defined and not a table
+null keys are left out: b = 1
+err xs[0]: TOML has no null
+err expected a map (a TOML document is a table), found an integer
+config prod 2 servers, alice 1
+title = "prod"
+
+[[servers]]
+name = "a"
+port = 8080
+extra = []
+proto = "Http"
+
+[[servers]]
+name = "b"
+port = 9000
+extra = [9001]
+
+[servers.proto]
+Pair = [1, "x"]
+
+[owners]
+alice = 1
+
+err servers[0].port: the value is not a valid `Port`

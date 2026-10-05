@@ -1,0 +1,214 @@
+// exit: 0
+// Serialization (lib/core/serde.kek): Value, Json, Toml, and the derived
+// Serialize and Deserialize (refined aliases, Option, Vec, enums,
+// generics, labeled fields).
+type Port = Int where 0 < self && self < 65536;
+
+type Name = String where 1 <= self.len() && self.len() <= 8;
+
+struct Secret {}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+enum Proto {
+    Http,
+    Tcp(Port),
+    Pair(Int, String),
+}
+
+#[derive(Serialize, Deserialize)]
+struct Server {
+    name: Name,
+    port: Port,
+    backup: Option<Port>,
+    extra: Vec<Port>,
+    proto: Proto,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Wrap<T> {
+    items: Vec<T>,
+}
+
+#[derive(Deserialize)]
+struct Login {
+    user: String,
+    password: Labeled<Secret, String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    title: String,
+    servers: Vec<Server>,
+    owners: HashMap<String, Int>,
+}
+
+fn json_docs(log: &Log) {
+    let mut d = Vec::new();
+    d.push("{\"a\": [1, 2.5, -3e2, true, null, \"x\\ny\\u00e9\\ud83d\\ude00\"], \"b\": {}}");
+    d.push("[1, 2,]");
+    d.push("{\"a\": 1, \"a\": 2}");
+    d.push("99999999999999999999");
+    d.push("\"tab\there\"");
+    d.push("  {\"k\" : [ ] }  ");
+    d.push("[01]");
+    d.push("{\"a\" 1}");
+    d.push("[\"\\q\"]");
+    for s in d.iter() {
+        match Json::parse(s) {
+            Ok(v) => {
+                log.info("ok " + Json::render(&v));
+                match Json::parse(Json::render_pretty(&v)) {
+                    Ok(w) => log.info("  pretty round trip " + (w == v).to_string()),
+                    Err(e) => log.info("  pretty reparse failed " + e.message()),
+                }
+            }
+            Err(e) => log.info("err " + e.message()),
+        }
+    }
+    let mut m = Vec::new();
+    m.push(("b", Value::Seq(Vec::new())));
+    m.push(("a", Value::Int(1)));
+    log.info(Json::render_pretty(&Value::Map(m)));
+}
+
+fn show(log: &Log, s: String) {
+    match Json::from_str::<Server>(s) {
+        Ok(v) => log.info("ok " + Json::to_string(&v)),
+        Err(e) => log.info("err " + e.message()),
+    }
+}
+
+fn derived(log: &Log) {
+    show(log, "{\"name\": \"web\", \"port\": 80, \"extra\": [1, 2], \"proto\": \"Http\"}");
+    show(
+        log,
+        "{\"name\": \"web\", \"port\": 80, \"backup\": 8080, \"extra\": [], \"proto\": {\"Tcp\": 443}}",
+    );
+    show(log, "{\"name\": \"web\", \"port\": 0, \"extra\": [], \"proto\": \"Http\"}");
+    show(log, "{\"name\": \"\", \"port\": 1, \"extra\": [], \"proto\": \"Http\"}");
+    show(
+        log,
+        "{\"name\": \"w\", \"port\": 1, \"backup\": 70000, \"extra\": [], \"proto\": \"Http\"}",
+    );
+    show(log, "{\"name\": \"w\", \"port\": 1, \"extra\": [5, 99999], \"proto\": \"Http\"}");
+    show(log, "{\"name\": \"w\", \"port\": 1, \"extra\": [], \"proto\": {\"Tcp\": 0}}");
+    show(log, "{\"name\": \"w\", \"port\": 1, \"extra\": [], \"proto\": {\"Pair\": [1, \"x\"]}}");
+    show(log, "{\"name\": \"w\", \"port\": 1, \"extra\": [], \"proto\": {\"Pair\": [1]}}");
+    show(log, "{\"name\": \"w\", \"port\": 1, \"extra\": [], \"proto\": \"Udp\"}");
+    show(log, "{\"name\": \"w\", \"extra\": [], \"proto\": \"Http\"}");
+    show(log, "{\"name\": \"w\", \"port\": \"80\", \"extra\": [], \"proto\": \"Http\"}");
+    show(log, "[1]");
+    let w = Wrap { items: Vec::new() };
+    log.info(Json::to_string(&w));
+    let ws: Result<Wrap<Proto>, SerdeError> = Json::from_str(
+        "{\"items\": [\"Http\", {\"Tcp\": 8}]}",
+    );
+    match ws {
+        Ok(x) => log.info(
+            "wrap "
+                + x.items.len().to_string()
+                + " "
+                + (x.items.get(1) == Some(Proto::Tcp(8))).to_string(),
+        ),
+        Err(e) => log.info("err " + e.message()),
+    }
+    match Json::from_str::<Login>("{\"user\": \"a\", \"password\": \"hunter22\"}") {
+        Ok(l) => log.info("login " + l.user + " " + l.password.mask()),
+        Err(e) => log.info("err " + e.message()),
+    }
+    match Json::from_str::<Login>("{\"user\": \"a\", \"password\": 42}") {
+        Ok(_) => log.info("??"),
+        Err(e) => log.info("err " + e.message()),
+    }
+}
+
+fn toml_docs(log: &Log) {
+    let doc = "# comment\ntitle = \"TOML \\u00e9x\" # trailing\nnums = [1, 0x1f, 0o17, 0b101, 1_000, -3, +4]\nfloats = [1.5, -2e3, 6.626e-34, inf, nan]\nwhen = 1979-05-27T07:32:00-08:00\nday = 1979-05-27\nlocal = 1979-05-27 07:32:00\nlit = 'C:\\path'\nml = \"\"\"\nline1\nline2 \\\n   cont\"\"\"\nmll = '''\nraw \\n'''\n\n[owner]\nname = \"Tom\"\na.b.c = 1\n\"quoted key\" = true\n\n[database.connection]\nports = [ 8000,\n  8001, # c\n  8002, ]\ninline = { x = 1, y = { z = \"q\" } }\n\n[[products]]\nname = \"Hammer\"\n\n[[products]]\nname = \"Nail\"\n[products.dims]\nw = 2\n";
+    match Toml::parse(doc) {
+        Ok(v) => {
+            log.info(Json::render(&v));
+            match Toml::render(&v) {
+                Ok(t) => {
+                    log.info(t);
+                    match Toml::parse(t) {
+                        Ok(w) => log.info("round trip " + (w == v).to_string()),
+                        Err(e) => log.info("reparse " + e.message()),
+                    }
+                }
+                Err(e) => log.info("render err " + e.message()),
+            }
+        }
+        Err(e) => log.info("err " + e.message()),
+    }
+    let mut b = Vec::new();
+    b.push("a = 1\na = 2");
+    b.push("[t]\n[t]");
+    b.push("a = {x = 1}\n[a]");
+    b.push("x = 01");
+    b.push("x = 1__0");
+    b.push("x = \"unterminated");
+    b.push("[a]\nb.c = 1\n[a.b]");
+    b.push("x = 9223372036854775808");
+    b.push("x = 1979-13-01x");
+    b.push("x = [1,,2]");
+    b.push("a.b = 1\na = 2");
+    b.push("x = 1 y = 2");
+    b.push("[[a]]\n[a]");
+    for s in b.iter() {
+        match Toml::parse(s) {
+            Ok(v) => log.info("unexpected ok " + Json::render(&v)),
+            Err(e) => log.info("err " + e.message()),
+        }
+    }
+    let mut nulls = Vec::new();
+    nulls.push(("a", Value::Null));
+    nulls.push(("b", Value::Int(1)));
+    match Toml::render(&Value::Map(nulls)) {
+        Ok(t) => log.info("null keys are left out: " + t.trim()),
+        Err(e) => log.info("err " + e.message()),
+    }
+    let mut bad = Vec::new();
+    let mut xs = Vec::new();
+    xs.push(Value::Null);
+    bad.push(("xs", Value::Seq(xs)));
+    match Toml::render(&Value::Map(bad)) {
+        Ok(t) => log.info("?? " + t),
+        Err(e) => log.info("err " + e.message()),
+    }
+    match Toml::render(&Value::Int(1)) {
+        Ok(t) => log.info("?? " + t),
+        Err(e) => log.info("err " + e.message()),
+    }
+    let cfg = "title = \"prod\"\n\n[owners]\nalice = 1\n\n[[servers]]\nname = \"a\"\nport = 8080\nextra = []\nproto = \"Http\"\n\n[[servers]]\nname = \"b\"\nport = 9000\nextra = [9001]\nproto = { Pair = [1, \"x\"] }\n";
+    match Toml::from_str::<Config>(cfg) {
+        Ok(c) => {
+            log.info(
+                "config "
+                    + c.title
+                    + " "
+                    + c.servers.len().to_string()
+                    + " servers, alice "
+                    + c.owners.get(&"alice").unwrap_or(0).to_string(),
+            );
+            match Toml::to_string(&c) {
+                Ok(t) => log.info(t),
+                Err(e) => log.info("err " + e.message()),
+            }
+        }
+        Err(e) => log.info("err " + e.message()),
+    }
+    match Toml::from_str::<Config>(
+        "title = \"x\"\n[owners]\n[[servers]]\nname = \"a\"\nport = 0\nproto = \"Http\"\n",
+    ) {
+        Ok(_) => log.info("??"),
+        Err(e) => log.info("err " + e.message()),
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    json_docs(log);
+    derived(log);
+    toml_docs(log);
+    0
+}

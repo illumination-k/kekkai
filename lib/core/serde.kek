@@ -1,0 +1,552 @@
+// Serialization (docs/serde.md): a type converts to and from a Value, the
+// data model shared by every format; a format (Json, Toml) only converts
+// between a Value and text.
+//
+//   #[derive(Serialize, Deserialize)]
+//   struct Config { name: String, port: Port, tags: Vec<String> }
+//
+//   let c: Config = Toml::from_str(text)?;
+//   Json::to_string(&c)
+//
+// What may cross the boundary is decided here once, for every format:
+//
+//   - Labeled<L, T> implements Deserialize but not Serialize: input can be
+//     labeled as it is read (a password never exists as a plain String),
+//     and labeled data cannot be written out.
+//   - Can<A, r> and the capabilities implement neither: a permission cannot
+//     be forged from input.
+//   - a derived Deserialize checks the predicates of refined aliases
+//     (`type Port = Int where 0 < self && self < 65536`) of the fields.
+//
+// Error messages never contain the data, only its shape and where it is,
+// so a SerdeError may be logged or returned to a client.
+
+// Value is a parsed document. Map keeps the order of its keys (but `==`
+// ignores it); Float keeps the number as written (the language has no
+// floating point type).
+#[derive(Clone)]
+enum Value {
+    Null,
+    Bool(Bool),
+    Int(Int),
+    Float(String),
+    Str(String),
+    Seq(Vec<Value>),
+    Map(Vec<(String, Value)>),
+}
+
+// SerdeError is a parse error (line and column, 1-based) or a value of the
+// wrong shape (path, such as `servers[1].port`).
+#[derive(PartialEq, Clone)]
+struct SerdeError {
+    path: String,
+    line: Int,
+    col: Int,
+    msg: String,
+}
+
+trait Serialize {
+    fn to_value(&self) -> Value;
+}
+
+// from_value builds an owned value from what it reads (`#[owned]`: the
+// result is not borrowed from v, as with clone).
+trait Deserialize {
+    #[owned]
+    fn from_value(v: &Value) -> Result<Self, SerdeError>;
+}
+
+impl SerdeError {
+    fn new(msg: String) -> SerdeError {
+        SerdeError { path: "", line: 0, col: 0, msg: msg }
+    }
+
+    // in_field is the error inside the field (or map key) name.
+    fn in_field(&self, name: String) -> SerdeError {
+        let rest = if self.path == "" || self.path.starts_with("[") {
+            self.path
+        } else {
+            "." + self.path
+        };
+        SerdeError { path: name + rest, line: self.line, col: self.col, msg: self.msg }
+    }
+
+    // in_index is the error inside element i of a sequence.
+    fn in_index(&self, i: Int) -> SerdeError {
+        let rest = if self.path == "" || self.path.starts_with("[") {
+            self.path
+        } else {
+            "." + self.path
+        };
+        SerdeError {
+            path: "[" + i.to_string() + "]" + rest,
+            line: self.line,
+            col: self.col,
+            msg: self.msg,
+        }
+    }
+
+    fn message(&self) -> String {
+        let mut m = self.msg;
+        if self.path != "" {
+            m = self.path + ": " + m;
+        }
+        if self.line > 0 {
+            m = "line " + self.line.to_string() + ", column " + self.col.to_string() + ": " + m;
+        }
+        m
+    }
+}
+
+impl Value {
+    // kind names the shape of the value for messages.
+    fn kind(&self) -> String {
+        match self {
+            Value::Null => "null",
+            Value::Bool(_) => "a boolean",
+            Value::Int(_) => "an integer",
+            Value::Float(_) => "a float",
+            Value::Str(_) => "a string",
+            Value::Seq(_) => "a sequence",
+            Value::Map(_) => "a map",
+        }
+    }
+
+    // get is the value of key in a map.
+    fn get(&self, key: String) -> Option<&Value> {
+        match self {
+            Value::Map(es) => {
+                for e in es.iter() {
+                    if e.0 == key {
+                        return Some(&e.1);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn mismatch(&self, what: String) -> SerdeError {
+        SerdeError::new("expected " + what + ", found " + self.kind())
+    }
+
+    // tagged is the value of an enum variant with fields: `{"name": payload}`.
+    fn tagged(name: String, payload: Value) -> Value {
+        let mut es = Vec::new();
+        es.push((name, payload));
+        Value::Map(es)
+    }
+
+    // ---- used by #[derive(Deserialize)] ----
+
+    // expect_map checks that the value is a map (the fields of `ty`).
+    fn expect_map(&self, ty: String) -> Result<(), SerdeError> {
+        match self {
+            Value::Map(_) => Ok(()),
+            _ => Err(self.mismatch("a map (`" + ty + "`)")),
+        }
+    }
+
+    // field decodes the field key of a map. A missing field reads as null,
+    // so an Option field may be left out.
+    #[owned]
+    fn field<T: Deserialize>(&self, key: String) -> Result<T, SerdeError> {
+        match self.get(key) {
+            Some(x) => match T::from_value(x) {
+                Ok(t) => Ok(t),
+                Err(e) => Err(e.in_field(key)),
+            },
+            None => match T::from_value(&Value::Null) {
+                Ok(t) => Ok(t),
+                Err(_) => Err(SerdeError::new("missing field `" + key + "`")),
+            },
+        }
+    }
+
+    // decode_in decodes the value, reporting errors inside path.
+    #[owned]
+    fn decode_in<T: Deserialize>(&self, path: String) -> Result<T, SerdeError> {
+        match T::from_value(self) {
+            Ok(t) => Ok(t),
+            Err(e) => Err(e.in_field(path)),
+        }
+    }
+
+    // element decodes element i of a sequence of n elements (a tuple
+    // variant's fields), reporting errors inside path.
+    #[owned]
+    fn element<T: Deserialize>(&self, path: String, i: Int, n: Int) -> Result<T, SerdeError> {
+        match self {
+            Value::Seq(xs) => {
+                if xs.len() != n {
+                    return Err(
+                        SerdeError::new(
+                            "expected " + n.to_string() + " elements, found " + xs.len().to_string(),
+                        ).in_field(path),
+                    );
+                }
+                match xs.get(i) {
+                    Some(x) => match T::from_value(x) {
+                        Ok(t) => Ok(t),
+                        Err(e) => Err(e.in_index(i).in_field(path)),
+                    },
+                    None => Err(SerdeError::new("missing element").in_field(path)),
+                }
+            }
+            _ => Err(self.mismatch("a sequence").in_field(path)),
+        }
+    }
+
+    // variant_name is the variant of an enum value: `"Name"` for a variant
+    // without fields, `{"Name": payload}` otherwise.
+    fn variant_name(&self, ty: String) -> Result<String, SerdeError> {
+        match self {
+            Value::Str(s) => Ok(s),
+            Value::Map(es) => {
+                if es.len() != 1 {
+                    return Err(SerdeError::new("expected one variant of `" + ty + "`"));
+                }
+                match es.get(0) {
+                    Some(e) => Ok(e.0),
+                    None => Err(SerdeError::new("expected one variant of `" + ty + "`")),
+                }
+            }
+            _ => Err(self.mismatch("a variant of `" + ty + "`")),
+        }
+    }
+
+    // variant_payload is the payload of an enum value (null for `"Name"`).
+    fn variant_payload(&self) -> &Value {
+        match self {
+            Value::Map(es) => match es.get(0) {
+                Some(e) => &e.1,
+                None => &Value::Null,
+            },
+            _ => &Value::Null,
+        }
+    }
+
+    fn unknown_variant(&self, ty: String, name: String) -> SerdeError {
+        SerdeError::new("unknown variant `" + name + "` of `" + ty + "`")
+    }
+
+    // refused is the error for a field whose refined type does not hold.
+    fn refused(&self, path: String, ty: String) -> SerdeError {
+        SerdeError::new("the value is not a valid `" + ty + "`").in_field(path)
+    }
+}
+
+// Maps are equal when they have the same keys with equal values, in any
+// order (the parsers refuse repeated keys).
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> Bool {
+        match self {
+            Value::Map(a) => match other {
+                Value::Map(b) => {
+                    if a.len() != b.len() {
+                        return false;
+                    }
+                    for e in a.iter() {
+                        match other.get(e.0) {
+                            Some(x) => {
+                                if !(e.1 == *x) {
+                                    return false;
+                                }
+                            }
+                            None => {
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                }
+                _ => false,
+            },
+            Value::Null => match other {
+                Value::Null => true,
+                _ => false,
+            },
+            Value::Bool(x) => match other {
+                Value::Bool(y) => x == y,
+                _ => false,
+            },
+            Value::Int(x) => match other {
+                Value::Int(y) => x == y,
+                _ => false,
+            },
+            Value::Float(x) => match other {
+                Value::Float(y) => x == y,
+                _ => false,
+            },
+            Value::Str(x) => match other {
+                Value::Str(y) => x == y,
+                _ => false,
+            },
+            Value::Seq(xs) => match other {
+                Value::Seq(ys) => xs == ys,
+                _ => false,
+            },
+        }
+    }
+}
+
+impl Eq for Value {}
+
+// ---- the core types ----
+
+impl Serialize for Value {
+    fn to_value(&self) -> Value {
+        self.clone()
+    }
+}
+
+impl Deserialize for Value {
+    fn from_value(v: &Value) -> Result<Value, SerdeError> {
+        Ok(v.clone())
+    }
+}
+
+impl Serialize for Int {
+    fn to_value(&self) -> Value {
+        Value::Int(*self)
+    }
+}
+
+impl Deserialize for Int {
+    fn from_value(v: &Value) -> Result<Int, SerdeError> {
+        match v {
+            Value::Int(n) => Ok(n),
+            _ => Err(v.mismatch("an integer")),
+        }
+    }
+}
+
+impl Serialize for Bool {
+    fn to_value(&self) -> Value {
+        Value::Bool(*self)
+    }
+}
+
+impl Deserialize for Bool {
+    fn from_value(v: &Value) -> Result<Bool, SerdeError> {
+        match v {
+            Value::Bool(b) => Ok(b),
+            _ => Err(v.mismatch("a boolean")),
+        }
+    }
+}
+
+impl Serialize for String {
+    fn to_value(&self) -> Value {
+        Value::Str(*self)
+    }
+}
+
+impl Deserialize for String {
+    fn from_value(v: &Value) -> Result<String, SerdeError> {
+        match v {
+            Value::Str(s) => Ok(s),
+            _ => Err(v.mismatch("a string")),
+        }
+    }
+}
+
+impl Serialize for () {
+    fn to_value(&self) -> Value {
+        Value::Null
+    }
+}
+
+impl Deserialize for () {
+    fn from_value(v: &Value) -> Result<(), SerdeError> {
+        match v {
+            Value::Null => Ok(()),
+            _ => Err(v.mismatch("null")),
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for Option<T> {
+    fn to_value(&self) -> Value {
+        match self {
+            Some(x) => x.to_value(),
+            None => Value::Null,
+        }
+    }
+}
+
+impl<T: Deserialize> Deserialize for Option<T> {
+    fn from_value(v: &Value) -> Result<Option<T>, SerdeError> {
+        match v {
+            Value::Null => Ok(None),
+            _ => Ok(Some(T::from_value(v)?)),
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for Vec<T> {
+    fn to_value(&self) -> Value {
+        let mut out = Vec::new();
+        for x in self.iter() {
+            out.push(x.to_value());
+        }
+        Value::Seq(out)
+    }
+}
+
+impl<T: Deserialize> Deserialize for Vec<T> {
+    fn from_value(v: &Value) -> Result<Vec<T>, SerdeError> {
+        match v {
+            Value::Seq(xs) => {
+                let mut out = Vec::new();
+                let mut i = 0;
+                for x in xs.iter() {
+                    match T::from_value(x) {
+                        Ok(t) => out.push(t),
+                        Err(e) => {
+                            return Err(e.in_index(i));
+                        }
+                    }
+                    i = i + 1;
+                }
+                Ok(out)
+            }
+            _ => Err(v.mismatch("a sequence")),
+        }
+    }
+}
+
+impl<V: Serialize> Serialize for HashMap<String, V> {
+    fn to_value(&self) -> Value {
+        let mut out = Vec::new();
+        for (k, x) in self.iter() {
+            out.push((k, x.to_value()));
+        }
+        Value::Map(out)
+    }
+}
+
+impl<V: Deserialize> Deserialize for HashMap<String, V> {
+    fn from_value(v: &Value) -> Result<HashMap<String, V>, SerdeError> {
+        match v {
+            Value::Map(es) => {
+                let mut out = HashMap::new();
+                for e in es.iter() {
+                    match V::from_value(&e.1) {
+                        Ok(x) => {
+                            out.insert(e.0, x);
+                        }
+                        Err(err) => {
+                            return Err(err.in_field(e.0));
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            _ => Err(v.mismatch("a map")),
+        }
+    }
+}
+
+// Labeled data is read already labeled, and never written: there is no
+// Serialize. The error of a failed read says only what shape was expected.
+impl<L, T: Deserialize> Deserialize for Labeled<L, T> {
+    fn from_value(v: &Value) -> Result<Labeled<L, T>, SerdeError> {
+        Ok(Labeled::new(T::from_value(v)?))
+    }
+}
+
+// ---- helpers of the formats ----
+
+// __serde_at is a parse error at offset i of s.
+fn __serde_at(s: String, i: Int, msg: String) -> SerdeError {
+    let mut line = 1;
+    let mut col = 1;
+    let mut j = 0;
+    while j < i && j < s.len() {
+        if s.char_at(j).unwrap_or(0) == 10 {
+            line = line + 1;
+            col = 1;
+        } else {
+            col = col + 1;
+        }
+        j = j + 1;
+    }
+    SerdeError { path: "", line: line, col: col, msg: msg }
+}
+
+fn __serde_hex(d: Int) -> String {
+    "0123456789abcdef".slice(d, d + 1)
+}
+
+// __serde_quote is s as a double-quoted string with JSON escapes (also
+// valid in TOML). Lone surrogates are escaped too.
+fn __serde_quote(s: String) -> String {
+    let mut parts = Vec::new();
+    parts.push("\"");
+    let n = s.len();
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        let lone = (c >= 55296
+            && c <= 56319
+            && !(i + 1 < n && __serde_low(s.char_at(i + 1).unwrap_or(0))))
+            || (__serde_low(c) && !(i > 0 && __serde_high(s.char_at(i - 1).unwrap_or(0))));
+        if c == 34 || c == 92 || c < 32 || c == 127 || lone {
+            parts.push(s.slice(start, i));
+            if c == 34 {
+                parts.push("\\\"");
+            } else if c == 92 {
+                parts.push("\\\\");
+            } else if c == 10 {
+                parts.push("\\n");
+            } else if c == 13 {
+                parts.push("\\r");
+            } else if c == 9 {
+                parts.push("\\t");
+            } else {
+                parts.push(
+                    "\\u"
+                        + __serde_hex(c.shr(12).bit_and(15))
+                        + __serde_hex(c.shr(8).bit_and(15))
+                        + __serde_hex(c.shr(4).bit_and(15))
+                        + __serde_hex(c.bit_and(15)),
+                );
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.slice(start, n));
+    parts.push("\"");
+    parts.join("")
+}
+
+fn __serde_high(c: Int) -> Bool {
+    c >= 55296 && c <= 56319
+}
+
+fn __serde_low(c: Int) -> Bool {
+    c >= 56320 && c <= 57343
+}
+
+// __serde_code_point appends code point cp as UTF-16 to parts.
+fn __serde_code_point(mut parts: Vec<String>, cp: Int) {
+    if cp >= 65536 {
+        let x = cp - 65536;
+        parts.push(String::from_char(55296 + x.shr(10)));
+        parts.push(String::from_char(56320 + x.bit_and(1023)));
+    } else {
+        parts.push(String::from_char(cp));
+    }
+}
+
+fn __serde_hex_value(c: Int) -> Int {
+    if c >= 48 && c <= 57 {
+        c - 48
+    } else if c >= 97 && c <= 102 {
+        c - 87
+    } else if c >= 65 && c <= 70 { c - 55 } else { -1 }
+}

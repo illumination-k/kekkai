@@ -32,6 +32,10 @@ struct CapsReport {
 // shared and mutable references are shown as written (`&T`, `&mut T`,
 // `self: &Point` for `&self`).
 fn caps_func_signature(fun: ChkFunc) -> String {
+    if ast_has_attr(fun.decl, "const") {
+        // a constant (compiler/desugar.kek): always pure
+        return "const " + fun.name + ": " + ty_str(fun.result);
+    }
     let mut ps = Vec::new();
     let mut i = 0;
     for p in fun.params {

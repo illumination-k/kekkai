@@ -34,7 +34,8 @@ fn ast_line(mut d: AstDumper, depth: Int, s: String) {
 fn ast_dump_file(f: AstFile) -> Vec<String> {
     let d = AstDumper { lines: Vec::new() };
     for s in f.structs {
-        ast_line(d, 0, "struct " + s.name + " @" + ast_dump_pos(s.pos));
+        let k = if s.kind == "" { "" } else { " " + s.kind };
+        ast_line(d, 0, "struct " + s.name + k + " @" + ast_dump_pos(s.pos));
         ast_dump_attrs(d, 1, s.attrs);
         ast_dump_generics(d, 1, s.generics);
         for fl in s.fields {
@@ -48,9 +49,17 @@ fn ast_dump_file(f: AstFile) -> Vec<String> {
         ast_dump_attrs(d, 1, e.attrs);
         ast_dump_generics(d, 1, e.generics);
         for v in e.variants {
-            ast_line(d, 1, "variant " + v.name + " @" + ast_dump_pos(v.pos));
+            let named = if v.named { " named" } else { "" };
+            ast_line(d, 1, "variant " + v.name + named + " @" + ast_dump_pos(v.pos));
+            let mut i = 0;
             for t in v.fields {
-                ast_dump_type(d, 2, t);
+                if v.named {
+                    ast_line(d, 2, "field " + v.names.get(i).unwrap_or(""));
+                    ast_dump_type(d, 3, t);
+                } else {
+                    ast_dump_type(d, 2, t);
+                }
+                i = i + 1;
             }
         }
     }
@@ -75,6 +84,9 @@ fn ast_dump_file(f: AstFile) -> Vec<String> {
         }
         for fd in im.funcs {
             ast_dump_func(d, 1, fd);
+        }
+        for c in im.consts {
+            ast_dump_const(d, 1, c);
         }
     }
     for t in f.traits {
@@ -101,7 +113,16 @@ fn ast_dump_file(f: AstFile) -> Vec<String> {
             None => {}
         }
     }
+    for c in f.consts {
+        ast_dump_const(d, 0, c);
+    }
     d.lines
+}
+
+fn ast_dump_const(d: AstDumper, depth: Int, c: AstConstDecl) {
+    ast_line(d, depth, "const " + c.name + " @" + ast_dump_pos(c.pos));
+    ast_dump_type(d, depth + 1, c.ty);
+    ast_dump_expr(d, depth + 1, c.value);
 }
 
 fn ast_dump_assoc(d: AstDumper, depth: Int, a: AstAssocType) {
@@ -523,6 +544,18 @@ fn ast_dump_pattern(d: AstDumper, depth: Int, p: AstPattern) {
         None => {}
     }
     let m = if p.mutable { " mut" } else { "" };
+    if p.brace {
+        let r = if p.rest { " .." } else { "" };
+        ast_line(
+            d,
+            depth,
+            "pat struct type=" + p.ty + " ctor=" + p.ctor + " fields=" + p.fields.join(",") + r + at,
+        );
+        for a in p.args {
+            ast_dump_pattern(d, depth + 1, a);
+        }
+        return;
+    }
     ast_line(d, depth, "pat type=" + p.ty + " ctor=" + p.ctor + " bind=" + p.bind + m + at);
     for a in p.args {
         ast_dump_pattern(d, depth + 1, a);

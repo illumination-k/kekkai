@@ -1,0 +1,1152 @@
+// Desugaring (prefix desugar_ / Dsg*): rewrites the item-level sugar into
+// the core forms the checker and the later passes know. It runs on the
+// whole program (core library, user program, derived implementations)
+// before the checker (chk_with_core) and builds new nodes, leaving the
+// parsed tree as it is (the formatter, and the parse cache of the daemon,
+// keep seeing the source forms). Rewritten nodes keep the ids of the nodes
+// they replace; inserted nodes get fresh ids.
+//
+//   const NAME: T = e;        a pure function `fn NAME() -> T { e }`
+//                             (attribute `#[const(__const)]`), called at
+//                             every use: `NAME` -> `NAME()`,
+//                             `Type::NAME` / `Self::NAME` -> a call
+//   struct S(A, B);           a struct with the fields "0", "1":
+//                             `S(a, b)` -> `S { 0: a, 1: b }`,
+//                             pattern `S(p, q)` -> `S { 0: p, 1: q }`
+//   struct S;                 a struct without fields: `S` -> `S {}`,
+//                             pattern `S` -> `S {}`
+//   E::V { a: A, b: B }       a positional variant: `E::V { b: y, a: x }`
+//                             -> `E::V(x, y)` (a block binding the values
+//                             first when they are not written in
+//                             declaration order, which keeps the order of
+//                             evaluation), pattern `E::V { b, .. }` ->
+//                             `E::V(_, b)`
+//   S { a, .. }               (pattern) every field in declaration order:
+//                             `S { a: a, b: _ }`
+//
+// The checker types a struct pattern (brace set) like a tuple pattern
+// whose elements are the fields.
+
+struct DsgCx {
+    // tuple structs (name -> number of fields), unit structs, every struct
+    tuple_structs: HashMap<String, Int>,
+    unit_structs: HashMap<String, Bool>,
+    structs: HashMap<String, AstStructDecl>,
+    // "E::V" -> the variant; enum names
+    variants: HashMap<String, AstVariant>,
+    enums: HashMap<String, Bool>,
+    // constants: top-level names and "Type::NAME"; those with an integer
+    // literal value (inlined into refinement predicates)
+    consts: HashMap<String, Bool>,
+    assoc: HashMap<String, Bool>,
+    int_consts: HashMap<String, Int>,
+    // the target type of the impl being rewritten ("" elsewhere)
+    mut self_name: String,
+    ids: AstIds,
+    errs: Vec<AstError>,
+    mut tmp: Int,
+}
+
+fn desugar_id(mut cx: DsgCx) -> Int {
+    cx.ids.next = cx.ids.next + 1;
+    cx.ids.next
+}
+
+fn desugar_error(mut cx: DsgCx, pos: AstPos, msg: String) {
+    cx.errs.push(AstError { pos: pos, msg: msg });
+}
+
+// desugar_type_name is the name of a named type (`P`, `Pair<A, B>`).
+fn desugar_type_name(t: AstType) -> String {
+    match t {
+        AstType::Named(n) => n.name,
+        _ => "",
+    }
+}
+
+// desugar_int_value is the value of an integer literal expression (`3`,
+// `-3`).
+fn desugar_int_value(e: AstExpr) -> Option<Int> {
+    match e {
+        AstExpr::IntLit(x) => Some(x.value),
+        AstExpr::Unary(u) => {
+            if u.op == "-" {
+                match u.x {
+                    AstExpr::IntLit(x) => Some(-x.value),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// desugar_items returns the program f with its sugar rewritten (errors go
+// to errs).
+fn desugar_items(f: AstFile, ids: AstIds, errs: Vec<AstError>) -> AstFile {
+    let mut cx = DsgCx {
+        tuple_structs: HashMap::new(),
+        unit_structs: HashMap::new(),
+        structs: HashMap::new(),
+        variants: HashMap::new(),
+        enums: HashMap::new(),
+        consts: HashMap::new(),
+        assoc: HashMap::new(),
+        int_consts: HashMap::new(),
+        self_name: "",
+        ids: ids,
+        errs: errs,
+        tmp: 0,
+    };
+    for sd in f.structs {
+        cx.structs.insert(sd.name, sd);
+        if sd.kind == "tuple" {
+            cx.tuple_structs.insert(sd.name, sd.fields.len());
+        } else if sd.kind == "unit" {
+            cx.unit_structs.insert(sd.name, true);
+        }
+    }
+    for ed in f.enums {
+        cx.enums.insert(ed.name, true);
+        for v in ed.variants {
+            cx.variants.insert(ed.name + "::" + v.name, v);
+            if v.named {
+                let mut seen: HashMap<String, Bool> = HashMap::new();
+                for n in v.names {
+                    if seen.contains_key(n) {
+                        desugar_error(
+                            cx,
+                            v.pos,
+                            "duplicate field `" + n + "` in variant `" + v.name + "`",
+                        );
+                    }
+                    seen.insert(n, true);
+                }
+            }
+        }
+    }
+    let mut fn_names: HashMap<String, Bool> = HashMap::new();
+    for fd in f.funcs {
+        fn_names.insert(fd.name, true);
+    }
+    let mut consts = Vec::new();
+    for c in f.consts {
+        if cx.consts.contains_key(c.name) || fn_names.contains_key(c.name) {
+            desugar_error(cx, c.pos, "the name `" + c.name + "` is defined more than once");
+            continue;
+        }
+        cx.consts.insert(c.name, true);
+        match desugar_int_value(c.value) {
+            Some(v) => {
+                cx.int_consts.insert(c.name, v);
+            }
+            None => {}
+        }
+        consts.push(c);
+    }
+    let mut ok_ids: HashMap<Int, Bool> = HashMap::new();
+    for im in f.impls {
+        let tn = desugar_type_name(im.target);
+        let mut fnames: HashMap<String, Bool> = HashMap::new();
+        for fd in im.funcs {
+            fnames.insert(fd.name, true);
+        }
+        for c in im.consts {
+            if im.trait_ty.is_some() {
+                desugar_error(
+                    cx,
+                    c.pos,
+                    "associated constants are only supported in inherent `impl` blocks",
+                );
+                continue;
+            }
+            let key = tn + "::" + c.name;
+            if cx.assoc.contains_key(key) || fnames.contains_key(c.name) {
+                desugar_error(
+                    cx,
+                    c.pos,
+                    "duplicate definitions with name `" + c.name + "` for `" + tn + "`",
+                );
+                continue;
+            }
+            cx.assoc.insert(key, true);
+            ok_ids.insert(c.id, true);
+            match desugar_int_value(c.value) {
+                Some(v) => {
+                    cx.int_consts.insert(key, v);
+                }
+                None => {}
+            }
+        }
+    }
+    let mut out = AstFile {
+        structs: f.structs,
+        enums: f.enums,
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+        aliases: Vec::new(),
+        consts: f.consts,
+    };
+    for fd in f.funcs {
+        out.funcs.push(desugar_func(cx, fd));
+    }
+    for c in consts {
+        out.funcs.push(desugar_const_func(cx, c));
+    }
+    for im in f.impls {
+        cx.self_name = desugar_type_name(im.target);
+        let mut funcs = Vec::new();
+        for fd in im.funcs {
+            funcs.push(desugar_func(cx, fd));
+        }
+        if im.trait_ty.is_none() {
+            for c in im.consts {
+                if ok_ids.contains_key(c.id) {
+                    funcs.push(desugar_const_func(cx, c));
+                }
+            }
+        }
+        out.impls.push(AstImplDecl {
+            id: im.id,
+            pos: im.pos,
+            generics: im.generics,
+            trait_ty: im.trait_ty,
+            target: im.target,
+            wheres: im.wheres,
+            assoc: im.assoc,
+            funcs: funcs,
+            consts: Vec::new(),
+        });
+        cx.self_name = "";
+    }
+    for td in f.traits {
+        let mut funcs = Vec::new();
+        for fd in td.funcs {
+            funcs.push(desugar_func(cx, fd));
+        }
+        out.traits.push(AstTraitDecl {
+            id: td.id,
+            pos: td.pos,
+            name: td.name,
+            generics: td.generics,
+            supers: td.supers,
+            assoc: td.assoc,
+            funcs: funcs,
+        });
+    }
+    for a in f.aliases {
+        let pred = match a.pred {
+            Some(e) => Some(desugar_pred(cx, e)),
+            None => None,
+        };
+        out.aliases.push(AstTypeAlias { id: a.id, pos: a.pos, name: a.name, ty: a.ty, pred: pred });
+    }
+    out
+}
+
+// desugar_const_func is the function of a constant.
+fn desugar_const_func(cx: DsgCx, c: AstConstDecl) -> AstFuncDecl {
+    let mut attrs = Vec::new();
+    let mut args = Vec::new();
+    args.push("__const");
+    attrs.push(AstAttr { pos: c.pos, name: "const", args: args });
+    let value = desugar_expr(cx, c.value);
+    let vpos = ast_expr_pos(c.value);
+    AstFuncDecl {
+        id: c.id,
+        pos: c.pos,
+        attrs: attrs,
+        name: c.name,
+        generics: Vec::new(),
+        self_kind: "",
+        params: Vec::new(),
+        result: Some(c.ty),
+        wheres: Vec::new(),
+        preds: Vec::new(),
+        has_body: true,
+        body: AstBlock {
+            id: desugar_id(cx),
+            pos: vpos,
+            stmts: Vec::new(),
+            tail: Some(value),
+            end: vpos,
+        },
+    }
+}
+
+fn desugar_func(cx: DsgCx, fd: AstFuncDecl) -> AstFuncDecl {
+    for prm in fd.params {
+        desugar_binding_name(cx, prm.name, prm.pos);
+    }
+    let mut preds = Vec::new();
+    for e in fd.preds {
+        preds.push(desugar_pred(cx, e));
+    }
+    let body = if fd.has_body {
+        desugar_block(cx, fd.body)
+    } else {
+        fd.body
+    };
+    AstFuncDecl {
+        id: fd.id,
+        pos: fd.pos,
+        attrs: fd.attrs,
+        name: fd.name,
+        generics: fd.generics,
+        self_kind: fd.self_kind,
+        params: fd.params,
+        result: fd.result,
+        wheres: fd.wheres,
+        preds: preds,
+        has_body: fd.has_body,
+        body: body,
+    }
+}
+
+// desugar_binding_name reports a variable that would hide a constant
+// (a use of the name always means the constant).
+fn desugar_binding_name(cx: DsgCx, name: String, pos: AstPos) {
+    if cx.consts.contains_key(name) {
+        desugar_error(
+            cx,
+            pos,
+            "`" + name + "` is a constant: it cannot be used as the name of a variable",
+        );
+    } else if cx.unit_structs.contains_key(name) {
+        desugar_error(
+            cx,
+            pos,
+            "`" + name + "` is a unit struct: it cannot be used as the name of a variable",
+        );
+    }
+}
+
+// ---- refinement predicates: integer constants are inlined ----
+
+fn desugar_pred(cx: DsgCx, e: AstExpr) -> AstExpr {
+    match e {
+        AstExpr::Ident(x) => {
+            match cx.int_consts.get(x.name) {
+                Some(v) => {
+                    if cx.consts.contains_key(x.name) {
+                        return AstExpr::IntLit(AstIntLit { id: x.id, pos: x.pos, value: v });
+                    }
+                }
+                None => {}
+            }
+            e
+        }
+        AstExpr::Path(x) => {
+            let tn = if x.ty == "Self" { cx.self_name } else { x.ty };
+            match cx.int_consts.get(tn + "::" + x.name) {
+                Some(v) => AstExpr::IntLit(AstIntLit { id: x.id, pos: x.pos, value: v }),
+                None => e,
+            }
+        }
+        AstExpr::Binary(x) => AstExpr::Binary(AstBinary {
+            id: x.id,
+            pos: x.pos,
+            op: x.op,
+            x: desugar_pred(cx, x.x),
+            y: desugar_pred(cx, x.y),
+        }),
+        AstExpr::Unary(x) => AstExpr::Unary(AstUnary {
+            id: x.id,
+            pos: x.pos,
+            op: x.op,
+            x: desugar_pred(cx, x.x),
+        }),
+        AstExpr::Method(x) => {
+            let mut args = Vec::new();
+            for a in x.args {
+                args.push(desugar_pred(cx, a));
+            }
+            AstExpr::Method(AstMethodCall {
+                id: x.id,
+                pos: x.pos,
+                recv: desugar_pred(cx, x.recv),
+                name: x.name,
+                targs: x.targs,
+                args: args,
+            })
+        }
+        _ => e,
+    }
+}
+
+// ---- statements and expressions ----
+
+fn desugar_block(cx: DsgCx, b: AstBlock) -> AstBlock {
+    let mut stmts = Vec::new();
+    for s in b.stmts {
+        stmts.push(desugar_stmt(cx, s));
+    }
+    let tail = match b.tail {
+        Some(e) => Some(desugar_expr(cx, e)),
+        None => None,
+    };
+    AstBlock { id: b.id, pos: b.pos, stmts: stmts, tail: tail, end: b.end }
+}
+
+fn desugar_opt_pat(cx: DsgCx, p: Option<AstPattern>) -> Option<AstPattern> {
+    match p {
+        Some(x) => Some(desugar_pat(cx, x)),
+        None => None,
+    }
+}
+
+// desugar_unit_pat is the pattern `S {}` of a unit struct.
+fn desugar_unit_pat(name: String, pos: AstPos, id: Int) -> AstPattern {
+    let mut q = ast_new_pattern(id, pos);
+    q.ctor = name;
+    q.brace = true;
+    q
+}
+
+fn desugar_stmt(cx: DsgCx, s0: AstStmt) -> AstStmt {
+    match s0 {
+        AstStmt::Let(s) => {
+            let mut pat = desugar_opt_pat(cx, s.pat);
+            if s.pat.is_none() {
+                if cx.unit_structs.contains_key(s.name) && !s.mutable {
+                    pat = Some(desugar_unit_pat(s.name, s.pos, desugar_id(cx)));
+                } else {
+                    desugar_binding_name(cx, s.name, s.pos);
+                }
+            }
+            let name = if pat.is_some() { "_" } else { s.name };
+            AstStmt::Let(AstLetStmt {
+                id: s.id,
+                pos: s.pos,
+                mutable: s.mutable,
+                name: name,
+                pat: pat,
+                ty: s.ty,
+                init: desugar_expr(cx, s.init),
+            })
+        }
+        AstStmt::Assign(s) => AstStmt::Assign(AstAssignStmt {
+            id: s.id,
+            pos: s.pos,
+            name: s.name,
+            value: desugar_expr(cx, s.value),
+        }),
+        AstStmt::FieldAssign(s) => AstStmt::FieldAssign(AstFieldAssignStmt {
+            id: s.id,
+            pos: s.pos,
+            target: AstFieldExpr {
+                id: s.target.id,
+                pos: s.target.pos,
+                x: desugar_expr(cx, s.target.x),
+                name: s.target.name,
+            },
+            value: desugar_expr(cx, s.value),
+        }),
+        AstStmt::Break(_) => s0,
+        AstStmt::Continue(_) => s0,
+        AstStmt::While(s) => AstStmt::While(AstWhileStmt {
+            id: s.id,
+            pos: s.pos,
+            pat: desugar_opt_pat(cx, s.pat),
+            cond: desugar_expr(cx, s.cond),
+            body: desugar_block(cx, s.body),
+        }),
+        AstStmt::For(s) => {
+            if s.pat.is_none() {
+                desugar_binding_name(cx, s.var, s.pos);
+            }
+            let end = match s.end {
+                Some(e) => Some(desugar_expr(cx, e)),
+                None => None,
+            };
+            AstStmt::For(AstForStmt {
+                id: s.id,
+                pos: s.pos,
+                var: s.var,
+                pat: desugar_opt_pat(cx, s.pat),
+                iter: desugar_expr(cx, s.iter),
+                end: end,
+                body: desugar_block(cx, s.body),
+            })
+        }
+        AstStmt::Return(s) => {
+            let v = match s.value {
+                Some(e) => Some(desugar_expr(cx, e)),
+                None => None,
+            };
+            AstStmt::Return(AstReturnStmt { id: s.id, pos: s.pos, value: v })
+        }
+        AstStmt::Expr(s) => AstStmt::Expr(AstExprStmt {
+            id: s.id,
+            pos: s.pos,
+            x: desugar_expr(cx, s.x),
+            semi: s.semi,
+        }),
+    }
+}
+
+fn desugar_exprs(cx: DsgCx, es: Vec<AstExpr>) -> Vec<AstExpr> {
+    let mut out = Vec::new();
+    for e in es {
+        out.push(desugar_expr(cx, e));
+    }
+    out
+}
+
+// desugar_call0 is the call `f()` of a constant's function f.
+fn desugar_call0(cx: DsgCx, f: AstExpr, pos: AstPos) -> AstExpr {
+    AstExpr::Call(AstCall { id: desugar_id(cx), pos: pos, func: f, args: Vec::new() })
+}
+
+// desugar_resolve is the type name of a path's first part (`Self` is the
+// impl's type).
+fn desugar_resolve(cx: DsgCx, ty: String) -> String {
+    if ty == "Self" && cx.self_name != "" {
+        return cx.self_name;
+    }
+    ty
+}
+
+// desugar_named_variant is the struct-like variant a path `E::V` names.
+fn desugar_named_variant(cx: DsgCx, ty: String, name: String) -> Option<AstVariant> {
+    match cx.variants.get(desugar_resolve(cx, ty) + "::" + name) {
+        Some(v) => if v.named && v.fields.len() > 0 {
+            Some(v)
+        } else {
+            None
+        },
+        None => None,
+    }
+}
+
+fn desugar_braces_error(cx: DsgCx, pos: AstPos, ty: String, name: String) {
+    desugar_error(
+        cx,
+        pos,
+        "variant `"
+            + ty
+            + "::"
+            + name
+            + "` has named fields: write `"
+            + ty
+            + "::"
+            + name
+            + " { .. }`",
+    );
+}
+
+// desugar_tuple_struct is the tuple struct a name in call or pattern
+// position names ("" if none).
+fn desugar_tuple_struct(cx: DsgCx, name: String) -> String {
+    let n = if name == "Self" { cx.self_name } else { name };
+    if cx.tuple_structs.contains_key(n) {
+        return n;
+    }
+    ""
+}
+
+fn desugar_unit_struct(cx: DsgCx, name: String) -> String {
+    let n = if name == "Self" { cx.self_name } else { name };
+    if cx.unit_structs.contains_key(n) {
+        return n;
+    }
+    ""
+}
+
+fn desugar_expr(cx: DsgCx, e0: AstExpr) -> AstExpr {
+    match e0 {
+        AstExpr::IntLit(_) => e0,
+        AstExpr::BoolLit(_) => e0,
+        AstExpr::StrLit(_) => e0,
+        AstExpr::UnitLit(_) => e0,
+        AstExpr::Ident(e) => {
+            if cx.consts.contains_key(e.name) {
+                return desugar_call0(cx, e0, e.pos);
+            }
+            let u = desugar_unit_struct(cx, e.name);
+            if u != "" {
+                return AstExpr::StructLit(AstStructLit {
+                    id: e.id,
+                    pos: e.pos,
+                    name: u,
+                    fields: Vec::new(),
+                });
+            }
+            e0
+        }
+        AstExpr::Path(e) => {
+            if cx.assoc.contains_key(desugar_resolve(cx, e.ty) + "::" + e.name) {
+                return desugar_call0(cx, e0, e.pos);
+            }
+            if desugar_named_variant(cx, e.ty, e.name).is_some() {
+                desugar_braces_error(cx, e.pos, e.ty, e.name);
+            }
+            e0
+        }
+        AstExpr::Call(e) => {
+            match e.func {
+                AstExpr::Ident(f) => {
+                    let ts = desugar_tuple_struct(cx, f.name);
+                    if ts != "" {
+                        return desugar_tuple_lit(cx, e, ts);
+                    }
+                }
+                AstExpr::Path(p) => {
+                    if desugar_named_variant(cx, p.ty, p.name).is_some() {
+                        desugar_braces_error(cx, p.pos, p.ty, p.name);
+                        return AstExpr::Call(AstCall {
+                            id: e.id,
+                            pos: e.pos,
+                            func: e.func,
+                            args: desugar_exprs(cx, e.args),
+                        });
+                    }
+                }
+                _ => {}
+            }
+            AstExpr::Call(AstCall {
+                id: e.id,
+                pos: e.pos,
+                func: desugar_expr(cx, e.func),
+                args: desugar_exprs(cx, e.args),
+            })
+        }
+        AstExpr::Binary(e) => AstExpr::Binary(AstBinary {
+            id: e.id,
+            pos: e.pos,
+            op: e.op,
+            x: desugar_expr(cx, e.x),
+            y: desugar_expr(cx, e.y),
+        }),
+        AstExpr::Unary(e) => AstExpr::Unary(AstUnary {
+            id: e.id,
+            pos: e.pos,
+            op: e.op,
+            x: desugar_expr(cx, e.x),
+        }),
+        AstExpr::Method(e) => AstExpr::Method(AstMethodCall {
+            id: e.id,
+            pos: e.pos,
+            recv: desugar_expr(cx, e.recv),
+            name: e.name,
+            targs: e.targs,
+            args: desugar_exprs(cx, e.args),
+        }),
+        AstExpr::Field(e) => AstExpr::Field(AstFieldExpr {
+            id: e.id,
+            pos: e.pos,
+            x: desugar_expr(cx, e.x),
+            name: e.name,
+        }),
+        AstExpr::StructLit(e) => {
+            if e.name.contains("::") {
+                return desugar_variant_lit(cx, e);
+            }
+            let mut fields = Vec::new();
+            for f in e.fields {
+                fields.push(AstFieldInit {
+                    id: f.id,
+                    pos: f.pos,
+                    name: f.name,
+                    value: desugar_expr(cx, f.value),
+                });
+            }
+            AstExpr::StructLit(AstStructLit { id: e.id, pos: e.pos, name: e.name, fields: fields })
+        }
+        AstExpr::If(e) => {
+            let els = match e.els {
+                Some(x) => Some(desugar_expr(cx, x)),
+                None => None,
+            };
+            AstExpr::If(AstIf {
+                id: e.id,
+                pos: e.pos,
+                pat: desugar_opt_pat(cx, e.pat),
+                cond: desugar_expr(cx, e.cond),
+                then: desugar_block(cx, e.then),
+                els: els,
+            })
+        }
+        AstExpr::Match(e) => {
+            let mut arms = Vec::new();
+            for a in e.arms {
+                arms.push(AstMatchArm {
+                    id: a.id,
+                    pos: a.pos,
+                    pat: desugar_pat(cx, a.pat),
+                    guard: match a.guard {
+                        Some(g) => Some(desugar_expr(cx, g)),
+                        None => None,
+                    },
+                    body: desugar_expr(cx, a.body),
+                });
+            }
+            AstExpr::Match(AstMatch { id: e.id, pos: e.pos, x: desugar_expr(cx, e.x), arms: arms })
+        }
+        AstExpr::Block(b) => AstExpr::Block(desugar_block(cx, b)),
+        AstExpr::Try(e) => AstExpr::Try(AstTry { id: e.id, pos: e.pos, x: desugar_expr(cx, e.x) }),
+        AstExpr::Closure(e) => {
+            for prm in e.params {
+                desugar_binding_name(cx, prm.name, prm.pos);
+            }
+            AstExpr::Closure(AstClosure {
+                id: e.id,
+                pos: e.pos,
+                is_move: e.is_move,
+                params: e.params,
+                result: e.result,
+                body: desugar_expr(cx, e.body),
+            })
+        }
+        AstExpr::Tuple(e) => AstExpr::Tuple(AstTupleLit {
+            id: e.id,
+            pos: e.pos,
+            elems: desugar_exprs(cx, e.elems),
+        }),
+        AstExpr::Range(e) => AstExpr::Range(AstRange {
+            id: e.id,
+            pos: e.pos,
+            start: desugar_expr(cx, e.start),
+            end: desugar_expr(cx, e.end),
+            inclusive: e.inclusive,
+        }),
+        AstExpr::Index(e) => AstExpr::Index(AstIndex {
+            id: e.id,
+            pos: e.pos,
+            x: desugar_expr(cx, e.x),
+            index: desugar_expr(cx, e.index),
+        }),
+    }
+}
+
+// desugar_tuple_lit rewrites the construction `S(a, b)` of a tuple struct
+// to `S { 0: a, 1: b }`.
+fn desugar_tuple_lit(cx: DsgCx, e: AstCall, name: String) -> AstExpr {
+    let n = cx.tuple_structs.get(name).unwrap_or(0);
+    if e.args.len() != n {
+        desugar_error(
+            cx,
+            e.pos,
+            "tuple struct `"
+                + name
+                + "` has "
+                + n.to_string()
+                + " field(s), but "
+                + e.args.len().to_string()
+                + " argument(s) were supplied",
+        );
+    }
+    let mut fields = Vec::new();
+    let mut i = 0;
+    for a in e.args {
+        if i < n {
+            fields.push(AstFieldInit {
+                id: desugar_id(cx),
+                pos: ast_expr_pos(a),
+                name: i.to_string(),
+                value: desugar_expr(cx, a),
+            });
+        }
+        i = i + 1;
+    }
+    AstExpr::StructLit(AstStructLit { id: e.id, pos: e.pos, name: name, fields: fields })
+}
+
+// desugar_variant_lit rewrites `E::V { b: y, a: x }` to `E::V(x, y)`,
+// binding the values in source order first when that is not the
+// declaration order.
+fn desugar_variant_lit(mut cx: DsgCx, e: AstStructLit) -> AstExpr {
+    let k = e.name.index_of("::").unwrap_or(0);
+    let ty = e.name.slice(0, k);
+    let vname = e.name.slice(k + 2, e.name.len());
+    let path = AstExpr::Path(AstPathExpr {
+        id: desugar_id(cx),
+        pos: e.pos,
+        ty: ty,
+        ty_args: Vec::new(),
+        name: vname,
+        targs: Vec::new(),
+    });
+    let vkey = desugar_resolve(cx, ty) + "::" + vname;
+    let v = match cx.variants.get(vkey) {
+        Some(v) => v,
+        None => {
+            if cx.enums.contains_key(desugar_resolve(cx, ty)) {
+                desugar_error(cx, e.pos, "no variant `" + vname + "` in enum `" + ty + "`");
+            } else {
+                desugar_error(cx, e.pos, "unknown enum `" + ty + "`");
+            }
+            let mut args = Vec::new();
+            for f in e.fields {
+                args.push(desugar_expr(cx, f.value));
+            }
+            return AstExpr::Call(AstCall { id: e.id, pos: e.pos, func: path, args: args });
+        }
+    };
+    if !v.named {
+        desugar_error(
+            cx,
+            e.pos,
+            "variant `" + e.name + "` has no named fields: write `" + e.name + "(..)`",
+        );
+        if v.fields.len() == 0 {
+            return path;
+        }
+        let mut args = Vec::new();
+        for f in e.fields {
+            args.push(desugar_expr(cx, f.value));
+        }
+        return AstExpr::Call(AstCall { id: e.id, pos: e.pos, func: path, args: args });
+    }
+    // the value of each declared field (index of the initializer)
+    let mut at: HashMap<String, Int> = HashMap::new();
+    let mut i = 0;
+    let mut in_order = true;
+    let mut last = -1;
+    for f in e.fields {
+        let mut decl = -1;
+        let mut j = 0;
+        for n in v.names {
+            if n == f.name {
+                decl = j;
+            }
+            j = j + 1;
+        }
+        if decl < 0 {
+            desugar_error(cx, f.pos, "variant `" + e.name + "` has no field `" + f.name + "`");
+        } else if at.contains_key(f.name) {
+            desugar_error(cx, f.pos, "field `" + f.name + "` specified more than once");
+        } else {
+            at.insert(f.name, i);
+            if decl < last {
+                in_order = false;
+            }
+            last = decl;
+        }
+        i = i + 1;
+    }
+    let mut missing = Vec::new();
+    for n in v.names {
+        if !at.contains_key(n) {
+            missing.push("`" + n + "`");
+        }
+    }
+    if missing.len() > 0 {
+        desugar_error(
+            cx,
+            e.pos,
+            "missing field(s) " + missing.join(", ") + " in initializer of `" + e.name + "`",
+        );
+    }
+    let mut vals = Vec::new();
+    for f in e.fields {
+        vals.push(desugar_expr(cx, f.value));
+    }
+    let n_unused = e.fields.len() - at.len();
+    if in_order && n_unused == 0 {
+        let mut args = Vec::new();
+        for n in v.names {
+            match at.get(n) {
+                Some(ix) => args.push(
+                    vals.get(ix).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: e.pos })),
+                ),
+                None => {}
+            }
+        }
+        return AstExpr::Call(AstCall { id: e.id, pos: e.pos, func: path, args: args });
+    }
+    // `{ let __v0 = y; let __v1 = x; E::V(__v1, __v0) }`
+    let mut stmts = Vec::new();
+    let mut names = Vec::new();
+    let mut ix = 0;
+    for f in e.fields {
+        cx.tmp = cx.tmp + 1;
+        let tn = "__v" + cx.tmp.to_string();
+        names.push(tn);
+        stmts.push(
+            AstStmt::Let(AstLetStmt {
+                id: desugar_id(cx),
+                pos: f.pos,
+                mutable: false,
+                name: tn,
+                pat: None,
+                ty: None,
+                init: vals.get(ix).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: f.pos })),
+            }),
+        );
+        ix = ix + 1;
+    }
+    let mut args = Vec::new();
+    for n in v.names {
+        match at.get(n) {
+            Some(k2) => args.push(
+                AstExpr::Ident(AstIdent {
+                    id: desugar_id(cx),
+                    pos: e.pos,
+                    name: names.get(k2).unwrap_or(""),
+                    targs: Vec::new(),
+                }),
+            ),
+            None => {}
+        }
+    }
+    let call = AstExpr::Call(AstCall { id: e.id, pos: e.pos, func: path, args: args });
+    AstExpr::Block(AstBlock {
+        id: desugar_id(cx),
+        pos: e.pos,
+        stmts: stmts,
+        tail: Some(call),
+        end: e.pos,
+    })
+}
+
+// ---- patterns ----
+
+fn desugar_wild(cx: DsgCx, pos: AstPos) -> AstPattern {
+    let mut q = ast_new_pattern(desugar_id(cx), pos);
+    q.wildcard = true;
+    q
+}
+
+fn desugar_pats(cx: DsgCx, ps: Vec<AstPattern>) -> Vec<AstPattern> {
+    let mut out = Vec::new();
+    for p in ps {
+        out.push(desugar_pat(cx, p));
+    }
+    out
+}
+
+// desugar_mk_pat is a constructor pattern: brace with every field in
+// fields (a struct), or positional (a variant, fields empty).
+fn desugar_mk_pat(
+    p: AstPattern,
+    ty: String,
+    ctor: String,
+    args: Vec<AstPattern>,
+    brace: Bool,
+    fields: Vec<String>,
+) -> AstPattern {
+    let mut q = ast_new_pattern(p.id, p.pos);
+    q.ty = ty;
+    q.ctor = ctor;
+    for a in args {
+        q.args.push(a);
+    }
+    q.brace = brace;
+    for f in fields {
+        q.fields.push(f);
+    }
+    q
+}
+
+// desugar_fields orders the subpatterns of a struct pattern p by the
+// declared field names (a missing field is `_` with `..`).
+fn desugar_fields(cx: DsgCx, p: AstPattern, names: Vec<String>, what: String) -> Vec<AstPattern> {
+    let mut at: HashMap<String, Int> = HashMap::new();
+    let mut i = 0;
+    for f in p.fields {
+        let mut known = false;
+        for n in names {
+            if n == f {
+                known = true;
+            }
+        }
+        let sub = p.args.get(i).unwrap_or(p);
+        if !known {
+            desugar_error(cx, sub.pos, "`" + what + "` has no field `" + f + "`");
+        } else if at.contains_key(f) {
+            desugar_error(cx, sub.pos, "field `" + f + "` is bound more than once");
+        } else {
+            at.insert(f, i);
+        }
+        i = i + 1;
+    }
+    let mut out = Vec::new();
+    let mut missing = Vec::new();
+    for n in names {
+        match at.get(n) {
+            Some(k) => match p.args.get(k) {
+                Some(a) => out.push(desugar_pat(cx, a)),
+                None => {}
+            },
+            None => {
+                if !p.rest {
+                    missing.push("`" + n + "`");
+                }
+                out.push(desugar_wild(cx, p.pos));
+            }
+        }
+    }
+    if missing.len() > 0 {
+        desugar_error(
+            cx,
+            p.pos,
+            "pattern `"
+                + what
+                + "` does not mention field(s) "
+                + missing.join(", ")
+                + " (add `..` to ignore the other fields)",
+        );
+    }
+    out
+}
+
+fn desugar_pat(cx: DsgCx, p: AstPattern) -> AstPattern {
+    if p.alts.len() > 0 {
+        let mut q = ast_new_pattern(p.id, p.pos);
+        for a in p.alts {
+            q.alts.push(desugar_pat(cx, a));
+        }
+        return q;
+    }
+    if p.at.len() > 0 {
+        let mut q = ast_new_pattern(p.id, p.pos);
+        q.bind = p.bind;
+        q.mutable = p.mutable;
+        for a in p.at {
+            q.at.push(desugar_pat(cx, a));
+        }
+        if p.mutable {
+            desugar_binding_name(cx, p.bind, p.pos);
+        }
+        return q;
+    }
+    if p.range {
+        return p;
+    }
+    if p.wildcard || p.int_value.is_some() || p.bool_lit.is_some() || p.str_value.is_some() {
+        return p;
+    }
+    if p.tuple {
+        let mut q = desugar_mk_pat(p, "", "", desugar_pats(cx, p.args), false, Vec::new());
+        q.tuple = true;
+        return q;
+    }
+    if p.brace {
+        if p.ty != "" {
+            let what = p.ty + "::" + p.ctor;
+            match cx.variants.get(desugar_resolve(cx, p.ty) + "::" + p.ctor) {
+                Some(v) => {
+                    if !v.named && !(p.rest && p.args.len() == 0) {
+                        desugar_error(
+                            cx,
+                            p.pos,
+                            "variant `" + what + "` has no named fields: write `" + what + "(..)`",
+                        );
+                        return desugar_mk_pat(
+                            p,
+                            p.ty,
+                            p.ctor,
+                            desugar_pats(cx, p.args),
+                            false,
+                            Vec::new(),
+                        );
+                    }
+                    let mut names = v.names;
+                    if !v.named {
+                        // `E::V { .. }` of a tuple variant
+                        names = Vec::new();
+                        for i in 0..v.fields.len() {
+                            names.push(i.to_string());
+                        }
+                    }
+                    let args = desugar_fields(cx, p, names, what);
+                    return desugar_mk_pat(p, p.ty, p.ctor, args, false, Vec::new());
+                }
+                None => {
+                    // the checker reports the unknown variant
+                    return desugar_mk_pat(
+                        p,
+                        p.ty,
+                        p.ctor,
+                        desugar_pats(cx, p.args),
+                        false,
+                        Vec::new(),
+                    );
+                }
+            }
+        }
+        let sname = if p.ctor == "Self" && cx.self_name != "" {
+            cx.self_name
+        } else {
+            p.ctor
+        };
+        match cx.structs.get(sname) {
+            Some(sd) => {
+                let mut names = Vec::new();
+                for f in sd.fields {
+                    names.push(f.name);
+                }
+                let args = desugar_fields(cx, p, names, sname);
+                return desugar_mk_pat(p, "", sname, args, true, names);
+            }
+            None => {
+                desugar_error(cx, p.pos, "unknown struct `" + p.ctor + "`");
+                return desugar_mk_pat(p, "", p.ctor, desugar_pats(cx, p.args), true, p.fields);
+            }
+        }
+    }
+    if p.ctor != "" {
+        if p.ty == "" {
+            let ts = desugar_tuple_struct(cx, p.ctor);
+            if ts != "" {
+                let n = cx.tuple_structs.get(ts).unwrap_or(0);
+                if p.args.len() != n {
+                    desugar_error(
+                        cx,
+                        p.pos,
+                        "tuple struct pattern `"
+                            + p.ctor
+                            + "` expects "
+                            + n.to_string()
+                            + " field(s), found "
+                            + p.args.len().to_string(),
+                    );
+                }
+                let mut args = Vec::new();
+                let mut names = Vec::new();
+                for i in 0..n {
+                    names.push(i.to_string());
+                    match p.args.get(i) {
+                        Some(a) => args.push(desugar_pat(cx, a)),
+                        None => args.push(desugar_wild(cx, p.pos)),
+                    }
+                }
+                return desugar_mk_pat(p, "", ts, args, true, names);
+            }
+        } else if desugar_named_variant(cx, p.ty, p.ctor).is_some() {
+            desugar_braces_error(cx, p.pos, p.ty, p.ctor);
+        }
+        return desugar_mk_pat(p, p.ty, p.ctor, desugar_pats(cx, p.args), false, Vec::new());
+    }
+    if p.bind != "" && !p.mutable {
+        let u = desugar_unit_struct(cx, p.bind);
+        if u != "" {
+            return desugar_unit_pat(u, p.pos, p.id);
+        }
+        if cx.consts.contains_key(p.bind) {
+            match cx.int_consts.get(p.bind) {
+                Some(v) => {
+                    // an integer constant matches its value
+                    let mut q = desugar_mk_pat(p, "", "", Vec::new(), false, Vec::new());
+                    q.int_value = Some(v);
+                    return q;
+                }
+                None => desugar_error(
+                    cx,
+                    p.pos,
+                    "constant `"
+                        + p.bind
+                        + "` cannot be used as a pattern (only integer constants can; compare with `==` instead)",
+                ),
+            }
+        }
+    }
+    if p.bind != "" && p.mutable {
+        desugar_binding_name(cx, p.bind, p.pos);
+    }
+    p
+}

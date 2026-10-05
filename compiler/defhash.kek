@@ -800,6 +800,7 @@ fn dh_types_hash(f: AstFile) -> String {
         xs.push(
             "struct "
                 + s.name
+                + s.kind
                 + "/"
                 + s.generics.len().to_string()
                 + "["
@@ -819,7 +820,11 @@ fn dh_types_hash(f: AstFile) -> String {
             for t in v.fields {
                 ts.push(dh_type(t));
             }
-            vs.push(v.name + "(" + ts.join(",") + ")");
+            if v.named {
+                vs.push(v.name + "{" + v.names.join(",") + ":" + ts.join(",") + "}");
+            } else {
+                vs.push(v.name + "(" + ts.join(",") + ")");
+            }
         }
         let mut attrs = Vec::new();
         for a in e.attrs {

@@ -232,8 +232,25 @@ t_refined() {
 	rm -rf "$d"
 }
 
+# Tuple structs, unit structs and struct-like variants are generated and
+# printed like Rust's Debug.
+t_forms() {
+	d=$(tmpdir)
+	run_test "$d/out" testdata/test/props_forms.kek
+	r=
+	[ $code -eq 1 ] || r="exit $code, want 1"
+	r="$r$(contains "$d/out" \
+		"test markers_are_equal ... ok (pure: hermetic, cacheable; 100 cases" \
+		"    counterexample: short_distances(m = Meters(10))" \
+		"    counterexample: pairs_are_ordered(p = Pair(5, \"a\"))" \
+		"    counterexample: rects_are_thin(s = Rect { w: 3, h: 3 })" \
+		"test result: FAILED. 1 passed; 3 failed")"
+	result forms "$r" "$d/out"
+	rm -rf "$d"
+}
+
 if [ "${1:-}" = --case ]; then
 	"t_$2"
 	exit 0
 fi
-run_parallel "$0" props seed cases mocks trap types refined
+run_parallel "$0" props seed cases mocks trap types refined forms

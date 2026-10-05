@@ -49,7 +49,8 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 | `Labeled<L, T>` | `Deserialize` のみ（`T` として読んでラベルを付ける） |
 | `Timestamp`・`Date`・`Duration` | `Str`（RFC 3339、`YYYY-MM-DD`、`"1h30m"`。[time.md](time.md)） |
 | derive した struct | フィールドの `Map`（フィールドの順）。ないフィールドは `Null` として読む（`Option` なら `None`、それ以外は `missing field`） |
-| derive した enum | 外部タグ：フィールドなしは `"V"`、1つは `{"V": x}`、2つ以上は `{"V": [x, y]}` |
+| derive したタプル構造体・ユニット構造体 | serde と同じ：`struct S;` は `Null`、`struct S(T);`（newtype）は中身の値そのもの、`struct S(A, B);` は `Seq` |
+| derive した enum | 外部タグ：フィールドなしは `"V"`、1つは `{"V": x}`、2つ以上は `{"V": [x, y]}`、構造体のようなバリアント `V { a: A, b: B }` は `{"V": {"a": x, "b": y}}`（ないフィールドは struct と同じく `Null` として読む） |
 
 `#[derive(Serialize, Deserialize)]` は generic な型にも使える（`impl<T: Serialize> Serialize for Wrap<T>`）。`Labeled` を含む型には `Serialize` を derive できない（エラー）。
 

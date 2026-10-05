@@ -43,6 +43,7 @@ enum FmtUnitKind {
     Impl(AstImplDecl),
     Trait(AstTraitDecl),
     Alias(AstTypeAlias),
+    Const(AstConstDecl),
     Assoc(AstAssocType),
     Field(AstField),
     Variant(AstVariant),
@@ -392,7 +393,7 @@ fn fmt_container(p: FmtPrinter, open: Int, close: Int, units: Vec<FmtUnit>, ind:
         let lead = fmt_take(p, !top, open_pos, true, u.start, 0);
         fmt_own_line(p, b, lead, top && i > 0);
         // top-level items are separated by a blank line, except
-        // consecutive `type` aliases (kept as written)
+        // consecutive `type` aliases and `const` items (kept as written)
         let alias_run = i > 0 && fmt_is_alias(u) && fmt_is_alias(fmt_unit_at(units, i - 1));
         let mut blank = fmt_blank_before(p, u.start.line)
             || (top && i > 0 && lead.len() == 0 && !alias_run);
@@ -443,6 +444,7 @@ fn fmt_container(p: FmtPrinter, open: Int, close: Int, units: Vec<FmtUnit>, ind:
 fn fmt_is_alias(u: FmtUnit) -> Bool {
     match u.kind {
         FmtUnitKind::Alias(_) => true,
+        FmtUnitKind::Const(_) => true,
         _ => false,
     }
 }
@@ -455,6 +457,10 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
         FmtUnitKind::Impl(d) => fmt_impl_decl(p, d, ind),
         FmtUnitKind::Trait(d) => fmt_trait_decl(p, d, ind),
         FmtUnitKind::Assoc(a) => fmt_assoc(a),
+        FmtUnitKind::Const(d) => {
+            let h = "const " + d.name + ": " + fmt_typ(d.ty) + " = ";
+            h + fmt_expr(p, d.value, ind, ind * 4 + fmt_w(p, h), false) + ";"
+        }
         FmtUnitKind::Alias(a) => {
             let h = "type " + a.name + " = " + fmt_typ(a.ty);
             match a.pred {
@@ -472,7 +478,19 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
             + ",",
         FmtUnitKind::Variant(v) => {
             let mut s = v.name;
-            if v.fields.len() > 0 {
+            if v.named {
+                let mut fs = Vec::new();
+                let mut i = 0;
+                for t in v.fields {
+                    fs.push(v.names.get(i).unwrap_or("") + ": " + fmt_typ(t));
+                    i = i + 1;
+                }
+                if fs.len() == 0 {
+                    s = s + " {}";
+                } else {
+                    s = s + " { " + fs.join(", ") + " }";
+                }
+            } else if v.fields.len() > 0 {
                 let mut ts = Vec::new();
                 for t in v.fields {
                     ts.push(fmt_typ(t));
@@ -560,6 +578,9 @@ fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
     for d in f.aliases {
         items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Alias(d) });
     }
+    for d in f.consts {
+        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Const(d) });
+    }
     fmt_sort_units(items);
     fmt_container(p, -1, p.toks.len() - 1, items, 0)
 }
@@ -626,6 +647,18 @@ fn fmt_assoc(a: AstAssocType) -> String {
 }
 
 fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
+    let head = fmt_attrs(d.attrs, ind) + "struct " + d.name + fmt_generics(d.generics);
+    if d.kind == "unit" {
+        return head + ";";
+    }
+    if d.kind == "tuple" {
+        let mut ts = Vec::new();
+        for fd in d.fields {
+            let m = if fd.mutable { "mut " } else { "" };
+            ts.push(m + fmt_typ(fd.ty));
+        }
+        return head + "(" + ts.join(", ") + ");";
+    }
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
     let mut units = Vec::new();
     for fd in d.fields {
@@ -720,6 +753,9 @@ fn fmt_impl_decl(p: FmtPrinter, d: AstImplDecl, ind: Int) -> String {
     }
     for f in d.funcs {
         units.push(FmtUnit { start: fmt_attrs_start(f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
+    }
+    for c in d.consts {
+        units.push(FmtUnit { start: c.pos, kind: FmtUnitKind::Const(c) });
     }
     fmt_sort_units(units);
     let mut head = "impl" + fmt_generics(d.generics) + " ";
@@ -1554,6 +1590,30 @@ fn fmt_pat(p: FmtPrinter, pt: AstPattern) -> String {
     }
     if pt.str_value.is_some() {
         return fmt_str_text(p, pt.pos);
+    }
+    if pt.brace {
+        let mut s = pt.ctor;
+        if pt.ty != "" {
+            s = pt.ty + "::" + s;
+        }
+        let mut fs = Vec::new();
+        let mut i = 0;
+        for a in pt.args {
+            let name = pt.fields.get(i).unwrap_or("");
+            if a.bind == name && a.ctor == "" && !a.wildcard && !a.brace {
+                fs.push(fmt_pat(p, a));
+            } else {
+                fs.push(name + ": " + fmt_pat(p, a));
+            }
+            i = i + 1;
+        }
+        if pt.rest {
+            fs.push("..");
+        }
+        if fs.len() == 0 {
+            return s + " {}";
+        }
+        return s + " { " + fs.join(", ") + " }";
     }
     if pt.ctor != "" {
         let mut s = pt.ctor;

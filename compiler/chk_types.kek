@@ -38,9 +38,12 @@ struct TyStruct {
     fields: Vec<TyField>,
 }
 
+// names are the field names of a struct-like variant `V { a: A }`
+// (empty for `V(A)`).
 struct TyVariant {
     name: String,
     fields: Vec<Ty>,
+    names: Vec<String>,
 }
 
 struct TyEnum {

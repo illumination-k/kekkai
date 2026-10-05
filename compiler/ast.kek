@@ -20,6 +20,19 @@ struct AstFile {
     impls: Vec<AstImplDecl>,
     traits: Vec<AstTraitDecl>,
     aliases: Vec<AstTypeAlias>,
+    consts: Vec<AstConstDecl>,
+}
+
+// `const NAME: T = value;` at the top level or in an inherent `impl`
+// (an associated constant, `Type::NAME`). The checker sees a constant as a
+// pure function without parameters, called at every use
+// (compiler/desugar.kek).
+struct AstConstDecl {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    ty: AstType,
+    value: AstExpr,
 }
 
 // `type Name = T;` or `type Name = T where pred;` (a refined alias: pred
@@ -112,6 +125,9 @@ struct AstGeneric {
     bounds: Vec<AstType>,
 }
 
+// kind is "" for `struct S { f: T }`, "tuple" for a tuple struct
+// `struct S(T, U);` (its fields are named "0", "1", ...) and "unit" for
+// `struct S;` (no fields).
 struct AstStructDecl {
     id: Int,
     pos: AstPos,
@@ -119,13 +135,18 @@ struct AstStructDecl {
     name: String,
     generics: Vec<AstGeneric>,
     fields: Vec<AstField>,
+    mut kind: String,
 }
 
+// A variant `V`, `V(A, B)` or, with names set (one per field), the
+// struct-like `V { a: A, b: B }` (named is true even for `V {}`).
 struct AstVariant {
     id: Int,
     pos: AstPos,
     name: String,
     fields: Vec<AstType>,
+    mut named: Bool,
+    names: Vec<String>,
 }
 
 struct AstEnumDecl {
@@ -208,6 +229,7 @@ struct AstImplDecl {
     mut wheres: Vec<AstWhere>,
     assoc: Vec<AstAssocType>,
     funcs: Vec<AstFuncDecl>,
+    consts: Vec<AstConstDecl>,
 }
 
 // ---- statements ----
@@ -434,6 +456,8 @@ struct AstFieldInit {
     value: AstExpr,
 }
 
+// `S { f: e }`, or `E::V { f: e }` for a struct-like variant (name is
+// then "E::V").
 struct AstStructLit {
     id: Int,
     pos: AstPos,
@@ -455,7 +479,12 @@ struct AstIf {
 // `(p, q)` has tuple set and its elements in args (`()` has none).
 // An or-pattern `p | q` has its alternatives in alts. A range pattern
 // `lo..=hi` / `lo..hi` / `..=hi` / `lo..` has range set (incl for `..=`).
-// `name @ p` has bind set and p as the single element of at.
+// `name @ p` has bind set and p as the single element of at. A struct
+// pattern `S { a, b: p, .. }` / `E::V { a, .. }` has brace set, the field
+// names in fields (parallel to args; `a` is short for `a: a`) and rest set
+// for `..`. compiler/desugar.kek rewrites struct patterns of structs (and
+// tuple structs `S(p, q)`) to list every field in declaration order, and
+// those of struct-like variants to positional `E::V(p, q)`.
 struct AstPattern {
     id: Int,
     pos: AstPos,
@@ -475,6 +504,9 @@ struct AstPattern {
     mut range_hi: Option<Int>,
     mut range_incl: Bool,
     at: Vec<AstPattern>,
+    mut brace: Bool,
+    mut fields: Vec<String>,
+    mut rest: Bool,
 }
 
 // `pat => body` or, with guard set, `pat if guard => body`.
@@ -802,5 +834,8 @@ fn ast_new_pattern(id: Int, pos: AstPos) -> AstPattern {
         range_hi: None,
         range_incl: false,
         at: Vec::new(),
+        brace: false,
+        fields: Vec::new(),
+        rest: false,
     }
 }

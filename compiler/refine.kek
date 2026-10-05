@@ -3349,6 +3349,20 @@ fn ref_call_expr(cx: RefCtx, st: RefSt, c: AstCall, e: AstExpr) -> RefVal {
     if ci.kind == "func" {
         match ci.func {
             Some(fun) => {
+                // a constant with an integer literal value is that value
+                if ast_has_attr(fun.decl, "const") {
+                    match fun.decl.body.tail {
+                        Some(t) => match desugar_int_value(t) {
+                            Some(v) => {
+                                if v.abs() <= 1152921504606846976 {
+                                    return ref_val_int(ref_lc(v));
+                                }
+                            }
+                            None => {}
+                        },
+                        None => {}
+                    }
+                }
                 return ref_call(cx, st, fun, args, c.args, c.pos, ref_show(e));
             }
             None => {}

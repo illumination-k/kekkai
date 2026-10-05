@@ -1,0 +1,53 @@
+// Property tests over tuple structs, unit structs and struct-like
+// variants: generated, shrunk and printed like Rust's Debug.
+
+struct Meters(Int);
+
+struct Marker;
+
+struct Pair<A, B>(A, B);
+
+enum Shape {
+    Rect { w: Int, h: Int },
+    Dot,
+    Many { items: Vec<Shape> },
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Rect { w, h } => w * h,
+        Shape::Dot => 0,
+        Shape::Many { items } => {
+            let mut total = 0;
+            for it in items {
+                total = total + area(it);
+            }
+            total
+        }
+    }
+}
+
+#[test]
+fn markers_are_equal(a: Marker, b: Marker) -> Bool {
+    let Marker = a;
+    let Marker = b;
+    true
+}
+
+#[test]
+fn short_distances(m: Meters) -> Bool {
+    m.0 < 10
+}
+
+#[test]
+fn pairs_are_ordered(p: Pair<Int, String>) -> Bool {
+    p.0 < 5 || p.1.len() == 0
+}
+
+#[test]
+fn rects_are_thin(s: Shape) -> Bool {
+    match s {
+        Shape::Rect { w, h } => w < 3 || h < 3,
+        _ => true,
+    }
+}

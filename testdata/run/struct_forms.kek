@@ -1,0 +1,171 @@
+// Tuple structs `struct Meters(Int);`, unit structs `struct Marker;`,
+// struct-like enum variants `Rect { w: Int, h: Int }` and struct patterns
+// `Point { x, .. }`.
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone)]
+struct Meters(Int);
+
+#[derive(PartialEq, Clone)]
+struct Pair<A, B>(A, B);
+
+#[derive(PartialEq, Eq, Hash, Default, Clone, PartialOrd, Ord)]
+struct Marker;
+
+struct Counter(mut Int, String);
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+enum Shape {
+    Rect { w: Int, h: Int },
+    Circle { r: Int },
+    Dot,
+    Line(Int, Int),
+}
+
+#[derive(Clone, PartialEq)]
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Seg {
+    a: Point,
+    b: Point,
+}
+
+impl Meters {
+    fn add(self, other: Meters) -> Meters {
+        Meters(self.0 + other.0)
+    }
+
+    fn zero() -> Self {
+        Self(0)
+    }
+}
+
+impl<A, B> Pair<A, B> {
+    fn swap(self) -> Pair<B, A> {
+        let Pair(a, b) = self;
+        Pair(b, a)
+    }
+}
+
+impl Marker {
+    fn me() -> Self {
+        Self
+    }
+
+    fn name(&self) -> String {
+        "marker"
+    }
+}
+
+impl Shape {
+    fn area(&self) -> Int {
+        match self {
+            Shape::Rect { w, h } => w * h,
+            Shape::Circle { r } => 3 * r * r,
+            Shape::Dot => 0,
+            Shape::Line(_, _) => 0,
+        }
+    }
+
+    fn square(n: Int) -> Self {
+        Self::Rect { h: n, w: n }
+    }
+}
+
+fn describe(s: Shape) -> String {
+    match s {
+        Shape::Rect { w: 0, .. } => "flat",
+        Shape::Rect { w, h: height } => "rect " + w.to_string() + "x" + height.to_string(),
+        Shape::Circle { .. } => "circle",
+        Shape::Dot => "dot",
+        Shape::Line(a, b) => "line " + a.to_string() + "-" + b.to_string(),
+    }
+}
+
+fn quadrant(p: Point) -> String {
+    match p {
+        Point { x: 0, y: 0 } => "origin",
+        Point { x: 0, .. } => "y axis",
+        Point { y: 0, x: _ } => "x axis",
+        Point { .. } => "plane",
+    }
+}
+
+fn trace(log: &Log, tag: String, v: Int) -> Int {
+    log.info("eval " + tag);
+    v
+}
+
+fn len2(s: Seg) -> Int {
+    let Seg { a: Point { x: x1, y: y1 }, b: Point { x: x2, y: y2 } } = s;
+    (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let m = Meters(3).add(Meters(4));
+    log.info(m.0.to_string() + " " + Meters::zero().0.to_string());
+    let Meters(inner) = m;
+    log.info(inner.to_string());
+    log.info((Meters(1) < Meters(2)).to_string() + " " + (m == Meters(7)).to_string());
+    log.info(Meters::default().0.to_string() + " " + m.clone().0.to_string());
+
+    let p = Pair(1, "one").swap();
+    log.info(p.0 + " " + p.1.to_string());
+    log.info((Pair(1, 2) == Pair(1, 2)).to_string());
+
+    let mk = Marker;
+    log.info(mk.name() + " " + Marker::me().name() + " " + (mk == Marker).to_string());
+    match mk {
+        Marker => log.info("matched marker"),
+    }
+    let Marker = Marker::default();
+
+    let mut c = Counter(0, "c");
+    c.0 = c.0 + 5;
+    log.info(c.1 + " " + c.0.to_string());
+
+    let shapes = vec_shapes();
+    for s in shapes.iter() {
+        log.info(describe(s.clone()) + " area " + s.area().to_string());
+    }
+    log.info((Shape::Rect { w: 1, h: 2 } == Shape::Rect { h: 2, w: 1 }).to_string());
+    log.info((Shape::Rect { w: 1, h: 2 } < Shape::Circle { r: 0 }).to_string());
+
+    // fields are evaluated in source order
+    let r = Shape::Rect { h: trace(log, "h", 2), w: trace(log, "w", 5) };
+    log.info(describe(r));
+    if let Shape::Rect { w, .. } = Shape::square(4) {
+        log.info("square w " + w.to_string());
+    }
+
+    log.info(quadrant(Point { x: 0, y: 0 }) + " " + quadrant(Point { x: 0, y: 1 }));
+    log.info(quadrant(Point { x: 2, y: 0 }) + " " + quadrant(Point { x: 1, y: 1 }));
+    let Point { mut x, y } = Point { x: 1, y: 2 };
+    x = x + y;
+    log.info(x.to_string());
+    let pts = Vec::new();
+    let mut ps = pts;
+    ps.push(Point { x: 1, y: 10 });
+    ps.push(Point { x: 2, y: 20 });
+    let mut total = 0;
+    for Point { x, y } in ps.iter() {
+        total = total + x * y;
+    }
+    log.info(total.to_string());
+    let seg = Seg { a: Point { x: 0, y: 0 }, b: Point { x: 3, y: 4 } };
+    log.info(len2(seg).to_string());
+    0
+}
+
+fn vec_shapes() -> Vec<Shape> {
+    let mut v = Vec::new();
+    v.push(Shape::Rect { w: 2, h: 3 });
+    v.push(Shape::Rect { w: 0, h: 3 });
+    v.push(Shape::Circle { r: 2 });
+    v.push(Shape::Dot);
+    v.push(Shape::Line(1, 2));
+    v
+}

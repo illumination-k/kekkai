@@ -207,11 +207,17 @@ fn derive_struct(sd: AstStructDecl, tr: String) -> String {
     for f in sd.fields {
         fields.push(f.name);
     }
-    derive_body(h, tr, fields, sd.name)
+    let lit = if sd.kind == "tuple" {
+        sd.name + "("
+    } else {
+        sd.name
+    };
+    derive_body(h, tr, fields, lit)
 }
 
 // derive_body is the implementation for a struct or tuple whose fields
-// (names or indices) are compared in order.
+// (names or indices) are compared in order. lit is the struct's name
+// ("" for a tuple type, "Name(" for a tuple struct).
 fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> String {
     if tr == "Eq" {
         return h + " {}\n";
@@ -285,6 +291,12 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
                 lit_s = lit_s + ",";
             }
             lit_s = lit_s + ")";
+        } else if lit.ends_with("(") {
+            let mut es = Vec::new();
+            for f in fields {
+                es.push("self." + f + ".clone()");
+            }
+            lit_s = lit + es.join(", ") + ")";
         } else {
             let mut inits = Vec::new();
             for f in fields {
@@ -295,6 +307,17 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
         return h + " {\n    fn clone(&self) -> Self {\n        " + lit_s + "\n    }\n}\n";
     }
     // Default (structs only)
+    if lit.ends_with("(") {
+        let mut es = Vec::new();
+        for f in fields {
+            es.push("Default::default()");
+        }
+        return h
+            + " {\n    fn default() -> Self {\n        "
+            + lit
+            + es.join(", ")
+            + ")\n    }\n}\n";
+    }
     let mut inits = Vec::new();
     for f in fields {
         inits.push(f + ": Default::default()");
@@ -310,6 +333,15 @@ fn derive_body(h: String, tr: String, fields: Vec<String>, lit: String) -> Strin
 // derive_pat is the pattern `E::V(p0, p1)` binding the fields as
 // prefix0, prefix1, ... (`E::V` without fields).
 fn derive_pat(en: String, v: AstVariant, prefix: String) -> String {
+    if v.named {
+        let mut fs = Vec::new();
+        let mut i = 0;
+        for n in v.names {
+            fs.push(n + ": " + prefix + i.to_string());
+            i = i + 1;
+        }
+        return en + "::" + v.name + " { " + fs.join(", ") + " }";
+    }
     if v.fields.len() == 0 {
         return en + "::" + v.name;
     }
@@ -423,7 +455,15 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
         let mut arms = Vec::new();
         for v in ed.variants {
             let mut r = ed.name + "::" + v.name;
-            if v.fields.len() > 0 {
+            if v.named {
+                let mut fs = Vec::new();
+                let mut i = 0;
+                for n in v.names {
+                    fs.push(n + ": a" + i.to_string() + ".clone()");
+                    i = i + 1;
+                }
+                r = r + " { " + fs.join(", ") + " }";
+            } else if v.fields.len() > 0 {
                 let mut es = Vec::new();
                 for i in 0..v.fields.len() {
                     es.push("a" + i.to_string() + ".clone()");
@@ -455,6 +495,9 @@ fn derive_enum(ed: AstEnumDecl, tr: String) -> String {
 }
 
 fn derive_wild_pat(en: String, v: AstVariant) -> String {
+    if v.named {
+        return en + "::" + v.name + " { .. }";
+    }
     if v.fields.len() == 0 {
         return en + "::" + v.name;
     }
@@ -505,6 +548,9 @@ fn derive_tuples() -> String {
 
 fn derive_serde_struct(sd: AstStructDecl, tr: String, aliases: Vec<AstTypeAlias>) -> String {
     let h = derive_header(tr, sd.name, sd.generics);
+    if sd.kind != "" {
+        return derive_serde_tuple_struct(sd, tr, h, aliases);
+    }
     if tr == "Serialize" {
         let mut body = "        let mut fields = Vec::new();\n";
         for f in sd.fields {
@@ -547,6 +593,66 @@ fn derive_serde_struct(sd: AstStructDecl, tr: String, aliases: Vec<AstTypeAlias>
         + " })\n    }\n}\n"
 }
 
+// derive_serde_tuple_struct: like serde, a unit struct is null, a newtype
+// `S(T)` is its field and a tuple struct with more fields is a sequence.
+fn derive_serde_tuple_struct(
+    sd: AstStructDecl,
+    tr: String,
+    h: String,
+    aliases: Vec<AstTypeAlias>,
+) -> String {
+    let n = sd.fields.len();
+    if tr == "Serialize" {
+        let mut r = "Value::Null";
+        if n == 1 {
+            r = "self.0.to_value()";
+        } else if n > 1 {
+            r = "let mut xs = Vec::new();\n";
+            for k in 0..n {
+                r = r + "        xs.push(self." + k.to_string() + ".to_value());\n";
+            }
+            r = r + "        Value::Seq(xs)";
+        }
+        return h + " {\n    fn to_value(&self) -> Value {\n        " + r + "\n    }\n}\n";
+    }
+    let mut body = "";
+    let mut args = Vec::new();
+    if n == 0 {
+        body = "        let u: () = Deserialize::from_value(v)?;\n";
+    }
+    let mut k = 0;
+    for f in sd.fields {
+        let x = "f" + k.to_string();
+        let read = if n == 1 {
+            "Deserialize::from_value(v)?"
+        } else {
+            "v.element(\"" + sd.name + "\", " + k.to_string() + ", " + n.to_string() + ")?"
+        };
+        body = body
+            + "        let "
+            + x
+            + ": "
+            + derive_ty(f.ty, aliases)
+            + " = "
+            + read
+            + ";\n"
+            + derive_checks(f.ty, x, "\"" + sd.name + "\"", aliases, 0, "        ");
+        args.push(x);
+        k = k + 1;
+    }
+    let built = if sd.kind == "unit" {
+        sd.name
+    } else {
+        sd.name + "(" + args.join(", ") + ")"
+    };
+    h
+        + " {\n    fn from_value(v: &Value) -> Result<Self, SerdeError> {\n"
+        + body
+        + "        Ok("
+        + built
+        + ")\n    }\n}\n"
+}
+
 fn derive_serde_enum(ed: AstEnumDecl, tr: String, aliases: Vec<AstTypeAlias>) -> String {
     let h = derive_header(tr, ed.name, ed.generics);
     if tr == "Serialize" {
@@ -555,7 +661,25 @@ fn derive_serde_enum(ed: AstEnumDecl, tr: String, aliases: Vec<AstTypeAlias>) ->
             let tag = "\"" + v.name + "\"";
             let n = v.fields.len();
             let mut r = "Value::Str(" + tag + ")";
-            if n == 1 {
+            if v.named {
+                // `{"V": {"a": x, "b": y}}`
+                let mut pushes = "";
+                let mut k = 0;
+                for name in v.names {
+                    pushes = pushes
+                        + "                fs.push((\""
+                        + name
+                        + "\", a"
+                        + k.to_string()
+                        + ".to_value()));\n";
+                    k = k + 1;
+                }
+                r = "{\n                let mut fs = Vec::new();\n"
+                    + pushes
+                    + "                Value::tagged("
+                    + tag
+                    + ", Value::Map(fs))\n            }";
+            } else if n == 1 {
                 r = "Value::tagged(" + tag + ", a0.to_value())";
             } else if n > 1 {
                 let mut pushes = "";
@@ -584,16 +708,26 @@ fn derive_serde_enum(ed: AstEnumDecl, tr: String, aliases: Vec<AstTypeAlias>) ->
     for v in ed.variants {
         let n = v.fields.len();
         let mut inner = "";
+        if v.named {
+            inner = "            p.expect_map(\"" + ed.name + "::" + v.name + "\")?;\n";
+        }
         let mut args = Vec::new();
         for k in 0..n {
             let x = "a" + k.to_string();
             let t = v.fields.get(k).unwrap_or(
                 AstType::Unit(AstUnitType { id: 0, pos: AstPos { file: "", line: 0, col: 0 } }),
             );
-            let read = if n == 1 {
+            let read = if v.named {
+                "p.field(\"" + v.names.get(k).unwrap_or("") + "\")?"
+            } else if n == 1 {
                 "p.decode_in(\"" + v.name + "\")?"
             } else {
                 "p.element(\"" + v.name + "\", " + k.to_string() + ", " + n.to_string() + ")?"
+            };
+            let path = if v.named {
+                "\"" + v.name + "." + v.names.get(k).unwrap_or("") + "\""
+            } else {
+                "\"" + v.name + "\""
             };
             inner = inner
                 + "            let "
@@ -603,10 +737,12 @@ fn derive_serde_enum(ed: AstEnumDecl, tr: String, aliases: Vec<AstTypeAlias>) ->
                 + " = "
                 + read
                 + ";\n"
-                + derive_checks(t, x, "\"" + v.name + "\"", aliases, 0, "            ");
+                + derive_checks(t, x, path, aliases, 0, "            ");
             args.push(x);
         }
-        let built = if n == 0 {
+        let built = if v.named {
+            derive_pat(ed.name, v, "a")
+        } else if n == 0 {
             ed.name + "::" + v.name
         } else {
             ed.name + "::" + v.name + "(" + args.join(", ") + ")"

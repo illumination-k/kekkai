@@ -5,7 +5,7 @@
 ## プログラムの構成
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
-- トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
+- トップレベルは `struct`・`enum`・`trait`・`impl`・`fn`・`type`・`const` のみ。グローバル変数はない（＝暗黙の権限がない）。`const` は純粋な値で、使うたびに評価される（下記「定数」）。
 - どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`Vec`／`Int`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
@@ -25,7 +25,8 @@
 | `Labeled<L, T>` | ラベル付きの値（個人情報は `Labeled<PII, T>`）。文字列にできない（下記） |
 | `Can<A, r>` | 資源 `r`（変数）への操作 `A` の権限（下記） |
 | `struct S<T> { f: T, mut g: T }` | フィールドは既定で不変、`mut` を付けたものだけ代入できる（参照型） |
-| `enum E<T> { A, B(T, U) }` | 再帰的に定義してよい |
+| `struct S<T>(T, mut U);`, `struct S;` | タプル構造体（フィールドは `s.0`）とユニット構造体（下記「構造体と列挙型の形」） |
+| `enum E<T> { A, B(T, U), C { x: T, y: U } }` | 再帰的に定義してよい。`C { .. }` は構造体のようなバリアント |
 | `fn(A, B) -> R` | 関数・クロージャの値（純粋） |
 | `Request`, `Response`, `TxError`, `NetError`, `IoError` | ホストが提供する不透明なデータ |
 | `&Log`, `&Net`, `&Db`, `&Clock`, `&Random`, `&Fs`, `Tx`, `&Tx` | capability（下記） |
@@ -59,6 +60,62 @@ fn largest<T: Ord>(v: Vec<T>, d: T) -> T {
 - 関数・struct・enum・`impl` が型パラメータを取れる。型引数は推論され、`f::<Int>(x)`、`Vec::<Int>::new()` のように明示もできる。
 - `impl` ブロックがメソッドを定義する。レシーバは `self`・`mut self`・`&self`（読み取り専用）・`&mut self`（書き換える）。`Self` は `impl` の対象の型。`impl Pair<Int, Int>` のように特定の型引数だけに定義してもよい。
 - 生成されるコードは型引数ごとに具体化される（単相化）。
+
+## 定数
+
+```kek
+const LIMIT: Int = 10;
+const PRIMES: Vec<Int> = primes_below(LIMIT);
+
+impl Point {
+    const ORIGIN: Point = Point { x: 0, y: 0 };
+
+    fn dist(&self) -> Int { (self.x - Self::ORIGIN.x).abs() + (self.y - Point::ORIGIN.y).abs() }
+}
+
+let m = Int::MAX;   // core の関連定数（`Int::MIN` も）
+```
+
+- `const NAME: T = e;` をトップレベルに、関連定数を固有の `impl` ブロックに書ける（`Type::NAME`、`impl` の中では `Self::NAME`）。trait の関連定数と trait の実装の中の定数はまだない。
+- 定数は引数のない純粋な関数として扱われ、**使うたびに評価される**（`Vec` の定数は使うたびに新しい値）。初期化式は capability を使えない（関数の引数がないので capability の変数が見えない：`const NOW: Int = clock.now_ms();` は ``cannot find value `clock` in this scope``）。初期化式から関数や他の定数を呼んでよい。
+- 名前空間は関数と同じで、同じ名前の関数や定数はエラー。変数・引数・パターンの束縛に定数の名前は使えない（使う場所の名前はいつも定数を指す）。
+- 整数リテラル（`-3` も）の値の定数はパターンに書ける（`match x { LIMIT => .. }` はその値と比べる）。ほかの定数はパターンにできない。
+- 篩型の検査器は整数リテラルの値の定数を値として知っている（関数本体でも、`type Small = Int where self < LIMIT` のような述語の中でも）。
+- `kek caps` は定数を `const NAME: T` と表示し、定義のハッシュ（`kek hash` など）では使った定数が依存になる。
+
+## 構造体と列挙型の形
+
+```kek
+#[derive(PartialEq, Clone, Hash, Serialize, Deserialize)]
+struct Meters(Int);            // タプル構造体
+struct Pair<A, B>(A, mut B);   // `mut` を付けたフィールドだけ代入できる
+struct Marker;                 // ユニット構造体
+
+enum Shape {
+    Rect { w: Int, h: Int },   // 構造体のようなバリアント
+    Dot,
+    Line(Int, Int),
+}
+
+let m = Meters(3);
+let x = m.0 + Pair(1, 2).1;
+let Meters(n) = m;
+let k = Marker;
+let r = Shape::Rect { h: 2, w: 1 };          // フィールドの順は自由。評価は書いた順
+match r {
+    Shape::Rect { w: 0, .. } => "flat",
+    Shape::Rect { w, h: height } => ...,
+    _ => ...,
+}
+let Point { x, mut y } = p;                   // 構造体のパターン（let・match・if let・while let・for）
+```
+
+- タプル構造体 `struct S(A, B);` のフィールドは `0`・`1`… という名前で、`s.0` で読み、`S(a, b)` で作り、`S(p, q)` でパターンにする。数が合わないとエラー。`impl` の中では `Self(a, b)` とも書ける。フィールドは既定で不変で、`struct S(mut Int);` のように型の前に `mut` を付けたものだけ `s.0 = e` で代入できる。
+- ユニット構造体 `struct S;` はフィールドのない構造体で、値もパターンも `S`（`S {}` とも書ける）。
+- 構造体のようなバリアント `V { a: A, b: B }` は `E::V { a: x, b: y }` で作る（すべてのフィールドが必要。`E::V { a, b }` の省略形も可）。順番どおりに書かなくてもよく、値は書いた順に評価される。位置で書くこと（`E::V(x, y)`）はできない。
+- 構造体のパターン `S { a, b: p, mut c, .. }`・`E::V { a, .. }`：`a` は `a: a` の省略形、`..` は残りのフィールドを無視する。`..` がないときはすべてのフィールドを書く（書かないと ``pattern `S` does not mention field(s) `b` ``）。ない名前のフィールドはエラー。入れ子にでき、`match`・`if let`・`while let`・`let`・`for` のどれにも使える。網羅性の検査は構造体をひとつのコンストラクタとして扱う（``missing `Point { .. }` ``）。
+- `#[derive(...)]` はどの形にも使える。シリアライズは serde と同じで、ユニット構造体は `null`、フィールドが 1 つのタプル構造体（newtype）はそのフィールドの値、2 つ以上は配列、構造体のようなバリアントは `{"V": {"a": x, "b": y}}`（[serde.md](serde.md)）。`kek test` のプロパティテストはどの形も生成し、Rust の Debug と同じ形（`Meters(3)`、`Rect { w: 1, h: 2 }`）で表示する。
+- 実装：これらはコンパイラの中で既存の形に書き換えられる（`compiler/desugar.kek`）。タプル構造体はフィールド `0`・`1` の構造体、構造体のようなバリアントは位置のバリアント、定数は引数のない関数になる。タプル構造体の名前を関数の値として渡すこと（`v.iter().map(Meters)`）はまだできない。
 
 ## trait
 
@@ -386,7 +443,7 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 - `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
 - 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
-- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
+- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、整数の定数、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、構造体 `S { a, b: p, .. }`・`E::V { a, .. }`、タプル構造体 `S(p, q)`、ユニット構造体 `S`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
   - or パターンはネストでき（`Some(1 | 2)`）、`match` の腕・`if let`・`while let` の先頭には `|` を書いてもよい。どの選択肢も同じ名前を同じ型・同じ可変性で束縛すること。網羅性検査は選択肢ごとに展開して数える
   - 範囲は `Int` だけで、`lo > hi`（`lo..hi` では `lo >= hi`）はエラー。`Int` は範囲を並べても網羅とみなさない（`_` が要る）
   - `x @ p` は p に一致した値全体を x に束縛する。p が or パターンなら括弧が要る（`x @ (A | B)`）

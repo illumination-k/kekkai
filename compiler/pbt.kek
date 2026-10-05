@@ -353,6 +353,14 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
             zero = pbt_struct(st.name, names, zs);
             show = if ws.len() == 0 {
                 json_quote(st.name)
+            } else if names.get(0).unwrap_or("") == "0" {
+                let mut ts2 = Vec::new();
+                let mut k = 0;
+                for a in ids {
+                    ts2.push("__kw_" + a + "(__x." + k.to_string() + ")");
+                    k = k + 1;
+                }
+                json_quote(st.name + "(") + " + " + ts2.join(" + \", \" + ") + " + \")\""
             } else {
                 json_quote(st.name + " { ") + " + " + pbt_join_shows(ws) + " + \" }\""
             };
@@ -394,21 +402,36 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                     zargs.push("__kz_" + a + "()");
                     i = i + 1;
                 }
-                let pat = pbt_call(ctor, binds);
+                let pat = pbt_vcall(ctor, v.names, binds);
                 let base = mask.shr(vi).bit_and(1) == 1;
                 if vi + 1 < nv {
                     gs = gs
                         + "    if __k == "
                         + vi.to_string()
                         + " {\n        return "
-                        + pbt_call(ctor, gargs)
+                        + pbt_vcall(ctor, v.names, gargs)
                         + ";\n    }\n";
                 } else {
-                    gs = gs + "    " + pbt_call(ctor, gargs) + "\n";
+                    gs = gs + "    " + pbt_vcall(ctor, v.names, gargs) + "\n";
                 }
-                cs = cs + "        " + pat + " => " + pbt_call(ctor, cargs) + ",\n";
+                cs = cs + "        " + pat + " => " + pbt_vcall(ctor, v.names, cargs) + ",\n";
                 if wargs.len() == 0 {
                     ws = ws + "        " + pat + " => " + json_quote(v.name) + ",\n";
+                } else if v.names.len() > 0 {
+                    let mut nw = Vec::new();
+                    let mut k = 0;
+                    for w in wargs {
+                        nw.push(v.names.get(k).unwrap_or("") + ": \" + " + w);
+                        k = k + 1;
+                    }
+                    ws = ws
+                        + "        "
+                        + pat
+                        + " => "
+                        + json_quote(v.name + " { ")
+                        + " + "
+                        + pbt_join_shows(nw)
+                        + " + \" }\",\n";
                 } else {
                     ws = ws
                         + "        "
@@ -460,13 +483,13 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                         + "(__f"
                         + fi.to_string()
                         + ") {\n                __out.push("
-                        + pbt_call(ctor, parts)
+                        + pbt_vcall(ctor, v.names, parts)
                         + ");\n            }\n";
                     fi = fi + 1;
                 }
                 ss = ss + "        " + pat + " => {\n" + body + "        }\n";
                 if base {
-                    let z = pbt_call(ctor, zargs);
+                    let z = pbt_vcall(ctor, v.names, zargs);
                     if zeros.len() == 0 {
                         zero = z;
                     }
@@ -508,6 +531,10 @@ fn pbt_struct(name: String, fields: Vec<String>, vals: Vec<String>) -> String {
     if fields.len() == 0 {
         return name + " {}";
     }
+    if fields.get(0).unwrap_or("") == "0" {
+        // a tuple struct
+        return name + "(" + vals.join(", ") + ")";
+    }
     let mut parts = Vec::new();
     let mut i = 0;
     for f in fields {
@@ -522,6 +549,15 @@ fn pbt_call(ctor: String, args: Vec<String>) -> String {
         return ctor;
     }
     ctor + "(" + args.join(", ") + ")"
+}
+
+// pbt_vcall is the construction (or pattern) of a variant: positional, or
+// with the field names of a struct-like variant.
+fn pbt_vcall(ctor: String, names: Vec<String>, args: Vec<String>) -> String {
+    if names.len() == 0 {
+        return pbt_call(ctor, args);
+    }
+    pbt_struct(ctor, names, args)
 }
 
 // pbt_join_shows joins `name: " + shown` parts of a struct rendering.

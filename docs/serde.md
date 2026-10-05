@@ -47,6 +47,7 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 | `HashMap<String, V>` | `Map` |
 | `Value` | そのまま |
 | `Labeled<L, T>` | `Deserialize` のみ（`T` として読んでラベルを付ける） |
+| `Timestamp`・`Date`・`Duration` | `Str`（RFC 3339、`YYYY-MM-DD`、`"1h30m"`。[time.md](time.md)） |
 | derive した struct | フィールドの `Map`（フィールドの順）。ないフィールドは `Null` として読む（`Option` なら `None`、それ以外は `missing field`） |
 | derive した enum | 外部タグ：フィールドなしは `"V"`、1つは `{"V": x}`、2つ以上は `{"V": [x, y]}` |
 
@@ -64,8 +65,8 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 
 | 関数 | 内容 |
 | --- | --- |
-| `Toml::parse(s) -> Result<Value, SerdeError>` | TOML 1.0：テーブル、テーブルの配列、ドット付きのキー、インラインテーブル、4種の文字列、16・8・2 進数と `_`、`inf`・`nan`。日時（4種）は書かれたとおりの `Str`。テーブルの再定義、重複したキー、閉じたインラインテーブルの拡張はエラー |
-| `Toml::render(&v) -> Result<String, SerdeError>` | 文書は `Map` であること。各テーブルは普通のキーを先に、子のテーブルとテーブルの配列（要素がすべて `Map` の空でない `Seq`）を後に書く。子のテーブルしかないテーブルのヘッダは省く。`Null` のキーは書かない（TOML に null はない）。配列の中の `Null` はエラー |
+| `Toml::parse(s) -> Result<Value, SerdeError>` | TOML 1.0：テーブル、テーブルの配列、ドット付きのキー、インラインテーブル、4種の文字列、16・8・2 進数と `_`、`inf`・`nan`。日時（4種）は書かれたとおりの `Str`（存在する日付・時刻であること）。テーブルの再定義、重複したキー、閉じたインラインテーブルの拡張はエラー |
+| `Toml::render(&v) -> Result<String, SerdeError>` | 文書は `Map` であること。各テーブルは普通のキーを先に、子のテーブルとテーブルの配列（要素がすべて `Map` の空でない `Seq`）を後に書く。子のテーブルしかないテーブルのヘッダは省く。日時の形の文字列（10 文字以上）は引用符なしの TOML の日時として書く（読むと `Str` に戻るので値は変わらない）。`Null` のキーは書かない（TOML に null はない）。配列の中の `Null` はエラー |
 | `Toml::from_str::<T>(s)`・`to_string(&x)` | 型との変換 |
 
 コンパイラの `kekkai.toml` もこれで読む（`compiler/tool_common.kek` の `tool_toml_parse`）。
@@ -74,5 +75,4 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 
 - フィールドの属性（`#[serde(rename = "...")]`、`default`、`skip`）。構文がフィールドの属性を持たないため
 - YAML
-- 日時の型（今は `Str`）
 - `Float` の数値としての扱い

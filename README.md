@@ -10,6 +10,7 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 - **冪等なハンドラ**：`#[handler(idempotent)]` のハンドラと、そこから呼ばれる関数は、冪等でない操作（`net.post`、`tx.outbox`、ファイルへの書き込み、乱数）を使えない
 - **可変性の追跡**：Rust と同じく、書き換えには `let mut`・`mut` 引数・`&mut T`・`&mut self` が要る。`&T`・`&self` からたどった値は深く読み取り専用で、保存・所有型での返却もできない（`clone()` で複製する）。足りない `mut` は `kek fix` が足す（[docs/mutability.md](docs/mutability.md)）
 - **シリアライズ**：`#[derive(Serialize, Deserialize)]` と JSON・TOML（core ライブラリ）。ラベル付きの値は読めるが書き出せず、篩型の別名は読み込み時に検査する（[docs/serde.md](docs/serde.md)）
+- **時刻**：`Timestamp`・`Duration`・`Date`（core ライブラリ、RFC 3339）。時計を読むのは `Timestamp::now(&Clock)` だけ（[docs/time.md](docs/time.md)）
 - **コア計算の健全性を Lean で証明**（`lean/`）
 
 設計は [docs/design.md](docs/design.md) を参照してください。

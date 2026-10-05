@@ -31,7 +31,7 @@ fn signed_in(db: &Db, random: &Random, clock: &Clock, status: Int, u: &User) -> 
     match start_session(db, random, clock, u) {
         Ok(token) => reply(status, &UserView { username: u.name }).with_header(
             "set-cookie",
-            session_cookie(token, session_ttl_ms() / 1000),
+            session_cookie(token, session_ttl()),
         ),
         Err(e) => store_error(e),
     }
@@ -89,7 +89,7 @@ fn account(req: Request, db: &Db, log: &Log, clock: &Clock, random: &Random) -> 
             },
             None => {}
         }
-        return Response::no_content().with_header("set-cookie", session_cookie("", 0));
+        return Response::no_content().with_header("set-cookie", session_cookie("", Duration::ms(0)));
     }
     json_error(404, "not found")
 }

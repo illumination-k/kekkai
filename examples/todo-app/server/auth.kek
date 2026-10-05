@@ -1,7 +1,7 @@
 // Accounts and sessions.
 //
 //   user:<name>        {"salt", "hash"}
-//   session:<token>    {"user", "expires"} (ms)
+//   session:<token>    {"user", "expires"} (RFC 3339)
 //
 // The password is read from the request already labeled
 // (Labeled<Secret, String> implements Deserialize but not Serialize), so
@@ -36,7 +36,7 @@ struct UserRecord {
 #[derive(Serialize, Deserialize)]
 struct Session {
     user: String,
-    expires: Int,
+    expires: Timestamp,
 }
 
 enum AuthError {
@@ -46,8 +46,8 @@ enum AuthError {
     Store(TxError),
 }
 
-fn session_ttl_ms() -> Int {
-    7 * 24 * 60 * 60 * 1000
+fn session_ttl() -> Duration {
+    Duration::days(7)
 }
 
 fn user_key(name: String) -> String {
@@ -166,7 +166,7 @@ fn login(db: &Db, name: String, password: &Labeled<Secret, String>) -> Result<Us
 fn start_session(db: &Db, random: &Random, clock: &Clock, u: &User) -> Result<String, TxError> {
     let token = random_hex(random, 32);
     let value = Json::to_string(
-        &Session { user: u.name, expires: clock.now_ms() + session_ttl_ms() },
+        &Session { user: u.name, expires: Timestamp::now(clock).add(session_ttl()) },
     );
     db.transaction(|tx| {
         tx.put(session_key(token), value)?;
@@ -193,14 +193,21 @@ fn current_user(req: Request, db: &Db, clock: &Clock) -> Option<User> {
             return None;
         }
     };
-    if s.expires <= clock.now_ms() {
+    if !session_valid(&s, &Timestamp::now(clock)) {
         return None;
     }
     Some(User { name: s.user })
 }
 
-fn session_cookie(token: String, max_age_s: Int) -> String {
-    "sid=" + token + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=" + max_age_s.to_string()
+fn session_valid(s: &Session, now: &Timestamp) -> Bool {
+    s.expires.is_after(now)
+}
+
+fn session_cookie(token: String, max_age: Duration) -> String {
+    "sid="
+        + token
+        + "; Path=/; HttpOnly; SameSite=Strict; Max-Age="
+        + max_age.as_seconds().to_string()
 }
 
 #[test]
@@ -253,4 +260,25 @@ fn credentials_are_read_checked_and_labeled() -> Bool {
         Err(e) => e.message(),
     };
     message == "username: the value is not a valid `Username`" && ok.is_ok()
+}
+
+#[test]
+fn sessions_expire(clock: &Clock) -> Result<(), String> {
+    let now = Timestamp::now(clock);
+    let s = Session { user: "alice", expires: now.add(session_ttl()) };
+    let stored: Session = match Json::from_str(Json::to_string(&s)) {
+        Ok(x) => x,
+        Err(e) => {
+            return Err(e.message());
+        }
+    };
+    if stored.expires.to_rfc3339() != "2026-01-08T00:00:00Z" {
+        return Err("expires at " + stored.expires.to_rfc3339());
+    }
+    let week_later = now.add(Duration::days(7));
+    if session_valid(&stored, &now.add(Duration::hours(1))) && !session_valid(&stored, &week_later) {
+        Ok(())
+    } else {
+        Err("wrong validity")
+    }
 }

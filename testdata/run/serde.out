@@ -34,9 +34,9 @@ err password: expected a string, found an integer
 title = "TOML éx"
 nums = [1, 31, 15, 5, 1000, -3, 4]
 floats = [1.5, -2e3, 6.626e-34, inf, nan]
-when = "1979-05-27T07:32:00-08:00"
-day = "1979-05-27"
-local = "1979-05-27 07:32:00"
+when = 1979-05-27T07:32:00-08:00
+day = 1979-05-27
+local = 1979-05-27 07:32:00
 lit = "C:\\path"
 ml = "line1\nline2 cont"
 mll = "raw \\n"

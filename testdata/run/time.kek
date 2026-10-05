@@ -1,0 +1,114 @@
+// exit: 0
+// Time (lib/core/time.kek): timestamps, durations, dates, RFC 3339 and
+// their serialization.
+#[derive(Serialize, Deserialize)]
+struct Lease {
+    holder: String,
+    since: Timestamp,
+    ttl: Duration,
+    day: Date,
+}
+
+fn show_ts(log: &Log, s: String) {
+    match Timestamp::parse(s) {
+        Ok(t) => log.info(s + " -> " + t.unix_ms().to_string() + " " + t.to_rfc3339()),
+        Err(e) => log.info(s + " -> err " + e.message()),
+    }
+}
+
+fn show_dur(log: &Log, s: String) {
+    match Duration::parse(s) {
+        Ok(d) => log.info(s + " -> " + d.as_ms().to_string() + "ms " + d.to_string()),
+        Err(e) => log.info(s + " -> err " + e.message()),
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let t = Timestamp::from_unix_ms(1791192600123);
+    log.info(t.to_rfc3339());
+    log.info(t.at_offset(540).to_rfc3339());
+    log.info(t.at_offset(-210).to_rfc3339());
+    log.info(Timestamp::from_unix_ms(-1).to_rfc3339());
+    log.info(Timestamp::from_unix_seconds(0).date().to_string());
+    let later = t.add(Duration::days(7)).add(Duration::minutes(-30));
+    log.info(
+        later.to_rfc3339()
+            + " "
+            + later.since(&t).to_string()
+            + " "
+            + later.is_after(&t).to_string(),
+    );
+    show_ts(log, "2026-10-05T18:30:00+09:00");
+    show_ts(log, "2026-10-05 09:30:00.5z");
+    show_ts(log, "1979-05-27T00:32:00.999999-07:00");
+    show_ts(log, "2026-02-29T00:00:00Z");
+    show_ts(log, "2026-10-05T24:00:00Z");
+    show_ts(log, "2026-10-05T09:30:00");
+    show_dur(log, "1h30m");
+    show_dur(log, "-500ms");
+    show_dur(log, "7d");
+    show_dur(log, "90s");
+    show_dur(log, "1x");
+    show_dur(log, "");
+    log.info(
+        Duration::ms(93784005).to_string()
+            + " "
+            + Duration::seconds(-90).to_string()
+            + " "
+            + Duration::ms(0).to_string(),
+    );
+    log.info(Duration::ms(-1500).as_seconds().to_string());
+    match Date::parse("2024-02-29") {
+        Ok(d) => {
+            log.info(
+                d.to_string()
+                    + " leap "
+                    + d.is_leap_year().to_string()
+                    + " weekday "
+                    + d.weekday().number().to_string(),
+            );
+            log.info(d.add_days(366).to_string() + " " + d.days_until(&d.add_days(-60)).to_string());
+            log.info(d.start_of_day().to_rfc3339());
+        }
+        Err(e) => log.info("err " + e.message()),
+    }
+    log.info(
+        Date::new(2023, 2, 29).is_some().to_string()
+            + " "
+            + Date::new(2000, 2, 29).is_some().to_string()
+            + " "
+            + Date::new(1900, 2, 29).is_some().to_string(),
+    );
+    match Date::parse("2026-13-01") {
+        Ok(_) => log.info("??"),
+        Err(e) => log.info("err " + e.message()),
+    }
+    let lease = Lease { holder: "alice", since: t, ttl: Duration::hours(36), day: t.date() };
+    log.info(Json::to_string(&lease));
+    match Toml::to_string(&lease) {
+        Ok(s) => log.info(s.trim()),
+        Err(e) => log.info("err " + e.message()),
+    }
+    match Toml::from_str::<Lease>(
+        "holder = \"bob\"\nsince = 2026-10-05T18:30:00+09:00\nttl = 3600000\nday = 2026-10-05\n",
+    ) {
+        Ok(l) => log.info(
+            l.holder
+                + " "
+                + l.since.to_rfc3339()
+                + " "
+                + l.ttl.to_string()
+                + " "
+                + l.day.to_string(),
+        ),
+        Err(e) => log.info("err " + e.message()),
+    }
+    match Json::from_str::<Lease>(
+        "{\"holder\": \"c\", \"since\": \"yesterday\", \"ttl\": \"1h\", \"day\": \"2026-10-05\"}",
+    ) {
+        Ok(_) => log.info("??"),
+        Err(e) => log.info("err " + e.message()),
+    }
+    0
+}

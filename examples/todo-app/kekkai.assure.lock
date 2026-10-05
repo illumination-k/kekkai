@@ -65,7 +65,7 @@
       "waivers": []
     },
     "<Session as Deserialize>::from_value": {
-      "hash": "5e83eb37c841240354d670a435b83d2c",
+      "hash": "ce5dacad6db57ac583b1f27c0764682e",
       "file": "server/auth.kek",
       "entry": "",
       "async": false,
@@ -221,7 +221,7 @@
       "waivers": []
     },
     "account": {
-      "hash": "c88087f47f503e3ecf51e67266d95156",
+      "hash": "8c54c62e5afde1c63812b0f084fadb55",
       "file": "server/main.kek",
       "entry": "",
       "async": true,
@@ -388,6 +388,10 @@
         "tested": {
           "value": true,
           "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": false,
+          "evidence": "smt"
         }
       },
       "assumptions": [],
@@ -408,7 +412,7 @@
       "waivers": []
     },
     "current_user": {
-      "hash": "21f19bfb368bea42903b6f8314a13438",
+      "hash": "76b5bca1f7e7f6c569f3db8000d2be83",
       "file": "server/auth.kek",
       "entry": "",
       "async": true,
@@ -518,6 +522,10 @@
         "tested": {
           "value": true,
           "evidence": "test"
+        },
+        "refine.no_overflow": {
+          "value": false,
+          "evidence": "smt"
         }
       },
       "assumptions": [],
@@ -840,7 +848,7 @@
       "waivers": []
     },
     "session_cookie": {
-      "hash": "67a2233cce5cba351eef6f7b7e736cf6",
+      "hash": "f50f2e12a28c386c4c15ba5be23f6cc0",
       "file": "server/auth.kek",
       "entry": "",
       "async": false,
@@ -875,8 +883,8 @@
       "assumptions": [],
       "waivers": []
     },
-    "session_ttl_ms": {
-      "hash": "bfef30705d3e61c8f819f5e22701abb6",
+    "session_ttl": {
+      "hash": "c27adad6ccbfaffec31d2263b9dc4389",
       "file": "server/auth.kek",
       "entry": "",
       "async": false,
@@ -886,19 +894,53 @@
           "evidence": "type"
         },
         "tested": {
-          "value": false,
-          "evidence": "test"
-        },
-        "refine.no_overflow": {
           "value": true,
-          "evidence": "smt"
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "session_valid": {
+      "hash": "910d41306ea6f4588816044d3bd7644d",
+      "file": "server/auth.kek",
+      "entry": "",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [],
+          "evidence": "type"
+        },
+        "tested": {
+          "value": true,
+          "evidence": "test"
+        }
+      },
+      "assumptions": [],
+      "waivers": []
+    },
+    "sessions_expire": {
+      "hash": "929eb570c657756ea1bcf27ae663762c",
+      "file": "server/auth.kek",
+      "entry": "test",
+      "async": false,
+      "guarantees": {
+        "effects": {
+          "value": [
+            "Clock"
+          ],
+          "evidence": "type"
+        },
+        "idempotent": {
+          "value": true,
+          "evidence": "type"
         }
       },
       "assumptions": [],
       "waivers": []
     },
     "signed_in": {
-      "hash": "a75df983f5039f7e57a39d049a4dde86",
+      "hash": "f56bdd2a461d8e108c30be6bb7c9e599",
       "file": "server/main.kek",
       "entry": "",
       "async": true,
@@ -914,10 +956,6 @@
         "tested": {
           "value": false,
           "evidence": "test"
-        },
-        "refine.no_div_zero": {
-          "value": true,
-          "evidence": "smt"
         }
       },
       "assumptions": [],
@@ -974,7 +1012,7 @@
       "waivers": []
     },
     "start_session": {
-      "hash": "b00ceee38a6653a612161632740a9647",
+      "hash": "7987f863de8478db5b682cc7d9ad223f",
       "file": "server/auth.kek",
       "entry": "",
       "async": true,

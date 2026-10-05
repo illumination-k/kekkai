@@ -800,6 +800,10 @@ fn __toml_is_time(s: String) -> Bool {
         && __toml_digits(s, 6, 8)) {
         return false;
     }
+    // TOML allows a leap second (60); Timestamp does not
+    if __time_num(s, 0, 2) > 23 || __time_num(s, 3, 5) > 59 || __time_num(s, 6, 8) > 60 {
+        return false;
+    }
     if s.len() == 8 {
         return true;
     }
@@ -811,7 +815,7 @@ fn __toml_datetime_ok(t: String) -> Bool {
     if __toml_is_time(t) {
         return true;
     }
-    if !__toml_is_date(t.slice(0, 10)) {
+    if !__toml_is_date(t.slice(0, 10)) || Date::parse(t.slice(0, 10)).is_err() {
         return false;
     }
     if t.len() == 10 {
@@ -1155,7 +1159,15 @@ fn __toml_inline(mut out: Vec<String>, v: &Value) -> Result<(), SerdeError> {
         Value::Bool(b) => out.push(if b { "true" } else { "false" }),
         Value::Int(n) => out.push(n.to_string()),
         Value::Float(f) => out.push(f),
-        Value::Str(s) => out.push(__serde_quote(s)),
+        Value::Str(s) => {
+            // dates and times read as strings, so they are written back
+            // as TOML dates and times (Timestamp, Date)
+            if __toml_datetime_ok(s) && s.len() >= 10 {
+                out.push(s);
+            } else {
+                out.push(__serde_quote(s));
+            }
+        }
         Value::Seq(xs) => {
             out.push("[");
             let mut i = 0;

@@ -1,0 +1,32 @@
+2026-10-05T09:30:00.123Z
+2026-10-05T18:30:00.123+09:00
+2026-10-05T06:00:00.123-03:30
+1969-12-31T23:59:59.999Z
+1970-01-01
+2026-10-12T09:00:00.123Z 6d23h30m true
+2026-10-05T18:30:00+09:00 -> 1791192600000 2026-10-05T09:30:00Z
+2026-10-05 09:30:00.5z -> 1791192600500 2026-10-05T09:30:00.500Z
+1979-05-27T00:32:00.999999-07:00 -> 296638320999 1979-05-27T07:32:00.999Z
+2026-02-29T00:00:00Z -> err no such date
+2026-10-05T24:00:00Z -> err no such time of day
+2026-10-05T09:30:00 -> err expected a date-time such as 2026-10-05T09:30:00Z
+1h30m -> 5400000ms 1h30m
+-500ms -> -500ms -500ms
+7d -> 604800000ms 7d
+90s -> 90000ms 1m30s
+1x -> err expected a duration such as 1h30m
+ -> err expected a duration such as 1h30m
+1d2h3m4s5ms -1m30s 0s
+-2
+2024-02-29 leap true weekday 4
+2025-03-01 -60
+2024-02-29T00:00:00Z
+false true false
+err no such date
+{"holder":"alice","since":"2026-10-05T09:30:00.123Z","ttl":"1d12h","day":"2026-10-05"}
+holder = "alice"
+since = 2026-10-05T09:30:00.123Z
+ttl = "1d12h"
+day = 2026-10-05
+bob 2026-10-05T09:30:00Z 1h 2026-10-05
+err since: expected a date-time such as 2026-10-05T09:30:00Z

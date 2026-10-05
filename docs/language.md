@@ -6,7 +6,7 @@
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
 - トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
@@ -253,6 +253,17 @@ Json::to_string(&s)
 - `Labeled<L, T>` は読めるが書けない（`Deserialize` だけを実装する）。`Can` と capability はどちらも実装しない。
 - derive した `Deserialize` は篩型の別名の述語を調べる（`Option`・`Vec` の要素も）。
 - 詳細は [serde.md](serde.md)。
+
+## 時刻（`Timestamp`・`Duration`・`Date`）
+
+```kek
+let expires = Timestamp::now(clock).add(Duration::days(7));   // 時計を読むには &Clock
+expires.to_rfc3339()                                         // "2026-10-12T09:30:00Z"
+let d = Date::parse("2024-02-29")?;                          // 存在する日付だけ
+```
+
+- 計算は core の純粋な関数で、時計を読むのは `Timestamp::now(clock)` だけ。UTC と固定オフセットのみ（タイムゾーン名・夏時間はない）。
+- `Serialize`・`Deserialize` を持つ（RFC 3339、`YYYY-MM-DD`、`"1h30m"`）。詳細は [time.md](time.md)。
 
 ## 篩型（refinement types）
 

@@ -1,0 +1,26 @@
+// `kek mutate` on a program with modules (geo/ is the module `geo`): the
+// report names module items as paths (`geo::area`), and neither derived
+// implementations nor the dispatch of `dyn Shape` are mutated.
+
+use geo::{Rect, Shape};
+
+fn total(shapes: Vec<Box<dyn Shape>>) -> Int {
+    let mut t = 0;
+    for s in shapes {
+        t += s.area();
+    }
+    t
+}
+
+#[test]
+fn area_of_rect() -> Bool {
+    geo::area(2, 3) == 6 && Rect { w: 1, h: 4 } == Rect { w: 1, h: 4 }
+}
+
+#[test]
+fn total_of_two() -> Bool {
+    let mut v: Vec<Box<dyn Shape>> = Vec::new();
+    v.push(Box::new(Rect { w: 2, h: 3 }));
+    v.push(Box::new(Rect { w: 1, h: 1 }));
+    total(v) == 7
+}

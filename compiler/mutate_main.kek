@@ -191,11 +191,11 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
         let name = p.names.get(fd.id).unwrap_or(fd.name);
         if base != "" && base_hash.get(name).unwrap_or("") == p.hashes.get(fd.id).unwrap_or("") {
-            unchanged.push(name);
+            unchanged.push(ast_display_name(name));
             continue;
         }
         sel.insert(fd.id, true);
-        funcs.push(name);
+        funcs.push(ast_display_name(name));
     }
     let mut w = cov_new_walk("collect");
     w.info = Some(p.info);
@@ -287,7 +287,7 @@ fn mut_cand_json(c: MutCand) -> IrjVal {
     irjson_set(o, "file", IrjVal::Str(c.pos.file));
     irjson_set(o, "line", irjson_int(c.pos.line));
     irjson_set(o, "col", irjson_int(c.pos.col));
-    irjson_set(o, "func", IrjVal::Str(c.func));
+    irjson_set(o, "func", IrjVal::Str(ast_display_name(c.func)));
     irjson_set(o, "kind", IrjVal::Str(c.kind));
     irjson_set(o, "description", IrjVal::Str(c.desc));
     irjson_set(o, "original", IrjVal::Str(c.orig));

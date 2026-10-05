@@ -531,6 +531,7 @@ fn dh_expr(w: DhWalk, e: AstExpr) {
 fn dh_expr_node(w: DhWalk, e: AstExpr) {
     match e {
         AstExpr::IntLit(x) => dh_lit(w, x.pos, "lit:int=" + x.value.to_string()),
+        AstExpr::FloatLit(x) => dh_lit(w, x.pos, "lit:float=" + x.bits.to_string()),
         AstExpr::BoolLit(x) => dh_lit(w, x.pos, "lit:bool=" + x.value.to_string()),
         AstExpr::StrLit(x) => dh_lit(w, x.pos, "lit:str=" + x.value),
         AstExpr::UnitLit(_) => dh_emit(w, "()"),

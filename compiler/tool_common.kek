@@ -533,17 +533,10 @@ fn tool_value_json(v: Value) -> ToolJson {
         Value::Null => ToolJson::Null,
         Value::Bool(b) => ToolJson::Bool(b),
         Value::Int(n) => ToolJson::Num(n),
-        Value::Float(f) => {
-            let mut end = 0;
-            while end < f.len() {
-                let c = f.char_at(end).unwrap_or(0);
-                if !((c >= 48 && c <= 57) || ((c == 45 || c == 43) && end == 0)) {
-                    break;
-                }
-                end = end + 1;
-            }
-            ToolJson::Num(f.slice(0, end).replace("+", "").parse_int().unwrap_or(0))
-        }
+        // kekkai.toml has no float settings. (The payload is not read: it
+        // is a String in the bootstrap compiler's core library and a Float
+        // in the current one.)
+        Value::Float(_) => ToolJson::Null,
         Value::Str(s) => ToolJson::Str(s),
         Value::Seq(xs) => {
             let mut out = Vec::new();

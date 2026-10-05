@@ -16,7 +16,9 @@
 // Generation is driven by a seeded PRNG (splitmix64), so a seed always
 // gives the same program.
 //
-// Programs exercise arithmetic edge cases, control flow, early returns,
+// Programs exercise arithmetic edge cases (also Float: IEEE operations,
+// NaN, signed zeros, saturating conversions, the bit patterns and the
+// shortest round-trip text), control flow, early returns,
 // enums, Option, `?`, loops, string host operations, Vec/Map collections,
 // `for` loops with break/continue and mutable structs shared through
 // aliases. Function i may only call functions j < i, loops are bounded
@@ -369,7 +371,10 @@ fn int_expr(g: Gen, idx: Int, d: Int) -> String {
     if d <= 0 {
         return int_leaf(g);
     }
-    let k = intn(g, 22);
+    let k = intn(g, 24);
+    if k >= 22 {
+        return float_to_int(g, idx, d - 1);
+    }
     if k >= 14 {
         return coll_int_expr(g, idx, d, k - 14);
     }
@@ -443,6 +448,87 @@ fn int_expr(g: Gen, idx: Int, d: Int) -> String {
             let z = fresh(g, "z");
             "{ let " + z + " = " + int_expr(g, idx, d - 1) + "; " + z + " * 2 - " + z + " }"
         }
+    }
+}
+
+// ---- Float ----
+//
+// Float values reach the Int results through the bit pattern (NaN is
+// canonical), saturating conversions, comparisons and the shortest
+// round-trip text (Display / Debug / `{:.n}`, computed by the core
+// library on both sides).
+
+fn float_to_int(g: Gen, idx: Int, d: Int) -> String {
+    let x = float_expr(g, idx, d);
+    match intn(g, 9) {
+        0 => x + ".to_bits()",
+        1 => x + ".to_bits()",
+        2 => x + ".trunc_to_int()",
+        3 => x + ".round_to_int()",
+        4 => "(if "
+            + x
+            + " "
+            + pick(g, "<~<=~>~>=~==~!=")
+            + " "
+            + float_expr(g, idx, d)
+            + " { 1 } else { 0 })",
+        // (text of moderate values only: the exact algorithms take up to
+        // 150k reference steps for the extremes, and calls may loop)
+        5 => float_tame(g, idx) + ".to_string().len()",
+        6 => "format!(\"{:?}\", " + float_tame(g, idx) + ").len()",
+        7 => "format!(\"{:." + intn(g, 4).to_string() + "}\", " + float_tame(g, idx) + ").len()",
+        _ => "(match "
+            + float_tame(g, idx)
+            + ".to_string().parse_float() { Some(y) => y.to_bits(), None => -1 })",
+    }
+}
+
+// float_tame is a Float of moderate magnitude (or 0, NaN, ±inf).
+fn float_tame(g: Gen, idx: Int) -> String {
+    if intn(g, 2) == 0 {
+        return "(("
+            + int_leaf(g)
+            + " % 100000).to_float() / "
+            + pick(g, "8.0~3.0~10.0~0.0~-7.0")
+            + ")";
+    }
+    pick(g, "0.1~(-0.0)~1e15~1e16~1.5e-5~123.456~(1.0 / 3.0)~Float::NAN~Float::NEG_INFINITY~2.5")
+}
+
+fn float_leaf(g: Gen, idx: Int) -> String {
+    if intn(g, 2) == 0 {
+        return int_leaf(g) + ".to_float()";
+    }
+    pick(
+        g,
+        "0.0~(-0.0)~1.0~0.5~(-2.5)~0.1~1e300~(-1e-300)~3.0e-5~1e16~123.456~5e-324~Float::INFINITY~Float::NAN~Float::MAX~Float::EPSILON~1_000.25",
+    )
+}
+
+fn float_expr(g: Gen, idx: Int, d: Int) -> String {
+    if d <= 0 {
+        return float_leaf(g, idx);
+    }
+    match intn(g, 9) {
+        0 => float_leaf(g, idx),
+        1 => paren(float_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~*"), float_expr(g, idx, d - 1)),
+        2 => paren(float_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~-~/"), float_expr(g, idx, d - 1)),
+        3 => "(-" + float_expr(g, idx, d - 1) + ")",
+        4 => float_expr(g, idx, d - 1)
+            + "."
+            + pick(g, "sqrt~floor~ceil~trunc~abs~round~signum~fract")
+            + "()",
+        5 => {
+            let a = float_expr(g, idx, d - 1);
+            a + "." + pick(g, "min~max~copysign~hypot") + "(" + float_expr(g, idx, d - 1) + ")"
+        }
+        6 => float_expr(g, idx, d - 1) + ".powi(" + intn(g, 7).to_string() + " - 3)",
+        7 => {
+            let c = bool_expr(g, idx, d - 1);
+            let t = float_expr(g, idx, d - 1);
+            "(if " + c + " { " + t + " } else { " + float_expr(g, idx, d - 1) + " })"
+        }
+        _ => "Float::from_int(" + int_expr(g, idx, d - 1) + ")",
     }
 }
 

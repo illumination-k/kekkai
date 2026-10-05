@@ -283,6 +283,7 @@ fn asr_w_exprs(w: AsrWalk, es: Vec<AstExpr>) {
 fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
     match e {
         AstExpr::IntLit(_) => {}
+        AstExpr::FloatLit(_) => {}
         AstExpr::BoolLit(_) => {}
         AstExpr::StrLit(_) => {}
         AstExpr::UnitLit(_) => {}

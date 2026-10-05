@@ -29,7 +29,7 @@ enum Value {
     Null,
     Bool(Bool),
     Int(Int),
-    Float(String),
+    Float(Float),
     Str(String),
     Seq(Vec<Value>),
     Map(Vec<(String, Value)>),
@@ -275,8 +275,10 @@ impl PartialEq for Value {
                 Value::Int(y) => x == y,
                 _ => false,
             },
+            // (NaN equals NaN here, so that Value's Eq is an equivalence:
+            // a document with `nan` equals itself after a round trip)
             Value::Float(x) => match other {
-                Value::Float(y) => x == y,
+                Value::Float(y) => x == y || (x.is_nan() && y.is_nan()),
                 _ => false,
             },
             Value::Str(x) => match other {
@@ -318,6 +320,23 @@ impl Deserialize for Int {
         match v {
             Value::Int(n) => Ok(n),
             _ => Err(v.mismatch("an integer")),
+        }
+    }
+}
+
+impl Serialize for Float {
+    fn to_value(&self) -> Value {
+        Value::Float(*self)
+    }
+}
+
+// A Float also reads an integer (JSON `1` is Value::Int).
+impl Deserialize for Float {
+    fn from_value(v: &Value) -> Result<Float, SerdeError> {
+        match v {
+            Value::Float(x) => Ok(x),
+            Value::Int(n) => Ok(n.to_float()),
+            _ => Err(v.mismatch("a float")),
         }
     }
 }

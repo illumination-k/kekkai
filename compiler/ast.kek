@@ -336,6 +336,7 @@ struct AstExprStmt {
 
 enum AstExpr {
     IntLit(AstIntLit),
+    FloatLit(AstFloatLit),
     BoolLit(AstBoolLit),
     StrLit(AstStringLit),
     UnitLit(AstUnitLit),
@@ -400,6 +401,16 @@ struct AstIntLit {
     id: Int,
     pos: AstPos,
     value: Int,
+}
+
+// A Float literal: text is the spelling as written (`1_000.5`, `2.5e-3`;
+// kept by the formatter), bits the IEEE 754 binary64 bit pattern of its
+// correctly rounded value.
+struct AstFloatLit {
+    id: Int,
+    pos: AstPos,
+    text: String,
+    bits: Int,
 }
 
 struct AstBoolLit {
@@ -617,6 +628,7 @@ fn ast_type_pos(t: AstType) -> AstPos {
 fn ast_expr_pos(e: AstExpr) -> AstPos {
     match e {
         AstExpr::IntLit(x) => x.pos,
+        AstExpr::FloatLit(x) => x.pos,
         AstExpr::BoolLit(x) => x.pos,
         AstExpr::StrLit(x) => x.pos,
         AstExpr::UnitLit(x) => x.pos,
@@ -643,6 +655,7 @@ fn ast_expr_pos(e: AstExpr) -> AstPos {
 fn ast_expr_id(e: AstExpr) -> Int {
     match e {
         AstExpr::IntLit(x) => x.id,
+        AstExpr::FloatLit(x) => x.id,
         AstExpr::BoolLit(x) => x.id,
         AstExpr::StrLit(x) => x.id,
         AstExpr::UnitLit(x) => x.id,

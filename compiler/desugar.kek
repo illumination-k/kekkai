@@ -562,6 +562,7 @@ fn desugar_unit_struct(cx: DsgCx, name: String) -> String {
 fn desugar_expr(cx: DsgCx, e0: AstExpr) -> AstExpr {
     match e0 {
         AstExpr::IntLit(_) => e0,
+        AstExpr::FloatLit(_) => e0,
         AstExpr::BoolLit(_) => e0,
         AstExpr::StrLit(_) => e0,
         AstExpr::UnitLit(_) => e0,

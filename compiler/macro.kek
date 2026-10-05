@@ -128,7 +128,7 @@ fn mac_text(p: ParseState, a: Int, b: Int) -> String {
         let k = t.kind;
         let text = if k == "STRING" {
             ast_quote(t.text)
-        } else if k == "IDENT" || k == "INT" {
+        } else if k == "IDENT" || k == "INT" || k == "FLOAT" {
             t.text
         } else {
             k
@@ -697,10 +697,17 @@ fn mac_piece(p: ParseState, pos: AstPos, v: AstExpr, sp: MacSpec) -> AstExpr {
         return mac_pad(p, pos, s, sp, 2);
     }
     if sp.prec >= 0 {
+        // Display::__fmt_precision: n fractional digits of a Float, the
+        // first n characters of a string
         let mut args = Vec::new();
         args.push(mac_ref(p, pos, v));
         args.push(mac_int(p, pos, sp.prec));
-        return mac_pad(p, pos, mac_call(p, pos, "__fmt_trunc", args), sp, 0);
+        if sp.width >= 0 && sp.align < 0 {
+            args.push(mac_int(p, pos, sp.width));
+            args.push(mac_str(p, pos, sp.fill));
+            return mac_call(p, pos, "__fmt_prec_auto", args);
+        }
+        return mac_pad(p, pos, mac_call(p, pos, "__fmt_prec", args), sp, 0);
     }
     if sp.width >= 0 && sp.align < 0 {
         // the default alignment depends on the type (numbers right)

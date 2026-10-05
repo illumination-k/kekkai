@@ -603,6 +603,7 @@ fn chk_new_binding(mut c: Chk, name: String, t: Ty, pos: AstPos) -> ChkBinding {
 
 fn chk_reserved(n: String) -> Bool {
     n == "Int"
+        || n == "Float"
         || n == "Bool"
         || n == "String"
         || n == "Result"
@@ -1550,7 +1551,7 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 chk_errorf(c, te.pos, "`Self` is only available in `impl` blocks");
                 return ty_invalid();
             }
-            if n == "Int" || n == "Bool" || n == "String" {
+            if n == "Int" || n == "Float" || n == "Bool" || n == "String" {
                 chk_type_args(c, te, 0);
                 return Ty::Prim(n);
             }
@@ -1662,7 +1663,8 @@ fn chk_expect(c: Chk, pos: AstPos, got: Ty, want: Ty, what: String) {
                 + "`"
                 + chk_pii_hint(got, want)
                 + chk_label_hint(got, want)
-                + chk_can_hint(got, want),
+                + chk_can_hint(got, want)
+                + chk_float_hint(ty_prune(got), ty_prune(want)),
         );
     }
 }
@@ -2156,6 +2158,7 @@ fn chk_expr(c: Chk, e: AstExpr) -> Ty {
 fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
     match e0 {
         AstExpr::IntLit(e) => chk_record(c, e.id, ty_int()),
+        AstExpr::FloatLit(e) => chk_record(c, e.id, ty_float()),
         AstExpr::BoolLit(e) => chk_record(c, e.id, ty_bool()),
         AstExpr::StrLit(e) => chk_record(c, e.id, ty_string()),
         AstExpr::UnitLit(e) => chk_record(c, e.id, ty_unit()),
@@ -2206,6 +2209,9 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
             if e.op == "-" && chk_op_overloaded(c, "Neg", ty_prune(t)) {
                 let r = chk_op_trait(c, e.id, e.pos, "-", "Neg", t, None);
                 return chk_record(c, e.id, r);
+            }
+            if e.op == "-" && ty_is_prim(ty_prune(t), "Float") {
+                return chk_record(c, e.id, ty_float());
             }
             if e.op == "-" {
                 chk_expect(c, e.pos, t, ty_int(), "negation");
@@ -2600,9 +2606,6 @@ fn chk_param_types(fun: ChkFunc, targs: Vec<Ty>) -> Vec<Ty> {
 // chk_call_what names a called function in diagnostics; the helpers that
 // format! expands to (compiler/macro.kek) are named by the format spec.
 fn chk_call_what(fun: ChkFunc) -> String {
-    if fun.name == "__fmt_trunc" {
-        return "a precision `{:.N}` (which truncates a String)";
-    }
     if fun.name == "__fmt_int" {
         return "an Int format (`{:x}`, `{:X}`, `{:b}`, `{:o}`, `{:+}`, `{:#}`, `{:0N}`)";
     }
@@ -2720,6 +2723,9 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
         return ty_bool();
     }
     if op == "<" || op == "<=" || op == ">" || op == ">=" {
+        if chk_float_operands(c, e, xt, yt, "comparison") {
+            return ty_bool();
+        }
         if ty_is_prim(ty_prune(xt), "Int") || ty_is_prim(ty_prune(yt), "Int") {
             chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), "comparison");
             chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), "comparison");
@@ -2746,8 +2752,32 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
     }
     let px = ty_prune(xt);
     let tr = chk_op_trait_name(op);
+    if op != "%" && lower_bitop_name(op) == "" && chk_float_operands(c, e, xt, yt, "arithmetic") {
+        // `+ - * /` on Float are primitive; `%` (fmod) is core's Rem
+        return ty_float();
+    }
     if tr != "" && chk_op_overloaded(c, tr, px) {
         return chk_op_trait(c, e.id, e.pos, op, tr, xt, Some(yt));
+    }
+    if ty_is_prim(px, "Float") || ty_is_prim(ty_prune(yt), "Float") {
+        // a bit operation on Float, or Int % Float
+        chk_errorf(
+            c,
+            e.pos,
+            "cannot apply `"
+                + op
+                + "` to `"
+                + ty_str(px)
+                + "` and `"
+                + ty_str(ty_prune(yt))
+                + "`"
+                + chk_float_hint(px, ty_prune(yt)),
+        );
+        return if ty_is_prim(px, "Float") {
+            ty_float()
+        } else {
+            ty_int()
+        };
     }
     if e.compound && !ty_is_var(px) && !ty_is_prim(px, "Int") && !ty_is_prim(px, "<invalid>") {
         // `x op= y` on a non-Int x: one error (not one per operand and
@@ -2763,6 +2793,52 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
     chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), what);
     chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), what);
     ty_int()
+}
+
+// chk_float_operands checks a binary operator whose operands involve
+// Float (true: handled, the operands are both Float or an error was
+// reported). There is no implicit conversion between Int and Float.
+fn chk_float_operands(c: Chk, e: AstBinary, xt: Ty, yt: Ty, what: String) -> Bool {
+    let px = ty_prune(xt);
+    let py = ty_prune(yt);
+    let fx = ty_is_prim(px, "Float");
+    let fy = ty_is_prim(py, "Float");
+    if !fx && !fy {
+        return false;
+    }
+    if (fx || ty_is_var(px)) && (fy || ty_is_var(py)) {
+        chk_expect(c, ast_expr_pos(e.x), xt, ty_float(), what);
+        chk_expect(c, ast_expr_pos(e.y), yt, ty_float(), what);
+        return true;
+    }
+    if ty_is_prim(px, "<invalid>") || ty_is_prim(py, "<invalid>") {
+        return true;
+    }
+    chk_errorf(
+        c,
+        e.pos,
+        "cannot apply `"
+            + e.op
+            + "` to `"
+            + ty_str(px)
+            + "` and `"
+            + ty_str(py)
+            + "`"
+            + chk_float_hint(px, py),
+    );
+    true
+}
+
+// chk_float_hint suggests the explicit conversion between Int and Float.
+fn chk_float_hint(a: Ty, b: Ty) -> String {
+    let ia = ty_is_prim(a, "Int");
+    let ib = ty_is_prim(b, "Int");
+    let fa = ty_is_prim(a, "Float");
+    let fb = ty_is_prim(b, "Float");
+    if (ia && fb) || (fa && ib) {
+        return " (there is no implicit conversion: use `i.to_float()` or `f.trunc_to_int()` / `f.round_to_int()`)";
+    }
+    ""
 }
 
 // chk_op_trait_name is the core trait of an arithmetic operator
@@ -2793,7 +2869,8 @@ fn chk_op_trait_name(op: String) -> String {
 // still unknown types are Int arithmetic.
 fn chk_op_overloaded(c: Chk, tr: String, t: Ty) -> Bool {
     match t {
-        Ty::Prim(_) => false,
+        // Float's `%` is fmod, implemented in the core library
+        Ty::Prim(n) => n == "Float" && tr == "Rem",
         Ty::Var(_) => false,
         Ty::Cap(_, _) => false,
         Ty::Param(_) => true,
@@ -2930,7 +3007,11 @@ fn chk_op_trait(
 
 // chk_builtin_eq reports the types whose `==` is a primitive operation.
 fn chk_builtin_eq(t: Ty) -> Bool {
-    ty_is_prim(t, "Int") || ty_is_prim(t, "Bool") || ty_is_prim(t, "String") || ty_is_prim(t, "()")
+    ty_is_prim(t, "Int")
+        || ty_is_prim(t, "Float")
+        || ty_is_prim(t, "Bool")
+        || ty_is_prim(t, "String")
+        || ty_is_prim(t, "()")
 }
 
 // chk_binop_trait records the binary operator e as a call of trait method
@@ -3591,7 +3672,7 @@ fn chk_path_type(c: Chk, name: String, self_ty: Option<Ty>, ty_args: Vec<Ty>) ->
         }
         None => {}
     }
-    if name == "Int" || name == "Bool" || name == "String" {
+    if name == "Int" || name == "Float" || name == "Bool" || name == "String" {
         return Some(Ty::Prim(name));
     }
     None

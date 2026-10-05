@@ -28,7 +28,7 @@ fn format_errors(n: Int) -> String {
     let i = format!("{x.y}"); // ERROR "invalid argument name `x.y`"
     let j = format!("{missing}"); // ERROR "cannot find value `missing` in this scope"
     let k = format!("{v}", v = n, w = n); // ERROR "named argument `w` never used"
-    let l = format!("{:.2}", n); // ERROR "mismatched types in argument of a precision `{:.N}` (which truncates a String): expected `String`, found `Int`"
+    let l = format!("{:.2}", Plain { x: n }); // ERROR "the trait bound `Plain: Display` is not satisfied"
     let m = format!("{:x}", "s"); // ERROR "an Int format (`{:x}`"
     ""
 }

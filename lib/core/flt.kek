@@ -1,0 +1,937 @@
+// Floating point algorithms on IEEE 754 binary64 bit patterns (held in an
+// Int), used by Float (lib/core/float.kek): decimal parsing (correctly
+// rounded), shortest round-trip printing (Rust's Display / Debug), fixed
+// precision printing (`{:.N}`, exact round-half-to-even) and fmod (`%`).
+// Everything is integer arithmetic, so the WasmGC build and the Lean
+// reference interpreter compute the same strings. Big integers are
+// Vec<Int> of base 2^30 limbs, least significant first, without leading
+// zero limbs (zero is the empty Vec).
+//
+// NaN results are the canonical quiet NaN 0x7ff8000000000000.
+
+fn __flt_nan() -> Int {
+    9221120237041090560
+}
+
+fn __flt_inf() -> Int {
+    9218868437227405312
+}
+
+fn __flt_sign() -> Int {
+    -9223372036854775807 - 1
+}
+
+fn __flt_hidden() -> Int {
+    4503599627370496
+}
+
+// ---- big integers ----
+
+fn __flt_limb() -> Int {
+    1073741824
+}
+
+fn __flt_mask() -> Int {
+    1073741823
+}
+
+fn __flt_ibits(x: Int) -> Int {
+    let mut n = 0;
+    let mut v = x;
+    while v > 0 {
+        v = v.shr(1);
+        n = n + 1;
+    }
+    n
+}
+
+fn __flt_big_norm(mut a: Vec<Int>) -> Vec<Int> {
+    while a.len() > 0 && a.get(a.len() - 1).unwrap_or(1) == 0 {
+        a.pop();
+    }
+    a
+}
+
+// x >= 0
+fn __flt_big(x: Int) -> Vec<Int> {
+    let mut r = Vec::new();
+    let mut v = x;
+    while v > 0 {
+        r.push(v.bit_and(__flt_mask()));
+        v = v.shr(30);
+    }
+    r
+}
+
+// the value of a, which must fit in 62 bits
+fn __flt_big_int(a: Vec<Int>) -> Int {
+    let mut r = 0;
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        r = r.shl(30).bit_or(a.get(i).unwrap_or(0));
+        i = i - 1;
+    }
+    r
+}
+
+fn __flt_big_bits(a: Vec<Int>) -> Int {
+    let n = a.len();
+    if n == 0 {
+        return 0;
+    }
+    30 * (n - 1) + __flt_ibits(a.get(n - 1).unwrap_or(0))
+}
+
+fn __flt_big_cmp(a: Vec<Int>, b: Vec<Int>) -> Int {
+    let na = a.len();
+    let nb = b.len();
+    if na != nb {
+        return if na < nb { -1 } else { 1 };
+    }
+    let mut i = na - 1;
+    while i >= 0 {
+        let x = a.get(i).unwrap_or(0);
+        let y = b.get(i).unwrap_or(0);
+        if x != y {
+            return if x < y { -1 } else { 1 };
+        }
+        i = i - 1;
+    }
+    0
+}
+
+fn __flt_big_add(a: Vec<Int>, b: Vec<Int>) -> Vec<Int> {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let mut r = Vec::new();
+    let mut carry = 0;
+    let mut i = 0;
+    while i < n {
+        let s = a.get(i).unwrap_or(0) + b.get(i).unwrap_or(0) + carry;
+        r.push(s.bit_and(__flt_mask()));
+        carry = s.shr(30);
+        i = i + 1;
+    }
+    if carry > 0 {
+        r.push(carry);
+    }
+    r
+}
+
+// a - b for a >= b
+fn __flt_big_sub(a: Vec<Int>, b: Vec<Int>) -> Vec<Int> {
+    let mut r = Vec::new();
+    let mut borrow = 0;
+    let mut i = 0;
+    let n = a.len();
+    while i < n {
+        let mut s = a.get(i).unwrap_or(0) - b.get(i).unwrap_or(0) - borrow;
+        if s < 0 {
+            s = s + __flt_limb();
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        r.push(s);
+        i = i + 1;
+    }
+    __flt_big_norm(r)
+}
+
+// a * m for 0 <= m < 2^32
+fn __flt_big_mul_small(a: Vec<Int>, m: Int) -> Vec<Int> {
+    if m == 0 {
+        return Vec::new();
+    }
+    let mut r = Vec::new();
+    let mut carry = 0;
+    for x in a {
+        let p = x * m + carry;
+        r.push(p.bit_and(__flt_mask()));
+        carry = p.shr(30);
+    }
+    while carry > 0 {
+        r.push(carry.bit_and(__flt_mask()));
+        carry = carry.shr(30);
+    }
+    r
+}
+
+fn __flt_big_shl(a: Vec<Int>, n: Int) -> Vec<Int> {
+    if a.len() == 0 {
+        return a;
+    }
+    let q = n / 30;
+    let s = n % 30;
+    let mut r = Vec::new();
+    for k in 0..q {
+        r.push(0);
+    }
+    if s == 0 {
+        for x in a {
+            r.push(x);
+        }
+        return r;
+    }
+    let mut carry = 0;
+    for x in a {
+        r.push(x.shl(s).bit_and(__flt_mask()).bit_or(carry));
+        carry = x.shr(30 - s);
+    }
+    if carry > 0 {
+        r.push(carry);
+    }
+    r
+}
+
+fn __flt_big_shr(a: Vec<Int>, n: Int) -> Vec<Int> {
+    let q = n / 30;
+    let s = n % 30;
+    let len = a.len();
+    let mut r = Vec::new();
+    let mut i = q;
+    while i < len {
+        let lo = a.get(i).unwrap_or(0).shr(s);
+        let hi = if s == 0 {
+            0
+        } else {
+            a.get(i + 1).unwrap_or(0).shl(30 - s).bit_and(__flt_mask())
+        };
+        r.push(lo.bit_or(hi));
+        i = i + 1;
+    }
+    __flt_big_norm(r)
+}
+
+fn __flt_pow10_small(k: Int) -> Int {
+    let mut r = 1;
+    for i in 0..k {
+        r = r * 10;
+    }
+    r
+}
+
+// a * 10^k for k >= 0
+fn __flt_big_mul_pow10(a: Vec<Int>, k: Int) -> Vec<Int> {
+    let mut r = a;
+    let mut n = k;
+    while n >= 9 {
+        r = __flt_big_mul_small(r, 1000000000);
+        n = n - 9;
+    }
+    if n > 0 {
+        r = __flt_big_mul_small(r, __flt_pow10_small(n));
+    }
+    r
+}
+
+// (a / d, a % d) for 0 < d < 2^31
+fn __flt_big_divmod_small(a: Vec<Int>, d: Int) -> (Vec<Int>, Int) {
+    let n = a.len();
+    let mut q = Vec::new();
+    for k in 0..n {
+        q.push(0);
+    }
+    let mut rem = 0;
+    let mut i = n - 1;
+    while i >= 0 {
+        let cur = rem.shl(30).bit_or(a.get(i).unwrap_or(0));
+        q.set(i, cur / d);
+        rem = cur % d;
+        i = i - 1;
+    }
+    (__flt_big_norm(q), rem)
+}
+
+// a / 2^k when that fits in 62 bits
+fn __flt_big_top(a: Vec<Int>, k: Int) -> Int {
+    let q = k / 30;
+    let sh = k % 30;
+    let mut r = 0;
+    let mut i = a.len() - 1;
+    while i > q {
+        r = r.shl(30).bit_or(a.get(i).unwrap_or(0));
+        i = i - 1;
+    }
+    r.shl(30 - sh).bit_or(a.get(q).unwrap_or(0).shr(sh))
+}
+
+// (a / s, a % s) for s > 0 when the quotient fits in 62 bits.
+fn __flt_big_divmod(a: Vec<Int>, s: Vec<Int>) -> (Int, Vec<Int>) {
+    let mut q = 0;
+    let mut r = a;
+    let bs = __flt_big_bits(s);
+    let ks = if bs > 31 { bs - 31 } else { 0 };
+    let shi = __flt_big_top(s, ks) + 1;
+    while __flt_big_cmp(r, s) >= 0 {
+        let br = __flt_big_bits(r);
+        if br <= 62 {
+            let ri = __flt_big_int(r);
+            let si = __flt_big_int(s);
+            q = q + ri / si;
+            return (q, __flt_big(ri % si));
+        }
+        let ka = br - 61;
+        let ahi = __flt_big_top(r, ka);
+        let qe = ahi / shi;
+        let sh = ka - ks;
+        if sh >= 0 {
+            r = __flt_big_sub(r, __flt_big_shl(__flt_big_mul_small(s, qe), sh));
+            q = q + qe.shl(sh);
+        } else {
+            let qq = qe.shr(0 - sh);
+            if qq == 0 {
+                r = __flt_big_sub(r, s);
+                q = q + 1;
+            } else {
+                r = __flt_big_sub(r, __flt_big_mul_small(s, qq));
+                q = q + qq;
+            }
+        }
+    }
+    (q, r)
+}
+
+// the decimal digits of a
+fn __flt_big_dec(a: Vec<Int>) -> String {
+    if a.len() == 0 {
+        return "0";
+    }
+    if a.len() <= 2 {
+        return __flt_big_int(a).to_string();
+    }
+    let mut chunks = Vec::new();
+    let mut x = a;
+    while x.len() > 0 {
+        let (q, r) = __flt_big_divmod_small(x, 1000000000);
+        chunks.push(r);
+        x = q;
+    }
+    let mut s = "";
+    let mut i = chunks.len() - 1;
+    let mut first = true;
+    while i >= 0 {
+        let c = chunks.get(i).unwrap_or(0).to_string();
+        if first {
+            s = c;
+            first = false;
+        } else {
+            s = s + "000000000".slice(0, 9 - c.len()) + c;
+        }
+        i = i - 1;
+    }
+    s
+}
+
+// ---- parsing ----
+
+// __flt_finish assembles the bits of q * 2^b (q < 2^53, b >= -1074)
+// rounded by half: the sign of (remainder - divisor / 2).
+fn __flt_finish(neg: Bool, q0: Int, half: Int, b0: Int) -> Int {
+    let mut q = q0;
+    let mut b = b0;
+    if half > 0 || (half == 0 && q.bit_and(1) == 1) {
+        q = q + 1;
+    }
+    if q == 2 * __flt_hidden() {
+        q = __flt_hidden();
+        b = b + 1;
+    }
+    let sign = if neg { __flt_sign() } else { 0 };
+    if b > 971 {
+        return sign.bit_or(__flt_inf());
+    }
+    if q < __flt_hidden() {
+        return sign.bit_or(q);
+    }
+    sign.bit_or((b + 1075).shl(52)).bit_or(q - __flt_hidden())
+}
+
+fn __flt_digit(c: Int) -> Int {
+    if c >= 48 && c <= 57 { c - 48 } else { -1 }
+}
+
+// __flt_parse reads a decimal floating point number (Rust's f64 grammar:
+// `[+-](digits[.digits]|.digits)[(e|E)[+-]digits]`, `inf`, `infinity`,
+// `nan`, case-insensitive) as correctly rounded bits.
+fn __flt_parse(s: String) -> Option<Int> {
+    let n = s.len();
+    let mut i = 0;
+    let mut neg = false;
+    let c0 = s.char_at(0).unwrap_or(-1);
+    if c0 == 43 || c0 == 45 {
+        neg = c0 == 45;
+        i = 1;
+    }
+    let sign = if neg { __flt_sign() } else { 0 };
+    let rest = s.slice(i, n).to_lower();
+    if rest == "inf" || rest == "infinity" {
+        return Some(sign.bit_or(__flt_inf()));
+    }
+    if rest == "nan" {
+        return Some(__flt_nan());
+    }
+    let mut digits = Vec::new();
+    let mut nd = 0; // digits seen (including leading zeros)
+    let mut frac = 0;
+    let mut dot = false;
+    let mut done = false;
+    while i < n && !done {
+        let c = s.char_at(i).unwrap_or(0);
+        let d = __flt_digit(c);
+        if d >= 0 {
+            nd = nd + 1;
+            if dot {
+                frac = frac + 1;
+            }
+            if d != 0 || digits.len() > 0 {
+                digits.push(d);
+            }
+            i = i + 1;
+        } else if c == 46 && !dot {
+            dot = true;
+            i = i + 1;
+        } else {
+            done = true;
+        }
+    }
+    if nd == 0 {
+        return None;
+    }
+    let mut exp = 0;
+    if i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        if c != 101 && c != 69 {
+            return None;
+        }
+        i = i + 1;
+        let mut eneg = false;
+        let ce = s.char_at(i).unwrap_or(-1);
+        if ce == 43 || ce == 45 {
+            eneg = ce == 45;
+            i = i + 1;
+        }
+        if i >= n {
+            return None;
+        }
+        while i < n {
+            let d = __flt_digit(s.char_at(i).unwrap_or(0));
+            if d < 0 {
+                return None;
+            }
+            if exp < 100000000 {
+                exp = exp * 10 + d;
+            }
+            i = i + 1;
+        }
+        if eneg {
+            exp = 0 - exp;
+        }
+    }
+    // value = digits * 10^e10
+    let mut e10 = exp - frac;
+    while digits.len() > 0 && digits.get(digits.len() - 1).unwrap_or(1) == 0 {
+        digits.pop();
+        e10 = e10 + 1;
+    }
+    let m = digits.len();
+    if m == 0 {
+        return Some(sign);
+    }
+    if m + e10 > 310 {
+        return Some(sign.bit_or(__flt_inf()));
+    }
+    if m + e10 < -326 {
+        return Some(sign);
+    }
+    if m <= 18 {
+        let mut d = 0;
+        for x in digits {
+            d = d * 10 + x;
+        }
+        if e10 >= 0 && e10 <= 18 {
+            let p = __flt_pow10_small(e10);
+            if d <= 9223372036854775807 / p {
+                return Some(__flt_from_ratio_int(neg, d * p, 1));
+            }
+        } else if e10 < 0 && e10 >= -18 {
+            let p = __flt_pow10_small(0 - e10);
+            let b = __flt_ibits(d) - __flt_ibits(p) - 53;
+            if b < 0 && __flt_ibits(d) - b <= 62 {
+                return Some(__flt_from_ratio_int(neg, d, p));
+            }
+        }
+    }
+    let mut big = Vec::new();
+    let mut k = 0;
+    while k < m {
+        let take = if m - k >= 9 { 9 } else { m - k };
+        let mut chunk = 0;
+        for j in 0..take {
+            chunk = chunk * 10 + digits.get(k + j).unwrap_or(0);
+        }
+        big = __flt_big_add(__flt_big_mul_small(big, __flt_pow10_small(take)), __flt_big(chunk));
+        k = k + take;
+    }
+    if e10 >= 0 {
+        Some(__flt_from_ratio(neg, __flt_big_mul_pow10(big, e10), __flt_big(1)))
+    } else {
+        Some(__flt_from_ratio(neg, big, __flt_big_mul_pow10(__flt_big(1), 0 - e10)))
+    }
+}
+
+// the bits of n / s rounded to nearest (n, s > 0, n < 2^62, s < 2^61)
+fn __flt_from_ratio_int(neg: Bool, n: Int, s: Int) -> Int {
+    let mut b = __flt_ibits(n) - __flt_ibits(s) - 53;
+    let mut a = n;
+    let mut sd = s;
+    if b >= 0 {
+        if __flt_ibits(s) + b > 61 {
+            return __flt_from_ratio(neg, __flt_big(n), __flt_big(s));
+        }
+        sd = s.shl(b);
+    } else {
+        if __flt_ibits(n) - b > 62 {
+            return __flt_from_ratio(neg, __flt_big(n), __flt_big(s));
+        }
+        a = n.shl(0 - b);
+    }
+    let mut q = a / sd;
+    let mut r = a % sd;
+    if q >= 2 * __flt_hidden() {
+        // halve the quotient: the dropped bit joins the remainder
+        if __flt_ibits(sd) > 60 {
+            return __flt_from_ratio(neg, __flt_big(n), __flt_big(s));
+        }
+        r = r + q.bit_and(1) * sd;
+        sd = sd * 2;
+        q = q.shr(1);
+        b = b + 1;
+    }
+    let tr = 2 * r;
+    let half = if tr > sd {
+        1
+    } else if tr < sd { -1 } else { 0 };
+    __flt_finish(neg, q, half, b)
+}
+
+// the bits of n / s rounded to nearest (big integers, n, s > 0)
+fn __flt_from_ratio(neg: Bool, n: Vec<Int>, s: Vec<Int>) -> Int {
+    let mut b = __flt_big_bits(n) - __flt_big_bits(s) - 53;
+    if b < -1074 {
+        b = -1074;
+    }
+    if b > 1000 {
+        return if neg { __flt_sign() } else { 0 }.bit_or(__flt_inf());
+    }
+    let mut a = n;
+    let mut sd = s;
+    if b >= 0 {
+        sd = __flt_big_shl(s, b);
+    } else {
+        a = __flt_big_shl(n, 0 - b);
+    }
+    let (q0, r0) = __flt_big_divmod(a, sd);
+    let mut q = q0;
+    let mut r = r0;
+    if q >= 2 * __flt_hidden() {
+        if q.bit_and(1) == 1 {
+            r = __flt_big_add(r, sd);
+        }
+        sd = __flt_big_shl(sd, 1);
+        q = q.shr(1);
+        b = b + 1;
+    }
+    let half = __flt_big_cmp(__flt_big_shl(r, 1), sd);
+    __flt_finish(neg, q, half, b)
+}
+
+// ---- shortest digits ----
+
+// __flt_shortest is the shortest decimal digits that read back as the
+// finite nonzero |x|: (digits, k) with x = 0.digits * 10^k.
+fn __flt_shortest(bits: Int) -> (Vec<Int>, Int) {
+    let ex = bits.shr(52).bit_and(2047);
+    let fm = bits.bit_and(__flt_hidden() - 1);
+    let f = if ex == 0 {
+        fm
+    } else {
+        fm.bit_or(__flt_hidden())
+    };
+    let e = if ex == 0 { -1074 } else { ex - 1075 };
+    let even = f.bit_and(1) == 0;
+    // fast path: an integer below 2^53 prints as itself
+    if e <= 0 && e > -53 && f.bit_and(1.shl(0 - e) - 1) == 0 {
+        return __flt_int_digits(f.shr(0 - e));
+    }
+    let mut r = Vec::new();
+    let mut s = Vec::new();
+    let mut mp = Vec::new();
+    let mut mm = Vec::new();
+    let lopsided = f == __flt_hidden() && ex > 1;
+    if e >= 0 {
+        if !lopsided {
+            r = __flt_big_shl(__flt_big(f), e + 1);
+            s = __flt_big(2);
+            mp = __flt_big_shl(__flt_big(1), e);
+            mm = mp;
+        } else {
+            r = __flt_big_shl(__flt_big(f), e + 2);
+            s = __flt_big(4);
+            mp = __flt_big_shl(__flt_big(1), e + 1);
+            mm = __flt_big_shl(__flt_big(1), e);
+        }
+    } else {
+        if !lopsided {
+            r = __flt_big(f * 2);
+            s = __flt_big_shl(__flt_big(1), 1 - e);
+            mp = __flt_big(1);
+            mm = mp;
+        } else {
+            r = __flt_big(f * 4);
+            s = __flt_big_shl(__flt_big(1), 2 - e);
+            mp = __flt_big(2);
+            mm = __flt_big(1);
+        }
+    }
+    // k estimate: floor((bits(f) + e - 1) * log10(2)), then fixed up
+    let lg = __flt_ibits(f) + e - 1;
+    let mut k = if lg >= 0 {
+        (lg * 1233).shr(12)
+    } else {
+        0 - ((0 - lg) * 1233).shr(12) - 1
+    };
+    if k >= 0 {
+        s = __flt_big_mul_pow10(s, k);
+    } else {
+        r = __flt_big_mul_pow10(r, 0 - k);
+        mp = __flt_big_mul_pow10(mp, 0 - k);
+        mm = __flt_big_mul_pow10(mm, 0 - k);
+    }
+    let mut fixing = true;
+    while fixing {
+        let c = __flt_big_cmp(__flt_big_add(r, mp), s);
+        if c > 0 || (even && c == 0) {
+            s = __flt_big_mul_small(s, 10);
+            k = k + 1;
+        } else {
+            fixing = false;
+        }
+    }
+    fixing = true;
+    while fixing {
+        let c = __flt_big_cmp(__flt_big_mul_small(__flt_big_add(r, mp), 10), s);
+        if c < 0 || (!even && c == 0) {
+            r = __flt_big_mul_small(r, 10);
+            mp = __flt_big_mul_small(mp, 10);
+            mm = __flt_big_mul_small(mm, 10);
+            k = k - 1;
+        } else {
+            fixing = false;
+        }
+    }
+    if __flt_big_bits(s) <= 59 {
+        return (
+            __flt_gen_int(
+                __flt_big_int(r),
+                __flt_big_int(s),
+                __flt_big_int(mp),
+                __flt_big_int(mm),
+                even,
+            ),
+            k,
+        );
+    }
+    (__flt_gen_big(r, s, mp, mm, even), k)
+}
+
+fn __flt_int_digits(n: Int) -> (Vec<Int>, Int) {
+    let t = n.to_string();
+    let mut ds = Vec::new();
+    let mut last = 0;
+    let mut i = 0;
+    for c in t.chars() {
+        ds.push(c - 48);
+        i = i + 1;
+        if c != 48 {
+            last = i;
+        }
+    }
+    ds.truncate(last);
+    (ds, t.len())
+}
+
+// digit generation (Steele & White / Burger & Dybvig) on Ints, s < 2^59
+fn __flt_gen_int(r0: Int, s: Int, mp0: Int, mm0: Int, even: Bool) -> Vec<Int> {
+    let mut ds = Vec::new();
+    let mut r = r0;
+    let mut mp = mp0;
+    let mut mm = mm0;
+    while true {
+        r = r * 10;
+        mp = mp * 10;
+        mm = mm * 10;
+        let d = r / s;
+        r = r % s;
+        let tc1 = if even { r <= mm } else { r < mm };
+        let tc2 = if even { r + mp >= s } else { r + mp > s };
+        if !tc1 && !tc2 {
+            ds.push(d);
+        } else {
+            if tc1 && !tc2 {
+                ds.push(d);
+            } else if !tc1 && tc2 {
+                ds.push(d + 1);
+            } else if 2 * r < s {
+                ds.push(d);
+            } else {
+                ds.push(d + 1);
+            }
+            return ds;
+        }
+    }
+    ds
+}
+
+fn __flt_gen_big(r0: Vec<Int>, s: Vec<Int>, mp0: Vec<Int>, mm0: Vec<Int>, even: Bool) -> Vec<Int> {
+    let mut ds = Vec::new();
+    let mut r = r0;
+    let mut mp = mp0;
+    let mut mm = mm0;
+    // the digit is estimated from the top bits (low by at most one)
+    let ks = __flt_big_bits(s) - 31;
+    let shi = __flt_big_top(s, ks) + 1;
+    while true {
+        r = __flt_big_mul_small(r, 10);
+        mp = __flt_big_mul_small(mp, 10);
+        mm = __flt_big_mul_small(mm, 10);
+        let mut d = __flt_big_top(r, ks) / shi;
+        if d > 0 {
+            r = __flt_big_sub(r, __flt_big_mul_small(s, d));
+        }
+        while __flt_big_cmp(r, s) >= 0 {
+            r = __flt_big_sub(r, s);
+            d = d + 1;
+        }
+        let c1 = __flt_big_cmp(r, mm);
+        let c2 = __flt_big_cmp(__flt_big_add(r, mp), s);
+        let tc1 = if even { c1 <= 0 } else { c1 < 0 };
+        let tc2 = if even { c2 >= 0 } else { c2 > 0 };
+        if !tc1 && !tc2 {
+            ds.push(d);
+        } else {
+            if tc1 && !tc2 {
+                ds.push(d);
+            } else if !tc1 && tc2 {
+                ds.push(d + 1);
+            } else if __flt_big_cmp(__flt_big_shl(r, 1), s) < 0 {
+                ds.push(d);
+            } else {
+                ds.push(d + 1);
+            }
+            return ds;
+        }
+    }
+    ds
+}
+
+fn __flt_digits_str(ds: Vec<Int>, from: Int, to: Int) -> String {
+    let mut s = "";
+    let mut i = from;
+    while i < to {
+        s = s + String::from_char(48 + ds.get(i).unwrap_or(0));
+        i = i + 1;
+    }
+    s
+}
+
+fn __flt_zeros(n: Int) -> String {
+    "0".repeat(n)
+}
+
+// __flt_special is the text of NaN, ±inf and ±0 ("" otherwise).
+fn __flt_special(bits: Int, zero: String) -> String {
+    let ex = bits.shr(52).bit_and(2047);
+    let fm = bits.bit_and(__flt_hidden() - 1);
+    let sg = if bits < 0 { "-" } else { "" };
+    if ex == 2047 {
+        return if fm != 0 { "NaN" } else { sg + "inf" };
+    }
+    if ex == 0 && fm == 0 {
+        return sg + zero;
+    }
+    ""
+}
+
+// __flt_plain writes 0.ds * 10^k without an exponent.
+fn __flt_plain(ds: Vec<Int>, k: Int, frac_min: Bool) -> String {
+    let n = ds.len();
+    if k <= 0 {
+        return "0." + __flt_zeros(0 - k) + __flt_digits_str(ds, 0, n);
+    }
+    if k >= n {
+        let t = __flt_digits_str(ds, 0, n) + __flt_zeros(k - n);
+        return if frac_min { t + ".0" } else { t };
+    }
+    __flt_digits_str(ds, 0, k) + "." + __flt_digits_str(ds, k, n)
+}
+
+// __flt_display is Rust's `{}` of an f64: the shortest digits that read
+// back as x, never in exponential notation.
+fn __flt_display(bits: Int) -> String {
+    let sp = __flt_special(bits, "0");
+    if sp != "" {
+        return sp;
+    }
+    let (ds, k) = __flt_shortest(bits);
+    let sg = if bits < 0 { "-" } else { "" };
+    sg + __flt_plain(ds, k, false)
+}
+
+// __flt_debug is Rust's `{:?}` of an f64: like Display with at least one
+// fractional digit for 1e-4 <= |x| < 1e16, exponential (`1e16`,
+// `1.5e-7`) otherwise.
+fn __flt_debug(bits: Int) -> String {
+    let sp = __flt_special(bits, "0.0");
+    if sp != "" {
+        return sp;
+    }
+    let (ds, k) = __flt_shortest(bits);
+    let sg = if bits < 0 { "-" } else { "" };
+    let sci = k - 1;
+    if sci >= -4 && sci < 16 {
+        return sg + __flt_plain(ds, k, true);
+    }
+    let n = ds.len();
+    let mut t = __flt_digits_str(ds, 0, 1);
+    if n > 1 {
+        t = t + "." + __flt_digits_str(ds, 1, n);
+    }
+    sg + t + "e" + sci.to_string()
+}
+
+// ---- fixed precision ----
+
+// __flt_fixed is Rust's `{:.prec}` of an f64: the exact value rounded
+// half to even at prec fractional digits.
+fn __flt_fixed(bits: Int, prec: Int) -> String {
+    let p = if prec < 0 { 0 } else { prec };
+    let ex = bits.shr(52).bit_and(2047);
+    let fm = bits.bit_and(__flt_hidden() - 1);
+    let sg = if bits < 0 { "-" } else { "" };
+    if ex == 2047 {
+        return if fm != 0 { "NaN" } else { sg + "inf" };
+    }
+    let f = if ex == 0 {
+        fm
+    } else {
+        fm.bit_or(__flt_hidden())
+    };
+    let e = if ex == 0 { -1074 } else { ex - 1075 };
+    let mut digits = "";
+    if f == 0 {
+        digits = "0";
+    } else if e >= 0 {
+        digits = __flt_big_dec(__flt_big_mul_pow10(__flt_big_shl(__flt_big(f), e), p));
+    } else if p <= 18 && __flt_ibits(f) + __flt_ibits(__flt_pow10_small(p)) <= 62 && 0 - e <= 61 {
+        let num = f * __flt_pow10_small(p);
+        let sh = 0 - e;
+        let mut q = num.shr(sh);
+        let rem = num.bit_and(1.shl(sh) - 1);
+        let half = 1.shl(sh - 1);
+        if rem > half || (rem == half && q.bit_and(1) == 1) {
+            q = q + 1;
+        }
+        digits = q.to_string();
+    } else {
+        let num = __flt_big_mul_pow10(__flt_big(f), p);
+        let sh = 0 - e;
+        let mut q = __flt_big_shr(num, sh);
+        let rem = __flt_big_sub(num, __flt_big_shl(q, sh));
+        let c = __flt_big_cmp(__flt_big_shl(rem, 1), __flt_big_shl(__flt_big(1), sh));
+        let odd = q.get(0).unwrap_or(0).bit_and(1) == 1;
+        if c > 0 || (c == 0 && odd) {
+            q = __flt_big_add(q, __flt_big(1));
+        }
+        digits = __flt_big_dec(q);
+    }
+    if p == 0 {
+        return sg + digits;
+    }
+    if digits.len() <= p {
+        digits = __flt_zeros(p + 1 - digits.len()) + digits;
+    }
+    let cut = digits.len() - p;
+    sg + digits.slice(0, cut) + "." + digits.slice(cut, digits.len())
+}
+
+// ---- fmod ----
+
+// __flt_fmod is C's fmod (Rust's `%` on f64): x - trunc(x / y) * y computed
+// exactly, with the sign of x (after musl).
+fn __flt_fmod(x: Int, y: Int) -> Int {
+    let all = 9223372036854775807;
+    let ax = x.bit_and(all);
+    let ay = y.bit_and(all);
+    let mut ex = x.shr(52).bit_and(2047);
+    let mut ey = y.shr(52).bit_and(2047);
+    let sx = x.bit_and(__flt_sign());
+    if ay == 0 || ay > __flt_inf() || ex == 2047 {
+        return __flt_nan();
+    }
+    if ax <= ay {
+        if ax == ay {
+            return sx;
+        }
+        return x;
+    }
+    let mut ux = 0;
+    let mut uy = 0;
+    if ex == 0 {
+        ux = ax;
+        while ux < __flt_hidden() {
+            ux = ux.shl(1);
+            ex = ex - 1;
+        }
+        ex = ex + 1;
+    } else {
+        ux = ax.bit_and(__flt_hidden() - 1).bit_or(__flt_hidden());
+    }
+    if ey == 0 {
+        uy = ay;
+        while uy < __flt_hidden() {
+            uy = uy.shl(1);
+            ey = ey - 1;
+        }
+        ey = ey + 1;
+    } else {
+        uy = ay.bit_and(__flt_hidden() - 1).bit_or(__flt_hidden());
+    }
+    while ex > ey {
+        let i = ux - uy;
+        if i >= 0 {
+            if i == 0 {
+                return sx;
+            }
+            ux = i;
+        }
+        ux = ux.shl(1);
+        ex = ex - 1;
+    }
+    let i = ux - uy;
+    if i >= 0 {
+        if i == 0 {
+            return sx;
+        }
+        ux = i;
+    }
+    while ux < __flt_hidden() {
+        ux = ux.shl(1);
+        ex = ex - 1;
+    }
+    if ex > 0 {
+        ux = (ux - __flt_hidden()).bit_or(ex.shl(52));
+    } else {
+        ux = ux.shr(1 - ex);
+    }
+    ux.bit_or(sx)
+}

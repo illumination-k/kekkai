@@ -1,0 +1,7 @@
+// Float literals: out of the range of Float (a syntax error).
+
+fn f() -> Float {
+    1e400 // ERROR "float literal `1e400` is out of range for `Float`"
+}
+
+fn main() {}

@@ -76,6 +76,7 @@ def asBool : Val → M Bool
 
 def evalUnop : UnOp → Val → M Val
   | .neg, .int x => pure (.int (i64Neg x))
+  | .neg, .float x => pure (.float (-x))
   | .not, .bool b => pure (.bool !b)
   | op, v => throw s!"type error: {repr op} on {repr v}"
 
@@ -91,6 +92,16 @@ def evalBinop : BinOp → Val → Val → M Val
   | .ge, .int x, .int y => pure (.bool (decide (x ≥ y)))
   | .eq, .int x, .int y => pure (.bool (x == y))
   | .ne, .int x, .int y => pure (.bool (x != y))
+  | .add, .float x, .float y => pure (.float (x + y))
+  | .sub, .float x, .float y => pure (.float (x - y))
+  | .mul, .float x, .float y => pure (.float (x * y))
+  | .div, .float x, .float y => pure (.float (x / y))
+  | .lt, .float x, .float y => pure (.bool (decide (x < y)))
+  | .le, .float x, .float y => pure (.bool (decide (x ≤ y)))
+  | .gt, .float x, .float y => pure (.bool (decide (x > y)))
+  | .ge, .float x, .float y => pure (.bool (decide (x ≥ y)))
+  | .eq, .float x, .float y => pure (.bool (x == y))
+  | .ne, .float x, .float y => pure (.bool (x != y))
   | .eq, .bool x, .bool y => pure (.bool (x == y))
   | .ne, .bool x, .bool y => pure (.bool (x != y))
   | .eq, .unit, .unit => pure (.bool true)
@@ -171,7 +182,8 @@ def execInstr (p : Program) (m : Machine) (f : Frame) (rest : List Frame) (i : I
   match i with
   | .const dst c =>
     write dst (match c with
-      | .unit => .unit | .bool b => .bool b | .int n => .int (wrap n) | .str s => .str s)
+      | .unit => .unit | .bool b => .bool b | .int n => .int (wrap n)
+      | .float b => .float (fOfBits b) | .str s => .str s)
   | .copy dst x => write dst (← get x)
   | .unop dst op x => write dst (← evalUnop op (← get x))
   | .binop dst op x y => write dst (← evalBinop op (← get x) (← get y))

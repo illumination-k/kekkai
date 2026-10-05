@@ -80,7 +80,9 @@ fn wasm_vec_to_host_func(m: WasmMod, agg: Int) -> Int {
 
 // wasm_box_host_elem converts a value to the JS value of an array element.
 fn wasm_box_host_elem(m: WasmMod, c: Vec<Int>, t: IrTy) {
-    if t.kind == "int" {
+    if t.kind == "float" {
+        cg_call(c, wasm_imp(m, "box_f64"));
+    } else if t.kind == "int" {
         cg_call(c, wasm_imp(m, "box_i64"));
     } else if t.kind == "bool" || t.kind == "unit" {
         cg_call(c, wasm_imp(m, "box_i32"));
@@ -394,6 +396,59 @@ fn wasm_is_inline_int_op(name: String) -> Bool {
         || name == "int.shl"
         || name == "int.shr"
         || name == "int.ushr"
+}
+
+// wasm_is_inline_float_op reports the Float builtins wasm has natively.
+fn wasm_is_inline_float_op(name: String) -> Bool {
+    name == "int.to_float"
+        || (name.starts_with("float.") && cg_float_unop(name) >= 0)
+        || name == "float.from_int"
+        || name == "float.to_bits"
+        || name == "float.from_bits"
+        || name == "float.trunc_to_int"
+}
+
+// cg_float_unop is the opcode of an f64 -> f64 builtin, -1 for others.
+fn cg_float_unop(name: String) -> Int {
+    match name {
+        "float.abs" => 153,
+        "float.ceil" => 155,
+        "float.floor" => 156,
+        "float.trunc" => 157,
+        "float.sqrt" => 159,
+        _ => -1,
+    }
+}
+
+// cg_float_op emits a Float builtin inline.
+fn cg_float_op(g: CgGen, ins: IrInstr) {
+    let c = g.c;
+    let name = ins.name;
+    let u = cg_float_unop(name);
+    if u >= 0 {
+        cg_arg(g, ins, 0);
+        cg_op(c, u);
+    } else if name == "int.to_float" || name == "float.from_int" {
+        cg_arg(g, ins, 0);
+        cg_op(c, 185); // f64.convert_i64_s
+    } else if name == "float.from_bits" {
+        cg_arg(g, ins, 0);
+        cg_op(c, 191); // f64.reinterpret_i64
+    } else if name == "float.trunc_to_int" {
+        cg_arg(g, ins, 0);
+        cg_op(c, 252); // i64.trunc_sat_f64_s
+        wasm_u32(c, 6);
+    } else {
+        // float.to_bits: NaN payloads are not observable, every NaN is
+        // the canonical quiet NaN
+        cg_i64(c, 9221120237041090560);
+        cg_arg(g, ins, 0);
+        cg_op(c, 189); // i64.reinterpret_f64
+        cg_arg(g, ins, 0);
+        cg_arg(g, ins, 0);
+        cg_op(c, 98); // f64.ne: NaN
+        cg_op(c, 27); // select
+    }
 }
 
 // cg_int_op emits an Int bit operation inline.

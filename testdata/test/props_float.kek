@@ -1,0 +1,29 @@
+// Float properties: generated values are finite (no NaN or infinities) and
+// shrink toward 0.0.
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Reading {
+    at: Int,
+    value: Float,
+}
+
+#[test]
+fn text_round_trips(x: Float) -> Bool {
+    x.to_string().parse_float() == Some(x) && format!("{:?}", x).parse_float() == Some(x)
+}
+
+#[test]
+fn generated_are_finite(xs: Vec<Float>) -> Bool {
+    xs.iter().all(|x| x.is_finite())
+}
+
+#[test]
+fn json_round_trips(r: Reading) -> Bool {
+    let back: Result<Reading, SerdeError> = Json::from_str(Json::to_string(&r));
+    back == Ok(r)
+}
+
+#[test]
+fn small_readings(r: Reading) -> Bool {
+    r.value.abs() < 10.0
+}

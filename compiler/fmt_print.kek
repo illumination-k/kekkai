@@ -1191,6 +1191,7 @@ fn fmt_sub(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool, paren: Bool)
 fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
     match e {
         AstExpr::IntLit(x) => fmt_int_text(p, x.pos),
+        AstExpr::FloatLit(x) => x.text,
         AstExpr::StrLit(x) => fmt_str_text(p, x.pos),
         AstExpr::BoolLit(x) => if x.value { "true" } else { "false" },
         AstExpr::UnitLit(_) => "()",

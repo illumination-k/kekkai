@@ -101,6 +101,9 @@ fn parse_describe(t: Tok) -> String {
     if t.kind == "INT" {
         return "integer `" + t.text + "`";
     }
+    if t.kind == "FLOAT" {
+        return "float `" + t.text + "`";
+    }
     if t.kind == "STRING" {
         return "string literal";
     }
@@ -1259,6 +1262,14 @@ fn parse_reid(p: ParseState, e: AstExpr) -> Option<AstExpr> {
         AstExpr::IntLit(x) => Some(
             AstExpr::IntLit(AstIntLit { id: parse_id(p), pos: x.pos, value: x.value }),
         ),
+        AstExpr::FloatLit(x) => Some(
+            AstExpr::FloatLit(AstFloatLit {
+                id: parse_id(p),
+                pos: x.pos,
+                text: x.text,
+                bits: x.bits,
+            }),
+        ),
         AstExpr::Field(x) => match parse_reid(p, x.x) {
             Some(r) => Some(
                 AstExpr::Field(AstFieldExpr { id: parse_id(p), pos: x.pos, x: r, name: x.name }),
@@ -1746,6 +1757,30 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
             None => parse_fail(p, t.pos, parse_int_error(t.text)),
         }
         return AstExpr::IntLit(AstIntLit { id: parse_id(p), pos: t.pos, value: v });
+    }
+    if k == "FLOAT" {
+        parse_next(p);
+        let mut bits = 0;
+        match flit_bits(t.text) {
+            Some(b) => {
+                bits = b;
+                if b == 9218868437227405312 {
+                    // +inf
+                    parse_fail(
+                        p,
+                        t.pos,
+                        "float literal `" + t.text + "` is out of range for `Float`",
+                    );
+                }
+            }
+            None => parse_fail(p, t.pos, "invalid float literal `" + t.text + "`"),
+        }
+        return AstExpr::FloatLit(AstFloatLit {
+            id: parse_id(p),
+            pos: t.pos,
+            text: t.text,
+            bits: bits,
+        });
     }
     if k == "STRING" {
         parse_next(p);

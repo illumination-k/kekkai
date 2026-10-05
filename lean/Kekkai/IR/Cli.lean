@@ -28,6 +28,7 @@ partial def renderVal (heap : Array HeapObj) (path : List Nat := []) : Val → S
   | .unit => "null"
   | .bool b => if b then "true" else "false"
   | .int i => toString i
+  | .float f => "{\"float\":" ++ toString (fToBits f) ++ "}"
   | .str s => (Json.str s).compress
   | .variant t fs =>
     "{\"tag\":" ++ toString t ++ ",\"fields\":[" ++ ",".intercalate (fs.toList.map (renderVal heap path)) ++ "]}"
@@ -61,6 +62,9 @@ partial def argVal (p : Program) (t : Ty) (j : Json) : HM Val := do
   | .int, _ =>
     let i ← lift j.getInt?
     if inRange i then pure (.int i) else throw s!"integer {i} out of i64 range"
+  | .float, _ =>
+    let i ← lift (j.getObjValAs? Int "float")
+    pure (.float (fOfBits i))
   | .string, Json.str s => pure (.str s)
   | .ext, _ => pure (.opaque t.ext)
   | .agg, _ =>

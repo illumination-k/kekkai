@@ -5,8 +5,11 @@
 //   Json::from_str::<T>(s) -> Result<T, SerdeError>
 //   Json::to_string(&x) / Json::to_string_pretty(&x) -> String
 //
-// Numbers with a fraction or an exponent become Value::Float (as written;
-// rendering writes TOML's inf and nan as null);
+// Numbers with a fraction or an exponent become Value::Float (correctly
+// rounded; out of range is an error), the others Value::Int. A Float is
+// written with the shortest digits that read back the same, always with a
+// fraction or an exponent (`1.0`, `0.1`, `1e21`), and NaN and the
+// infinities (which JSON lacks) as null, like JavaScript;
 // integers outside the 64-bit range are an error. Objects keep the order
 // of their keys; a repeated key is an error. Nesting is limited to 256
 // levels.
@@ -102,16 +105,11 @@ fn __json_render(mut out: Vec<String>, v: &Value, indent: Int, depth: Int) {
 
 // __json_float is a float in JSON's syntax: TOML's inf and nan have no
 // JSON form and become null (as in JavaScript), a leading `+` is dropped.
-fn __json_float(f: String) -> String {
-    let g = if f.starts_with("+") {
-        f.slice(1, f.len())
-    } else {
-        f
-    };
-    if g == "inf" || g == "-inf" || g == "nan" || g == "-nan" {
+fn __json_float(f: Float) -> String {
+    if !f.is_finite() {
         return "null";
     }
-    g
+    __flt_debug(f.to_bits())
 }
 
 fn __json_newline(mut out: Vec<String>, indent: Int, depth: Int) {
@@ -235,7 +233,16 @@ impl __JsonParser {
         }
         let text = self.s.slice(start, self.i);
         if float {
-            return Ok(Value::Float(text));
+            return match __flt_parse(text) {
+                Some(b) => {
+                    if b.bit_and(9223372036854775807) == 9218868437227405312 {
+                        Err(__serde_at(self.s, start, "number out of range"))
+                    } else {
+                        Ok(Value::Float(Float::from_bits(b)))
+                    }
+                }
+                None => Err(__serde_at(self.s, start, "invalid number")),
+            };
         }
         match text.parse_int() {
             Some(n) => Ok(Value::Int(n)),

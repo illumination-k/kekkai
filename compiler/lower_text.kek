@@ -108,6 +108,10 @@ fn lower_instr_str(ins: IrInstr) -> String {
         if k == "bool" {
             return "const " + ins.cst.bool_val.to_string();
         }
+        if k == "float" {
+            // the bit pattern
+            return "const float " + ins.cst.int_val.to_string();
+        }
         if k == "string" {
             return "const " + lower_quote(ins.cst.str_val);
         }

@@ -249,8 +249,25 @@ t_forms() {
 	rm -rf "$d"
 }
 
+# Float values are finite, round-trip through text and JSON, and shrink
+# toward 0.0.
+t_float() {
+	d=$(tmpdir)
+	run_test "$d/out" testdata/test/props_float.kek
+	r=
+	[ $code -eq 1 ] || r="exit $code, want 1"
+	r="$r$(contains "$d/out" \
+		"test text_round_trips ... ok (pure: hermetic, cacheable; 100 cases" \
+		"test generated_are_finite ... ok (pure: hermetic, cacheable; 100 cases" \
+		"test json_round_trips ... ok (pure: hermetic, cacheable; 100 cases" \
+		"    counterexample: small_readings(r = Reading { at: 0, value: 10.0 })" \
+		"test result: FAILED. 3 passed; 1 failed")"
+	result float "$r" "$d/out"
+	rm -rf "$d"
+}
+
 if [ "${1:-}" = --case ]; then
 	"t_$2"
 	exit 0
 fi
-run_parallel "$0" props seed cases mocks trap types refined forms
+run_parallel "$0" props seed cases mocks trap types refined forms float

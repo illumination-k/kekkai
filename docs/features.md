@@ -17,7 +17,7 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | 文字リテラル `'a'`、`b'a'` | 両方 | ✅ | `char` 型はなく、コードポイントの `Int` |
 | ラベル付きの `break` / `continue` | 両方 | 🚧 | |
 | `break value`（式としての `loop`） | Rust | 🚧 | |
-| `as` によるキャスト | 両方 | ⛔ | 数値型が `Int` だけなので不要 |
+| `as` によるキャスト | 両方 | ⛔ | 数値型は `Int` と `Float` だけなので、`i.to_float()`・`f.trunc_to_int()` などのメソッドで足りる |
 | `defer` | Go | ⛔ | 線形な `Tx` と RAII 的な後始末は型で表す |
 
 ## パターン
@@ -46,7 +46,7 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | --- | --- | --- |
 | 演算子の多重定義 `Add` `Sub` `Mul` `Div` `Rem` `Neg` | ✅ | |
 | `Display` / `Debug`、`#[derive(Debug)]`、`to_string` | ✅ | `Labeled` は実装しない（情報フロー） |
-| 浮動小数点数 `f64` | 🚧 | IR・Lean・コード生成・数値の表示が要る |
+| 浮動小数点数 `f64` | ✅ | `Float`（`Int` に合わせた名前）。`PartialEq`/`PartialOrd` のみ、暗黙の変換なし、表示は Rust と同じ最短桁。超越関数（`exp`・`ln`・`sin`、`powf`）は 🚧 |
 | `dyn Trait` | 🚧 | クロージャ（`dyn Fn`）のみ |
 | goroutine / channel、`async` | ⛔ | I/O はコンパイラがステートマシンに変換する。並行性は Workers に任せる |
 | 所有権・ライフタイム | ⛔ | 可変性の追跡（docs/mutability.md）で代える |
@@ -68,4 +68,5 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `Option` / `Result` のコンビネータ | ✅ | `map` `and_then` `ok_or` `map_err` … `unwrap` / `expect` はない |
 | `Vec` の操作（`sort` `contains` `insert` `remove` `dedup` `binary_search` …） | ✅ | |
 | `Int` の操作（`pow` `checked_*` `saturating_*` `rem_euclid` …） | ✅ | |
+| `Float` の操作（`sqrt` `floor` `round` `powi` `min` `clamp` `to_bits` `parse_float` …） | ✅ | `exp`・`ln`・三角関数はまだない |
 | `String` の操作（`chars` `lines` `split_once` `strip_prefix` `repeat` …） | ✅ | |

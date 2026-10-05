@@ -629,6 +629,8 @@ fn mut_default(t: Ty) -> String {
     match t {
         Ty::Prim(n) => if n == "Int" {
             "0"
+        } else if n == "Float" {
+            "0.0"
         } else if n == "String" {
             "\"\""
         } else if n == "Bool" { "!" } else { "" },

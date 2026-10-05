@@ -1014,7 +1014,23 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
 fn mu_pattern(mut cx: MuCx, p: AstPattern, v: MuVal) {
     match cx.info.patterns.get(p.id) {
         Some(pi) => {
-            if pi.kind == "bind" {
+            if pi.kind == "or" {
+                // the alternatives bind the same variables
+                for a in p.alts {
+                    mu_pattern(cx, a, v);
+                }
+                // `kek fix` would have to add `mut` in every alternative
+                for cb in chk_pat_bindings(cx.info, p) {
+                    match cx.binds.get(cb.id) {
+                        Some(mut b) => {
+                            b.kind = "";
+                        }
+                        None => {}
+                    }
+                }
+                return;
+            }
+            if pi.kind == "bind" || pi.kind == "at" {
                 match pi.bind {
                     Some(cb) => {
                         let rel = mu_rel(cx, cb.ty);
@@ -1036,6 +1052,10 @@ fn mu_pattern(mut cx: MuCx, p: AstPattern, v: MuVal) {
                         );
                     }
                     None => {}
+                }
+                // `x @ p`: p is matched against the same value
+                for a in p.at {
+                    mu_pattern(cx, a, v);
                 }
                 return;
             }
@@ -1139,6 +1159,12 @@ fn mu_expr(cx: MuCx, e0: AstExpr) -> MuVal {
             let mut out = mu_val(0);
             for arm in e.arms {
                 mu_pattern(cx, arm.pat, x);
+                match arm.guard {
+                    Some(g) => {
+                        mu_expr(cx, g);
+                    }
+                    None => {}
+                }
                 out = mu_join(out, mu_expr(cx, arm.body));
             }
             out

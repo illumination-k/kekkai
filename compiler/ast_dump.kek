@@ -390,6 +390,13 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             for a in x.arms {
                 ast_line(d, depth + 1, "arm @" + ast_dump_pos(a.pos));
                 ast_dump_pattern(d, depth + 2, a.pat);
+                match a.guard {
+                    Some(g) => {
+                        ast_line(d, depth + 2, "guard");
+                        ast_dump_expr(d, depth + 3, g);
+                    }
+                    None => {}
+                }
                 ast_dump_expr(d, depth + 2, a.body);
             }
         }
@@ -452,6 +459,40 @@ fn ast_dump_pattern(d: AstDumper, depth: Int, p: AstPattern) {
     if p.wildcard {
         ast_line(d, depth, "pat _" + at);
         return;
+    }
+    if p.alts.len() > 0 {
+        ast_line(d, depth, "pat or" + at);
+        for a in p.alts {
+            ast_dump_pattern(d, depth + 1, a);
+        }
+        return;
+    }
+    if p.range {
+        let mut r = "pat range ";
+        match p.range_lo {
+            Some(v) => {
+                r = r + v.to_string();
+            }
+            None => {}
+        }
+        r = r + if p.range_incl { "..=" } else { ".." };
+        match p.range_hi {
+            Some(v) => {
+                r = r + v.to_string();
+            }
+            None => {}
+        }
+        ast_line(d, depth, r + at);
+        return;
+    }
+    match p.at.get(0) {
+        Some(sub) => {
+            let m = if p.mutable { " mut" } else { "" };
+            ast_line(d, depth, "pat at bind=" + p.bind + m + at);
+            ast_dump_pattern(d, depth + 1, sub);
+            return;
+        }
+        None => {}
     }
     if p.tuple {
         ast_line(d, depth, "pat tuple" + at);

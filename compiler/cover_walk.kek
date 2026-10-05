@@ -7,7 +7,8 @@
 //
 //   cover    insert probes `__cov_hit(k);` (lib/prelude/cover.kek): at the
 //            entry of every function, in every branch (then / else, also
-//            an implicit empty else, match arms), loop body and closure
+//            an implicit empty else, match arms, both outcomes of a match
+//            guard), loop body and closure
 //            body, and after every statement that may leave its block
 //            early (`return`, `?`, `break`, `continue`), so that the probes
 //            give exact line coverage. Each probe is a site (CovSite) with
@@ -27,7 +28,7 @@ struct CovSite {
     file: String,
     line: Int,
     col: Int,
-    // fn, then, else, arm, loop, closure, seq
+    // fn, then, else, arm, guard, loop, closure, seq
     kind: String,
     // branches: the decision (if / match) they belong to, their index in
     // it and its line
@@ -227,6 +228,14 @@ fn cov_div_expr(e: AstExpr, loops: Int) -> Bool {
             for a in x.arms {
                 if cov_div_expr(a.body, loops) {
                     return true;
+                }
+                match a.guard {
+                    Some(ge) => {
+                        if cov_div_expr(ge, loops) {
+                            return true;
+                        }
+                    }
+                    None => {}
                 }
             }
             cov_div_expr(x.x, loops)
@@ -565,6 +574,10 @@ fn cov_match(mut w: CovW, x: AstMatch) -> AstExpr {
     let mut arms = Vec::new();
     let mut i = 0;
     for a in x.arms {
+        let guard = match a.guard {
+            Some(ge) => Some(cov_guard(w, ge, a.pos.line)),
+            None => None,
+        };
         let body = match a.body {
             AstExpr::Block(b) => AstExpr::Block(
                 cov_block_k(w, b, "arm", g, i, x.pos.line, a.pos.line),
@@ -575,10 +588,32 @@ fn cov_match(mut w: CovW, x: AstMatch) -> AstExpr {
                 cov_expr(w, other)
             },
         };
-        arms.push(AstMatchArm { id: a.id, pos: a.pos, pat: a.pat, body: body });
+        arms.push(AstMatchArm { id: a.id, pos: a.pos, pat: a.pat, guard: guard, body: body });
         i = i + 1;
     }
     AstExpr::Match(AstMatch { id: x.id, pos: x.pos, x: scrut, arms: arms })
+}
+
+// cov_guard walks a match guard. In cover mode the guard is a decision of
+// its own: `if g { hit(t); true } else { hit(f); false }` (the sites cover
+// no lines; the arm's probe does).
+fn cov_guard(mut w: CovW, ge: AstExpr, line: Int) -> AstExpr {
+    let g2 = cov_expr(w, ge);
+    if w.mode != "cover" {
+        return g2;
+    }
+    w.groups = w.groups + 1;
+    let g = w.groups;
+    let pos = fmt_start_pos(ge);
+    let kt = cov_new_site(w, pos, "guard", g, 0, line);
+    let kf = cov_new_site(w, pos, "guard", g, 1, line);
+    let mut ts = Vec::new();
+    ts.push(cov_probe(w, kt, pos));
+    let t = AstExpr::BoolLit(AstBoolLit { id: cov_id(w), pos: pos, value: true });
+    let mut fs = Vec::new();
+    fs.push(cov_probe(w, kf, pos));
+    let f = AstExpr::BoolLit(AstBoolLit { id: cov_id(w), pos: pos, value: false });
+    cov_if(w, pos, g2, cov_block_of(w, pos, ts, Some(t)), cov_block_of(w, pos, fs, Some(f)))
 }
 
 // ---- source text helpers (reports) ----

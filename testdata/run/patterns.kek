@@ -1,0 +1,129 @@
+// Match guards, or-patterns, range patterns and `@` bindings.
+
+enum Shape {
+    Circle(Int),
+    Square(Int),
+    Rect(Int, Int),
+    Dot,
+}
+
+fn grade(n: Int) -> String {
+    match n {
+        ..=-1 => "negative",
+        0 => "zero",
+        1..=9 => "digit",
+        10..100 => "two digits",
+        100.. => "large",
+        _ => "unreachable",
+    }
+}
+
+fn side(s: Shape) -> Int {
+    match s {
+        Shape::Circle(n) | Shape::Square(n) => n,
+        Shape::Rect(w, h) if w == h => w,
+        Shape::Rect(w, _) => -w,
+        Shape::Dot => 0,
+    }
+}
+
+fn small(o: Option<Int>) -> String {
+    match o {
+        Some(1 | 2 | 3) => "small",
+        Some(n @ 4..=6) => "medium " + n.to_string(),
+        Some(n) if n < 0 => "neg " + n.to_string(),
+        whole @ Some(_) => "other " + whole.unwrap_or(0).to_string(),
+        None => "none",
+    }
+}
+
+fn parity(n: Int) -> String {
+    match n {
+        x if x % 2 == 0 => "even",
+        _ => "odd",
+    }
+}
+
+fn first_pair(p: (Option<Int>, Option<Int>)) -> Int {
+    match p {
+        (Some(a), _) | (None, Some(a)) => a,
+        (None, None) => -1,
+    }
+}
+
+fn is_ok(r: Result<Int, String>) -> Bool {
+    match r {
+        Ok(0..=10) => true,
+        Ok(_) | Err(_) => false,
+    }
+}
+
+fn bump(mut v: Vec<Int>, k: Int) {
+    v.push(k);
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    log.info(grade(-5) + " " + grade(0) + " " + grade(7) + " " + grade(42) + " " + grade(100));
+    log.info(
+        side(Shape::Circle(3)).to_string()
+            + " "
+            + side(Shape::Square(4)).to_string()
+            + " "
+            + side(Shape::Rect(5, 5)).to_string()
+            + " "
+            + side(Shape::Rect(5, 6)).to_string()
+            + " "
+            + side(Shape::Dot).to_string(),
+    );
+    log.info(
+        small(Some(2))
+            + ", "
+            + small(Some(5))
+            + ", "
+            + small(Some(-3))
+            + ", "
+            + small(Some(9))
+            + ", "
+            + small(None),
+    );
+    log.info(parity(4) + " " + parity(7));
+    log.info(
+        first_pair((Some(1), Some(2))).to_string()
+            + " "
+            + first_pair((None, Some(2))).to_string()
+            + " "
+            + first_pair((None, None)).to_string(),
+    );
+    log.info(
+        is_ok(Ok(3)).to_string()
+            + " "
+            + is_ok(Ok(11)).to_string()
+            + " "
+            + is_ok(Err("e")).to_string(),
+    );
+    if let Some(1 | 2) = Some(2) {
+        log.info("if let or");
+    }
+    let mut it: Vec<Option<Int>> = Vec::new();
+    it.push(Some(1));
+    it.push(Some(5));
+    it.push(None);
+    let mut i = 0;
+    let mut seen = 0;
+    while let Some(Some(n @ 1..=5)) = it.get(i) {
+        seen = seen + n;
+        i = i + 1;
+    }
+    log.info("while let " + seen.to_string());
+    // the guard sees the bindings and may call methods
+    let mut acc: Vec<Int> = Vec::new();
+    for k in 0..6 {
+        match k {
+            n @ (1 | 3 | 5) if acc.len() < 2 => bump(acc, n),
+            _ => {}
+        }
+    }
+    log.info("acc " + acc.len().to_string());
+    0
+}

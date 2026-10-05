@@ -800,7 +800,7 @@ fn parse_block(mut p: ParseState) -> AstBlock {
             parse_next(p);
             let mut pat = None;
             if parse_accept(p, "let") {
-                pat = Some(parse_pattern(p));
+                pat = Some(parse_top_pattern(p));
                 parse_expect(p, "=");
             }
             p.no_struct = true;
@@ -1307,7 +1307,7 @@ fn parse_if(mut p: ParseState) -> AstIf {
     let pos = parse_expect(p, "if").pos;
     let mut pat = None;
     if parse_accept(p, "let") {
-        pat = Some(parse_pattern(p));
+        pat = Some(parse_top_pattern(p));
         parse_expect(p, "=");
     }
     let saved = p.no_struct;
@@ -1336,10 +1336,14 @@ fn parse_match(mut p: ParseState) -> AstExpr {
     parse_expect(p, "{");
     while !parse_at(p, "}") {
         let ap = parse_tok(p).pos;
-        let pat = parse_pattern(p);
+        let pat = parse_top_pattern(p);
+        let mut guard = None;
+        if parse_accept(p, "if") {
+            guard = Some(parse_expr(p));
+        }
         parse_expect(p, "=>");
         let body = parse_expr(p);
-        m.arms.push(AstMatchArm { id: parse_id(p), pos: ap, pat: pat, body: body });
+        m.arms.push(AstMatchArm { id: parse_id(p), pos: ap, pat: pat, guard: guard, body: body });
         if !parse_accept(p, ",") {
             if parse_block_like(body) && !p.failed {
                 continue;
@@ -1351,22 +1355,61 @@ fn parse_match(mut p: ParseState) -> AstExpr {
     AstExpr::Match(m)
 }
 
+// parse_top_pattern parses the pattern of a match arm, `if let` or
+// `while let`, which may start with `|`.
+fn parse_top_pattern(p: ParseState) -> AstPattern {
+    parse_accept(p, "|");
+    parse_pattern(p)
+}
+
+// parse_pattern parses a pattern, an or-pattern `p | q | ...` included.
 fn parse_pattern(p: ParseState) -> AstPattern {
+    let pos = parse_tok(p).pos;
+    let first = parse_pattern_no_alt(p);
+    if !parse_at(p, "|") {
+        return first;
+    }
+    let mut pat = ast_new_pattern(parse_id(p), pos);
+    pat.alts.push(first);
+    while parse_accept(p, "|") {
+        pat.alts.push(parse_pattern_no_alt(p));
+    }
+    pat
+}
+
+// parse_kind_ahead is the kind of the token n places after the current one.
+fn parse_kind_ahead(p: ParseState, n: Int) -> String {
+    if p.failed {
+        return "";
+    }
+    match p.toks.get(p.pos + n) {
+        Some(t) => t.kind,
+        None => "",
+    }
+}
+
+// parse_pattern_int parses an integer literal pattern, optionally negated.
+fn parse_pattern_int(p: ParseState) -> Int {
+    let neg = parse_accept(p, "-");
+    let it = parse_expect(p, "INT");
+    let mut v = 0;
+    match parse_int_text(it.text) {
+        Some(n) => {
+            v = n;
+        }
+        None => parse_fail(p, it.pos, "integer literal out of range"),
+    }
+    if neg {
+        v = -v;
+    }
+    v
+}
+
+// parse_pattern_no_alt parses a pattern other than an or-pattern (one
+// alternative of it).
+fn parse_pattern_no_alt(p: ParseState) -> AstPattern {
     let t = parse_tok(p);
-    let mut pat = AstPattern {
-        id: parse_id(p),
-        pos: t.pos,
-        wildcard: false,
-        tuple: false,
-        mutable: false,
-        bind: "",
-        ty: "",
-        ctor: "",
-        args: Vec::new(),
-        int_value: None,
-        bool_lit: None,
-        str_value: None,
-    };
+    let mut pat = ast_new_pattern(parse_id(p), t.pos);
     let k = t.kind;
     if k == "_" {
         parse_next(p);
@@ -1391,6 +1434,22 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         pat.tuple = true;
         return pat;
     }
+    if (k == "IDENT" && parse_peek_at(p, "@"))
+        || (k == "mut" && parse_peek_at(p, "IDENT") && parse_kind_ahead(p, 2) == "@") {
+        // `name @ p`
+        pat.mutable = parse_accept(p, "mut");
+        pat.bind = parse_expect(p, "IDENT").text;
+        parse_expect(p, "@");
+        pat.at.push(parse_pattern_no_alt(p));
+        return pat;
+    }
+    if k == "..=" {
+        parse_next(p);
+        pat.range = true;
+        pat.range_incl = true;
+        pat.range_hi = Some(parse_pattern_int(p));
+        return pat;
+    }
     if k == "mut" {
         parse_next(p);
         let it = parse_expect(p, "IDENT");
@@ -1399,17 +1458,19 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         return pat;
     }
     if k == "INT" || k == "-" {
-        let neg = parse_accept(p, "-");
-        let it = parse_expect(p, "INT");
-        let mut v = 0;
-        match parse_int_text(it.text) {
-            Some(n) => {
-                v = n;
+        let v = parse_pattern_int(p);
+        if parse_at(p, "..=") || parse_at(p, "..") {
+            // `lo..=hi`, `lo..hi` or `lo..`
+            pat.range = true;
+            pat.range_lo = Some(v);
+            pat.range_incl = parse_at(p, "..=");
+            parse_next(p);
+            if parse_at(p, "INT") || parse_at(p, "-") {
+                pat.range_hi = Some(parse_pattern_int(p));
+            } else if pat.range_incl {
+                parse_fail(p, parse_tok(p).pos, "expected the end of the range pattern");
             }
-            None => parse_fail(p, it.pos, "integer literal out of range"),
-        }
-        if neg {
-            v = -v;
+            return pat;
         }
         pat.int_value = Some(v);
         return pat;

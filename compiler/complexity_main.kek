@@ -7,7 +7,7 @@
 //                operators and recursive call; if, match and loops add
 //                their nesting level too
 //   cyclomatic   McCabe: 1 + if, loops, match arms beyond the first,
-//                && / || and `?`
+//                match guards, && / || and `?`
 //   nesting      the deepest nesting of if / match / loops / closures
 //   lines        from the `fn` to the closing brace
 //
@@ -465,6 +465,14 @@ fn cx_expr_in(mut w: CxWalk, e: AstExpr, logic: String) {
             cx_expr(w, x.x);
             cx_enter(w, x.pos);
             for arm in x.arms {
+                match arm.guard {
+                    Some(g) => {
+                        // a guard is one more decision
+                        w.cyclomatic = w.cyclomatic + 1;
+                        cx_expr(w, g);
+                    }
+                    None => {}
+                }
                 cx_expr(w, arm.body);
             }
             cx_leave(w);

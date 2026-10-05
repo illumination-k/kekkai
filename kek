@@ -382,6 +382,10 @@ Compiler internals:
   kek embed-prelude lib/prelude compiler/prelude_src.kek [-check]
   kek embed-prelude lib/core compiler/core_src.kek -as core [-check]
 
+Editors:
+  kek lsp                         language server on stdin/stdout (diagnostics, hover,
+                                  definition, references, symbols; docs/tooling.md)
+
 Daemon:
   kek daemon start|stop|status|stats
                                   keep the compiler running: parses stay in memory between builds
@@ -1809,6 +1813,12 @@ assure)
 	;;
 similar) cmd_similar "$@" ;;
 complexity) cmd_complexity "$@" ;;
+lsp)
+	# the language server reads its standard input for as long as the
+	# editor runs: never through the daemon (compiler/lsp.kek)
+	stage_dir
+	wasm "$(stage_module "$_stage_memo")" lsp "$root"
+	;;
 help | -h | --help) usage ;;
 *) compiler "$cmd" "$@" ;;
 esac

@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "kekkai": {
+      "source": {
+        "source": "directory",
+        "path": "."
+      }
+    }
+  },
+  "enabledPlugins": {
+    "kekkai-lsp@kekkai": true
+  }
+}

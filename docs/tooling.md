@@ -168,6 +168,53 @@ long).
   errors (type errors stop the fixing; refinement checks are skipped) are
   printed to stderr; the exit status is then 1.
 
+## `kek lsp`
+
+A language server (the Language Server Protocol over standard input and
+output, `compiler/lsp.kek`) for editors and for Claude Code's LSP tool.
+It answers from the same analysis as `check -json`, so its diagnostics
+are exactly those of `kek check -json` (with `phase` as the diagnostic's
+`code` and the refinement facts as `relatedInformation`).
+
+| Request | Answer |
+| --- | --- |
+| `didOpen` / `didChange` / `didSave` | `publishDiagnostics` for every file of the document's program that has diagnostics (or had them) |
+| `textDocument/hover` | a binding's type (`let x: T`), a builtin operation's type, or the declaration (signature up to the body) and the comment above it |
+| `textDocument/definition` | the declaration of a local, parameter, function, method (also in the core library: `lib/core`), struct, field, enum, variant, trait or type alias |
+| `textDocument/references` | every occurrence that resolves to the same declaration, across the files of the program |
+| `textDocument/documentSymbol` | the declarations of the file and their members |
+| `workspace/symbol` | the declarations of the `.kek` files under the workspace root whose name contains the query (case-insensitive) |
+
+- **Programs.** The program of a file is its directory when the directory
+  has several `.kek` files and no two of them declare the same top-level
+  name (`compiler/`, `examples/todo-app/server`); otherwise the file alone
+  (`testdata/run/`, where every file has its own `main`). Open documents
+  are analyzed from the editor's text, the other files from disk; the
+  analysis is reused while none of the texts change.
+- Files under `lib/` (the prelude and the core library) get no
+  diagnostics: they are checked as part of every program.
+- Names are resolved by the type checker (`ChkInfo`): a method call goes
+  to the method the checker chose, a field to the field of the
+  receiver's struct type. Programs with parse errors have no
+  definitions or references (the checker does not run).
+- Positions are UTF-16 code units, or UTF-8 bytes when the client offers
+  `utf-8` in `general.positionEncodings`. Synchronization is full (the
+  whole text on each change).
+- `./kek lsp` runs the current compiler directly, never through
+  `kek daemon`. It reads `./kekkai.toml` (the `[refine]` section) of the
+  workspace root.
+- For checking the whole compiler (`compiler/`, about 40,000 lines) a
+  change takes about 2 s; a single-file program about 0.1 s.
+
+### Claude Code
+
+The repository is a plugin marketplace (`.claude-plugin/marketplace.json`)
+with one plugin, `kekkai-lsp` (`editors/claude-code`), whose `.lsp.json`
+starts `${CLAUDE_PROJECT_DIR}/kek lsp` for `.kek` files. With it, Claude
+gets the diagnostics after each edit of a `.kek` file and can use the LSP
+tool (`goToDefinition`, `findReferences`, `hover`, `documentSymbol`,
+`workspaceSymbol`). See the README for enabling it.
+
 ## `kek search [-json] [-limit n] '<signature>' [file.kek]`
 
 A Hoogle-style search by type, as described under 型検索 in

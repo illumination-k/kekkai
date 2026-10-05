@@ -19,6 +19,9 @@ fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
     if cmd == "caps" {
         return caps_main(args, fs, log);
     }
+    if cmd == "lsp" {
+        return lsp_main(args, fs, log);
+    }
     if cmd == "search" {
         return search_main(args, fs, log);
     }
@@ -76,7 +79,7 @@ fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
         return prelude_embed_main(args, fs, log);
     }
     log.error(
-        "usage: kek (lex|ast|check|ir|build|test-build|fmt|fix|caps|search|hash|config|similar|complexity|assure|cover-build|cover-report|mutate-build|mutate-report|embed-prelude) ...",
+        "usage: kek (lex|ast|check|ir|build|test-build|fmt|fix|caps|search|lsp|hash|config|similar|complexity|assure|cover-build|cover-report|mutate-build|mutate-report|embed-prelude) ...",
     );
     2
 }

@@ -21,6 +21,9 @@
 #   assure        kek assure plan/apply/check on testdata/assure against
 #                 tests/assure goldens
 #   daemon        kek daemon: the compiler kept running gives the same results
+#   lsp           kek lsp: a language server session on tests/lsp against
+#                 its golden (diagnostics, hover, definition, references,
+#                 symbols, UTF-16 positions)
 #   actions       kek affected / test -affected (git changes), the input-digest
 #                 action cache of build and test, the remote cache (file://)
 #   similar       kek similar (duplicate / similar code) against tests/similar goldens
@@ -83,7 +86,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar complexity smt refine fmt fix difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon lsp cover mutate agent-cmds assure similar complexity smt refine fmt fix difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

@@ -53,6 +53,7 @@ mise run todo-app                          # フロントエンド付きの例�
 | `kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base path \| -diff rev] <file\|dir>` | 関数ごとの認知的複雑度・循環的複雑度・ネストの深さ。上限を超えれば終了コード 1（CI で強制できる） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
 | `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
+| `kek lsp` | Language Server（標準入出力）。診断・hover・定義へのジャンプ・参照・シンボル。エディタと Claude Code から使う（[docs/tooling.md](docs/tooling.md)） |
 | `kek daemon start\|stop\|status\|stats` | コンパイラを常駐させる（構文木をメモリに残し、変わったファイルだけ構文解析する） |
 | `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`complexity`、`assure` の土台 |
 | `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[complexity]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
@@ -251,6 +252,12 @@ KEK_REMOTE_CACHE=https://cache.example ./kek test src   # CI と手元でキャ�
 ```
 
 `KEK_REMOTE_CACHE` は Bazel のリモートキャッシュと同じ HTTP プロトコル（`GET`/`PUT <url>/ac/<sha256>`）で、bazel-remote（`--disable_http_ac_validation`）や `file://` の共有ディレクトリが使えます。設計と現状は [docs/parallel-build.md](docs/parallel-build.md)。
+
+### エディタと Claude Code（`kek lsp`）
+
+`./kek lsp` は Language Server Protocol を話す言語サーバーです。診断は `kek check -json` と同じもので、ディレクトリが 1 つのプログラムのとき（`compiler/` など）はファイルをまたいで定義・参照をたどります。
+
+このリポジトリはそのまま Claude Code のプラグインのマーケットプレイスになっていて（`.claude-plugin/marketplace.json`、プラグインは `editors/claude-code`）、`.claude/settings.json` で有効にしています。リポジトリを Claude Code で開いてマーケットプレイスを信頼すると、`.kek` を編集するたびに Claude が診断を受け取り、LSP ツール（定義・参照・hover・シンボル）を使えるようになります。読み込まれないときは `/plugin` で `kekkai-lsp@kekkai` をインストールしてください。サーバーは `${CLAUDE_PROJECT_DIR}/kek lsp` で起動するので、wasmtime が PATH にあること（`mise install`）が前提です。
 
 ## 開発
 

@@ -1,0 +1,9 @@
+{
+  "name": "kekkai-lsp",
+  "version": "0.1.0",
+  "description": "Kekkai language server (kek lsp) for .kek files",
+  "author": {
+    "name": "illumination-k"
+  },
+  "lspServers": "./.lsp.json"
+}

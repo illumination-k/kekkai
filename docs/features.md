@@ -17,6 +17,8 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | 文字リテラル `'a'`、`b'a'` | 両方 | ✅ | `char` 型はなく、コードポイントの `Int` |
 | ラベル付きの `break` / `continue` | 両方 | 🚧 | |
 | `break value`（式としての `loop`） | Rust | 🚧 | |
+| 式としての代入（`Some(x) => n += x,`） | Rust | 🚧 | 現状は文なので腕ではブロックで包む |
+| `?` での `From` によるエラー型の変換 | Rust | 🚧 | 現状はエラー型の一致が必要 |
 | `as` によるキャスト | 両方 | ⛔ | 数値型が `Int` だけなので不要 |
 | `defer` | Go | ⛔ | 線形な `Tx` と RAII 的な後始末は型で表す |
 
@@ -48,6 +50,8 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `Display` / `Debug`、`#[derive(Debug)]`、`to_string` | ✅ | `Labeled` は実装しない（情報フロー） |
 | 浮動小数点数 `f64` | 🚧 | IR・Lean・コード生成・数値の表示が要る |
 | `dyn Trait` | 🚧 | クロージャ（`dyn Fn`）のみ |
+| `impl Trait`（引数・戻り値、`Fn` 以外） | 🚧 | |
+| trait の関連定数 | 🚧 | |
 | goroutine / channel、`async` | ⛔ | I/O はコンパイラがステートマシンに変換する。並行性は Workers に任せる |
 | 所有権・ライフタイム | ⛔ | 可変性の追跡（docs/mutability.md）で代える |
 
@@ -69,3 +73,6 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `Vec` の操作（`sort` `contains` `insert` `remove` `dedup` `binary_search` …） | ✅ | |
 | `Int` の操作（`pow` `checked_*` `saturating_*` `rem_euclid` …） | ✅ | |
 | `String` の操作（`chars` `lines` `split_once` `strip_prefix` `repeat` …） | ✅ | |
+| イテレータの追加のアダプタ（`flat_map` `scan` `partition` `unzip` …） | 🚧 | |
+| `HashMap` の entry API | 🚧 | |
+| `BTreeMap` / `BTreeSet` / `VecDeque` | 🚧 | |

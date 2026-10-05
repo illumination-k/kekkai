@@ -1,0 +1,32 @@
+testdata/complexity/basic.kek:68:1  deep (Vec<Vec<Int>>) -> Int
+  cognitive 15, cyclomatic 6, nesting 5 > 4, 15 lines
+  hint: nested 5 deep at 74:21: return early or extract the inner block into a function
+
+testdata/complexity/basic.kek:127:1  deep_allowed (Vec<Vec<Int>>) -> Int
+  cognitive 15, cyclomatic 6, nesting 5 > 4, 15 lines
+  allowed by #[allow(complexity)]
+
+testdata/complexity/basic.kek:86:1  shipping (Int, Bool, Bool, Int) -> Int
+  cognitive 12, cyclomatic 13 > 10, nesting 2, 38 lines
+  hint: 13 paths: each needs its own test case
+
+testdata/complexity/basic.kek:23:1  in_range (Int, Int, Int, Bool) -> Bool
+  cognitive 3, cyclomatic 4, nesting 1, 6 lines
+testdata/complexity/basic.kek:36:1  count_kinds (Vec<Int>) -> Int
+  cognitive 3, cyclomatic 4, nesting 2, 15 lines
+testdata/complexity/basic.kek:10:1  classify (Int) -> String
+  cognitive 3, cyclomatic 3, nesting 1, 5 lines
+testdata/complexity/basic.kek:17:1  fact (Int) -> Int
+  cognitive 3, cyclomatic 2, nesting 1, 3 lines
+testdata/complexity/basic.kek:31:1  any_big (Vec<Int>) -> Bool
+  cognitive 3, cyclomatic 2, nesting 2, 3 lines
+testdata/complexity/basic.kek:60:1  half (Int) -> Result<Int, String>
+  cognitive 1, cyclomatic 2, nesting 1, 6 lines
+testdata/complexity/basic.kek:53:1  sum_halves (Int, Int) -> Result<Int, String>
+  cognitive 0, cyclomatic 3, nesting 0, 5 lines
+testdata/complexity/basic.kek:5:1  add (Int, Int) -> Int
+  cognitive 0, cyclomatic 1, nesting 0, 3 lines
+
+2 functions over the limits (cognitive 15, cyclomatic 10, nesting 4)
+1 allowed by #[allow(complexity)]
+--- exit 1

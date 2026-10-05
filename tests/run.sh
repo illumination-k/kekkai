@@ -24,6 +24,8 @@
 #   actions       kek affected / test -affected (git changes), the input-digest
 #                 action cache of build and test, the remote cache (file://)
 #   similar       kek similar (duplicate / similar code) against tests/similar goldens
+#   complexity    kek complexity (cognitive / cyclomatic complexity, nesting)
+#                 against tests/complexity goldens
 #   smt           the refinement-type solver (kek smt): testdata/smt goldens,
 #                 random formulas against brute force, a timed benchmark
 #   refine        refinement types in kek check: plain, -v and -json
@@ -81,7 +83,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar smt refine fmt fix difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar complexity smt refine fmt fix difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

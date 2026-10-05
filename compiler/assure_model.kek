@@ -440,16 +440,18 @@ fn asr_def_fun(p: DhProgram, name: String) -> Option<ChkFunc> {
 fn asr_assumptions(fun: ChkFunc) -> Vec<AsrAssume> {
     let mut out = Vec::new();
     for a in fun.decl.attrs {
-        if a.name == "allow" && ast_attr_has(a, "similar") {
-            out.push(AsrAssume {
-                kind: "allow(similar)",
-                call: "",
-                reason: ast_attr_value(a, "reason").unwrap_or(""),
-                owner: ast_attr_value(a, "owner").unwrap_or(""),
-                expires: ast_attr_value(a, "expires").unwrap_or(""),
-                line: a.pos.line,
-                col: 0,
-            });
+        for what in "similar complexity".split(" ") {
+            if a.name == "allow" && ast_attr_has(a, what) {
+                out.push(AsrAssume {
+                    kind: "allow(" + what + ")",
+                    call: "",
+                    reason: ast_attr_value(a, "reason").unwrap_or(""),
+                    owner: ast_attr_value(a, "owner").unwrap_or(""),
+                    expires: ast_attr_value(a, "expires").unwrap_or(""),
+                    line: a.pos.line,
+                    col: 0,
+                });
+            }
         }
         if a.name == "policy" {
             // an authorization policy: its decisions are trusted

@@ -1,0 +1,12 @@
+--- stderr
+testdata/check/err_types.kek:4:5: non-exhaustive patterns in match on `Color`: missing `Color::Blue`
+testdata/check/err_types.kek:11:5: mismatched types in function result: expected `String`, found `Int`
+testdata/check/err_types.kek:15:14: `?` cannot convert the error type `TxError` into `NetError`
+testdata/check/err_types.kek:21:5: cannot assign twice to immutable variable `x` (declare it with `let mut`)
+testdata/check/err_types.kek:26:6: the `?` operator can only be used on `Option` in a function that returns `Option` (this returns `Int`)
+testdata/check/err_types.kek:30:1: a handler must return `Response`, found `Int`
+testdata/check/err_types.kek:30:11: handler parameters must be `Request` or capabilities (&Log, &Net, &Db, &Clock, &Random), found `Int`
+testdata/check/err_types.kek:35:5: non-exhaustive patterns in match on `Result<Option<Int>, String>`: missing `Ok(_)`
+testdata/check/err_types.kek:56:9: unreachable pattern
+kek complexity: cannot load the base program testdata/check/err_types.kek
+--- exit 2

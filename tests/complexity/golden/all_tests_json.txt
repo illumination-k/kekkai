@@ -1,0 +1,349 @@
+{
+  "path": "testdata/complexity/basic.kek",
+  "limits": {
+    "cognitive": 15,
+    "cyclomatic": 10,
+    "nesting": 4,
+    "lines": 0
+  },
+  "findings": [
+    {
+      "name": "deep",
+      "file": "testdata/complexity/basic.kek",
+      "line": 68,
+      "col": 1,
+      "sig": "(Vec<Vec<Int>>) -> Int",
+      "hash": "H",
+      "cognitive": 15,
+      "cyclomatic": 6,
+      "nesting": 5,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 74,
+        "col": 21
+      },
+      "over": [
+        "nesting"
+      ],
+      "new": true,
+      "hint": "nested 5 deep at 74:21: return early or extract the inner block into a function"
+    },
+    {
+      "name": "deep_test",
+      "file": "testdata/complexity/basic.kek",
+      "line": 145,
+      "col": 1,
+      "sig": "() -> Bool",
+      "hash": "H",
+      "cognitive": 15,
+      "cyclomatic": 6,
+      "nesting": 5,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 151,
+        "col": 21
+      },
+      "over": [
+        "nesting"
+      ],
+      "new": true,
+      "hint": "nested 5 deep at 151:21: return early or extract the inner block into a function"
+    },
+    {
+      "name": "shipping",
+      "file": "testdata/complexity/basic.kek",
+      "line": 86,
+      "col": 1,
+      "sig": "(Int, Bool, Bool, Int) -> Int",
+      "hash": "H",
+      "cognitive": 12,
+      "cyclomatic": 13,
+      "nesting": 2,
+      "lines": 38,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 116,
+        "col": 9
+      },
+      "over": [
+        "cyclomatic"
+      ],
+      "new": true,
+      "hint": "13 paths: each needs its own test case"
+    }
+  ],
+  "allowed": [
+    {
+      "name": "deep_allowed",
+      "file": "testdata/complexity/basic.kek",
+      "line": 127,
+      "col": 1,
+      "sig": "(Vec<Vec<Int>>) -> Int",
+      "hash": "H",
+      "cognitive": 15,
+      "cyclomatic": 6,
+      "nesting": 5,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 133,
+        "col": 21
+      },
+      "over": [
+        "nesting"
+      ],
+      "new": true,
+      "hint": "nested 5 deep at 133:21: return early or extract the inner block into a function",
+      "allowed_by": {
+        "reason": "a fixture",
+        "owner": "tests",
+        "expires": "2099-01-01"
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": "deep",
+      "file": "testdata/complexity/basic.kek",
+      "line": 68,
+      "col": 1,
+      "sig": "(Vec<Vec<Int>>) -> Int",
+      "hash": "H",
+      "cognitive": 15,
+      "cyclomatic": 6,
+      "nesting": 5,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 74,
+        "col": 21
+      },
+      "over": [
+        "nesting"
+      ],
+      "new": true,
+      "hint": "nested 5 deep at 74:21: return early or extract the inner block into a function"
+    },
+    {
+      "name": "deep_allowed",
+      "file": "testdata/complexity/basic.kek",
+      "line": 127,
+      "col": 1,
+      "sig": "(Vec<Vec<Int>>) -> Int",
+      "hash": "H",
+      "cognitive": 15,
+      "cyclomatic": 6,
+      "nesting": 5,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 133,
+        "col": 21
+      },
+      "over": [
+        "nesting"
+      ],
+      "new": true,
+      "hint": "nested 5 deep at 133:21: return early or extract the inner block into a function"
+    },
+    {
+      "name": "deep_test",
+      "file": "testdata/complexity/basic.kek",
+      "line": 145,
+      "col": 1,
+      "sig": "() -> Bool",
+      "hash": "H",
+      "cognitive": 15,
+      "cyclomatic": 6,
+      "nesting": 5,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 151,
+        "col": 21
+      },
+      "over": [
+        "nesting"
+      ],
+      "new": true,
+      "hint": "nested 5 deep at 151:21: return early or extract the inner block into a function"
+    },
+    {
+      "name": "shipping",
+      "file": "testdata/complexity/basic.kek",
+      "line": 86,
+      "col": 1,
+      "sig": "(Int, Bool, Bool, Int) -> Int",
+      "hash": "H",
+      "cognitive": 12,
+      "cyclomatic": 13,
+      "nesting": 2,
+      "lines": 38,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 116,
+        "col": 9
+      },
+      "over": [
+        "cyclomatic"
+      ],
+      "new": true,
+      "hint": "13 paths: each needs its own test case"
+    },
+    {
+      "name": "in_range",
+      "file": "testdata/complexity/basic.kek",
+      "line": 23,
+      "col": 1,
+      "sig": "(Int, Int, Int, Bool) -> Bool",
+      "hash": "H",
+      "cognitive": 3,
+      "cyclomatic": 4,
+      "nesting": 1,
+      "lines": 6,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 24,
+        "col": 5
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "count_kinds",
+      "file": "testdata/complexity/basic.kek",
+      "line": 36,
+      "col": 1,
+      "sig": "(Vec<Int>) -> Int",
+      "hash": "H",
+      "cognitive": 3,
+      "cyclomatic": 4,
+      "nesting": 2,
+      "lines": 15,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 39,
+        "col": 9
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "classify",
+      "file": "testdata/complexity/basic.kek",
+      "line": 10,
+      "col": 1,
+      "sig": "(Int) -> String",
+      "hash": "H",
+      "cognitive": 3,
+      "cyclomatic": 3,
+      "nesting": 1,
+      "lines": 5,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 11,
+        "col": 5
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "fact",
+      "file": "testdata/complexity/basic.kek",
+      "line": 17,
+      "col": 1,
+      "sig": "(Int) -> Int",
+      "hash": "H",
+      "cognitive": 3,
+      "cyclomatic": 2,
+      "nesting": 1,
+      "lines": 3,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 18,
+        "col": 5
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "any_big",
+      "file": "testdata/complexity/basic.kek",
+      "line": 31,
+      "col": 1,
+      "sig": "(Vec<Int>) -> Bool",
+      "hash": "H",
+      "cognitive": 3,
+      "cyclomatic": 2,
+      "nesting": 2,
+      "lines": 3,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 32,
+        "col": 22
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "half",
+      "file": "testdata/complexity/basic.kek",
+      "line": 60,
+      "col": 1,
+      "sig": "(Int) -> Result<Int, String>",
+      "hash": "H",
+      "cognitive": 1,
+      "cyclomatic": 2,
+      "nesting": 1,
+      "lines": 6,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 61,
+        "col": 5
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "sum_halves",
+      "file": "testdata/complexity/basic.kek",
+      "line": 53,
+      "col": 1,
+      "sig": "(Int, Int) -> Result<Int, String>",
+      "hash": "H",
+      "cognitive": 0,
+      "cyclomatic": 3,
+      "nesting": 0,
+      "lines": 5,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 53,
+        "col": 1
+      },
+      "over": [],
+      "new": true
+    },
+    {
+      "name": "add",
+      "file": "testdata/complexity/basic.kek",
+      "line": 5,
+      "col": 1,
+      "sig": "(Int, Int) -> Int",
+      "hash": "H",
+      "cognitive": 0,
+      "cyclomatic": 1,
+      "nesting": 0,
+      "lines": 3,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 5,
+        "col": 1
+      },
+      "over": [],
+      "new": true
+    }
+  ]
+}
+--- exit 1

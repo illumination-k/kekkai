@@ -1,0 +1,158 @@
+// Todos, each owned by the user who created it.
+//
+//   todo:next          the last id handed out
+//   todo:<id>          {"id", "owner", "title", "done"}
+//   todos:<owner>      the owner's ids, a JSON array
+//
+// Changing a todo takes a Can<Edit, t> for that very todo, and only the
+// #[policy] can_edit can grant one: a handler that loads todo 7 from the
+// URL cannot toggle it without asking the policy about todo 7.
+
+struct Edit {}
+
+#[derive(Serialize, Deserialize)]
+struct Todo {
+    id: Int,
+    owner: String,
+    title: String,
+    done: Bool,
+}
+
+// What the client sees of a todo (not its owner).
+#[derive(Serialize)]
+struct TodoView {
+    id: Int,
+    title: String,
+    done: Bool,
+}
+
+type Title = String where 1 <= self.len() && self.len() <= 200;
+
+#[derive(Deserialize)]
+struct NewTodo {
+    title: Title,
+}
+
+#[policy(reason = "a todo is changed only by the user who created it", owner = "illumination-k")]
+fn can_edit(u: &User, t: Todo) -> Option<Can<Edit, t>> {
+    if t.owner == u.name {
+        Some(Can::grant())
+    } else {
+        None
+    }
+}
+
+fn todo_key(id: Int) -> String {
+    "todo:" + id.to_string()
+}
+
+fn index_key(owner: String) -> String {
+    "todos:" + owner
+}
+
+fn view(t: &Todo) -> TodoView {
+    TodoView { id: t.id, title: t.title, done: t.done }
+}
+
+fn decode(s: String) -> Option<Todo> {
+    match Json::from_str(s) {
+        Ok(t) => Some(t),
+        Err(_) => None,
+    }
+}
+
+fn read_ids(tx: &Tx, owner: String) -> Result<Vec<Int>, TxError> {
+    match tx.get(index_key(owner))? {
+        Some(s) => match Json::from_str(s) {
+            Ok(ids) => Ok(ids),
+            Err(_) => Ok(Vec::new()),
+        },
+        None => Ok(Vec::new()),
+    }
+}
+
+fn load(db: &Db, id: Int) -> Result<Option<Todo>, TxError> {
+    match db.get(todo_key(id))? {
+        Some(s) => Ok(decode(s)),
+        None => Ok(None),
+    }
+}
+
+fn list(db: &Db, u: &User) -> Result<Vec<Todo>, TxError> {
+    db.transaction(|tx| {
+        let mut out = Vec::new();
+        for id in read_ids(tx, u.name)? {
+            match tx.get(todo_key(id))? {
+                Some(s) => match decode(s) {
+                    Some(t) => out.push(t),
+                    None => {}
+                },
+                None => {}
+            }
+        }
+        tx.commit()?;
+        Ok(out)
+    })
+}
+
+fn create(db: &Db, u: &User, title: String) -> Result<Todo, TxError> {
+    db.transaction(|tx| {
+        let id = tx.get("todo:next")?.unwrap_or("0").parse_int().unwrap_or(0) + 1;
+        let t = Todo { id, owner: u.name, title, done: false };
+        let mut ids = read_ids(tx, u.name)?;
+        ids.push(id);
+        tx.put("todo:next", id.to_string())?;
+        tx.put(todo_key(id), Json::to_string(&t))?;
+        tx.put(index_key(u.name), Json::to_string(&ids))?;
+        tx.commit()?;
+        Ok(t)
+    })
+}
+
+fn toggle(db: &Db, t: Todo, _cap: Can<Edit, t>) -> Result<Todo, TxError> {
+    let next = Todo { id: t.id, owner: t.owner, title: t.title, done: !t.done };
+    db.transaction(|tx| {
+        tx.put(todo_key(t.id), Json::to_string(&next))?;
+        tx.commit()?;
+        Ok(next)
+    })
+}
+
+fn remove(db: &Db, t: Todo, _cap: Can<Edit, t>) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        let ids: Vec<Int> = read_ids(tx, t.owner)?.iter().filter(|x| *x != t.id).collect();
+        tx.delete(todo_key(t.id))?;
+        tx.put(index_key(t.owner), Json::to_string(&ids))?;
+        tx.commit()
+    })
+}
+
+#[test]
+fn others_cannot_edit(db: &Db) -> Result<(), String> {
+    let alice = User { name: "alice" };
+    let bob = User { name: "bob" };
+    let t = match create(db, &alice, "secret plan") {
+        Ok(t) => t,
+        Err(_) => {
+            return Err("create failed");
+        }
+    };
+    if can_edit(&bob, t).is_some() {
+        return Err("bob may edit alice's todo");
+    }
+    match list(db, &bob) {
+        Ok(ts) => if ts.len() != 0 {
+            return Err("bob sees alice's todo");
+        },
+        Err(_) => {
+            return Err("list failed");
+        }
+    }
+    match can_edit(&alice, t) {
+        Some(cap) => match toggle(db, t, cap) {
+            Ok(n) => if n.done { Ok(()) } else { Err("not toggled") },
+            Err(_) => Err("toggle failed"),
+        },
+        None => Err("alice may not edit her own todo"),
+    }
+}

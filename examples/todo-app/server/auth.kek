@@ -1,0 +1,256 @@
+// Accounts and sessions.
+//
+//   user:<name>        {"salt", "hash"}
+//   session:<token>    {"user", "expires"} (ms)
+//
+// The password is read from the request already labeled
+// (Labeled<Secret, String> implements Deserialize but not Serialize), so
+// nothing can log it, store it, compare it or put it into a response. The
+// only ways out are the two #[declassify] functions below, which
+// `kek caps` lists and `kek assure` records as assumptions.
+//
+// The hash is the core library's DefaultHasher stretched over a few
+// thousand rounds: enough for a demo, not a real password hash.
+
+struct Secret {}
+
+struct User {
+    name: String,
+}
+
+// A username's length is part of its type: Deserialize refuses others.
+type Username = String where 3 <= self.len() && self.len() <= 32;
+
+#[derive(Deserialize)]
+struct Credentials {
+    username: Username,
+    password: Labeled<Secret, String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct UserRecord {
+    salt: String,
+    hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Session {
+    user: String,
+    expires: Int,
+}
+
+enum AuthError {
+    Invalid(String),
+    Taken,
+    BadLogin,
+    Store(TxError),
+}
+
+fn session_ttl_ms() -> Int {
+    7 * 24 * 60 * 60 * 1000
+}
+
+fn user_key(name: String) -> String {
+    "user:" + name
+}
+
+fn session_key(token: String) -> String {
+    "session:" + token
+}
+
+// Usernames end up in keys, so they are made of [a-z0-9_-] (the length is
+// checked by the type Username).
+fn valid_username(s: String) -> Bool {
+    let mut i = 0;
+    while i < s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        let ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 || c == 45;
+        if !ok {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// random_hex is n random hex digits (session tokens, salts).
+fn random_hex(random: &Random, n: Int) -> String {
+    let mut parts = Vec::new();
+    for _ in 0..n {
+        parts.push(hex_digit(random.int(0, 16)));
+    }
+    parts.join("")
+}
+
+fn stretch(salt: String, p: &String) -> Int {
+    let mut x = 0;
+    for round in 0..4096 {
+        let mut h = DefaultHasher::new();
+        x.hash(&mut h);
+        round.hash(&mut h);
+        salt.hash(&mut h);
+        p.hash(&mut h);
+        x = h.finish();
+    }
+    x
+}
+
+#[declassify(reason = "only a salted, stretched hash of the password is stored", owner = "illumination-k", expires = "2027-12-31")]
+fn password_hash(salt: String, password: &Labeled<Secret, String>) -> String {
+    password.map(|p| stretch(salt, p)).hash()
+}
+
+#[declassify(reason = "reveals only whether the password is long enough", owner = "illumination-k", expires = "2027-12-31")]
+fn password_ok(password: &Labeled<Secret, String>) -> Bool {
+    password.map(|p| p.len() >= 8 && p.len() <= 200).expose_unchecked()
+}
+
+fn signup(
+    db: &Db,
+    random: &Random,
+    name: String,
+    password: &Labeled<Secret, String>,
+) -> Result<User, AuthError> {
+    if !valid_username(name) {
+        return Err(AuthError::Invalid("username must be made of a-z, 0-9, _ and -"));
+    }
+    if !password_ok(password) {
+        return Err(AuthError::Invalid("password must be 8-200 characters"));
+    }
+    let salt = random_hex(random, 16);
+    let record = Json::to_string(&UserRecord { salt: salt, hash: password_hash(salt, password) });
+    let r = db.transaction(|tx| {
+        match tx.get(user_key(name))? {
+            Some(_) => {
+                tx.rollback();
+                Ok(false)
+            }
+            None => {
+                tx.put(user_key(name), record)?;
+                tx.commit()?;
+                Ok(true)
+            }
+        }
+    });
+    match r {
+        Ok(true) => Ok(User { name }),
+        Ok(false) => Err(AuthError::Taken),
+        Err(e) => Err(AuthError::Store(e)),
+    }
+}
+
+fn login(db: &Db, name: String, password: &Labeled<Secret, String>) -> Result<User, AuthError> {
+    let record = match db.get(user_key(name)) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return Err(AuthError::BadLogin);
+        }
+        Err(e) => {
+            return Err(AuthError::Store(e));
+        }
+    };
+    let r: UserRecord = match Json::from_str(record) {
+        Ok(r) => r,
+        Err(_) => {
+            return Err(AuthError::BadLogin);
+        }
+    };
+    if password_hash(r.salt, password) == r.hash {
+        Ok(User { name })
+    } else {
+        Err(AuthError::BadLogin)
+    }
+}
+
+// start_session stores a new session for u and returns its token.
+fn start_session(db: &Db, random: &Random, clock: &Clock, u: &User) -> Result<String, TxError> {
+    let token = random_hex(random, 32);
+    let value = Json::to_string(
+        &Session { user: u.name, expires: clock.now_ms() + session_ttl_ms() },
+    );
+    db.transaction(|tx| {
+        tx.put(session_key(token), value)?;
+        tx.commit()?;
+        Ok(token)
+    })
+}
+
+fn end_session(db: &Db, token: String) -> Result<(), TxError> {
+    db.transaction(|tx| {
+        tx.delete(session_key(token))?;
+        tx.commit()
+    })
+}
+
+// current_user is the user of the request's session cookie, if it is
+// still valid.
+fn current_user(req: Request, db: &Db, clock: &Clock) -> Option<User> {
+    let token = cookie(req, "sid")?;
+    let value = db.get(session_key(token)).unwrap_or(None)?;
+    let s: Session = match Json::from_str(value) {
+        Ok(s) => s,
+        Err(_) => {
+            return None;
+        }
+    };
+    if s.expires <= clock.now_ms() {
+        return None;
+    }
+    Some(User { name: s.user })
+}
+
+fn session_cookie(token: String, max_age_s: Int) -> String {
+    "sid=" + token + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=" + max_age_s.to_string()
+}
+
+#[test]
+fn usernames() -> Bool {
+    valid_username("alice_01") && !valid_username("Alice") && !valid_username("a:b")
+}
+
+#[test]
+fn signup_then_login(db: &Db, random: &Random) -> Result<(), String> {
+    let pw: Labeled<Secret, String> = Labeled::new("correct horse");
+    let wrong: Labeled<Secret, String> = Labeled::new("battery staple");
+    match signup(db, random, "alice", &pw) {
+        Ok(_) => {}
+        _ => {
+            return Err("signup failed");
+        }
+    }
+    match signup(db, random, "alice", &pw) {
+        Err(AuthError::Taken) => {}
+        _ => {
+            return Err("duplicate signup accepted");
+        }
+    }
+    match login(db, "alice", &wrong) {
+        Err(AuthError::BadLogin) => {}
+        _ => {
+            return Err("wrong password accepted");
+        }
+    }
+    match login(db, "alice", &pw) {
+        Ok(u) => if u.name == "alice" {
+            Ok(())
+        } else {
+            Err("wrong user")
+        },
+        _ => Err("login failed"),
+    }
+}
+
+#[test]
+fn credentials_are_read_checked_and_labeled() -> Bool {
+    let short: Result<Credentials, SerdeError> = Json::from_str(
+        "{\"username\": \"al\", \"password\": \"x\"}",
+    );
+    let ok: Result<Credentials, SerdeError> = Json::from_str(
+        "{\"username\": \"alice\", \"password\": \"x\"}",
+    );
+    let message = match short {
+        Ok(_) => "",
+        Err(e) => e.message(),
+    };
+    message == "username: the value is not a valid `Username`" && ok.is_ok()
+}

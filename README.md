@@ -25,6 +25,7 @@ mise install          # mise.toml のツールを入れる
 ./kek run testdata/run/recursive_enum.kek
 ./kek build -o out testdata/e2e/bank.kek   # out/ に worker.js・module.wasm・wrangler.toml
 scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
+mise run todo-app                          # フロントエンド付きの例（examples/todo-app）
 ```
 
 `./kek` はシェルスクリプトで、`bootstrap/kek.wasm`（コンパイラ自身をコンパイルした WasmGC + WASI のモジュール）で現在の `compiler/` をビルドし（`.kek-cache/` にキャッシュ）、そのコンパイラを wasmtime で実行します。詳しくは [bootstrap/README.md](bootstrap/README.md) と [docs/selfhost.md](docs/selfhost.md)。

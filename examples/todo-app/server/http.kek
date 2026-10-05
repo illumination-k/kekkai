@@ -1,0 +1,47 @@
+// HTTP helpers: JSON bodies (lib/core/serde.kek), cookies and errors.
+
+#[derive(Serialize)]
+struct ErrorBody {
+    error: String,
+}
+
+// body reads the request's JSON body as T; a malformed body is a 400 that
+// says what is wrong (SerdeError never contains the data).
+fn body<T: Deserialize>(req: Request) -> Result<T, Response> {
+    match Json::from_str(req.body()) {
+        Ok(x) => Ok(x),
+        Err(e) => Err(json_error(400, e.message())),
+    }
+}
+
+fn reply<T: Serialize>(status: Int, x: &T) -> Response {
+    Response::json(status, Json::to_string(x))
+}
+
+fn json_error(status: Int, message: String) -> Response {
+    reply(status, &ErrorBody { error: message })
+}
+
+fn store_error(e: TxError) -> Response {
+    if e.retryable() {
+        json_error(503, "busy, retry").with_header("retry-after", "1")
+    } else {
+        json_error(500, e.message())
+    }
+}
+
+// cookie is the value of the cookie `name` sent with the request.
+fn cookie(req: Request, name: String) -> Option<String> {
+    let header = req.header("cookie")?;
+    for part in header.split(";") {
+        let p = part.trim();
+        if p.starts_with(name + "=") {
+            return Some(p.slice(name.len() + 1, p.len()));
+        }
+    }
+    None
+}
+
+fn hex_digit(d: Int) -> String {
+    "0123456789abcdef".slice(d, d + 1)
+}

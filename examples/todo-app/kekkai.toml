@@ -1,0 +1,17 @@
+# Assurance policy of the todo app (docs/assure.md). Run from this
+# directory: ../../kek assure plan server
+
+[effects]
+forbid = ["Net", "Fs"]                   # the app talks to nothing but its store
+
+[escalate]
+weaken = "owner"
+new_assumption = "security"              # a new #[policy] or declassification
+
+[flow]
+max_declassify_per_module = 2
+declassify_requires = ["reason", "owner", "expires"]
+
+[module."server/todos.kek"]
+forbid = ["Random"]                      # todo logic stays deterministic
+review = ["change"]                      # even a body-only change needs a look

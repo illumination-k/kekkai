@@ -47,11 +47,12 @@ scripts/dev.sh testdata/e2e/bank.kek       # workerd でローカルに配信
 | `kek test [-run re] [-j n] [-json] <file>` | `#[test]` 関数をモックの capability で実行（テストごとに別プロセス、並列）。引数を取るテストはプロパティベーステスト。結果は定義ハッシュでキャッシュし、変更の影響を受けたテストだけを実行する |
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)）。篩型の証明（`refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow`）も記録する |
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
+| `kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base path \| -diff rev] <file\|dir>` | 関数ごとの認知的複雑度・循環的複雑度・ネストの深さ。上限を超えれば終了コード 1（CI で強制できる） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
 | `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
 | `kek daemon start\|stop\|status\|stats` | コンパイラを常駐させる（構文木をメモリに残し、変わったファイルだけ構文解析する） |
-| `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`assure` の土台 |
-| `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
+| `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`complexity`、`assure` の土台 |
+| `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[complexity]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
 | `kek mutate [-json] [-base p] [-diff rev] [-shard i/n] <file>` | ミューテーションテスト（型の付く変異体だけ。型で検出された変異体を別に数える。結果はキャッシュ。シャードに分割できる） |
 
 ### テスト（`kek test`）
@@ -162,6 +163,28 @@ LLM が既存の実装を探さずに似た関数を書き足すのを防ぐた�
 - `-base <file|dir>` は基準になる古いプログラムで、同じ定義ハッシュを持つ定義は既存とみなし、新しい定義を含む指摘だけを報告します。`-diff <rev>` では `./kek` が `git archive` でその revision のプログラムを一時ディレクトリに取り出して `-base` に渡します。
 - `kekkai.toml` の `[similar]` で `threshold`（%）・`min_nodes`・`max_nodes`（これより大きい木は木の編集距離の代わりにラベル列の編集距離で近似）を設定できます。フラグが優先します。
 - `-semantic` を付けると、書き方は違うが意味が同じコードも探します。シグネチャが同じ純粋関数の組ごとに `a(x) == b(x)` のプロパティテストを合成し、`kek test` で 200 個の生成入力に対して比べます（`semantic`。証明ではありません。1 組の制限時間は `KEK_TEST_TIMEOUT`、既定 10s）。
+
+### 複雑度（`kek complexity`）
+
+`kek similar` と同じく、LLM が書き足したコードが読めないほど込み入るのを CI で止めるためのコマンドです（JSON は [docs/tooling.md](docs/tooling.md)）。関数ごとに次を測り、どれかが上限を超えた関数を報告します。
+
+| 指標 | 意味 | 既定の上限 |
+| --- | --- | --- |
+| `cognitive` | 認知的複雑度（SonarSource）。`if`・`else if`・`else`・`match`・ループ・同じ論理演算子の並び・再帰呼び出しごとに +1、`if`・`match`・ループはさらにネストの深さを足す | 15 |
+| `cyclomatic` | 循環的複雑度（McCabe）。1 + `if`・ループ・`match` の 2 本目以降の腕・`&&`/`\|\|`・`?` | 10 |
+| `nesting` | `if`・`match`・ループ・クロージャの最大のネスト（最も深い位置も示す） | 4 |
+| `lines` | `fn` から閉じ括弧までの行数 | 0（無効） |
+
+```sh
+./kek complexity src                    # 上限を超えた関数：file:line・指標・ヒント
+./kek complexity -all -json src         # 全関数の指標（エージェント向けの JSON）
+./kek complexity -diff origin/main src  # PR の CI：追加・変更されて悪化した関数だけ
+```
+
+- クロージャはそれを含む関数に数えます。`#[test]` 関数（`-tests` で対象にする）、`#[derive]` が生成した実装、core と prelude は対象外です。
+- 上限は `kekkai.toml` の `[complexity]`（`cognitive`・`cyclomatic`・`nesting`・`lines`）かフラグで変えられ、0 で無効になります。フラグが優先します。
+- `-base <file|dir>`／`-diff <rev>` では、定義ハッシュが基準と同じ関数は報告しません。基準に同じ名前の関数があれば、上限を超えた指標が基準より増えたときだけ報告します（ラチェット：既存の負債には触れても落ちず、悪化させると落ちる）。
+- 意図的に複雑な関数は `#[allow(complexity, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` で抑制でき、`allowed` に理由とともに残ります（`kek assure` の前提にもなります）。
 
 ### カバレッジ（`kek cover`）
 

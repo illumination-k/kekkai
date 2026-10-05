@@ -1,0 +1,11 @@
+testdata/complexity/basic.kek:68:1  deep (Vec<Vec<Int>>) -> Int
+  cognitive 15, cyclomatic 6, nesting 5 > 4, 15 lines
+  hint: nested 5 deep at 74:21: return early or extract the inner block into a function
+
+testdata/complexity/basic.kek:86:1  shipping (Int, Bool, Bool, Int) -> Int
+  cognitive 12, cyclomatic 13 > 10, nesting 2, 38 lines
+  hint: 13 paths: each needs its own test case
+
+2 functions over the limits (cognitive 15, cyclomatic 10, nesting 4)
+1 allowed by #[allow(complexity)]
+--- exit 1

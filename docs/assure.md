@@ -18,7 +18,7 @@
 | --- | --- |
 | 保証 | 成り立つ性質（flow.noninterference、authz.requires、net.hosts、契約など） |
 | 根拠 | 型検査／SMTによる証明／テスト／仮定 |
-| 前提 | SMTソルバ、外部境界の宣言、脱出口、declassify、`#[allow(similar)]`、`#[rare]` |
+| 前提 | SMTソルバ、外部境界の宣言、脱出口、declassify、`#[allow(similar)]`・`#[allow(complexity)]`、`#[rare]` |
 | 脱出口の管理情報 | 理由、責任者、期限 |
 
 ## コマンド
@@ -126,7 +126,7 @@ kek assure check [-json] <file|dir>
 
 - `hash`：定義ハッシュ（名前に依存しない。変数名の変更では変わらない）
 - `file`、`entry`（`handler`・`main`・`test`・空）、`async`（I/O に到達するのでステートマシンになる）
-- `assumptions`：コード側の前提。`#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` と `#[rare]`、認可のポリシー（`policy`：`#[policy(reason = "...", owner = "...", expires = "...")]` の関数ごとに 1 つ）、ラベル付きの値の格下げ（`flow.declassify`：`Labeled` の `mask`・`hash`・`expose_unchecked` の呼び出し 1 つにつき 1 つ。ロックには `call` を記録し、理由・責任者・期限はその関数の `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` から取る）。同じ種類の前提は順番で対応づけるので、格下げの追加・削除・`#[declassify]` の変更が plan に現れる（位置は `flow.declassify mask() at 24:46` のようにメッセージに出る）
+- `assumptions`：コード側の前提。`#[allow(similar, reason = "...", owner = "...", expires = "YYYY-MM-DD")]`（`complexity` も同じ）と `#[rare]`、認可のポリシー（`policy`：`#[policy(reason = "...", owner = "...", expires = "...")]` の関数ごとに 1 つ）、ラベル付きの値の格下げ（`flow.declassify`：`Labeled` の `mask`・`hash`・`expose_unchecked` の呼び出し 1 つにつき 1 つ。ロックには `call` を記録し、理由・責任者・期限はその関数の `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` から取る）。同じ種類の前提は順番で対応づけるので、格下げの追加・削除・`#[declassify]` の変更が plan に現れる（位置は `flow.declassify mask() at 24:46` のようにメッセージに出る）
 - `waivers`：`apply` で承認した弱化の記録（理由・責任者・期限・承認日）
 
 集合の保証は「この範囲のことしかしない」という上限なので、要素が増えると弱化、減ると強化。真偽の保証は成り立たなくなると弱化。将来の保証（契約など）や根拠（`smt`）も同じ形（名前・種類・値・根拠）で追加できる。

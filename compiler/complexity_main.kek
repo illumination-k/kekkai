@@ -1,0 +1,743 @@
+// `complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n]
+// [-nesting n] [-lines n] [-base path] <path>` (prefix cx_ / Cx*): the
+// complexity of each definition, and the ones over the limits.
+//
+//   cognitive    SonarSource's cognitive complexity: +1 for each if,
+//                else if, else, match, loop, sequence of like boolean
+//                operators and recursive call; if, match and loops add
+//                their nesting level too
+//   cyclomatic   McCabe: 1 + if, loops, match arms beyond the first,
+//                && / || and `?`
+//   nesting      the deepest nesting of if / match / loops / closures
+//   lines        from the `fn` to the closing brace
+//
+// Closures count toward the function that contains them. A limit of 0
+// turns it off. With -base, a definition whose hash is in the base
+// program is old and not reported, and a changed definition (one of the
+// same name in the base) only when a metric over its limit grew: the CI
+// mode for pull requests (`kek complexity -diff <rev>` in ./kek).
+
+struct CxLimits {
+    cognitive: Int,
+    cyclomatic: Int,
+    nesting: Int,
+    lines: Int,
+}
+
+struct CxMetrics {
+    cognitive: Int,
+    cyclomatic: Int,
+    nesting: Int,
+    lines: Int,
+    // where the deepest nesting starts
+    deepest: AstPos,
+}
+
+struct CxDef {
+    d: DhDef,
+    m: CxMetrics,
+    allow: Option<AstAttr>,
+    // not in the base program
+    fresh: Bool,
+    // the definition of the same name in the base program
+    was: Option<CxMetrics>,
+    // the metrics over their limits ("cognitive", ...)
+    over: Vec<String>,
+}
+
+// Walker state of one definition.
+struct CxWalk {
+    info: ChkInfo,
+    self_name: String,
+    mut cognitive: Int,
+    mut cyclomatic: Int,
+    mut nest: Int,
+    mut max_nest: Int,
+    mut deepest: AstPos,
+}
+
+fn cx_usage() -> String {
+    "complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base <file|dir>] <file|dir>"
+}
+
+fn cx_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = tool_flags(
+        args,
+        1,
+        "json all tests cognitive# cyclomatic# nesting# lines# base= base_name=",
+    );
+    if fl.err != "" {
+        return tool_flag_error(fl, cx_usage(), log);
+    }
+    if fl.rest.len() != 1 {
+        log.error("usage: kek " + cx_usage());
+        return 2;
+    }
+    let cfg = match tool_config(fs, log) {
+        Some(c) => c,
+        None => {
+            return 2;
+        }
+    };
+    let lim = CxLimits {
+        cognitive: cx_limit(fl, cfg, "cognitive", 15),
+        cyclomatic: cx_limit(fl, cfg, "cyclomatic", 10),
+        nesting: cx_limit(fl, cfg, "nesting", 4),
+        lines: cx_limit(fl, cfg, "lines", 0),
+    };
+    if lim.cognitive < 0 || lim.cyclomatic < 0 || lim.nesting < 0 || lim.lines < 0 {
+        log.error("kek complexity: a limit must be 0 (off) or more");
+        return 2;
+    }
+    let path = fl.rest.get(0).unwrap_or("");
+    let l = match dh_load(path, fs, log) {
+        Some(l) => l,
+        None => {
+            return 2;
+        }
+    };
+    let base = tool_flag_str(fl, "base", "");
+    let mut old: HashMap<String, Bool> = HashMap::new();
+    let mut old_by_name: HashMap<String, CxMetrics> = HashMap::new();
+    if base != "" {
+        match dh_load(base, fs, log) {
+            Some(b) => {
+                for d in b.prog.defs {
+                    old.insert(d.hash, true);
+                    if d.fun.decl.has_body {
+                        old_by_name.insert(d.name, cx_metrics(b.res.info, d));
+                    }
+                }
+            }
+            None => {
+                log.error("kek complexity: cannot load the base program " + base);
+                return 2;
+            }
+        }
+    }
+    let tests = tool_flag_bool(fl, "tests");
+    let defs = cx_sort(cx_defs(l, lim, tests, old, old_by_name));
+    let mut findings = Vec::new();
+    let mut allowed = Vec::new();
+    for d in defs {
+        if !cx_reported(d) {
+            continue;
+        }
+        if d.allow.is_none() {
+            findings.push(d);
+        } else {
+            allowed.push(d);
+        }
+    }
+    let all = tool_flag_bool(fl, "all");
+    if tool_flag_bool(fl, "json") {
+        let o = irjson_obj();
+        irjson_set(o, "path", IrjVal::Str(path));
+        if base != "" {
+            // `kek complexity -diff rev` names the base `git:rev`
+            irjson_set(o, "base", IrjVal::Str(tool_flag_str(fl, "base_name", base)));
+        }
+        let lo = irjson_obj();
+        irjson_set(lo, "cognitive", irjson_int(lim.cognitive));
+        irjson_set(lo, "cyclomatic", irjson_int(lim.cyclomatic));
+        irjson_set(lo, "nesting", irjson_int(lim.nesting));
+        irjson_set(lo, "lines", irjson_int(lim.lines));
+        irjson_set(o, "limits", irjson_val(lo));
+        let mut fs_json = Vec::new();
+        for d in findings {
+            fs_json.push(irjson_val(cx_def_json(d)));
+        }
+        irjson_set(o, "findings", IrjVal::Arr(fs_json));
+        let mut al_json = Vec::new();
+        for d in allowed {
+            let ao = cx_def_json(d);
+            match d.allow {
+                Some(a) => {
+                    let by = irjson_obj();
+                    irjson_set(by, "reason", IrjVal::Str(ast_attr_value(a, "reason").unwrap_or("")));
+                    irjson_set(by, "owner", IrjVal::Str(ast_attr_value(a, "owner").unwrap_or("")));
+                    irjson_set(
+                        by,
+                        "expires",
+                        IrjVal::Str(ast_attr_value(a, "expires").unwrap_or("")),
+                    );
+                    irjson_set(ao, "allowed_by", irjson_val(by));
+                }
+                None => {}
+            }
+            al_json.push(irjson_val(ao));
+        }
+        irjson_set(o, "allowed", IrjVal::Arr(al_json));
+        if all {
+            let mut ds = Vec::new();
+            for d in defs {
+                ds.push(irjson_val(cx_def_json(d)));
+            }
+            irjson_set(o, "functions", IrjVal::Arr(ds));
+        }
+        log.info(irjson_encode(irjson_val(o), false));
+    } else {
+        log.info(cx_text(findings, allowed, defs, lim, all));
+    }
+    if findings.len() > 0 {
+        return 1;
+    }
+    0
+}
+
+// cx_limit: the flag, else [complexity] in kekkai.toml, else d.
+fn cx_limit(fl: ToolFlags, cfg: ToolJson, name: String, d: Int) -> Int {
+    tool_flag_int(fl, name, tool_json_int(tool_config_get(cfg, "complexity", name), d))
+}
+
+// cx_defs measures the user functions with a body, without the #[test]
+// functions (unless tests) and the #[derive] implementations.
+fn cx_defs(
+    l: DhLoaded,
+    lim: CxLimits,
+    tests: Bool,
+    old: HashMap<String, Bool>,
+    old_by_name: HashMap<String, CxMetrics>,
+) -> Vec<CxDef> {
+    // derived implementations are parsed with every position at the
+    // `#[derive]` attribute
+    let mut derived: HashMap<String, Bool> = HashMap::new();
+    for s in l.file.structs {
+        for a in s.attrs {
+            if a.name == "derive" {
+                derived.insert(sim_pos_key(a.pos), true);
+            }
+        }
+    }
+    for e in l.file.enums {
+        for a in e.attrs {
+            if a.name == "derive" {
+                derived.insert(sim_pos_key(a.pos), true);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for d in l.prog.defs {
+        let decl = d.fun.decl;
+        if !decl.has_body || (d.fun.test && !tests) {
+            continue;
+        }
+        if derived.contains_key(sim_pos_key(decl.pos)) {
+            continue;
+        }
+        let mut allow: Option<AstAttr> = None;
+        for a in decl.attrs {
+            if a.name == "allow" && ast_attr_has(a, "complexity") {
+                allow = Some(a);
+            }
+        }
+        let m = cx_metrics(l.res.info, d);
+        out.push(CxDef {
+            d: d,
+            m: m,
+            allow: allow,
+            fresh: !old.contains_key(d.hash),
+            was: old_by_name.get(d.name),
+            over: cx_over(m, lim),
+        });
+    }
+    out
+}
+
+fn cx_over(m: CxMetrics, lim: CxLimits) -> Vec<String> {
+    let mut out = Vec::new();
+    if lim.cognitive > 0 && m.cognitive > lim.cognitive {
+        out.push("cognitive");
+    }
+    if lim.cyclomatic > 0 && m.cyclomatic > lim.cyclomatic {
+        out.push("cyclomatic");
+    }
+    if lim.nesting > 0 && m.nesting > lim.nesting {
+        out.push("nesting");
+    }
+    if lim.lines > 0 && m.lines > lim.lines {
+        out.push("lines");
+    }
+    out
+}
+
+fn cx_get(m: CxMetrics, name: String) -> Int {
+    if name == "cognitive" {
+        return m.cognitive;
+    }
+    if name == "cyclomatic" {
+        return m.cyclomatic;
+    }
+    if name == "nesting" {
+        return m.nesting;
+    }
+    m.lines
+}
+
+fn cx_limit_of(lim: CxLimits, name: String) -> Int {
+    if name == "cognitive" {
+        return lim.cognitive;
+    }
+    if name == "cyclomatic" {
+        return lim.cyclomatic;
+    }
+    if name == "nesting" {
+        return lim.nesting;
+    }
+    lim.lines
+}
+
+// cx_reported: over a limit, new or changed, and (when the base has a
+// definition of the same name) worse in a metric over its limit.
+fn cx_reported(d: CxDef) -> Bool {
+    if d.over.len() == 0 || !d.fresh {
+        return false;
+    }
+    match d.was {
+        Some(w) => d.over.iter().any(|k| cx_get(d.m, k) > cx_get(w, k)),
+        None => true,
+    }
+}
+
+// ---- metrics ----
+
+fn cx_metrics(info: ChkInfo, d: DhDef) -> CxMetrics {
+    let decl = d.fun.decl;
+    let w = CxWalk {
+        info: info,
+        self_name: d.name,
+        cognitive: 0,
+        cyclomatic: 1,
+        nest: 0,
+        max_nest: 0,
+        deepest: decl.pos,
+    };
+    cx_block(w, decl.body);
+    CxMetrics {
+        cognitive: w.cognitive,
+        cyclomatic: w.cyclomatic,
+        nesting: w.max_nest,
+        lines: decl.body.end.line - decl.pos.line + 1,
+        deepest: w.deepest,
+    }
+}
+
+// cx_structure counts an if / match / loop at the current nesting level.
+fn cx_structure(mut w: CxWalk) {
+    w.cognitive = w.cognitive + 1 + w.nest;
+}
+
+// cx_enter goes one level deeper (into the body of a structure at pos).
+fn cx_enter(mut w: CxWalk, pos: AstPos) {
+    w.nest = w.nest + 1;
+    if w.nest > w.max_nest {
+        w.max_nest = w.nest;
+        w.deepest = pos;
+    }
+}
+
+fn cx_leave(mut w: CxWalk) {
+    w.nest = w.nest - 1;
+}
+
+fn cx_block(w: CxWalk, b: AstBlock) {
+    for s in b.stmts {
+        cx_stmt(w, s);
+    }
+    match b.tail {
+        Some(e) => cx_expr(w, e),
+        None => {}
+    }
+}
+
+fn cx_nested_block(w: CxWalk, pos: AstPos, b: AstBlock) {
+    cx_enter(w, pos);
+    cx_block(w, b);
+    cx_leave(w);
+}
+
+fn cx_stmt(mut w: CxWalk, s: AstStmt) {
+    match s {
+        AstStmt::Let(l) => cx_expr(w, l.init),
+        AstStmt::Assign(a) => cx_expr(w, a.value),
+        AstStmt::FieldAssign(a) => {
+            cx_expr(w, a.target.x);
+            cx_expr(w, a.value);
+        }
+        AstStmt::Break(_) => {}
+        AstStmt::Continue(_) => {}
+        AstStmt::While(s) => {
+            cx_structure(w);
+            w.cyclomatic = w.cyclomatic + 1;
+            cx_expr(w, s.cond);
+            cx_nested_block(w, s.pos, s.body);
+        }
+        AstStmt::For(s) => {
+            cx_structure(w);
+            w.cyclomatic = w.cyclomatic + 1;
+            cx_expr(w, s.iter);
+            match s.end {
+                Some(e) => cx_expr(w, e),
+                None => {}
+            }
+            cx_nested_block(w, s.pos, s.body);
+        }
+        AstStmt::Return(r) => match r.value {
+            Some(e) => cx_expr(w, e),
+            None => {}
+        },
+        AstStmt::Expr(e) => cx_expr(w, e.x),
+    }
+}
+
+fn cx_expr(w: CxWalk, e: AstExpr) {
+    cx_expr_in(w, e, "");
+}
+
+// cx_expr_in walks e; logic is the boolean operator of the enclosing
+// binary expression ("" when there is none), so that a sequence of like
+// operators counts once.
+fn cx_expr_in(mut w: CxWalk, e: AstExpr, logic: String) {
+    match e {
+        AstExpr::Binary(x) => {
+            if x.op == "&&" || x.op == "||" {
+                w.cyclomatic = w.cyclomatic + 1;
+                if x.op != logic {
+                    w.cognitive = w.cognitive + 1;
+                }
+                cx_expr_in(w, x.x, x.op);
+                cx_expr_in(w, x.y, x.op);
+            } else {
+                cx_expr(w, x.x);
+                cx_expr(w, x.y);
+            }
+        }
+        AstExpr::Unary(x) => cx_expr(w, x.x),
+        AstExpr::Call(x) => {
+            match w.info.calls.get(x.id) {
+                Some(ci) => match ci.func {
+                    Some(f) => {
+                        if f.name == w.self_name {
+                            w.cognitive = w.cognitive + 1;
+                        }
+                    }
+                    None => {}
+                },
+                None => {}
+            }
+            cx_expr(w, x.func);
+            for a in x.args {
+                cx_expr(w, a);
+            }
+        }
+        AstExpr::Method(x) => {
+            match w.info.methods.get(x.id) {
+                Some(m) => match m.func {
+                    Some(f) => {
+                        if f.name == w.self_name {
+                            w.cognitive = w.cognitive + 1;
+                        }
+                    }
+                    None => {}
+                },
+                None => {}
+            }
+            cx_expr(w, x.recv);
+            for a in x.args {
+                cx_expr(w, a);
+            }
+        }
+        AstExpr::Field(x) => cx_expr(w, x.x),
+        AstExpr::StructLit(x) => {
+            for f in x.fields {
+                cx_expr(w, f.value);
+            }
+        }
+        AstExpr::If(x) => {
+            cx_structure(w);
+            cx_if(w, x);
+        }
+        AstExpr::Match(x) => {
+            cx_structure(w);
+            if x.arms.len() > 1 {
+                w.cyclomatic = w.cyclomatic + x.arms.len() - 1;
+            }
+            cx_expr(w, x.x);
+            cx_enter(w, x.pos);
+            for arm in x.arms {
+                cx_expr(w, arm.body);
+            }
+            cx_leave(w);
+        }
+        AstExpr::Block(b) => cx_block(w, b),
+        AstExpr::Try(x) => {
+            w.cyclomatic = w.cyclomatic + 1;
+            cx_expr(w, x.x);
+        }
+        AstExpr::Closure(x) => {
+            cx_enter(w, x.pos);
+            cx_expr(w, x.body);
+            cx_leave(w);
+        }
+        AstExpr::Tuple(x) => {
+            for a in x.elems {
+                cx_expr(w, a);
+            }
+        }
+        AstExpr::Range(x) => {
+            cx_expr(w, x.start);
+            cx_expr(w, x.end);
+        }
+        AstExpr::Index(x) => {
+            cx_expr(w, x.x);
+            cx_expr(w, x.index);
+        }
+        _ => {}
+    }
+}
+
+// cx_if walks an if whose own increment is counted: `else if` and `else`
+// add 1 without the nesting level, and stay at the level of the first if.
+fn cx_if(mut w: CxWalk, x: AstIf) {
+    w.cyclomatic = w.cyclomatic + 1;
+    cx_expr(w, x.cond);
+    cx_nested_block(w, x.pos, x.then);
+    match x.els {
+        Some(e) => {
+            w.cognitive = w.cognitive + 1;
+            match e {
+                AstExpr::If(y) => cx_if(w, y),
+                AstExpr::Block(b) => cx_nested_block(w, b.pos, b),
+                _ => {
+                    cx_enter(w, x.pos);
+                    cx_expr(w, e);
+                    cx_leave(w);
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+// ---- output ----
+
+// cx_less orders by cognitive, then cyclomatic complexity (descending),
+// then by position.
+fn cx_less(a: CxDef, b: CxDef) -> Bool {
+    if a.m.cognitive != b.m.cognitive {
+        return a.m.cognitive > b.m.cognitive;
+    }
+    if a.m.cyclomatic != b.m.cyclomatic {
+        return a.m.cyclomatic > b.m.cyclomatic;
+    }
+    let pa = a.d.pos;
+    let pb = b.d.pos;
+    if pa.file != pb.file {
+        return ast_str_less(pa.file, pb.file);
+    }
+    if pa.line != pb.line {
+        return pa.line < pb.line;
+    }
+    if pa.col != pb.col {
+        return pa.col < pb.col;
+    }
+    ast_str_less(a.d.name, b.d.name)
+}
+
+// cx_sort is a merge sort by cx_less.
+fn cx_sort(xs: Vec<CxDef>) -> Vec<CxDef> {
+    let n = xs.len();
+    if n <= 1 {
+        return xs;
+    }
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut i = 0;
+    for x in xs {
+        if i < n / 2 {
+            left.push(x);
+        } else {
+            right.push(x);
+        }
+        i = i + 1;
+    }
+    let l = cx_sort(left);
+    let r = cx_sort(right);
+    let mut out = Vec::new();
+    let mut a = 0;
+    let mut b = 0;
+    while a < l.len() || b < r.len() {
+        let take_left = match l.get(a) {
+            Some(x) => match r.get(b) {
+                Some(y) => !cx_less(y, x),
+                None => true,
+            },
+            None => false,
+        };
+        if take_left {
+            match l.get(a) {
+                Some(x) => out.push(x),
+                None => {}
+            }
+            a = a + 1;
+        } else {
+            match r.get(b) {
+                Some(y) => out.push(y),
+                None => {}
+            }
+            b = b + 1;
+        }
+    }
+    out
+}
+
+fn cx_hint(d: CxDef) -> String {
+    let mut parts = Vec::new();
+    if d.over.iter().any(|k| k == "nesting") {
+        parts.push(
+            "nested "
+                + d.m.nesting.to_string()
+                + " deep at "
+                + d.m.deepest.line.to_string()
+                + ":"
+                + d.m.deepest.col.to_string()
+                + ": return early or extract the inner block into a function",
+        );
+    }
+    if d.over.iter().any(|k| k == "cognitive") {
+        parts.push(
+            "hard to follow: split the branches of `" + d.d.name + "` into smaller functions",
+        );
+    } else if d.over.iter().any(|k| k == "lines") {
+        parts.push("split `" + d.d.name + "` into smaller functions");
+    }
+    if d.over.iter().any(|k| k == "cyclomatic") {
+        parts.push(d.m.cyclomatic.to_string() + " paths: each needs its own test case");
+    }
+    parts.join("; ")
+}
+
+fn cx_metrics_json(m: CxMetrics) -> IrjObj {
+    let o = irjson_obj();
+    irjson_set(o, "cognitive", irjson_int(m.cognitive));
+    irjson_set(o, "cyclomatic", irjson_int(m.cyclomatic));
+    irjson_set(o, "nesting", irjson_int(m.nesting));
+    irjson_set(o, "lines", irjson_int(m.lines));
+    o
+}
+
+fn cx_def_json(d: CxDef) -> IrjObj {
+    let o = irjson_obj();
+    irjson_set(o, "name", IrjVal::Str(d.d.name));
+    irjson_set(o, "file", IrjVal::Str(d.d.pos.file));
+    irjson_set(o, "line", irjson_int(d.d.pos.line));
+    irjson_set(o, "col", irjson_int(d.d.pos.col));
+    irjson_set(o, "sig", IrjVal::Str(d.d.sig));
+    irjson_set(o, "hash", IrjVal::Str(d.d.hash));
+    irjson_set(o, "cognitive", irjson_int(d.m.cognitive));
+    irjson_set(o, "cyclomatic", irjson_int(d.m.cyclomatic));
+    irjson_set(o, "nesting", irjson_int(d.m.nesting));
+    irjson_set(o, "lines", irjson_int(d.m.lines));
+    irjson_set(o, "deepest", sim_pos_json(d.m.deepest));
+    irjson_set(o, "over", irjson_strs(d.over));
+    irjson_set(o, "new", irjson_bool(d.fresh));
+    match d.was {
+        Some(w) => irjson_set(o, "was", irjson_val(cx_metrics_json(w))),
+        None => {}
+    }
+    if d.over.len() > 0 {
+        irjson_set(o, "hint", IrjVal::Str(cx_hint(d)));
+    }
+    o
+}
+
+// cx_metric_text: "cognitive 23 > 15 (was 12)" for a metric over its
+// limit, "cognitive 3" otherwise.
+fn cx_metric_text(d: CxDef, lim: CxLimits, name: String) -> String {
+    let v = cx_get(d.m, name);
+    let mut s = name + " " + v.to_string();
+    if name == "lines" {
+        s = v.to_string() + " lines";
+    }
+    if d.over.iter().any(|k| k == name) {
+        s = s + " > " + cx_limit_of(lim, name).to_string();
+        match d.was {
+            Some(w) => {
+                s = s + " (was " + cx_get(w, name).to_string() + ")";
+            }
+            None => {}
+        }
+    }
+    s
+}
+
+fn cx_metrics_text(d: CxDef, lim: CxLimits) -> String {
+    let mut parts = Vec::new();
+    for k in "cognitive cyclomatic nesting lines".split(" ") {
+        parts.push(cx_metric_text(d, lim, k));
+    }
+    parts.join(", ")
+}
+
+fn cx_head(d: CxDef) -> String {
+    d.d.pos.file
+        + ":"
+        + d.d.pos.line.to_string()
+        + ":"
+        + d.d.pos.col.to_string()
+        + "  "
+        + d.d.name
+        + " "
+        + d.d.sig
+}
+
+fn cx_text(
+    findings: Vec<CxDef>,
+    allowed: Vec<CxDef>,
+    defs: Vec<CxDef>,
+    lim: CxLimits,
+    all: Bool,
+) -> String {
+    let mut lines = Vec::new();
+    // -all lists every definition, the others only the findings
+    let shown = if all { defs } else { findings };
+    for d in shown {
+        lines.push(cx_head(d));
+        lines.push("  " + cx_metrics_text(d, lim));
+        if cx_reported(d) {
+            if d.allow.is_none() {
+                lines.push("  hint: " + cx_hint(d));
+            } else {
+                lines.push("  allowed by #[allow(complexity)]");
+            }
+        }
+        if !all || cx_reported(d) {
+            lines.push("");
+        }
+    }
+    if all && defs.len() > 0 {
+        lines.push("");
+    }
+    let mut on = Vec::new();
+    for k in "cognitive cyclomatic nesting lines".split(" ") {
+        let v = cx_limit_of(lim, k);
+        if v > 0 {
+            on.push(k + " " + v.to_string());
+        }
+    }
+    let mut limits = "(" + on.join(", ") + ")";
+    if on.len() == 0 {
+        limits = "(every limit is off)";
+    }
+    if findings.len() == 0 {
+        lines.push("no function over the limits " + limits);
+    } else if findings.len() == 1 {
+        lines.push("1 function over the limits " + limits);
+    } else {
+        lines.push(findings.len().to_string() + " functions over the limits " + limits);
+    }
+    if allowed.len() > 0 {
+        lines.push(allowed.len().to_string() + " allowed by #[allow(complexity)]");
+    }
+    lines.join("\n")
+}

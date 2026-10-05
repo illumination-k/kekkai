@@ -134,7 +134,7 @@ by `similar` and `assure`.
 
 ## `kek config`
 
-Prints `./kekkai.toml`, the project configuration read by `similar`,
+Prints `./kekkai.toml`, the project configuration read by `similar`, `complexity`,
 `cover`, `mutate` and `assure`, as JSON (exit 1 on a syntax error). The
 format is a TOML subset: `[section]` / `[section."sub"]` headers and
 `key = value` with strings, integers, booleans and arrays.
@@ -513,6 +513,78 @@ members are still reported when two or more of them remain.
 - Findings are sorted by kind (`duplicate`, `literals`, `structural`), then
   by descending similarity, then by member position. Members are sorted by
   file, line and column.
+## `kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base path | -diff rev] <file|dir>`
+
+Measures the complexity of each function and reports the ones over the
+limits. Like `kek similar`, run it after writing a function and in CI to
+enforce it. The program must type-check. The exit status is 1 when at
+least one function is reported, 0 when none is, and 2 for usage errors
+and programs that do not check.
+
+```
+$ kek complexity src
+src/fees.kek:68:1  deep (Vec<Vec<Int>>) -> Int
+  cognitive 15, cyclomatic 6, nesting 5 > 4, 15 lines
+  hint: nested 5 deep at 74:21: return early or extract the inner block into a function
+
+1 function over the limits (cognitive 15, cyclomatic 10, nesting 4)
+```
+
+| Metric | How | Default limit |
+| --- | --- | --- |
+| `cognitive` | SonarSource's cognitive complexity: +1 for each `if`, `else if`, `else`, `match`, `while`, `for`, sequence of like boolean operators (`a && b && c` is 1, `a && b \|\| c` is 2) and direct recursive call. `if`, `match` and loops also add their nesting level. | 15 |
+| `cyclomatic` | McCabe: 1 + each `if`, `while`, `for`, `match` arm beyond the first, `&&`, `\|\|` and `?`. | 10 |
+| `nesting` | The deepest nesting of `if` / `match` / loop bodies and closures. `deepest` is where it starts. | 4 |
+| `lines` | From the `fn` line to the closing brace. | 0 (off) |
+
+A limit of 0 turns the metric off. Closures count toward the function
+that contains them. `#[test]` functions are skipped unless `-tests` is
+given; `#[derive]` implementations, the core library and the prelude
+always are.
+
+Options:
+
+- `-cognitive n`, `-cyclomatic n`, `-nesting n`, `-lines n` set the limits.
+  `./kekkai.toml` can set them in a `[complexity]` section; flags
+  override the file.
+- `-all` also lists every function with its metrics (text), or adds
+  `functions` (JSON), sorted like the findings.
+- `-base <file|dir>` loads a base program. A function whose `hash`
+  appears in the base is old and never reported. A changed function (the
+  base has one of the same name) is reported only when a metric over its
+  limit grew; `was` holds its metrics in the base. So touching old debt
+  does not fail CI, and making it worse does.
+- `-diff <rev>` is handled by `./kek` as for `kek similar`: the path at the
+  git revision becomes `-base`, named `git:<rev>`.
+
+A function with `#[allow(complexity, reason = "...", owner = "...",
+expires = "YYYY-MM-DD")]` is listed under `allowed` with `allowed_by`
+instead of `findings`. `kek assure` records it as an `allow(complexity)`
+assumption.
+
+`-json` prints:
+
+```json
+{"path": "src", "base": "git:origin/main",
+ "limits": {"cognitive": 15, "cyclomatic": 10, "nesting": 4, "lines": 0},
+ "findings": [
+   {"name": "shipping", "file": "src/a.kek", "line": 86, "col": 1,
+    "sig": "(Int, Bool, Bool, Int) -> Int", "hash": "b072...",
+    "cognitive": 12, "cyclomatic": 13, "nesting": 2, "lines": 38,
+    "deepest": {"file": "src/a.kek", "line": 116, "col": 9},
+    "over": ["cyclomatic"], "new": true,
+    "was": {"cognitive": 8, "cyclomatic": 11, "nesting": 1, "lines": 31},
+    "hint": "13 paths: each needs its own test case"}
+ ],
+ "allowed": [{"name": "deep_allowed", "...": "...",
+              "allowed_by": {"reason": "...", "owner": "...", "expires": "2099-01-01"}}]}
+```
+
+- `base` is present only with `-base` or `-diff`; `was` only on functions
+  that have a namesake in the base; `hint` only on functions over a limit;
+  `functions` only with `-all`.
+- Functions are sorted by descending `cognitive`, then `cyclomatic`, then
+  by file, line and column.
 ## `kek test -json [flags] <file|dir>`
 
 Runs the `#[test]` functions like `kek test` and prints the results as one

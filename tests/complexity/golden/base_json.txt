@@ -1,0 +1,42 @@
+{
+  "path": "testdata/complexity/basic.kek",
+  "base": "testdata/complexity/base.kek",
+  "limits": {
+    "cognitive": 15,
+    "cyclomatic": 10,
+    "nesting": 4,
+    "lines": 0
+  },
+  "findings": [
+    {
+      "name": "shipping",
+      "file": "testdata/complexity/basic.kek",
+      "line": 86,
+      "col": 1,
+      "sig": "(Int, Bool, Bool, Int) -> Int",
+      "hash": "H",
+      "cognitive": 12,
+      "cyclomatic": 13,
+      "nesting": 2,
+      "lines": 38,
+      "deepest": {
+        "file": "testdata/complexity/basic.kek",
+        "line": 116,
+        "col": 9
+      },
+      "over": [
+        "cyclomatic"
+      ],
+      "new": true,
+      "was": {
+        "cognitive": 8,
+        "cyclomatic": 11,
+        "nesting": 1,
+        "lines": 31
+      },
+      "hint": "13 paths: each needs its own test case"
+    }
+  ],
+  "allowed": []
+}
+--- exit 1

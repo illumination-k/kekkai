@@ -26,7 +26,7 @@ fn mut_check_one(p: CovProg, sel: HashMap<Int, Bool>, c: MutCand) -> String {
     let prog = frontend_parse_all(p.srcs);
     let mut w = cov_new_walk("apply");
     w.real = true;
-    w.active.insert(c.node, mut_one_cand(c));
+    mut_activate(w, c);
     cov_rewrite_file(w, prog.file, p, sel);
     let res = chk_check(prog.file);
     match res.errs.get(0) {
@@ -43,7 +43,7 @@ fn mut_check_set(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) -> Strin
     let mut w = cov_new_walk("apply");
     w.real = true;
     for c in cs {
-        w.active.insert(c.node, mut_one_cand(c));
+        mut_activate(w, c);
     }
     cov_rewrite_file(w, prog.file, p, sel);
     let res = chk_check(prog.file);
@@ -67,6 +67,11 @@ fn mut_bisect(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) {
     for c in cs {
         if !nodes.insert(c.node) {
             distinct = false;
+        }
+        for n in c.also {
+            if !nodes.insert(n) {
+                distinct = false;
+            }
         }
     }
     if distinct {
@@ -118,12 +123,7 @@ fn mut_schema(p: CovProg, sel: HashMap<Int, Bool>, cands: Vec<MutCand>) -> ChkRe
         if c.status != "" {
             continue;
         }
-        match w.active.get(c.node) {
-            Some(mut v) => v.push(c),
-            None => {
-                w.active.insert(c.node, mut_one_cand(c));
-            }
-        }
+        mut_activate(w, c);
     }
     cov_rewrite_file(w, prog.file, p, sel);
     if !p.main {

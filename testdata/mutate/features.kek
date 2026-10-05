@@ -1,0 +1,130 @@
+// `kek mutate` on the newer language features: bit operations, compound
+// assignments, Float, match guards, range and or-patterns, macros and
+// derives. Most mutants are killed; a few survive on purpose (see the
+// comments), and some pattern mutants are killed by types (a match that
+// is no longer exhaustive).
+
+#[derive(Debug, Clone, PartialEq)]
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn flags(a: Int, b: Int) -> Int {
+    let mut v = a & b;
+    v |= 1 << 8;
+    v ^= a | b;
+    v
+}
+
+fn shift_mix(x: Int) -> Int {
+    (x << 2) - (x >> 1) + (x ^ 3)
+}
+
+fn sum_sq(v: Vec<Int>) -> Int {
+    let mut s = 0;
+    for x in v {
+        s += x * x;
+    }
+    s
+}
+
+fn mean(v: Vec<Float>) -> Float {
+    let mut s = 0.0;
+    for x in v {
+        s += x;
+    }
+    s / v.len().to_float()
+}
+
+fn scale(x: Float) -> Float {
+    if x < 1.5 { -x * 2.0 } else { x - 0.5 }
+}
+
+fn grade(n: Int) -> String {
+    match n {
+        0..=59 => "F",
+        60..=79 => "C",
+        80..100 => "A",
+        _ => "?",
+    }
+}
+
+fn kind(c: Int) -> Int {
+    match c {
+        1 | 2 => 10,
+        x if x > 50 => 20,
+        x if x % 2 == 0 => 30,
+        _ => 40,
+    }
+}
+
+// removing the guard keeps the match well-typed (`Some(n)` is still
+// reachable)
+fn pick(o: Option<Int>, strict: Bool) -> Int {
+    match o {
+        Some(0) if strict => -1,
+        Some(n) => n * 10,
+        None => 0,
+    }
+}
+
+fn label(x: Int) -> String {
+    format!("{}-{}", x + 1, if x > 9 { "big" } else { "small" })
+}
+
+#[test]
+fn flags_values() -> Bool {
+    flags(12, 10) == (((12 & 10) | 256) ^ (12 | 10)) && flags(0, 0) == 256
+}
+
+#[test]
+fn shift_mix_values() -> Bool {
+    shift_mix(5) == 20 - 2 + 6 && shift_mix(-8) == -32 + 4 + (-8 ^ 3)
+}
+
+#[test]
+fn sum_sq_values() -> Bool {
+    sum_sq(vec![1, 2, 3]) == 14
+}
+
+#[test]
+fn mean_values() -> Bool {
+    mean(vec![1.0, 2.0, 6.0]) == 3.0
+}
+
+// (scale(1.5) is not tested: `<` → `<=` survives)
+#[test]
+fn scale_values() -> Bool {
+    scale(1.0) == -2.0 && scale(3.0) == 2.5
+}
+
+#[test]
+fn grade_values() -> Bool {
+    grade(0) == "F"
+        && grade(59) == "F"
+        && grade(60) == "C"
+        && grade(79) == "C"
+        && grade(80) == "A"
+        && grade(99) == "A"
+        && grade(100) == "?"
+}
+
+// (kind(2) is not tested: deleting the alternative `2` survives)
+#[test]
+fn kind_values() -> Bool {
+    kind(1) == 10 && kind(51) == 20 && kind(50) == 30 && kind(7) == 40
+}
+
+#[test]
+fn pick_values() -> Bool {
+    pick(Some(0), true) == -1
+        && pick(Some(0), false) == 0
+        && pick(Some(2), false) == 20
+        && pick(None, true) == 0
+}
+
+#[test]
+fn label_values() -> Bool {
+    label(1) == "2-small" && label(10) == "11-big" && Point { x: 1, y: 2 } == Point { x: 1, y: 2 }
+}

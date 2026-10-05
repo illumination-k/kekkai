@@ -87,8 +87,69 @@ fn __mut_neg(k: Int, x: Int) -> Int {
     if __mut_on(k) { x } else { 0 - x }
 }
 
-// operator codes: 1 + 2 - 3 * 4 / 5 % 6 < 7 <= 8 > 9 >=
+// `-x` (a Float), or x when mutant k is active
+fn __mut_fneg(k: Int, x: Float) -> Float {
+    if __mut_on(k) { x } else { -x }
+}
+
+// `!x` (bitwise not), or x when mutant k is active
+fn __mut_bnot(k: Int, x: Int) -> Int {
+    if __mut_on(k) { x } else { !x }
+}
+
+// a Float replaced by alt when mutant k is active (literals)
+fn __mut_float(k: Int, x: Float, alt: Float) -> Float {
+    if __mut_on(k) { alt } else { x }
+}
+
+// operator codes: 1 + 2 - 3 * 4 / 5 % 6 < 7 <= 8 > 9 >= 10 & 11 | 12 ^
+// 13 << 14 >>
 fn __mut_iop(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Int {
+    let o = if __mut_on(k) { alt } else { op };
+    if o == 1 {
+        x + y
+    } else if o == 2 {
+        x - y
+    } else if o == 3 {
+        x * y
+    } else if o == 4 {
+        x / y
+    } else if o == 5 {
+        x % y
+    } else if o == 10 {
+        x & y
+    } else if o == 11 {
+        x | y
+    } else if o == 12 {
+        x ^ y
+    } else if o == 13 { x << y } else { x >> y }
+}
+
+// two mutants of one operator (`^` → `&`, `^` → `|`)
+fn __mut_iop2(k: Int, k2: Int, x: Int, y: Int, op: Int, alt: Int, alt2: Int) -> Int {
+    let a = __mut_on(k);
+    let b = __mut_on(k2);
+    __mut_iop(
+        0,
+        x,
+        y,
+        if a {
+            alt
+        } else if b { alt2 } else { op },
+        op,
+    )
+}
+
+fn __mut_icmp(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Bool {
+    let o = if __mut_on(k) { alt } else { op };
+    if o == 6 {
+        x < y
+    } else if o == 7 {
+        x <= y
+    } else if o == 8 { x > y } else { x >= y }
+}
+
+fn __mut_fop(k: Int, x: Float, y: Float, op: Int, alt: Int) -> Float {
     let o = if __mut_on(k) { alt } else { op };
     if o == 1 {
         x + y
@@ -99,7 +160,7 @@ fn __mut_iop(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Int {
     } else if o == 4 { x / y } else { x % y }
 }
 
-fn __mut_icmp(k: Int, x: Int, y: Int, op: Int, alt: Int) -> Bool {
+fn __mut_fcmp(k: Int, x: Float, y: Float, op: Int, alt: Int) -> Bool {
     let o = if __mut_on(k) { alt } else { op };
     if o == 6 {
         x < y

@@ -34,7 +34,7 @@ struct CapsReport {
 fn caps_func_signature(fun: ChkFunc) -> String {
     if ast_has_attr(fun.decl, "const") {
         // a constant (compiler/desugar.kek): always pure
-        return "const " + fun.name + ": " + ty_str(fun.result);
+        return ast_display_name("const " + fun.name + ": " + ty_str(fun.result));
     }
     let mut ps = Vec::new();
     let mut i = 0;
@@ -54,7 +54,7 @@ fn caps_func_signature(fun: ChkFunc) -> String {
         };
         s = s + " -> " + r + ty_str(fun.result);
     }
-    s
+    ast_display_name(s)
 }
 
 // caps_ref_prefix is `&` or `&mut ` when parameter i is declared a
@@ -122,7 +122,7 @@ fn caps_reports(a: DiagAnalysis) -> Vec<CapsReport> {
             }
         }
         out.push(CapsReport {
-            name: fun.name,
+            name: ast_display_name(fun.name),
             signature: caps_func_signature(fun),
             line: p.line,
             col: p.col,
@@ -289,6 +289,10 @@ fn caps_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             lines.push("    warning: granted but unused: " + unused.join(", "));
         }
     }
-    frontend_print(log, lines);
+    let mut shown = Vec::new();
+    for l in lines {
+        shown.push(ast_display_name(l));
+    }
+    frontend_print(log, shown);
     0
 }

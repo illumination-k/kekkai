@@ -339,8 +339,13 @@ fn lex_run(lx: LexState) {
             lex_char_lit(lx, pos, lx.uoff, false);
         } else if lex_is_ident_start(c) {
             let start = lx.uoff;
+            // `$` continues an identifier only in the module-qualified
+            // names of generated code (compiler/modres.kek; parse_file_at
+            // rejects it in sources)
             while lx.off < lx.n
-                && (lex_is_ident_start(lex_peek(lx, 0)) || lex_is_digit(lex_peek(lx, 0))) {
+                && (lex_is_ident_start(lex_peek(lx, 0))
+                    || lex_is_digit(lex_peek(lx, 0))
+                    || lex_peek(lx, 0) == 36) {
                 lex_advance(lx);
             }
             let word = lx.src.slice(start, lx.uoff);

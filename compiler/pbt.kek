@@ -352,7 +352,7 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
             copy = pbt_struct(st.name, names, cs);
             zero = pbt_struct(st.name, names, zs);
             show = if ws.len() == 0 {
-                json_quote(st.name)
+                json_quote(derive_base_name(st.name))
             } else if names.get(0).unwrap_or("") == "0" {
                 let mut ts2 = Vec::new();
                 let mut k = 0;
@@ -360,9 +360,9 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                     ts2.push("__kw_" + a + "(__x." + k.to_string() + ")");
                     k = k + 1;
                 }
-                json_quote(st.name + "(") + " + " + ts2.join(" + \", \" + ") + " + \")\""
+                json_quote(derive_base_name(st.name) + "(") + " + " + ts2.join(" + \", \" + ") + " + \")\""
             } else {
-                json_quote(st.name + " { ") + " + " + pbt_join_shows(ws) + " + \" }\""
+                json_quote(derive_base_name(st.name) + " { ") + " + " + pbt_join_shows(ws) + " + \" }\""
             };
         }
         Ty::Enum(en, args) => {

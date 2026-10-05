@@ -27,6 +27,8 @@ struct FmtPrinter {
     used: Vec<Bool>,
     // > 0 while trying to print a binary expression on one line
     mut flat: Int,
+    // ids of the `pub` items, fields and methods (ParseResult.pubs)
+    pubs: HashMap<Int, Bool>,
 }
 
 struct FmtResult {
@@ -44,6 +46,7 @@ enum FmtUnitKind {
     Trait(AstTraitDecl),
     Alias(AstTypeAlias),
     Const(AstConstDecl),
+    Use(AstUse),
     Assoc(AstAssocType),
     Field(AstField),
     Variant(AstVariant),
@@ -115,13 +118,14 @@ fn fmt_source(src: String) -> FmtResult {
         comments: lr.comments,
         used: used,
         flat: 0,
+        pubs: pr.pubs,
     };
     let mut i = 0;
     for t in p.toks {
         p.tok_at.insert(fmt_pos_key(t.pos), i);
         i = i + 1;
     }
-    FmtResult { out: fmt_file(p, pr.file), errs: Vec::new() }
+    FmtResult { out: fmt_file(p, pr.file, pr.uses), errs: Vec::new() }
 }
 
 // ---- strings ----
@@ -447,8 +451,31 @@ fn fmt_is_alias(u: FmtUnit) -> Bool {
     match u.kind {
         FmtUnitKind::Alias(_) => true,
         FmtUnitKind::Const(_) => true,
+        FmtUnitKind::Use(_) => true,
         _ => false,
     }
+}
+
+// fmt_pub is "pub " for a `pub` item, field or method (by node id).
+fn fmt_pub(p: FmtPrinter, id: Int) -> String {
+    if p.pubs.contains_key(id) { "pub " } else { "" }
+}
+
+// fmt_use prints a `use` declaration.
+fn fmt_use(u: AstUse) -> String {
+    let mut s = "use " + u.path.join("::");
+    if u.glob {
+        return s + if u.path.len() > 0 { "::*;" } else { "*;" };
+    }
+    let mut items = Vec::new();
+    for it in u.items {
+        items.push(if it.alias == "" { it.name } else { it.name + " as " + it.alias });
+    }
+    let sep = if u.path.len() > 0 { "::" } else { "" };
+    if u.braces {
+        return s + sep + "{" + items.join(", ") + "};";
+    }
+    s + sep + items.join(", ") + ";"
 }
 
 fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
@@ -459,12 +486,13 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
         FmtUnitKind::Impl(d) => fmt_impl_decl(p, d, ind),
         FmtUnitKind::Trait(d) => fmt_trait_decl(p, d, ind),
         FmtUnitKind::Assoc(a) => fmt_assoc(a),
+        FmtUnitKind::Use(u) => fmt_use(u),
         FmtUnitKind::Const(d) => {
-            let h = "const " + d.name + ": " + fmt_typ(d.ty) + " = ";
+            let h = fmt_pub(p, d.id) + "const " + d.name + ": " + fmt_typ(d.ty) + " = ";
             h + fmt_expr(p, d.value, ind, ind * 4 + fmt_w(p, h), false) + ";"
         }
         FmtUnitKind::Alias(a) => {
-            let h = "type " + a.name + " = " + fmt_typ(a.ty);
+            let h = fmt_pub(p, a.id) + "type " + a.name + " = " + fmt_typ(a.ty);
             match a.pred {
                 Some(e) => {
                     let w = h + " where ";
@@ -473,7 +501,8 @@ fn fmt_render(p: FmtPrinter, u: FmtUnit, ind: Int) -> String {
                 None => h + ";",
             }
         }
-        FmtUnitKind::Field(f) => if f.mutable { "mut " } else { "" }
+        FmtUnitKind::Field(f) => fmt_pub(p, f.id)
+            + if f.mutable { "mut " } else { "" }
             + f.name
             + ": "
             + fmt_typ(f.ty)
@@ -553,16 +582,19 @@ fn fmt_next_brace(p: FmtPrinter, i: Int) -> Int {
 
 // ---- items ----
 
-fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
+fn fmt_file(p: FmtPrinter, f: AstFile, uses: Vec<AstUse>) -> String {
     let mut items = Vec::new();
+    for u in uses {
+        items.push(FmtUnit { start: u.pos, kind: FmtUnitKind::Use(u) });
+    }
     for d in f.structs {
-        items.push(FmtUnit { start: fmt_attrs_start(d.attrs, d.pos), kind: FmtUnitKind::Struct(d) });
+        items.push(FmtUnit { start: fmt_start(p, d.attrs, d.pos), kind: FmtUnitKind::Struct(d) });
     }
     for d in f.enums {
-        items.push(FmtUnit { start: fmt_attrs_start(d.attrs, d.pos), kind: FmtUnitKind::Enum(d) });
+        items.push(FmtUnit { start: fmt_start(p, d.attrs, d.pos), kind: FmtUnitKind::Enum(d) });
     }
     for d in f.traits {
-        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Trait(d) });
+        items.push(FmtUnit { start: fmt_start(p, Vec::new(), d.pos), kind: FmtUnitKind::Trait(d) });
     }
     for d in f.funcs {
         let mut start = d.pos;
@@ -572,16 +604,16 @@ fn fmt_file(p: FmtPrinter, f: AstFile) -> String {
             }
             None => {}
         }
-        items.push(FmtUnit { start: start, kind: FmtUnitKind::Func(d) });
+        items.push(FmtUnit { start: fmt_start(p, d.attrs, start), kind: FmtUnitKind::Func(d) });
     }
     for d in f.impls {
         items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Impl(d) });
     }
     for d in f.aliases {
-        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Alias(d) });
+        items.push(FmtUnit { start: fmt_start(p, Vec::new(), d.pos), kind: FmtUnitKind::Alias(d) });
     }
     for d in f.consts {
-        items.push(FmtUnit { start: d.pos, kind: FmtUnitKind::Const(d) });
+        items.push(FmtUnit { start: fmt_start(p, Vec::new(), d.pos), kind: FmtUnitKind::Const(d) });
     }
     fmt_sort_units(items);
     fmt_container(p, -1, p.toks.len() - 1, items, 0)
@@ -599,6 +631,25 @@ fn fmt_sort_units(mut items: Vec<FmtUnit>) {
             j = j - 1;
         }
     }
+}
+
+// fmt_start is where an item, field or method starts: its first
+// attribute, else a `pub` before pos, else pos.
+fn fmt_start(p: FmtPrinter, attrs: Vec<AstAttr>, pos: AstPos) -> AstPos {
+    match attrs.get(0) {
+        Some(a) => {
+            return a.pos;
+        }
+        None => {}
+    }
+    let i = fmt_tok_index(p, pos);
+    if i > 0 {
+        let t = fmt_tok(p, i - 1);
+        if t.kind == "IDENT" && t.text == "pub" {
+            return t.pos;
+        }
+    }
+    pos
 }
 
 fn fmt_attrs_start(attrs: Vec<AstAttr>, pos: AstPos) -> AstPos {
@@ -627,10 +678,10 @@ fn fmt_trait_decl(p: FmtPrinter, d: AstTraitDecl, ind: Int) -> String {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
     }
     for f in d.funcs {
-        units.push(FmtUnit { start: fmt_attrs_start(f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
+        units.push(FmtUnit { start: fmt_start(p, f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
     }
     fmt_sort_units(units);
-    let mut head = "trait " + d.name + fmt_generics(d.generics);
+    let mut head = fmt_pub(p, d.id) + "trait " + d.name + fmt_generics(d.generics);
     if d.supers.len() > 0 {
         let mut ss = Vec::new();
         for t in d.supers {
@@ -649,7 +700,7 @@ fn fmt_assoc(a: AstAssocType) -> String {
 }
 
 fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
-    let head = fmt_attrs(d.attrs, ind) + "struct " + d.name + fmt_generics(d.generics);
+    let head = fmt_attrs(d.attrs, ind) + fmt_pub(p, d.id) + "struct " + d.name + fmt_generics(d.generics);
     if d.kind == "unit" {
         return head + ";";
     }
@@ -657,16 +708,17 @@ fn fmt_struct_decl(p: FmtPrinter, d: AstStructDecl, ind: Int) -> String {
         let mut ts = Vec::new();
         for fd in d.fields {
             let m = if fd.mutable { "mut " } else { "" };
-            ts.push(m + fmt_typ(fd.ty));
+            ts.push(fmt_pub(p, fd.id) + m + fmt_typ(fd.ty));
         }
         return head + "(" + ts.join(", ") + ");";
     }
     let open = fmt_next_brace(p, fmt_tok_index(p, d.pos));
     let mut units = Vec::new();
     for fd in d.fields {
-        units.push(FmtUnit { start: fd.pos, kind: FmtUnitKind::Field(fd) });
+        units.push(FmtUnit { start: fmt_start(p, Vec::new(), fd.pos), kind: FmtUnitKind::Field(fd) });
     }
     fmt_attrs(d.attrs, ind)
+        + fmt_pub(p, d.id)
         + "struct "
         + d.name
         + fmt_generics(d.generics)
@@ -754,10 +806,10 @@ fn fmt_impl_decl(p: FmtPrinter, d: AstImplDecl, ind: Int) -> String {
         units.push(FmtUnit { start: a.pos, kind: FmtUnitKind::Assoc(a) });
     }
     for f in d.funcs {
-        units.push(FmtUnit { start: fmt_attrs_start(f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
+        units.push(FmtUnit { start: fmt_start(p, f.attrs, f.pos), kind: FmtUnitKind::Func(f) });
     }
     for c in d.consts {
-        units.push(FmtUnit { start: c.pos, kind: FmtUnitKind::Const(c) });
+        units.push(FmtUnit { start: fmt_start(p, Vec::new(), c.pos), kind: FmtUnitKind::Const(c) });
     }
     fmt_sort_units(units);
     let mut head = "impl" + fmt_generics(d.generics) + " ";
@@ -806,6 +858,7 @@ fn fmt_enum_decl(p: FmtPrinter, d: AstEnumDecl, ind: Int) -> String {
         units.push(FmtUnit { start: v.pos, kind: FmtUnitKind::Variant(v) });
     }
     fmt_attrs(d.attrs, ind)
+        + fmt_pub(p, d.id)
         + "enum "
         + d.name
         + fmt_generics(d.generics)
@@ -839,9 +892,10 @@ fn fmt_func_decl(p: FmtPrinter, d: AstFuncDecl, ind: Int) -> String {
     };
     let name = d.name + fmt_generics(d.generics);
     let wh = fmt_wheres_preds(p, d.wheres, d.preds, ind, d.body.pos);
-    let mut head = "fn " + name + "(" + params.join(", ") + ")" + ret;
+    let pv = fmt_pub(p, d.id);
+    let mut head = pv + "fn " + name + "(" + params.join(", ") + ")" + ret;
     if ind * 4 + fmt_w(p, head) + 2 > fmt_max_width() && params.len() > 0 {
-        head = "fn " + name + "(\n";
+        head = pv + "fn " + name + "(\n";
         for ps in params {
             head = head + fmt_indent(ind + 1) + ps + ",\n";
         }

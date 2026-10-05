@@ -301,7 +301,7 @@ fn chk_parse_core_from(mut srcs: Vec<FeSource>) -> ChkCore {
     };
     let mut errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
-    srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples() });
+    srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples(), module: "" });
     for s in srcs {
         let pr = parse_file(s.name, s.text, ids);
         for e in pr.errs {
@@ -459,6 +459,10 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
         }
         return;
     }
+    if a.name == "__mod" || a.name == "__private" {
+        // added by compiler/modres.kek (`__` names cannot be written)
+        return;
+    }
     if a.name == "const" && ast_attr_has(a, "__const") {
         // the function of a constant (compiler/desugar.kek)
         return;
@@ -560,7 +564,12 @@ fn chk_check_full(
         lin_check(c.info, fun, c.errs);
     }
     // the mutability and refinement passes need a well-typed program
-    let typed = c.errs.len() == 0;
+    let mut typed = c.errs.len() == 0;
+    if typed {
+        // private methods and fields of modules (compiler/modres.kek)
+        mr_check_privacy(c.info, user, c.errs);
+        typed = c.errs.len() == 0;
+    }
     let mut mr = mu_empty_report();
     if typed && mu {
         mr = mu_program(c.info, f);
@@ -1195,7 +1204,11 @@ fn chk_declare_func(
         declass: Vec::new(),
     };
     for a in fd.attrs {
-        if scope.contains_key("Self") && a.name != "fresh" && a.name != "owned" && a.name != "const" {
+        if scope.contains_key("Self")
+            && a.name != "fresh"
+            && a.name != "owned"
+            && a.name != "const"
+            && !a.name.starts_with("__") {
             chk_errorf(c, a.pos, "attributes are not allowed on methods");
             continue;
         }

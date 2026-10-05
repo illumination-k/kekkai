@@ -1,0 +1,1570 @@
+// Name resolution of modules (prefix mr_ / Mr*; docs/modules.md).
+//
+// A subdirectory `a/b` of the program is the module `a::b`. Right after
+// parsing, every item of a module other than the root gets the global name
+// `a$b$name`, and every reference (identifiers, paths, types, patterns,
+// struct literals, impl and trait names) is resolved in the scope of its
+// file: the items of its module, its `use` declarations, then the core
+// library and the prelude (whose names stay global). The later passes see
+// unique global names only; ast_display_name turns `a$b$name` back into
+// `a::b::name` for the user.
+//
+// Like compiler/desugar.kek, the pass builds new nodes and leaves the
+// parsed trees as they are (the formatter, and the parse cache of the
+// daemon, keep the source forms); nodes keep their ids.
+//
+// Visibility: an item is visible in its module and the module's
+// descendants unless it is `pub`; items of the root module are visible
+// everywhere (through `crate::`). Methods of inherent impls and struct
+// fields are checked after type checking (mr_check_privacy) from the
+// attributes this pass adds: `#[__mod(a::b)]` on the functions of a
+// submodule (their module), `#[__private]` on methods without `pub` and
+// `#[__private_fields(f, g)]` on the structs of a submodule.
+
+struct MrItem {
+    // "function", "struct", "enum", "trait", "constant", "type alias"
+    kind: String,
+    module: String,
+    name: String,
+    mangled: String,
+    is_pub: Bool,
+    unit: Bool,
+}
+
+struct MrCx {
+    // module + "\t" + name -> the item
+    items: HashMap<String, MrItem>,
+    // every module path ("" is the root)
+    modules: HashMap<String, Bool>,
+    errs: Vec<AstError>,
+    pubs: HashMap<Int, Bool>,
+    // global names of the unit structs
+    units: HashMap<String, Bool>,
+    // the file being resolved
+    mut module: String,
+    // `use` of the file: name -> item key, name -> module, glob modules
+    // (with the text of their `use` for messages)
+    mut imp_items: HashMap<String, String>,
+    mut imp_mods: HashMap<String, String>,
+    mut globs: Vec<String>,
+    // local variables (name -> number of bindings in scope) and the
+    // binding stack; type parameters likewise
+    locals: HashMap<String, Int>,
+    stack: Vec<String>,
+    tparams: HashMap<String, Int>,
+    tstack: Vec<String>,
+}
+
+// MrPath is a resolved path: kind "none" (its head is not a module),
+// "mod" (a module), "item" (an item, then the rest of the segments:
+// `m::T::f` has rest ["f"]) or "err" (reported).
+struct MrPath {
+    kind: String,
+    module: String,
+    item: String,
+    rest: Vec<String>,
+}
+
+// MrFile is a parsed file of the program with its module.
+struct MrFile {
+    pr: ParseResult,
+    module: String,
+    name: String,
+}
+
+// mr_mangle is the global name of item name of module m.
+fn mr_mangle(m: String, name: String) -> String {
+    if m == "" {
+        return name;
+    }
+    m.split("::").join("$") + "$" + name
+}
+
+fn mr_key(m: String, name: String) -> String {
+    m + "\t" + name
+}
+
+fn mr_child(m: String, name: String) -> String {
+    if m == "" {
+        return name;
+    }
+    m + "::" + name
+}
+
+fn mr_parent(m: String) -> String {
+    let parts = m.split("::");
+    let mut out = Vec::new();
+    for i in 0..parts.len() - 1 {
+        out.push(parts.get(i).unwrap_or(""));
+    }
+    out.join("::")
+}
+
+// mr_module_text names a module in messages.
+fn mr_module_text(m: String) -> String {
+    if m == "" {
+        return "the crate root";
+    }
+    "module `" + m + "`"
+}
+
+fn mr_error(mut cx: MrCx, pos: AstPos, msg: String) {
+    cx.errs.push(AstError { pos: pos, msg: msg });
+}
+
+// mr_needed reports whether a program uses modules at all: a subdirectory,
+// a `use`, or a path starting with `crate`, `self` or `super`. Otherwise the
+// pass does not run and the program is exactly as parsed.
+fn mr_needed(files: Vec<MrFile>) -> Bool {
+    for f in files {
+        if f.module != "" || f.pr.uses.len() > 0 || f.pr.mod_paths {
+            return true;
+        }
+    }
+    false
+}
+
+fn mr_is_lib_file(name: String) -> Bool {
+    name.starts_with("<prelude>") || name.starts_with("<core>")
+}
+
+// mr_resolve_program resolves the names of the files of a program and
+// returns them as one AstFile (errors go to errs).
+fn mr_resolve_program(files: Vec<MrFile>, mut errs: Vec<AstError>) -> AstFile {
+    let mut cx = MrCx {
+        items: HashMap::new(),
+        modules: HashMap::new(),
+        errs: errs,
+        pubs: HashMap::new(),
+        units: HashMap::new(),
+        module: "",
+        imp_items: HashMap::new(),
+        imp_mods: HashMap::new(),
+        globs: Vec::new(),
+        locals: HashMap::new(),
+        stack: Vec::new(),
+        tparams: HashMap::new(),
+        tstack: Vec::new(),
+    };
+    cx.modules.insert("", true);
+    for f in files {
+        if mr_is_lib_file(f.name) {
+            continue;
+        }
+        let mut m = f.module;
+        while m != "" {
+            cx.modules.insert(m, true);
+            m = mr_parent(m);
+        }
+        for id in f.pr.pubs.keys() {
+            cx.pubs.insert(id, true);
+        }
+        let af = f.pr.file;
+        for d in af.funcs {
+            mr_declare(cx, f.module, d.name, "function", d.id, false);
+        }
+        for d in af.structs {
+            mr_declare(cx, f.module, d.name, "struct", d.id, d.kind == "unit");
+        }
+        for d in af.enums {
+            mr_declare(cx, f.module, d.name, "enum", d.id, false);
+        }
+        for d in af.traits {
+            mr_declare(cx, f.module, d.name, "trait", d.id, false);
+        }
+        for d in af.consts {
+            mr_declare(cx, f.module, d.name, "constant", d.id, false);
+        }
+        for d in af.aliases {
+            mr_declare(cx, f.module, d.name, "type alias", d.id, false);
+        }
+    }
+    let out = AstFile {
+        structs: Vec::new(),
+        enums: Vec::new(),
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+        aliases: Vec::new(),
+        consts: Vec::new(),
+    };
+    for f in files {
+        if mr_is_lib_file(f.name) {
+            chk_append_file(out, f.pr.file);
+            continue;
+        }
+        cx.module = f.module;
+        cx.imp_items = HashMap::new();
+        cx.imp_mods = HashMap::new();
+        cx.globs = Vec::new();
+        for u in f.pr.uses {
+            mr_use(cx, u);
+        }
+        chk_append_file(out, mr_file(cx, f.pr.file));
+    }
+    out
+}
+
+fn mr_declare(mut cx: MrCx, m: String, name: String, kind: String, id: Int, unit: Bool) {
+    let key = mr_key(m, name);
+    if cx.items.contains_key(key) {
+        // a duplicate: the checker reports it
+        return;
+    }
+    cx.items.insert(key, MrItem {
+        kind: kind,
+        module: m,
+        name: name,
+        mangled: mr_mangle(m, name),
+        is_pub: cx.pubs.contains_key(id),
+        unit: unit,
+    });
+    if unit {
+        cx.units.insert(mr_mangle(m, name), true);
+    }
+}
+
+// mr_visible reports whether item it can be named from module m.
+fn mr_visible(it: MrItem, m: String) -> Bool {
+    it.is_pub || it.module == "" || it.module == m || m.starts_with(it.module + "::")
+}
+
+// ---- `use` ----
+
+fn mr_use(mut cx: MrCx, u: AstUse) {
+    if u.glob {
+        let r = mr_resolve_segs(cx, u.path, u.pos);
+        if r.kind == "mod" {
+            cx.globs.push(r.module);
+        } else if r.kind != "err" {
+            mr_error(cx, u.pos, "`use " + u.path.join("::") + "::*` must name a module");
+        }
+        return;
+    }
+    for it in u.items {
+        let mut segs = Vec::new();
+        for s in u.path {
+            segs.push(s);
+        }
+        let mut local = if it.alias != "" { it.alias } else { it.name };
+        if it.name == "self" {
+            // `use a::b::{self}` names the module a::b
+            local = if it.alias != "" { it.alias } else { u.path.get(u.path.len() - 1).unwrap_or("") };
+        } else {
+            segs.push(it.name);
+        }
+        let r = mr_resolve_segs(cx, segs, it.pos);
+        if r.kind == "err" {
+            continue;
+        }
+        if r.kind == "none" {
+            mr_error(cx, it.pos, "unresolved import `" + segs.join("::") + "`: no module `" + segs.get(0).unwrap_or("") + "`");
+            continue;
+        }
+        if cx.imp_items.contains_key(local) || cx.imp_mods.contains_key(local) {
+            mr_error(cx, it.pos, "the name `" + local + "` is imported more than once");
+            continue;
+        }
+        if r.kind == "mod" {
+            cx.imp_mods.insert(local, r.module);
+            continue;
+        }
+        if r.rest.len() > 0 {
+            mr_error(cx, it.pos, "unresolved import `" + segs.join("::") + "`: only modules and items can be imported");
+            continue;
+        }
+        if cx.items.contains_key(mr_key(cx.module, local)) {
+            let here = mr_key(cx.module, local);
+            if here != mr_key(r.module, r.item) {
+                mr_error(cx, it.pos, "the name `" + local + "` is defined in this module and imported by `use`");
+            } else {
+                mr_error(cx, it.pos, "the name `" + local + "` is defined in this module: it need not be imported");
+            }
+            continue;
+        }
+        cx.imp_items.insert(local, mr_key(r.module, r.item));
+    }
+}
+
+// ---- paths ----
+
+// mr_resolve_segs resolves a path given as segments (see MrPath); errors
+// are reported at pos.
+fn mr_resolve_segs(mut cx: MrCx, segs: Vec<String>, pos: AstPos) -> MrPath {
+    let none = MrPath { kind: "none", module: "", item: "", rest: Vec::new() };
+    let n = segs.len();
+    if n == 0 {
+        return none;
+    }
+    let head = segs.get(0).unwrap_or("");
+    let mut cur = "";
+    let mut i = 1;
+    if head == "crate" {
+        cur = "";
+    } else if head == "self" {
+        cur = cx.module;
+    } else if head == "super" {
+        cur = cx.module;
+        i = 0;
+        while i < n && segs.get(i).unwrap_or("") == "super" {
+            if cur == "" {
+                mr_error(cx, pos, "`super` used at the crate root: there is no parent module");
+                return MrPath { kind: "err", module: "", item: "", rest: Vec::new() };
+            }
+            cur = mr_parent(cur);
+            i = i + 1;
+        }
+    } else if cx.tparams.contains_key(head) {
+        return none;
+    } else if cx.modules.contains_key(mr_child(cx.module, head))
+        && !cx.items.contains_key(mr_key(cx.module, head)) {
+        cur = mr_child(cx.module, head);
+    } else if cx.imp_mods.contains_key(head) {
+        cur = cx.imp_mods.get(head).unwrap_or("");
+    } else {
+        return none;
+    }
+    // descend through submodules
+    while i < n - 1 && cx.modules.contains_key(mr_child(cur, segs.get(i).unwrap_or(""))) {
+        cur = mr_child(cur, segs.get(i).unwrap_or(""));
+        i = i + 1;
+    }
+    if i >= n {
+        return MrPath { kind: "mod", module: cur, item: "", rest: Vec::new() };
+    }
+    let name = segs.get(i).unwrap_or("");
+    let it = match cx.items.get(mr_key(cur, name)) {
+        Some(x) => x,
+        None => {
+            if i == n - 1 && cx.modules.contains_key(mr_child(cur, name)) {
+                return MrPath { kind: "mod", module: mr_child(cur, name), item: "", rest: Vec::new() };
+            }
+            mr_error(cx, pos, "cannot find `" + name + "` in " + mr_module_text(cur));
+            return MrPath { kind: "err", module: "", item: "", rest: Vec::new() };
+        }
+    };
+    if !mr_visible(it, cx.module) {
+        mr_error(cx, pos, it.kind + " `" + name + "` is private to module `" + it.module + "`");
+        return MrPath { kind: "err", module: "", item: "", rest: Vec::new() };
+    }
+    let mut rest = Vec::new();
+    let start = i + 1;
+    for j in start..n {
+        rest.push(segs.get(j).unwrap_or(""));
+    }
+    MrPath { kind: "item", module: cur, item: name, rest: rest }
+}
+
+fn mr_path_mangled(cx: MrCx, r: MrPath) -> String {
+    mr_mangle(r.module, r.item)
+}
+
+// mr_lookup resolves a single name that is not a local variable or a type
+// parameter: an item of the module, an import, a glob import; else the
+// name itself (the core library, the prelude, or unknown: the checker
+// reports it). With strict, a root item named from a submodule without a
+// path is an error.
+fn mr_lookup(mut cx: MrCx, name: String, pos: AstPos, strict: Bool) -> String {
+    match cx.items.get(mr_key(cx.module, name)) {
+        Some(it) => {
+            return it.mangled;
+        }
+        None => {}
+    }
+    match cx.imp_items.get(name) {
+        Some(k) => match cx.items.get(k) {
+            Some(it) => {
+                return it.mangled;
+            }
+            None => {}
+        },
+        None => {}
+    }
+    let mut found = Vec::new();
+    let mut from = Vec::new();
+    for g in cx.globs {
+        match cx.items.get(mr_key(g, name)) {
+            Some(it) => {
+                if mr_visible(it, cx.module) {
+                    let mut dup = false;
+                    for x in found {
+                        if x == it.mangled {
+                            dup = true;
+                        }
+                    }
+                    if !dup {
+                        found.push(it.mangled);
+                        from.push(g);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    if found.len() == 1 {
+        return found.get(0).unwrap_or(name);
+    }
+    if found.len() > 1 {
+        if strict {
+            let mut us = Vec::new();
+            for g in from {
+                us.push("`use " + if g == "" { "crate" } else { "crate::" + g } + "::*`");
+            }
+            mr_error(cx, pos, "`" + name + "` is ambiguous (imported by " + us.join(" and ") + ")");
+        }
+        return found.get(0).unwrap_or(name);
+    }
+    if strict && cx.module != "" && cx.items.contains_key(mr_key("", name)) {
+        mr_error(
+            cx,
+            pos,
+            "cannot find `" + name + "` in module `" + cx.module + "` (it is defined in the crate root: use `crate::" + name + "`)",
+        );
+    }
+    name
+}
+
+// mr_unit_struct is the global name of the unit struct a pattern binding
+// names ("" if it names none).
+fn mr_unit_struct(cx: MrCx, name: String) -> String {
+    let m = mr_lookup(cx, name, AstPos { file: "", line: 0, col: 0 }, false);
+    if cx.units.contains_key(m) {
+        return m;
+    }
+    ""
+}
+
+// mr_type_name resolves the name of a named type (`T`, `m::T`, `T::Item`).
+fn mr_type_name(cx: MrCx, name: String, pos: AstPos) -> String {
+    if name == "_" || name == "Self" || name.starts_with("=") || cx.tparams.contains_key(name) {
+        return name;
+    }
+    if name.contains("$") {
+        mr_error(cx, pos, "unexpected character `$`");
+        return name;
+    }
+    if !name.contains("::") {
+        return mr_lookup(cx, name, pos, true);
+    }
+    let segs = name.split("::");
+    let head = segs.get(0).unwrap_or("");
+    if head == "Self" || cx.tparams.contains_key(head) {
+        // an associated type `T::Item`
+        return name;
+    }
+    let r = mr_resolve_segs(cx, segs, pos);
+    if r.kind == "item" {
+        let mut s = mr_path_mangled(cx, r);
+        for x in r.rest {
+            s = s + "::" + x;
+        }
+        return s;
+    }
+    if r.kind == "mod" {
+        mr_error(cx, pos, "expected a type, found module `" + name + "`");
+    }
+    if r.kind == "none" && segs.len() > 2 {
+        mr_error(cx, pos, "unresolved module `" + head + "`");
+    }
+    name
+}
+
+// ---- scopes ----
+
+fn mr_bind(mut cx: MrCx, name: String) {
+    if name == "" || name == "_" {
+        return;
+    }
+    cx.locals.insert(name, cx.locals.get(name).unwrap_or(0) + 1);
+    cx.stack.push(name);
+}
+
+fn mr_unbind_to(mut cx: MrCx, n: Int) {
+    while cx.stack.len() > n {
+        let name = cx.stack.pop().unwrap_or("");
+        let c = cx.locals.get(name).unwrap_or(1) - 1;
+        if c <= 0 {
+            cx.locals.remove(name);
+        } else {
+            cx.locals.insert(name, c);
+        }
+    }
+}
+
+fn mr_tbind(mut cx: MrCx, name: String) {
+    cx.tparams.insert(name, cx.tparams.get(name).unwrap_or(0) + 1);
+    cx.tstack.push(name);
+}
+
+fn mr_tunbind_to(mut cx: MrCx, n: Int) {
+    while cx.tstack.len() > n {
+        let name = cx.tstack.pop().unwrap_or("");
+        let c = cx.tparams.get(name).unwrap_or(1) - 1;
+        if c <= 0 {
+            cx.tparams.remove(name);
+        } else {
+            cx.tparams.insert(name, c);
+        }
+    }
+}
+
+// ---- items ----
+
+fn mr_file(mut cx: MrCx, f: AstFile) -> AstFile {
+    let mut out = AstFile {
+        structs: Vec::new(),
+        enums: Vec::new(),
+        funcs: Vec::new(),
+        impls: Vec::new(),
+        traits: Vec::new(),
+        aliases: Vec::new(),
+        consts: Vec::new(),
+    };
+    for d in f.structs {
+        out.structs.push(mr_struct(cx, d));
+    }
+    for d in f.enums {
+        let t0 = cx.tstack.len();
+        let gs = mr_generics(cx, d.generics);
+        let mut vs = Vec::new();
+        for v in d.variants {
+            vs.push(AstVariant {
+                id: v.id,
+                pos: v.pos,
+                name: v.name,
+                fields: mr_types(cx, v.fields),
+                named: v.named,
+                names: v.names,
+            });
+        }
+        mr_tunbind_to(cx, t0);
+        out.enums.push(AstEnumDecl {
+            id: d.id,
+            pos: d.pos,
+            attrs: d.attrs,
+            name: mr_mangle(cx.module, d.name),
+            generics: gs,
+            variants: vs,
+        });
+    }
+    for d in f.funcs {
+        out.funcs.push(mr_func(cx, d, mr_mangle(cx.module, d.name), false));
+    }
+    for d in f.impls {
+        out.impls.push(mr_impl(cx, d));
+    }
+    for d in f.traits {
+        let t0 = cx.tstack.len();
+        mr_tbind(cx, "Self");
+        let gs = mr_generics(cx, d.generics);
+        let mut assoc = Vec::new();
+        for a in d.assoc {
+            mr_tbind(cx, a.name);
+        }
+        for a in d.assoc {
+            assoc.push(mr_assoc(cx, a));
+        }
+        let mut funcs = Vec::new();
+        for fd in d.funcs {
+            funcs.push(mr_func(cx, fd, fd.name, false));
+        }
+        mr_tunbind_to(cx, t0);
+        out.traits.push(AstTraitDecl {
+            id: d.id,
+            pos: d.pos,
+            name: mr_mangle(cx.module, d.name),
+            generics: gs,
+            supers: mr_types(cx, d.supers),
+            assoc: assoc,
+            funcs: funcs,
+        });
+    }
+    for a in f.aliases {
+        let n0 = cx.stack.len();
+        mr_bind(cx, "self");
+        let pred = match a.pred {
+            Some(e) => Some(mr_expr(cx, e)),
+            None => None,
+        };
+        mr_unbind_to(cx, n0);
+        out.aliases.push(AstTypeAlias {
+            id: a.id,
+            pos: a.pos,
+            name: mr_mangle(cx.module, a.name),
+            ty: mr_type(cx, a.ty),
+            pred: pred,
+        });
+    }
+    for c in f.consts {
+        out.consts.push(mr_const(cx, c, mr_mangle(cx.module, c.name)));
+    }
+    out
+}
+
+fn mr_const(cx: MrCx, c: AstConstDecl, name: String) -> AstConstDecl {
+    AstConstDecl { id: c.id, pos: c.pos, name: name, ty: mr_type(cx, c.ty), value: mr_expr(cx, c.value) }
+}
+
+fn mr_assoc(cx: MrCx, a: AstAssocType) -> AstAssocType {
+    let ty = match a.ty {
+        Some(t) => Some(mr_type(cx, t)),
+        None => None,
+    };
+    AstAssocType { id: a.id, pos: a.pos, name: a.name, ty: ty }
+}
+
+fn mr_struct(cx: MrCx, d: AstStructDecl) -> AstStructDecl {
+    let t0 = cx.tstack.len();
+    let gs = mr_generics(cx, d.generics);
+    let mut fields = Vec::new();
+    let mut private = Vec::new();
+    for f in d.fields {
+        fields.push(AstField {
+            id: f.id,
+            pos: f.pos,
+            mutable: f.mutable,
+            name: f.name,
+            ty: mr_type(cx, f.ty),
+        });
+        if !cx.pubs.contains_key(f.id) {
+            private.push(f.name);
+        }
+    }
+    mr_tunbind_to(cx, t0);
+    let mut attrs = Vec::new();
+    for a in d.attrs {
+        attrs.push(a);
+    }
+    if cx.module != "" && private.len() > 0 {
+        attrs.push(AstAttr { pos: d.pos, name: "__private_fields", args: private });
+    }
+    AstStructDecl {
+        id: d.id,
+        pos: d.pos,
+        attrs: attrs,
+        name: mr_mangle(cx.module, d.name),
+        generics: gs,
+        fields: fields,
+        kind: d.kind,
+    }
+}
+
+fn mr_impl(cx: MrCx, d: AstImplDecl) -> AstImplDecl {
+    let t0 = cx.tstack.len();
+    mr_tbind(cx, "Self");
+    let gs = mr_generics(cx, d.generics);
+    let trait_ty = match d.trait_ty {
+        Some(t) => Some(mr_type(cx, t)),
+        None => None,
+    };
+    let target = mr_type(cx, d.target);
+    let wheres = mr_wheres(cx, d.wheres);
+    let mut assoc = Vec::new();
+    for a in d.assoc {
+        assoc.push(mr_assoc(cx, a));
+    }
+    let inherent = d.trait_ty.is_none();
+    let mut funcs = Vec::new();
+    for fd in d.funcs {
+        funcs.push(mr_func(cx, fd, fd.name, inherent && !cx.pubs.contains_key(fd.id)));
+    }
+    let mut consts = Vec::new();
+    for c in d.consts {
+        consts.push(mr_const(cx, c, c.name));
+    }
+    mr_tunbind_to(cx, t0);
+    AstImplDecl {
+        id: d.id,
+        pos: d.pos,
+        generics: gs,
+        trait_ty: trait_ty,
+        target: target,
+        wheres: wheres,
+        assoc: assoc,
+        funcs: funcs,
+        consts: consts,
+    }
+}
+
+fn mr_generics(cx: MrCx, gs: Vec<AstGeneric>) -> Vec<AstGeneric> {
+    for g in gs {
+        mr_tbind(cx, g.name);
+    }
+    let mut out = Vec::new();
+    for g in gs {
+        out.push(AstGeneric { id: g.id, pos: g.pos, name: g.name, bounds: mr_types(cx, g.bounds) });
+    }
+    out
+}
+
+fn mr_wheres(cx: MrCx, ws: Vec<AstWhere>) -> Vec<AstWhere> {
+    let mut out = Vec::new();
+    for w in ws {
+        out.push(AstWhere { id: w.id, pos: w.pos, ty: mr_type(cx, w.ty), bounds: mr_types(cx, w.bounds) });
+    }
+    out
+}
+
+// mr_func resolves a function (name is its new name); private marks a
+// method of an inherent impl without `pub`.
+fn mr_func(cx: MrCx, fd: AstFuncDecl, name: String, private: Bool) -> AstFuncDecl {
+    let t0 = cx.tstack.len();
+    let n0 = cx.stack.len();
+    let gs = mr_generics(cx, fd.generics);
+    let mut params = Vec::new();
+    for p in fd.params {
+        let ty = match p.ty {
+            Some(t) => Some(mr_type(cx, t)),
+            None => None,
+        };
+        params.push(AstParam { id: p.id, pos: p.pos, mutable: p.mutable, name: p.name, ty: ty });
+    }
+    let result = match fd.result {
+        Some(t) => Some(mr_type(cx, t)),
+        None => None,
+    };
+    let wheres = mr_wheres(cx, fd.wheres);
+    for p in fd.params {
+        mr_bind(cx, p.name);
+    }
+    let n1 = cx.stack.len();
+    mr_bind(cx, "result");
+    let mut preds = Vec::new();
+    for e in fd.preds {
+        preds.push(mr_expr(cx, e));
+    }
+    mr_unbind_to(cx, n1);
+    let body = if fd.has_body { mr_block(cx, fd.body) } else { fd.body };
+    mr_unbind_to(cx, n0);
+    mr_tunbind_to(cx, t0);
+    let mut attrs = Vec::new();
+    for a in fd.attrs {
+        if (a.name == "main" || a.name == "handler") && cx.module != "" {
+            mr_error(cx, fd.pos, "`#[" + a.name + "]` must be in the root module (this is module `" + cx.module + "`)");
+        }
+        attrs.push(a);
+    }
+    if cx.module != "" {
+        let mut args = Vec::new();
+        args.push(cx.module);
+        attrs.push(AstAttr { pos: fd.pos, name: "__mod", args: args });
+        if private {
+            attrs.push(AstAttr { pos: fd.pos, name: "__private", args: Vec::new() });
+        }
+    }
+    AstFuncDecl {
+        id: fd.id,
+        pos: fd.pos,
+        attrs: attrs,
+        name: name,
+        generics: gs,
+        self_kind: fd.self_kind,
+        params: params,
+        result: result,
+        wheres: wheres,
+        preds: preds,
+        has_body: fd.has_body,
+        body: body,
+    }
+}
+
+// ---- types ----
+
+fn mr_types(cx: MrCx, ts: Vec<AstType>) -> Vec<AstType> {
+    let mut out = Vec::new();
+    for t in ts {
+        out.push(mr_type(cx, t));
+    }
+    out
+}
+
+fn mr_opt_type(cx: MrCx, t: Option<AstType>) -> Option<AstType> {
+    match t {
+        Some(x) => Some(mr_type(cx, x)),
+        None => None,
+    }
+}
+
+fn mr_type(cx: MrCx, t: AstType) -> AstType {
+    match t {
+        AstType::Named(n) => AstType::Named(AstNamedType {
+            id: n.id,
+            pos: n.pos,
+            name: mr_type_name(cx, n.name, n.pos),
+            args: mr_types(cx, n.args),
+        }),
+        AstType::Ref(r) => AstType::Ref(AstRefType {
+            id: r.id,
+            pos: r.pos,
+            mutable: r.mutable,
+            elem: mr_type(cx, r.elem),
+        }),
+        AstType::Unit(_) => t,
+        AstType::Tuple(x) => AstType::Tuple(AstTupleType { id: x.id, pos: x.pos, elems: mr_types(cx, x.elems) }),
+        AstType::Fn(x) => AstType::Fn(AstFnType {
+            id: x.id,
+            pos: x.pos,
+            kind: x.kind,
+            params: mr_types(cx, x.params),
+            result: mr_opt_type(cx, x.result),
+        }),
+    }
+}
+
+// ---- patterns ----
+
+// mr_pat resolves a pattern and binds its variables.
+fn mr_pat(cx: MrCx, p: AstPattern) -> AstPattern {
+    let mut q = ast_new_pattern(p.id, p.pos);
+    q.wildcard = p.wildcard;
+    q.tuple = p.tuple;
+    q.mutable = p.mutable;
+    q.int_value = p.int_value;
+    q.bool_lit = p.bool_lit;
+    q.str_value = p.str_value;
+    q.range = p.range;
+    q.range_lo = p.range_lo;
+    q.range_hi = p.range_hi;
+    q.range_incl = p.range_incl;
+    q.brace = p.brace;
+    q.fields = p.fields;
+    q.rest = p.rest;
+    q.ty = p.ty;
+    q.ctor = p.ctor;
+    q.bind = p.bind;
+    if p.ctor != "" {
+        if p.ty == "" {
+            q.ctor = mr_type_name(cx, p.ctor, p.pos);
+        } else {
+            let mut segs = p.ty.split("::");
+            segs.push(p.ctor);
+            let r = mr_resolve_segs(cx, segs, p.pos);
+            if r.kind == "item" {
+                if r.rest.len() == 0 {
+                    q.ty = "";
+                    q.ctor = mr_path_mangled(cx, r);
+                } else {
+                    q.ty = mr_path_mangled(cx, r);
+                    q.ctor = r.rest.join("::");
+                }
+            } else if r.kind == "none" {
+                q.ty = mr_type_name(cx, p.ty, p.pos);
+            } else if r.kind == "mod" {
+                mr_error(cx, p.pos, "expected a pattern, found module `" + segs.join("::") + "`");
+            }
+        }
+    }
+    for a in p.args {
+        q.args.push(mr_pat(cx, a));
+    }
+    for a in p.alts {
+        q.alts.push(mr_pat(cx, a));
+    }
+    for a in p.at {
+        q.at.push(mr_pat(cx, a));
+    }
+    if p.bind != "" && p.ctor == "" {
+        let u = mr_unit_struct(cx, p.bind);
+        if u != "" {
+            q.bind = u;
+        } else {
+            mr_bind(cx, p.bind);
+        }
+    }
+    q
+}
+
+fn mr_opt_pat(cx: MrCx, p: Option<AstPattern>) -> Option<AstPattern> {
+    match p {
+        Some(x) => Some(mr_pat(cx, x)),
+        None => None,
+    }
+}
+
+// ---- statements and expressions ----
+
+fn mr_block(cx: MrCx, b: AstBlock) -> AstBlock {
+    let n0 = cx.stack.len();
+    let mut stmts = Vec::new();
+    for s in b.stmts {
+        stmts.push(mr_stmt(cx, s));
+    }
+    let tail = match b.tail {
+        Some(e) => Some(mr_expr(cx, e)),
+        None => None,
+    };
+    mr_unbind_to(cx, n0);
+    AstBlock { id: b.id, pos: b.pos, stmts: stmts, tail: tail, end: b.end }
+}
+
+fn mr_stmt(cx: MrCx, s0: AstStmt) -> AstStmt {
+    match s0 {
+        AstStmt::Let(s) => {
+            let init = mr_expr(cx, s.init);
+            let ty = mr_opt_type(cx, s.ty);
+            let pat = mr_opt_pat(cx, s.pat);
+            let mut name = s.name;
+            if s.pat.is_none() {
+                let u = mr_unit_struct(cx, s.name);
+                if u != "" && !s.mutable {
+                    name = u;
+                } else {
+                    mr_bind(cx, s.name);
+                }
+            }
+            AstStmt::Let(AstLetStmt {
+                id: s.id,
+                pos: s.pos,
+                mutable: s.mutable,
+                name: name,
+                pat: pat,
+                ty: ty,
+                init: init,
+                let_else: s.let_else,
+            })
+        }
+        AstStmt::Assign(s) => AstStmt::Assign(AstAssignStmt {
+            id: s.id,
+            pos: s.pos,
+            name: s.name,
+            value: mr_expr(cx, s.value),
+        }),
+        AstStmt::FieldAssign(s) => AstStmt::FieldAssign(AstFieldAssignStmt {
+            id: s.id,
+            pos: s.pos,
+            target: AstFieldExpr {
+                id: s.target.id,
+                pos: s.target.pos,
+                x: mr_expr(cx, s.target.x),
+                name: s.target.name,
+            },
+            value: mr_expr(cx, s.value),
+        }),
+        AstStmt::Break(_) => s0,
+        AstStmt::Continue(_) => s0,
+        AstStmt::While(s) => {
+            let cond = mr_expr(cx, s.cond);
+            let n0 = cx.stack.len();
+            let pat = mr_opt_pat(cx, s.pat);
+            let body = mr_block(cx, s.body);
+            mr_unbind_to(cx, n0);
+            AstStmt::While(AstWhileStmt {
+                id: s.id,
+                pos: s.pos,
+                pat: pat,
+                cond: cond,
+                body: body,
+                is_loop: s.is_loop,
+            })
+        }
+        AstStmt::For(s) => {
+            let iter = mr_expr(cx, s.iter);
+            let end = match s.end {
+                Some(e) => Some(mr_expr(cx, e)),
+                None => None,
+            };
+            let n0 = cx.stack.len();
+            let pat = mr_opt_pat(cx, s.pat);
+            if s.pat.is_none() {
+                mr_bind(cx, s.var);
+            }
+            let body = mr_block(cx, s.body);
+            mr_unbind_to(cx, n0);
+            AstStmt::For(AstForStmt {
+                id: s.id,
+                pos: s.pos,
+                var: s.var,
+                pat: pat,
+                iter: iter,
+                end: end,
+                body: body,
+            })
+        }
+        AstStmt::Return(s) => {
+            let v = match s.value {
+                Some(e) => Some(mr_expr(cx, e)),
+                None => None,
+            };
+            AstStmt::Return(AstReturnStmt { id: s.id, pos: s.pos, value: v })
+        }
+        AstStmt::Expr(s) => AstStmt::Expr(AstExprStmt {
+            id: s.id,
+            pos: s.pos,
+            x: mr_expr(cx, s.x),
+            semi: s.semi,
+        }),
+    }
+}
+
+fn mr_exprs(cx: MrCx, es: Vec<AstExpr>) -> Vec<AstExpr> {
+    let mut out = Vec::new();
+    for e in es {
+        out.push(mr_expr(cx, e));
+    }
+    out
+}
+
+// mr_path resolves `a::b` / `m::f` / `m::T::f` / `T::f`.
+fn mr_path(cx: MrCx, e: AstPathExpr) -> AstExpr {
+    let mut segs = e.ty.split("::");
+    segs.push(e.name);
+    let r = mr_resolve_segs(cx, segs, e.pos);
+    if r.kind == "item" {
+        if r.rest.len() == 0 {
+            if e.ty_args.len() > 0 {
+                mr_error(cx, e.pos, "unexpected type arguments");
+            }
+            return AstExpr::Ident(AstIdent {
+                id: e.id,
+                pos: e.pos,
+                name: mr_path_mangled(cx, r),
+                targs: mr_types(cx, e.targs),
+            });
+        }
+        if r.rest.len() == 1 {
+            return AstExpr::Path(AstPathExpr {
+                id: e.id,
+                pos: e.pos,
+                ty: mr_path_mangled(cx, r),
+                ty_args: mr_types(cx, e.ty_args),
+                name: r.rest.get(0).unwrap_or(""),
+                targs: mr_types(cx, e.targs),
+            });
+        }
+        mr_error(cx, e.pos, "cannot find `" + segs.join("::") + "`");
+    } else if r.kind == "mod" {
+        mr_error(cx, e.pos, "expected a value, found module `" + segs.join("::") + "`");
+    } else if r.kind == "none" {
+        let ty = if e.ty.contains("::") {
+            mr_error(cx, e.pos, "unresolved module `" + segs.get(0).unwrap_or("") + "`");
+            e.ty
+        } else {
+            mr_type_name(cx, e.ty, e.pos)
+        };
+        return AstExpr::Path(AstPathExpr {
+            id: e.id,
+            pos: e.pos,
+            ty: ty,
+            ty_args: mr_types(cx, e.ty_args),
+            name: e.name,
+            targs: mr_types(cx, e.targs),
+        });
+    }
+    AstExpr::Path(e)
+}
+
+// mr_struct_name resolves the name of a struct literal (`S`, `E::V`,
+// `m::S`, `m::E::V`).
+fn mr_struct_name(cx: MrCx, name: String, pos: AstPos) -> String {
+    if !name.contains("::") {
+        return mr_type_name(cx, name, pos);
+    }
+    let segs = name.split("::");
+    let r = mr_resolve_segs(cx, segs, pos);
+    if r.kind == "item" {
+        let mut s = mr_path_mangled(cx, r);
+        for x in r.rest {
+            s = s + "::" + x;
+        }
+        return s;
+    }
+    if r.kind == "none" {
+        let mut rest = Vec::new();
+        for i in 1..segs.len() {
+            rest.push(segs.get(i).unwrap_or(""));
+        }
+        return mr_type_name(cx, segs.get(0).unwrap_or(""), pos) + "::" + rest.join("::");
+    }
+    if r.kind == "mod" {
+        mr_error(cx, pos, "expected a struct, found module `" + name + "`");
+    }
+    name
+}
+
+fn mr_expr(cx: MrCx, e0: AstExpr) -> AstExpr {
+    match e0 {
+        AstExpr::IntLit(_) => e0,
+        AstExpr::BoolLit(_) => e0,
+        AstExpr::StrLit(_) => e0,
+        AstExpr::UnitLit(_) => e0,
+        AstExpr::Ident(e) => {
+            if cx.locals.contains_key(e.name) {
+                return e0;
+            }
+            AstExpr::Ident(AstIdent {
+                id: e.id,
+                pos: e.pos,
+                name: mr_lookup(cx, e.name, e.pos, true),
+                targs: mr_types(cx, e.targs),
+            })
+        }
+        AstExpr::Path(e) => mr_path(cx, e),
+        AstExpr::Call(e) => AstExpr::Call(AstCall {
+            id: e.id,
+            pos: e.pos,
+            func: mr_expr(cx, e.func),
+            args: mr_exprs(cx, e.args),
+        }),
+        AstExpr::Binary(e) => AstExpr::Binary(AstBinary {
+            id: e.id,
+            pos: e.pos,
+            op: e.op,
+            x: mr_expr(cx, e.x),
+            y: mr_expr(cx, e.y),
+            compound: e.compound,
+        }),
+        AstExpr::Unary(e) => AstExpr::Unary(AstUnary { id: e.id, pos: e.pos, op: e.op, x: mr_expr(cx, e.x) }),
+        AstExpr::Method(e) => AstExpr::Method(AstMethodCall {
+            id: e.id,
+            pos: e.pos,
+            recv: mr_expr(cx, e.recv),
+            name: e.name,
+            targs: mr_types(cx, e.targs),
+            args: mr_exprs(cx, e.args),
+        }),
+        AstExpr::Field(e) => AstExpr::Field(AstFieldExpr {
+            id: e.id,
+            pos: e.pos,
+            x: mr_expr(cx, e.x),
+            name: e.name,
+        }),
+        AstExpr::StructLit(e) => {
+            let mut fields = Vec::new();
+            for f in e.fields {
+                fields.push(AstFieldInit { id: f.id, pos: f.pos, name: f.name, value: mr_expr(cx, f.value) });
+            }
+            AstExpr::StructLit(AstStructLit {
+                id: e.id,
+                pos: e.pos,
+                name: mr_struct_name(cx, e.name, e.pos),
+                fields: fields,
+            })
+        }
+        AstExpr::If(e) => {
+            let cond = mr_expr(cx, e.cond);
+            let n0 = cx.stack.len();
+            let pat = mr_opt_pat(cx, e.pat);
+            let then = mr_block(cx, e.then);
+            mr_unbind_to(cx, n0);
+            let els = match e.els {
+                Some(x) => Some(mr_expr(cx, x)),
+                None => None,
+            };
+            AstExpr::If(AstIf { id: e.id, pos: e.pos, pat: pat, cond: cond, then: then, els: els })
+        }
+        AstExpr::Match(e) => {
+            let x = mr_expr(cx, e.x);
+            let mut arms = Vec::new();
+            for a in e.arms {
+                let n0 = cx.stack.len();
+                let pat = mr_pat(cx, a.pat);
+                let guard = match a.guard {
+                    Some(g) => Some(mr_expr(cx, g)),
+                    None => None,
+                };
+                let body = mr_expr(cx, a.body);
+                mr_unbind_to(cx, n0);
+                arms.push(AstMatchArm { id: a.id, pos: a.pos, pat: pat, guard: guard, body: body });
+            }
+            AstExpr::Match(AstMatch { id: e.id, pos: e.pos, x: x, arms: arms })
+        }
+        AstExpr::Block(b) => AstExpr::Block(mr_block(cx, b)),
+        AstExpr::Try(e) => AstExpr::Try(AstTry { id: e.id, pos: e.pos, x: mr_expr(cx, e.x) }),
+        AstExpr::Closure(e) => {
+            let n0 = cx.stack.len();
+            let mut params = Vec::new();
+            for p in e.params {
+                params.push(AstParam {
+                    id: p.id,
+                    pos: p.pos,
+                    mutable: p.mutable,
+                    name: p.name,
+                    ty: mr_opt_type(cx, p.ty),
+                });
+            }
+            for p in e.params {
+                mr_bind(cx, p.name);
+            }
+            let result = mr_opt_type(cx, e.result);
+            let body = mr_expr(cx, e.body);
+            mr_unbind_to(cx, n0);
+            AstExpr::Closure(AstClosure {
+                id: e.id,
+                pos: e.pos,
+                is_move: e.is_move,
+                params: params,
+                result: result,
+                body: body,
+            })
+        }
+        AstExpr::Tuple(e) => AstExpr::Tuple(AstTupleLit { id: e.id, pos: e.pos, elems: mr_exprs(cx, e.elems) }),
+        AstExpr::Range(e) => AstExpr::Range(AstRange {
+            id: e.id,
+            pos: e.pos,
+            start: mr_expr(cx, e.start),
+            end: mr_expr(cx, e.end),
+            inclusive: e.inclusive,
+        }),
+        AstExpr::Index(e) => AstExpr::Index(AstIndex {
+            id: e.id,
+            pos: e.pos,
+            x: mr_expr(cx, e.x),
+            index: mr_expr(cx, e.index),
+        }),
+        AstExpr::Macro(m) => AstExpr::Macro(AstMacro {
+            id: m.id,
+            pos: m.pos,
+            name: m.name,
+            delim: m.delim,
+            args: m.args,
+            arg_names: m.arg_names,
+            repeat: m.repeat,
+            pat: m.pat,
+            expansion: mr_expr(cx, m.expansion),
+            errs: m.errs,
+        }),
+    }
+}
+
+// ---- visibility of methods and fields (after type checking) ----
+
+// MrPriv holds the private members of the program: method declarations
+// (by id, and by "Type::name" for paths) with their module, and the
+// private fields of structs (by global name) with the struct's module.
+struct MrPriv {
+    methods: HashMap<Int, String>,
+    paths: HashMap<String, String>,
+    owners: HashMap<Int, String>,
+    fields: HashMap<String, Vec<String>>,
+    field_mods: HashMap<String, String>,
+    info: ChkInfo,
+    errs: Vec<AstError>,
+    // the module of the function being checked
+    mut module: String,
+}
+
+// mr_attr_arg is the first argument of attribute name ("" without it).
+fn mr_attr_arg(attrs: Vec<AstAttr>, name: String) -> String {
+    match ast_find_attr(attrs, name) {
+        Some(a) => a.args.get(0).unwrap_or(""),
+        None => "",
+    }
+}
+
+// mr_module_of is the module of a global name (`a$b$T` -> "a::b").
+fn mr_module_of(name: String) -> String {
+    let parts = name.split("$");
+    let mut out = Vec::new();
+    for i in 0..parts.len() - 1 {
+        out.push(parts.get(i).unwrap_or(""));
+    }
+    out.join("::")
+}
+
+fn mr_sees(from: String, m: String) -> Bool {
+    m == "" || from == m || from.starts_with(m + "::")
+}
+
+// mr_check_privacy reports uses of private methods and fields of user
+// (the resolved program, before desugaring) outside their module.
+fn mr_check_privacy(info: ChkInfo, user: AstFile, errs: Vec<AstError>) {
+    let mut pv = MrPriv {
+        methods: HashMap::new(),
+        paths: HashMap::new(),
+        owners: HashMap::new(),
+        fields: HashMap::new(),
+        field_mods: HashMap::new(),
+        info: info,
+        errs: errs,
+        module: "",
+    };
+    let mut any = false;
+    for im in user.impls {
+        if im.trait_ty.is_some() {
+            continue;
+        }
+        let tn = match im.target {
+            AstType::Named(n) => n.name,
+            _ => "",
+        };
+        for fd in im.funcs {
+            if ast_has_attr(fd, "__private") {
+                let m = mr_attr_arg(fd.attrs, "__mod");
+                pv.methods.insert(fd.id, m);
+                pv.owners.insert(fd.id, tn);
+                pv.paths.insert(tn + "::" + fd.name, m);
+                any = true;
+            }
+        }
+    }
+    for sd in user.structs {
+        match ast_find_attr(sd.attrs, "__private_fields") {
+            Some(a) => {
+                pv.fields.insert(sd.name, a.args);
+                pv.field_mods.insert(sd.name, mr_module_of(sd.name));
+                any = true;
+            }
+            None => {}
+        }
+    }
+    if !any {
+        return;
+    }
+    for fd in user.funcs {
+        mr_pv_func(pv, fd);
+    }
+    for im in user.impls {
+        for fd in im.funcs {
+            mr_pv_func(pv, fd);
+        }
+        for c in im.consts {
+            // the module of the impl's type (an impl usually lives there)
+            pv.module = match im.target {
+                AstType::Named(n) => mr_module_of(n.name),
+                _ => "",
+            };
+            mr_pv_expr(pv, c.value);
+        }
+    }
+    for td in user.traits {
+        for fd in td.funcs {
+            mr_pv_func(pv, fd);
+        }
+    }
+    for c in user.consts {
+        pv.module = mr_module_of(c.name);
+        mr_pv_expr(pv, c.value);
+    }
+}
+
+fn mr_pv_func(mut pv: MrPriv, fd: AstFuncDecl) {
+    if chk_is_lib_pos(fd.pos) || !fd.has_body {
+        return;
+    }
+    pv.module = mr_attr_arg(fd.attrs, "__mod");
+    mr_pv_block(pv, fd.body);
+}
+
+fn mr_pv_error(mut pv: MrPriv, pos: AstPos, msg: String) {
+    pv.errs.push(AstError { pos: pos, msg: msg });
+}
+
+// mr_pv_field checks the use of field f of the struct named s.
+fn mr_pv_field(pv: MrPriv, s: String, f: String, pos: AstPos) {
+    match pv.fields.get(s) {
+        Some(fs) => {
+            let m = pv.field_mods.get(s).unwrap_or("");
+            if mr_sees(pv.module, m) {
+                return;
+            }
+            for x in fs {
+                if x == f {
+                    mr_pv_error(
+                        pv,
+                        pos,
+                        "field `" + f + "` of `" + ast_display_name(s) + "` is private to module `" + m + "`",
+                    );
+                    return;
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+fn mr_pv_recv_struct(pv: MrPriv, x: AstExpr) -> String {
+    match pv.info.types.get(ast_expr_id(x)) {
+        Some(t) => match ty_prune(t) {
+            Ty::Struct(s, _) => s.name,
+            _ => "",
+        },
+        None => "",
+    }
+}
+
+fn mr_pv_block(pv: MrPriv, b: AstBlock) {
+    for s in b.stmts {
+        mr_pv_stmt(pv, s);
+    }
+    match b.tail {
+        Some(e) => mr_pv_expr(pv, e),
+        None => {}
+    }
+}
+
+fn mr_pv_opt_pat(pv: MrPriv, p: Option<AstPattern>) {
+    match p {
+        Some(x) => mr_pv_pat(pv, x),
+        None => {}
+    }
+}
+
+fn mr_pv_pat(pv: MrPriv, p: AstPattern) {
+    if p.ctor != "" && p.ty == "" && pv.fields.contains_key(p.ctor) {
+        if p.brace {
+            for f in p.fields {
+                mr_pv_field(pv, p.ctor, f, p.pos);
+            }
+        } else {
+            for i in 0..p.args.len() {
+                mr_pv_field(pv, p.ctor, i.to_string(), p.pos);
+            }
+        }
+    }
+    for a in p.args {
+        mr_pv_pat(pv, a);
+    }
+    for a in p.alts {
+        mr_pv_pat(pv, a);
+    }
+    for a in p.at {
+        mr_pv_pat(pv, a);
+    }
+}
+
+fn mr_pv_stmt(pv: MrPriv, s0: AstStmt) {
+    match s0 {
+        AstStmt::Let(s) => {
+            mr_pv_expr(pv, s.init);
+            mr_pv_opt_pat(pv, s.pat);
+        }
+        AstStmt::Assign(s) => mr_pv_expr(pv, s.value),
+        AstStmt::FieldAssign(s) => {
+            mr_pv_expr(pv, AstExpr::Field(s.target));
+            mr_pv_expr(pv, s.value);
+        }
+        AstStmt::Break(_) => {}
+        AstStmt::Continue(_) => {}
+        AstStmt::While(s) => {
+            mr_pv_expr(pv, s.cond);
+            mr_pv_opt_pat(pv, s.pat);
+            mr_pv_block(pv, s.body);
+        }
+        AstStmt::For(s) => {
+            mr_pv_expr(pv, s.iter);
+            match s.end {
+                Some(e) => mr_pv_expr(pv, e),
+                None => {}
+            }
+            mr_pv_opt_pat(pv, s.pat);
+            mr_pv_block(pv, s.body);
+        }
+        AstStmt::Return(s) => match s.value {
+            Some(e) => mr_pv_expr(pv, e),
+            None => {}
+        },
+        AstStmt::Expr(s) => mr_pv_expr(pv, s.x),
+    }
+}
+
+fn mr_pv_exprs(pv: MrPriv, es: Vec<AstExpr>) {
+    for e in es {
+        mr_pv_expr(pv, e);
+    }
+}
+
+fn mr_pv_expr(pv: MrPriv, e0: AstExpr) {
+    match e0 {
+        AstExpr::Path(e) => match pv.paths.get(e.ty + "::" + e.name) {
+            Some(m) => {
+                if !mr_sees(pv.module, m) {
+                    mr_pv_error(
+                        pv,
+                        e.pos,
+                        "associated function `" + e.name + "` of `" + ast_display_name(e.ty) + "` is private to module `" + m + "`",
+                    );
+                }
+            }
+            None => {}
+        },
+        AstExpr::Call(e) => {
+            match e.func {
+                AstExpr::Ident(f) => {
+                    if pv.fields.contains_key(f.name) {
+                        // a tuple struct
+                        for i in 0..e.args.len() {
+                            mr_pv_field(pv, f.name, i.to_string(), e.pos);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            mr_pv_expr(pv, e.func);
+            mr_pv_exprs(pv, e.args);
+        }
+        AstExpr::Binary(e) => {
+            mr_pv_expr(pv, e.x);
+            mr_pv_expr(pv, e.y);
+        }
+        AstExpr::Unary(e) => mr_pv_expr(pv, e.x),
+        AstExpr::Method(e) => {
+            match pv.info.methods.get(e.id) {
+                Some(mi) => match mi.func {
+                    Some(f) => match pv.methods.get(f.decl.id) {
+                        Some(m) => {
+                            if !mr_sees(pv.module, m) {
+                                mr_pv_error(
+                                    pv,
+                                    e.pos,
+                                    "method `" + e.name + "` of `" + ast_display_name(pv.owners.get(f.decl.id).unwrap_or("")) + "` is private to module `" + m + "`",
+                                );
+                            }
+                        }
+                        None => {}
+                    },
+                    None => {}
+                },
+                None => {}
+            }
+            mr_pv_expr(pv, e.recv);
+            mr_pv_exprs(pv, e.args);
+        }
+        AstExpr::Field(e) => {
+            let s = mr_pv_recv_struct(pv, e.x);
+            if s != "" {
+                mr_pv_field(pv, s, e.name, e.pos);
+            }
+            mr_pv_expr(pv, e.x);
+        }
+        AstExpr::StructLit(e) => {
+            for f in e.fields {
+                mr_pv_field(pv, e.name, f.name, f.pos);
+                mr_pv_expr(pv, f.value);
+            }
+        }
+        AstExpr::If(e) => {
+            mr_pv_expr(pv, e.cond);
+            mr_pv_opt_pat(pv, e.pat);
+            mr_pv_block(pv, e.then);
+            match e.els {
+                Some(x) => mr_pv_expr(pv, x),
+                None => {}
+            }
+        }
+        AstExpr::Match(e) => {
+            mr_pv_expr(pv, e.x);
+            for a in e.arms {
+                mr_pv_pat(pv, a.pat);
+                match a.guard {
+                    Some(g) => mr_pv_expr(pv, g),
+                    None => {}
+                }
+                mr_pv_expr(pv, a.body);
+            }
+        }
+        AstExpr::Block(b) => mr_pv_block(pv, b),
+        AstExpr::Try(e) => mr_pv_expr(pv, e.x),
+        AstExpr::Closure(e) => mr_pv_expr(pv, e.body),
+        AstExpr::Tuple(e) => mr_pv_exprs(pv, e.elems),
+        AstExpr::Range(e) => {
+            mr_pv_expr(pv, e.start);
+            mr_pv_expr(pv, e.end);
+        }
+        AstExpr::Index(e) => {
+            mr_pv_expr(pv, e.x);
+            mr_pv_expr(pv, e.index);
+        }
+        AstExpr::Macro(m) => mr_pv_expr(pv, m.expansion),
+        _ => {}
+    }
+}

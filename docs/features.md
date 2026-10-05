@@ -37,7 +37,8 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `const` と関連定数（`Int::MAX`） | ✅ | 純粋な式のみ |
 | タプル struct・ユニット struct | ✅ | |
 | struct 形式の enum の variant | ✅ | |
-| モジュール `mod` / `use` / `pub` | 🚧 | 現状はディレクトリが 1 つの名前空間 |
+| モジュール・`use`・`pub` | ✅ | サブディレクトリがモジュール（Go と同じく `mod foo;` は書かない）。メソッドとフィールドの `pub` も検査する（[modules.md](modules.md)） |
+| ファイル内の `mod foo { ... }`、`pub use`、`pub(crate)` | 🚧 | |
 | `static` / グローバル変数 | ⛔ | 暗黙の権限になる（capability の原則） |
 
 ## 型・trait

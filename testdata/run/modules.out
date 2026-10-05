@@ -1,0 +1,10 @@
+== modules ==
+3 4
+circle at Point { x: 3, y: 4 } r=2
+square at Point { x: 1, y: 1 } area=9
+49 8
+0
+4 6
+== other == circle at Point { x: 0, y: 9 } r=1
+first
+7

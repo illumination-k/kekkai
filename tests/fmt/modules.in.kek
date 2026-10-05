@@ -1,0 +1,28 @@
+// `pub`, `use` and paths (docs/modules.md)
+use crate::geometry::{Point,  Shape as S};
+use   super::util;
+use store::*;
+use a::b::c as d;
+
+// a public struct
+pub   struct P { pub x: Int, mut y: Int, pub mut z: Int }
+pub struct T(pub Int,  Int);
+pub enum E { A, B }
+pub trait Tr { fn f(&self) -> Int; }
+pub type Alias = Int;
+pub const C: Int = 1;
+
+impl P {
+    pub const ORIGIN: Int = 0;
+    // a public method
+    pub fn new() -> P { P { x: 0, y: 0, z: 0 } }
+    #[allow(similar)]
+    pub fn long_method_name_to_wrap(&self, first_argument: Int, second_argument: Int) -> Int { first_argument }
+    fn private(&self) -> Int { self.x }
+}
+
+pub fn paths() -> Int {
+    let p = crate::geometry::Point::new();
+    let q = geometry::shapes::Shape::Circle { r: 1 };
+    match q { geometry::shapes::Shape::Circle { r } => r, self::E::A => 0, _ => super::helper::<Int>() }
+}

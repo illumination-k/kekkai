@@ -196,7 +196,7 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
                 match m.allow {
                     Some(a) => {
                         let ao = irjson_obj();
-                        irjson_set(ao, "name", IrjVal::Str(m.d.name));
+                        irjson_set(ao, "name", IrjVal::Str(ast_display_name(m.d.name)));
                         irjson_set(
                             ao,
                             "reason",
@@ -233,7 +233,7 @@ fn sim_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         irjson_set(o, "allowed", IrjVal::Arr(al_json));
         log.info(irjson_encode(irjson_val(o), false));
     } else {
-        log.info(sim_text(findings, allowed));
+        log.info(ast_display_name(sim_text(findings, allowed)));
     }
     if findings.len() > 0 {
         return 1;
@@ -975,11 +975,11 @@ fn sim_finding_json(f: SimFinding) -> IrjObj {
     let mut ms = Vec::new();
     for m in f.members {
         let mo = irjson_obj();
-        irjson_set(mo, "name", IrjVal::Str(m.d.name));
+        irjson_set(mo, "name", IrjVal::Str(ast_display_name(m.d.name)));
         irjson_set(mo, "file", IrjVal::Str(m.d.pos.file));
         irjson_set(mo, "line", irjson_int(m.d.pos.line));
         irjson_set(mo, "col", irjson_int(m.d.pos.col));
-        irjson_set(mo, "sig", IrjVal::Str(m.d.sig));
+        irjson_set(mo, "sig", IrjVal::Str(ast_display_name(m.d.sig)));
         irjson_set(mo, "hash", IrjVal::Str(m.d.hash));
         irjson_set(mo, "nodes", irjson_int(m.tree.n));
         irjson_set(mo, "new", irjson_bool(m.fresh));

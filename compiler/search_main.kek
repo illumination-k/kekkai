@@ -918,9 +918,9 @@ fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         let mut xs = Vec::new();
         for m in ms {
             let o = irjson_obj();
-            irjson_set(o, "name", IrjVal::Str(m.cand.name));
+            irjson_set(o, "name", IrjVal::Str(ast_display_name(m.cand.name)));
             irjson_set(o, "kind", IrjVal::Str(m.cand.kind));
-            irjson_set(o, "signature", IrjVal::Str(m.cand.signature));
+            irjson_set(o, "signature", IrjVal::Str(ast_display_name(m.cand.signature)));
             irjson_set(o, "match", IrjVal::Str(m.kind));
             irjson_set(o, "score", irjson_int(m.score));
             irjson_set(o, "pure", irjson_bool(m.cand.pure));
@@ -954,9 +954,9 @@ fn search_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             }
         }
         lines.push(
-            search_pad(m.cand.name, 24)
+            search_pad(ast_display_name(m.cand.name), 24)
                 + " "
-                + m.cand.signature
+                + ast_display_name(m.cand.signature)
                 + "  ["
                 + m.kind
                 + "] ("

@@ -407,7 +407,8 @@ EOF
 # KEK_BUILD_CACHE=0 disables the cache.
 # src_digest <path> [args...]: the digest of an action's inputs: the
 # compiler, the path, the arguments and the contents of the program's
-# files (a directory's *.kek). Equal digests give equal outputs, so the
+# files (a directory's *.kek, and those of its subdirectories: the
+# modules, docs/modules.md). Equal digests give equal outputs, so the
 # compiler need not run at all (Bazel's action key).
 src_digest() {
 	_sd_p=$1
@@ -416,8 +417,8 @@ src_digest() {
 		stage_key
 		printf '%s\n%s\n' "$_sd_p" "$*"
 		if [ -d "$_sd_p" ]; then
-			for _sd_f in "$_sd_p"/*.kek; do
-				printf '%s\0' "${_sd_f##*/}"
+			prog_files "$_sd_p" | while IFS= read -r _sd_f; do
+				printf '%s\0' "${_sd_f#"$_sd_p"/}"
 				cat "$_sd_f"
 				printf '\0'
 			done
@@ -425,6 +426,24 @@ src_digest() {
 			cat "$_sd_p"
 		fi
 	} | sha
+}
+
+# prog_files <dir>: the .kek files of the program in <dir>, as the compiler
+# reads them: the directory's own, sorted, then those of each
+# subdirectory (a module) in turn. Directories starting with "." and
+# node_modules are skipped.
+prog_files() {
+	for _pf_f in "$1"/*.kek; do
+		[ -f "$_pf_f" ] && printf '%s\n' "$_pf_f"
+	done
+	for _pf_d in "$1"/*/; do
+		[ -d "$_pf_d" ] || continue
+		_pf_d=${_pf_d%/}
+		case ${_pf_d##*/} in
+		node_modules | .*) continue ;;
+		esac
+		(prog_files "$_pf_d")
+	done
 }
 
 # ---- remote cache ----
@@ -1614,8 +1633,8 @@ cmd_mutate() {
 			for _p in "$_file" ${_base:+"$_base"}; do
 				echo "=="
 				if [ -d "$_p" ]; then
-					for _f in "$_p"/*.kek; do
-						printf '%s\0' "${_f##*/}"
+					prog_files "$_p" | while IFS= read -r _f; do
+						printf '%s\0' "${_f#"$_p"/}"
 						cat "$_f"
 					done
 				else

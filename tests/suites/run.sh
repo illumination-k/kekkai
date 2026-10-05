@@ -2,13 +2,17 @@
 # run: the #[main] programs in testdata/run are run with `./kek run` and a
 # temporary file path as the only argument; stdout must equal the .out
 # file and the exit code the `// exit: N` comment on the first line.
+# A directory testdata/run/<name>/ is a program with modules
+# (docs/modules.md): its main.kek has the comment, <name>.out the output.
 . "$(dirname "$0")/../lib.sh"
 SUITE=run
 
 one() {
-	f=$1
+	f=${1%/}
 	name=$(basename "$f" .kek)
-	want_code=$(head -n 1 "$f" | sed -n 's|^// exit: \(-\{0,1\}[0-9]*\).*|\1|p')
+	first=$f
+	[ -d "$f" ] && first=$f/main.kek
+	want_code=$(head -n 1 "$first" | sed -n 's|^// exit: \(-\{0,1\}[0-9]*\).*|\1|p')
 	[ -n "$want_code" ] || want_code=0
 	d=$(tmpdir)
 	set +e
@@ -37,4 +41,4 @@ if [ "${1:-}" = --case ]; then
 	one "$2"
 	exit 0
 fi
-run_parallel "$0" testdata/run/*.kek
+run_parallel "$0" testdata/run/*.kek testdata/run/*/

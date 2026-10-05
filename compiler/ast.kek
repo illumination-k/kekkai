@@ -23,6 +23,26 @@ struct AstFile {
     consts: Vec<AstConstDecl>,
 }
 
+// `use a::b;` (path ["a"], items [b]), `use a::b as c;`, `use a::{b, c as
+// d};` (braces) or `use a::*;` (glob, no items). A use is not an item of
+// AstFile: ParseResult.uses keeps those of a file (compiler/modres.kek
+// resolves them per file).
+struct AstUse {
+    id: Int,
+    pos: AstPos,
+    path: Vec<String>,
+    items: Vec<AstUseItem>,
+    mut glob: Bool,
+    mut braces: Bool,
+}
+
+// alias is "" without `as`.
+struct AstUseItem {
+    pos: AstPos,
+    name: String,
+    mut alias: String,
+}
+
 // `const NAME: T = value;` at the top level or in an inherent `impl`
 // (an associated constant, `Type::NAME`). The checker sees a constant as a
 // pure function without parameters, called at every use
@@ -601,7 +621,16 @@ fn ast_pos_string(p: AstPos) -> String {
 }
 
 fn ast_error_string(e: AstError) -> String {
-    ast_pos_string(e.pos) + ": " + e.msg
+    ast_pos_string(e.pos) + ": " + ast_display_name(e.msg)
+}
+
+// ast_display_name spells the global names of module items (`a$b$f`,
+// compiler/modres.kek) as paths (`a::b::f`) in s.
+fn ast_display_name(s: String) -> String {
+    if !s.contains("$") {
+        return s;
+    }
+    s.split("$").join("::")
 }
 
 fn ast_type_pos(t: AstType) -> AstPos {

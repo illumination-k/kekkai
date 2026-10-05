@@ -1,0 +1,39 @@
+// The module `geometry`: its items are private unless `pub`.
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct Point {
+    pub x: Int,
+    pub y: Int,
+}
+
+pub enum Quadrant {
+    First,
+    Other,
+}
+
+pub type Dist = Int;
+
+pub const ORIGIN: Point = Point { x: 0, y: 0 };
+
+impl Point {
+    pub fn new(x: Int, y: Int) -> Point {
+        Point { x: x, y: y }
+    }
+
+    pub fn quadrant(&self) -> Quadrant {
+        if self.positive() {
+            Quadrant::First
+        } else {
+            Quadrant::Other
+        }
+    }
+
+    pub fn manhattan(&self) -> Dist {
+        util::abs(self.x) + util::abs(self.y)
+    }
+
+    // private: callable in `geometry` and its submodules only
+    fn positive(&self) -> Bool {
+        self.x > 0 && self.y > 0
+    }
+}

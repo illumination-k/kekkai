@@ -1,0 +1,24 @@
+pub const LIMIT: Int = 3;
+
+struct Hidden {}
+
+fn secret() -> Int {
+    7
+}
+
+pub fn shared() -> Int {
+    secret()
+}
+
+pub struct Counter {
+    value: Int,
+}
+
+fn no_root() -> Int {
+    root_helper() // ERROR "it is defined in the crate root: use `crate::root_helper`"
+}
+
+#[main]
+fn main(args: Vec<String>) -> Int { // ERROR "`#[main]` must be in the root module"
+    crate::root_helper() + super::root_helper() + no_root()
+}

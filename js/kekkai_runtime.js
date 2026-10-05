@@ -499,6 +499,8 @@ export function createKekkai(module, meta) {
     arr_push: (a, x) => { a.push(x); },
     box_i64: (x) => x,
     box_i32: (x) => x,
+    to_f64: (x) => Number(x),
+    box_f64: (x) => x,
 
     // --- strings cross through linear memory as UTF-16 code units ---
     str_len: (s) => s.length,

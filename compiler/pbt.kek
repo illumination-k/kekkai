@@ -2,7 +2,7 @@
 // generate, and the per-type functions of the synthesized harness.
 //
 // A #[test] may take, besides capabilities, parameters of generatable
-// types: Int, Bool, String, (), Vec<T>, Option<T>, Result<T, E>, tuples
+// types: Int, Float, Bool, String, (), Vec<T>, Option<T>, Result<T, E>, tuples
 // and the program's own structs and enums whose fields are generatable.
 // For every such type the harness gets (N numbers the type):
 //
@@ -22,13 +22,13 @@ fn pbt_why(info: ChkInfo, t: Ty) -> String {
         return "";
     }
     why
-        + " (a test takes capabilities and generatable values: Int, Bool, String, (), Vec, Option, Result, tuples, and structs and enums of these)"
+        + " (a test takes capabilities and generatable values: Int, Float, Bool, String, (), Vec, Option, Result, tuples, and structs and enums of these)"
 }
 
 fn pbt_why_in(info: ChkInfo, t0: Ty, mut seen: HashMap<String, Bool>) -> String {
     let t = ty_resolve(t0);
     match t {
-        Ty::Prim(n) => if n == "Int" || n == "Bool" || n == "String" || n == "()" {
+        Ty::Prim(n) => if n == "Int" || n == "Float" || n == "Bool" || n == "String" || n == "()" {
             ""
         } else {
             "`" + n + "` values cannot be generated"
@@ -219,6 +219,12 @@ fn pbt_emit(g: PbtGen, n: String, t: Ty) {
                 show = "__x.to_string()";
                 copy = "__x";
                 zero = "0";
+            } else if p == "Float" {
+                gen = "__gen_float(__g)";
+                shr = "__shrink_float(__x)";
+                show = "__fmt_debug(&__x)";
+                copy = "__x";
+                zero = "0.0";
             } else if p == "Bool" {
                 gen = "__gen_bool(__g)";
                 shr = "__shrink_bool(__x)";

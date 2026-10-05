@@ -21,7 +21,7 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `?` のエラー型の `From` 変換 | Rust | ✅ | core の `From<T>`（`Into` はない） |
 | ラベル付きのブロック `'a: { }` | Rust | 🚧 | |
 | let チェーン `if let P = e && c` | Rust 2024 | 🚧 | |
-| `as` によるキャスト | 両方 | ⛔ | 数値型が `Int` だけなので不要 |
+| `as` によるキャスト | 両方 | ⛔ | 数値型は `Int` と `Float` だけなので、`i.to_float()`・`f.trunc_to_int()` などのメソッドで足りる |
 | `defer` | Go | ⛔ | 線形な `Tx` と RAII 的な後始末は型で表す |
 
 ## パターン
@@ -51,7 +51,7 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | --- | --- | --- |
 | 演算子の多重定義 `Add` `Sub` `Mul` `Div` `Rem` `Neg` | ✅ | |
 | `Display` / `Debug`、`#[derive(Debug)]`、`to_string` | ✅ | `Labeled` は実装しない（情報フロー） |
-| 浮動小数点数 `f64` | 🚧 | IR・Lean・コード生成・数値の表示が要る |
+| 浮動小数点数 `f64` | ✅ | `Float`（`Int` に合わせた名前）。`PartialEq`/`PartialOrd` のみ、暗黙の変換なし、表示は Rust と同じ最短桁。超越関数（`exp`・`ln`・`sin`、`powf`）は 🚧 |
 | `dyn Trait`、`Box<dyn Trait>` | ✅ | プログラム中で変換される具体型の enum とディスパッチ関数に変換する。`dyn A + B` は未対応 |
 | `impl Trait`（引数・戻り値） | ✅ | trait メソッドの戻り値（RPITIT）は未対応 |
 | trait の関連定数 | 🚧 | |
@@ -75,6 +75,7 @@ Kekkai は Rust の構文に合わせ、Go の「サーバーを書くのに必�
 | `Option` / `Result` のコンビネータ | ✅ | `map` `and_then` `ok_or` `map_err` … `unwrap` / `expect` はない |
 | `Vec` の操作（`sort` `contains` `insert` `remove` `dedup` `binary_search` …） | ✅ | |
 | `Int` の操作（`pow` `checked_*` `saturating_*` `rem_euclid` …） | ✅ | |
+| `Float` の操作（`sqrt` `floor` `round` `powi` `min` `clamp` `to_bits` `parse_float` …） | ✅ | `exp`・`ln`・三角関数はまだない |
 | `String` の操作（`chars` `lines` `split_once` `strip_prefix` `repeat` …） | ✅ | |
 | イテレータのアダプタ（`flat_map` `flatten` `scan` `inspect` `map_while` `fuse` `cycle` `cloned`） | ✅ | `scan` のクロージャは `Option<(状態, 要素)>` を返す |
 | イテレータの消費（`reduce` `try_fold` `partition` `unzip` `min_by` `max_by` `is_sorted` `eq` `cmp` …） | ✅ | `try_fold` は `Option` / `Result`。`partition` / `unzip` は `Vec` を返す |

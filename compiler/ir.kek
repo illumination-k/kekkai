@@ -8,7 +8,10 @@
 // owner (`coll` for elem/key, op == "const" for cst), and `ir_ty_none()`
 // is used as the placeholder.
 
-// IrTy is a representation type. kind: unit bool int string ext agg.
+// IrTy is a representation type. kind: unit bool int float string ext agg
+// (float: IEEE 754 binary64; its constants carry the bit pattern in
+// IrConst.int_val, and binop / unop "neg" act on f64 when the operands
+// are float).
 struct IrTy {
     kind: String,
     agg: Int, // aggregate index (kind == "agg")

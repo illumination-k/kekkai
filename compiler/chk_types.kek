@@ -53,7 +53,7 @@ struct TyEnum {
 }
 
 enum Ty {
-    // "()", "Bool", "Int", "String", "!" (never), "<invalid>"
+    // "()", "Bool", "Int", "Float", "String", "!" (never), "<invalid>"
     Prim(String),
     // Request, Response, TxError, NetError, IoError
     Opaque(String),
@@ -85,6 +85,10 @@ fn ty_bool() -> Ty {
 
 fn ty_int() -> Ty {
     Ty::Prim("Int")
+}
+
+fn ty_float() -> Ty {
+    Ty::Prim("Float")
 }
 
 fn ty_string() -> Ty {

@@ -355,6 +355,7 @@ fn ast_dump_expr(d: AstDumper, depth: Int, e: AstExpr) {
             depth,
             "int " + x.value.to_string() + " @" + ast_dump_pos(x.pos),
         ),
+        AstExpr::FloatLit(x) => ast_line(d, depth, "float " + x.text + " @" + ast_dump_pos(x.pos)),
         AstExpr::BoolLit(x) => ast_line(
             d,
             depth,

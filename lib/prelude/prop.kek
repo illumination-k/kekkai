@@ -99,6 +99,84 @@ fn __gen_int(g: __Gen) -> Int {
     __gen_below(g, g.size * 2 + 1) - g.size
 }
 
+// __gen_float: finite values only (NaN and the infinities are never
+// generated: a property over Float would almost always have to exclude
+// them), biased toward 0.0, -0.0, ±1, 0.5, the extremes (MAX, MIN,
+// MIN_POSITIVE, the smallest subnormal, EPSILON), multiples of 1/8 up to
+// the size, and arbitrary finite bit patterns.
+fn __gen_float(g: __Gen) -> Float {
+    let r = __gen_below(g, 20);
+    if r < 4 {
+        let k = __gen_below(g, 11);
+        let bits = if k == 0 {
+            0
+        } else if k == 1 {
+            -9223372036854775807 - 1 // -0.0
+        } else if k == 2 {
+            4607182418800017408 // 1.0
+        } else if k == 3 {
+            -4616189618054758400 // -1.0
+        } else if k == 4 {
+            4602678819172646912 // 0.5
+        } else if k == 5 {
+            9218868437227405311 // MAX
+        } else if k == 6 {
+            -4503599627370497 // MIN
+        } else if k == 7 {
+            4503599627370496 // MIN_POSITIVE
+        } else if k == 8 {
+            1 // the smallest subnormal
+        } else if k == 9 {
+            4372995238176751616 // EPSILON
+        } else {
+            4611686018427387904
+        }; // 2.0
+        return Float::from_bits(bits);
+    }
+    if r == 4 {
+        let b = __gen_next(g);
+        if b.ushr(52).bit_and(2047) == 2047 {
+            // NaN or infinite: clear the top exponent bit
+            return Float::from_bits(b.bit_xor(4611686018427387904));
+        }
+        return Float::from_bits(b);
+    }
+    let n = __gen_below(g, g.size * 16 + 1) - g.size * 8;
+    n.to_float() / 8.0
+}
+
+// __shrink_float: toward 0.0 (also |x| for a negative x, the integer
+// part, and for an integer the steps toward 0 that __shrink_int takes).
+fn __shrink_float(x: Float) -> Vec<Float> {
+    let mut out = Vec::new();
+    if x == 0.0 || x != x {
+        return out;
+    }
+    out.push(0.0);
+    if x < 0.0 {
+        out.push(-x);
+    }
+    let t = x.trunc();
+    if t != x && t != 0.0 {
+        out.push(t);
+    }
+    if t != x {
+        return out;
+    }
+    // an integer: x - d for d = x/2, x/4, ..., 1 (as __shrink_int)
+    let mut d = (x / 2.0).trunc();
+    let mut k = 0;
+    while d != 0.0 && k < 64 {
+        let c = x - d;
+        if c != x && c != 0.0 {
+            out.push(c);
+        }
+        d = (d / 2.0).trunc();
+        k = k + 1;
+    }
+    out
+}
+
 fn __gen_bool(g: __Gen) -> Bool {
     __gen_below(g, 2) == 1
 }

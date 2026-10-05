@@ -1218,6 +1218,7 @@ fn lsp_walk_exprs(mut w: LspWalk, fs: &Fs, es: Vec<AstExpr>) {
 fn lsp_walk_expr(mut w: LspWalk, fs: &Fs, e0: AstExpr) {
     match e0 {
         AstExpr::IntLit(_) => {}
+        AstExpr::FloatLit(_) => {}
         AstExpr::BoolLit(_) => {}
         AstExpr::StrLit(_) => {}
         AstExpr::UnitLit(_) => {}
@@ -1392,6 +1393,7 @@ fn lsp_walk_expr(mut w: LspWalk, fs: &Fs, e0: AstExpr) {
 fn lsp_expr_id(e0: AstExpr) -> Int {
     match e0 {
         AstExpr::IntLit(e) => e.id,
+        AstExpr::FloatLit(e) => e.id,
         AstExpr::BoolLit(e) => e.id,
         AstExpr::StrLit(e) => e.id,
         AstExpr::UnitLit(e) => e.id,

@@ -1,10 +1,12 @@
 // Lexer.
 //
-// Token kinds are strings: "EOF", "IDENT", "INT", "STRING", "LABEL" for
+// Token kinds are strings: "EOF", "IDENT", "INT", "FLOAT", "STRING", "LABEL" for
 // the token classes, and the source spelling for keywords and punctuation
 // ("fn", "(", "->", ...). An INT token's text is the literal as written:
 // decimal or `0x`/`0o`/`0b`, with `_` separators, or a character / byte
-// literal (`'a'`, `'\n'`, `b'a'`); the parser computes its value. A LABEL
+// literal (`'a'`, `'\n'`, `b'a'`); the parser computes its value. A FLOAT
+// token is a decimal literal with a fraction and/or an exponent (`1.5`,
+// `1e10`, `2.5e-3`, `1_000.5`), also kept as written. A LABEL
 // is `'name` not closed by a quote (reserved for loop labels).
 //
 // The lexer scans the UTF-8 bytes of the source (columns count bytes) and
@@ -61,6 +63,9 @@ fn lex_kind_name(k: String) -> String {
     }
     if k == "INT" {
         return "integer literal";
+    }
+    if k == "FLOAT" {
+        return "float literal";
     }
     if k == "STRING" {
         return "string literal";
@@ -131,6 +136,13 @@ fn lex_error(mut lx: LexState, pos: AstPos, msg: String) {
 
 fn lex_is_ident_start(c: Int) -> Bool {
     c == 95 || (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+}
+
+// lex_digits skips decimal digits and `_` separators.
+fn lex_digits(mut lx: LexState) {
+    while lx.off < lx.n && (lex_is_digit(lex_peek(lx, 0)) || lex_peek(lx, 0) == 95) {
+        lex_advance(lx);
+    }
 }
 
 fn lex_is_digit(c: Int) -> Bool {
@@ -362,6 +374,7 @@ fn lex_run(lx: LexState) {
             }
         } else if lex_is_digit(c) {
             let start = lx.uoff;
+            let mut kind = "INT";
             let c1 = lex_peek(lx, 1);
             if c == 48 && (c1 == 120 || c1 == 111 || c1 == 98) {
                 // 0x / 0o / 0b: the parser checks the digits
@@ -372,11 +385,35 @@ fn lex_run(lx: LexState) {
                     lex_advance(lx);
                 }
             } else {
-                while lx.off < lx.n && (lex_is_digit(lex_peek(lx, 0)) || lex_peek(lx, 0) == 95) {
-                    lex_advance(lx);
+                lex_digits(lx);
+                // a fraction `.5` and an exponent `e10` make a FLOAT; not
+                // after `.` (`t.0.1` is two tuple fields) and not `1..2`
+                // or `1.max(2)` (a digit must follow the dot)
+                let after_dot = match lx.toks.get(lx.toks.len() - 1) {
+                    Some(t) => t.kind == ".",
+                    None => false,
+                };
+                if !after_dot {
+                    if lex_peek(lx, 0) == 46 && lex_is_digit(lex_peek(lx, 1)) {
+                        lex_advance(lx);
+                        lex_digits(lx);
+                        kind = "FLOAT";
+                    }
+                    let e = lex_peek(lx, 0);
+                    let e1 = lex_peek(lx, 1);
+                    if (e == 101 || e == 69)
+                        && (lex_is_digit(e1)
+                            || ((e1 == 43 || e1 == 45) && lex_is_digit(lex_peek(lx, 2)))) {
+                        lex_advance(lx);
+                        if e1 == 43 || e1 == 45 {
+                            lex_advance(lx);
+                        }
+                        lex_digits(lx);
+                        kind = "FLOAT";
+                    }
                 }
             }
-            lex_emit(lx, "INT", lx.src.slice(start, lx.uoff), pos);
+            lex_emit(lx, kind, lx.src.slice(start, lx.uoff), pos);
         } else if c == 34 {
             lex_string(lx, pos);
         } else {

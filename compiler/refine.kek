@@ -592,6 +592,7 @@ fn ref_show(e: AstExpr) -> String {
 fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
     match e {
         AstExpr::IntLit(x) => x.value.to_string(),
+        AstExpr::FloatLit(x) => x.text,
         AstExpr::BoolLit(x) => if x.value { "true" } else { "false" },
         AstExpr::StrLit(x) => ast_quote(x.value),
         AstExpr::UnitLit(_) => "()",
@@ -2585,6 +2586,10 @@ fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
         },
         AstExpr::Unary(u) => {
             let v = ref_expr(cx, st, u.x);
+            if u.op == "-" && !ty_is_prim(ref_ty_of(cx, u.x), "Int") {
+                // Float (not in QF_LIA) and Neg implementations
+                return ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), u.pos);
+            }
             if u.op == "-" {
                 let x = ref_int_or_fresh(cx, st, v, u.x);
                 let r = ref_lscale(x, -1);
@@ -3262,6 +3267,7 @@ fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
 fn ref_no_calls(e: AstExpr) -> Bool {
     match e {
         AstExpr::IntLit(_) => true,
+        AstExpr::FloatLit(_) => true,
         AstExpr::BoolLit(_) => true,
         AstExpr::StrLit(_) => true,
         AstExpr::Ident(_) => true,

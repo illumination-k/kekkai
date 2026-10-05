@@ -32,6 +32,11 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
                     errs.push(derive_pii_error(a.pos, tr, sd.name, "field `" + pii + "`"));
                     continue;
                 }
+                let fl = derive_float_struct(sd);
+                if fl != "" && derive_float_bad(tr) {
+                    errs.push(derive_float_error(a.pos, tr, sd.name, "field `" + fl + "`"));
+                    continue;
+                }
                 if tr == "Hash" {
                     // a key must not change while it is in a HashMap
                     let mut bad = "";
@@ -80,6 +85,11 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
                     errs.push(derive_pii_error(a.pos, tr, ed.name, "variant `" + pii + "`"));
                     continue;
                 }
+                let fl = derive_float_enum(ed);
+                if fl != "" && derive_float_bad(tr) {
+                    errs.push(derive_float_error(a.pos, tr, ed.name, "variant `" + fl + "`"));
+                    continue;
+                }
                 if tr == "Default" {
                     errs.push(AstError {
                         pos: a.pos,
@@ -112,6 +122,48 @@ fn derive_items(mut f: AstFile, ids: AstIds, mut errs: Vec<AstError>) {
 // Deserialize (lib/core/serde.kek), so only these can be derived for a type
 // that holds one (a derived equality, Hash, order, default or Serialize
 // would need the same of Labeled, and would leak it).
+
+// Float implements PartialEq and PartialOrd but not Eq, Ord or Hash
+// (NaN != NaN), as in Rust, so neither does a type that holds one.
+
+fn derive_float_bad(tr: String) -> Bool {
+    tr == "Eq" || tr == "Ord" || tr == "Hash"
+}
+
+fn derive_float_error(pos: AstPos, tr: String, name: String, what: String) -> AstError {
+    AstError {
+        pos: pos,
+        msg: "cannot derive `"
+            + tr
+            + "` for `"
+            + name
+            + "`: "
+            + what
+            + " holds a `Float`, which implements only `PartialEq` and `PartialOrd` (NaN is not equal to itself)",
+    }
+}
+
+// derive_float_struct is the first field of sd that holds a Float ("" if
+// none).
+fn derive_float_struct(sd: AstStructDecl) -> String {
+    for f in sd.fields {
+        if derive_mentions(f.ty, "Float") {
+            return f.name;
+        }
+    }
+    ""
+}
+
+fn derive_float_enum(ed: AstEnumDecl) -> String {
+    for v in ed.variants {
+        for t in v.fields {
+            if derive_mentions(t, "Float") {
+                return v.name;
+            }
+        }
+    }
+    ""
+}
 
 fn derive_pii_ok(tr: String) -> Bool {
     tr == "Clone" || tr == "Deserialize"

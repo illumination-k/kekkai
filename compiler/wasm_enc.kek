@@ -3,7 +3,8 @@
 // Byte buffers are Vec<Int> (one byte per element). Value types are
 // encoded as one Int: a non-negative value is `(ref null <typeidx>)`, and
 // a negative value is the negated type code:
-//   -127 i32, -126 i64, -119 i16 (packed storage), -110 anyref, -107 structref
+//   -127 i32, -126 i64, -124 f64, -119 i16 (packed storage), -110 anyref,
+//   -107 structref
 
 fn wasm_i32_t() -> Int {
     -127
@@ -11,6 +12,10 @@ fn wasm_i32_t() -> Int {
 
 fn wasm_i64_t() -> Int {
     -126
+}
+
+fn wasm_f64_t() -> Int {
+    -124
 }
 
 fn wasm_extern_t() -> Int {
@@ -95,6 +100,14 @@ fn cg_i32(mut c: Vec<Int>, x: Int) {
 fn cg_i64(mut c: Vec<Int>, x: Int) {
     c.push(66); // i64.const
     wasm_s64(c, x);
+}
+
+// cg_f64 pushes the f64 whose bit pattern is bits.
+fn cg_f64(mut c: Vec<Int>, bits: Int) {
+    c.push(68); // f64.const
+    for k in 0..8 {
+        c.push(bits.ushr(8 * k).bit_and(255));
+    }
 }
 
 fn cg_get(mut c: Vec<Int>, l: Int) {
@@ -187,6 +200,8 @@ fn cg_default(c: Vec<Int>, t: Int) {
         cg_i32(c, 0);
     } else if t == -126 {
         cg_i64(c, 0);
+    } else if t == -124 {
+        cg_f64(c, 0);
     } else {
         cg_ref_null(c, 0 - t); // extern 0x6f, any 0x6e, struct 0x6b
     }

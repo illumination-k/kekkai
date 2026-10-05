@@ -1,0 +1,366 @@
+// Float: a 64-bit IEEE 754 binary64 floating-point number, Rust's f64
+// (Go's float64). The name follows Int (there is one integer and one
+// floating-point type, so no width in the name).
+//
+// Literals are `1.5`, `0.1`, `1e10`, `2.5e-3`, `1_000.5`. Arithmetic
+// `+ - * /`, unary `-` and the comparisons are IEEE operations (wasm's
+// f64 instructions); `%` is the remainder of truncated division, as C's
+// fmod and Rust's `%` on f64 (Rem below). There is no implicit conversion
+// between Int and Float: `i.to_float()` / `Float::from_int(i)`, and
+// `f.trunc_to_int()` / `f.round_to_int()` (saturating, NaN gives 0, as
+// Rust's `as i64`).
+//
+// Float implements PartialEq and PartialOrd but not Eq, Ord or Hash (NaN
+// is not equal to itself), so it cannot be a HashMap key or be sorted with
+// `sort()`, as in Rust.
+//
+// NaN payloads and the sign of a NaN are not observable: `to_bits()` maps
+// every NaN to the canonical quiet NaN 0x7ff8000000000000 (wasm and other
+// hosts may produce different NaN bit patterns).
+//
+// The builtins (compiler/chk_builtins.kek) are `to_bits`, `from_bits`,
+// `from_int`, `Int::to_float`, `trunc_to_int`, `sqrt`, `floor`, `ceil`,
+// `trunc` and `abs`. Text conversion (shortest round-trip output, `{:.2}`,
+// `parse_float`) and fmod are exact algorithms on the bit patterns in
+// lib/core/flt.kek, so every host prints the same digits.
+
+impl Float {
+    const NAN: Float = 0.0 / 0.0;
+    const INFINITY: Float = 1.0 / 0.0;
+    const NEG_INFINITY: Float = -1.0 / 0.0;
+    // the largest finite value, and its negation
+    const MAX: Float = 1.7976931348623157e308;
+    const MIN: Float = -1.7976931348623157e308;
+    // the smallest positive normal value
+    const MIN_POSITIVE: Float = 2.2250738585072014e-308;
+    // the difference between 1.0 and the next larger value
+    const EPSILON: Float = 2.220446049250313e-16;
+    const PI: Float = 3.141592653589793;
+    const TAU: Float = 6.283185307179586;
+    const E: Float = 2.718281828459045;
+    const SQRT_2: Float = 1.4142135623730951;
+    const LN_2: Float = 0.6931471805599453;
+    const LN_10: Float = 2.302585092994046;
+
+    fn is_nan(self) -> Bool {
+        self != self
+    }
+
+    fn is_infinite(self) -> Bool {
+        self == Float::INFINITY || self == Float::NEG_INFINITY
+    }
+
+    // is_finite: neither infinite nor NaN.
+    fn is_finite(self) -> Bool {
+        self - self == 0.0
+    }
+
+    // is_normal: finite, nonzero and not subnormal.
+    fn is_normal(self) -> Bool {
+        let e = self.to_bits().ushr(52).bit_and(2047);
+        e != 0 && e != 2047
+    }
+
+    // is_sign_negative: the sign bit is set (-0.0 too; never for NaN,
+    // whose sign is not observable).
+    fn is_sign_negative(self) -> Bool {
+        self.to_bits() < 0
+    }
+
+    fn is_sign_positive(self) -> Bool {
+        !self.is_sign_negative()
+    }
+
+    // round is the nearest integer, halfway cases away from zero (Rust's
+    // round; -0.3 gives -0.0).
+    fn round(self) -> Float {
+        let t = self.trunc();
+        if (self - t).abs() >= 0.5 {
+            if self > 0.0 { t + 1.0 } else { t - 1.0 }
+        } else {
+            t
+        }
+    }
+
+    // round_ties_even is the nearest integer, halfway cases to even.
+    fn round_ties_even(self) -> Float {
+        let r = self.round();
+        if (r - self).abs() == 0.5 && r % 2.0 != 0.0 {
+            if r > self { r - 1.0 } else { r + 1.0 }
+        } else {
+            r
+        }
+    }
+
+    // fract is self - self.trunc().
+    fn fract(self) -> Float {
+        self - self.trunc()
+    }
+
+    // round_to_int is round() converted to Int (saturating, NaN gives 0).
+    fn round_to_int(self) -> Int {
+        self.round().trunc_to_int()
+    }
+
+    // floor_to_int / ceil_to_int likewise.
+    fn floor_to_int(self) -> Int {
+        self.floor().trunc_to_int()
+    }
+
+    fn ceil_to_int(self) -> Int {
+        self.ceil().trunc_to_int()
+    }
+
+    // signum is 1.0 for +0.0 and positive values, -1.0 for -0.0 and
+    // negative values, NaN for NaN.
+    fn signum(self) -> Float {
+        if self.is_nan() {
+            self
+        } else if self.is_sign_negative() { -1.0 } else { 1.0 }
+    }
+
+    // copysign is the magnitude of self with the sign of sign.
+    fn copysign(self, sign: Float) -> Float {
+        let m = self.to_bits().bit_and(Int::MAX);
+        Float::from_bits(m.bit_or(sign.to_bits().bit_and(Int::MIN)))
+    }
+
+    // min and max ignore a NaN argument (NaN only when both are NaN), as
+    // Rust's f64::min / f64::max.
+    fn min(self, other: Float) -> Float {
+        if self.is_nan() {
+            other
+        } else if other.is_nan() {
+            self
+        } else if other < self { other } else { self }
+    }
+
+    fn max(self, other: Float) -> Float {
+        if self.is_nan() {
+            other
+        } else if other.is_nan() {
+            self
+        } else if other > self { other } else { self }
+    }
+
+    // clamp restricts self to [min, max] (NaN stays NaN; unlike Rust it
+    // does not panic when min > max: the result is then max).
+    fn clamp(self, min: Float, max: Float) -> Float {
+        let mut x = self;
+        if x < min {
+            x = min;
+        }
+        if x > max {
+            x = max;
+        }
+        x
+    }
+
+    fn recip(self) -> Float {
+        1.0 / self
+    }
+
+    fn to_degrees(self) -> Float {
+        self * (180.0 / Float::PI)
+    }
+
+    fn to_radians(self) -> Float {
+        self * (Float::PI / 180.0)
+    }
+
+    // powi is self raised to the integer power n, by repeated squaring
+    // (like Rust's powi, not always correctly rounded; the same result on
+    // every host).
+    fn powi(self, n: Int) -> Float {
+        let mut k = n;
+        if k < 0 {
+            k = -k;
+        }
+        let mut base = self;
+        let mut r = 1.0;
+        while k != 0 {
+            if k.bit_and(1) == 1 {
+                r = r * base;
+            }
+            k = k.ushr(1);
+            if k != 0 {
+                base = base * base;
+            }
+        }
+        if n < 0 { 1.0 / r } else { r }
+    }
+
+    // hypot is sqrt(self² + other²) without intermediate overflow for
+    // large arguments.
+    fn hypot(self, other: Float) -> Float {
+        let a = self.abs();
+        let b = other.abs();
+        if a.is_infinite() || b.is_infinite() {
+            return Float::INFINITY;
+        }
+        let m = a.max(b);
+        if m == 0.0 || m.is_nan() {
+            return a + b;
+        }
+        let x = a / m;
+        let y = b / m;
+        m * (x * x + y * y).sqrt()
+    }
+
+    // total_cmp is IEEE 754's totalOrder: -NaN < -inf < ... < -0.0 < +0.0
+    // < ... < inf < NaN (NaN has no sign here, so every NaN is last).
+    fn total_cmp(&self, other: &Float) -> Ordering {
+        let a = __flt_total_key(self.to_bits());
+        let b = __flt_total_key(other.to_bits());
+        a.cmp(&b)
+    }
+}
+
+// __flt_total_key maps bit patterns to Ints ordered as totalOrder.
+fn __flt_total_key(b: Int) -> Int {
+    if b < 0 { b.bit_xor(Int::MAX) } else { b }
+}
+
+impl PartialEq for Float {
+    fn eq(&self, other: &Self) -> Bool {
+        self == other
+    }
+}
+
+// The order of the numbers; NaN is unordered (None).
+impl PartialOrd for Float {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self < other {
+            Some(Ordering::Less)
+        } else if self > other {
+            Some(Ordering::Greater)
+        } else if self == other {
+            Some(Ordering::Equal)
+        } else {
+            None
+        }
+    }
+}
+
+impl Clone for Float {
+    fn clone(&self) -> Float {
+        *self
+    }
+}
+
+impl Default for Float {
+    fn default() -> Float {
+        0.0
+    }
+}
+
+impl Add<Float> for Float {
+    type Output = Float;
+
+    fn add(self, rhs: Float) -> Float {
+        self + rhs
+    }
+}
+
+impl Sub<Float> for Float {
+    type Output = Float;
+
+    fn sub(self, rhs: Float) -> Float {
+        self - rhs
+    }
+}
+
+impl Mul<Float> for Float {
+    type Output = Float;
+
+    fn mul(self, rhs: Float) -> Float {
+        self * rhs
+    }
+}
+
+impl Div<Float> for Float {
+    type Output = Float;
+
+    fn div(self, rhs: Float) -> Float {
+        self / rhs
+    }
+}
+
+// `%`: the remainder of truncated division, exact, with the sign of self
+// (C's fmod): x % 0.0 and inf % y are NaN, x % inf is x.
+impl Rem<Float> for Float {
+    type Output = Float;
+
+    fn rem(self, rhs: Float) -> Float {
+        Float::from_bits(__flt_fmod(self.to_bits(), rhs.to_bits()))
+    }
+}
+
+impl Neg for Float {
+    type Output = Float;
+
+    fn neg(self) -> Float {
+        -self
+    }
+}
+
+// Display is Rust's: the shortest digits that read back as the same
+// value, never in exponent notation (1.0 is "1", 1e21 is
+// "1000000000000000000000", -0.0 is "-0", "NaN", "inf", "-inf").
+// `{:.n}` rounds the exact value half to even at n fractional digits.
+impl Display for Float {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(__flt_display(self.to_bits()));
+    }
+
+    fn __fmt_numeric(&self) -> Bool {
+        true
+    }
+
+    fn __fmt_precision(&self, n: Int) -> String {
+        __flt_fixed(self.to_bits(), n)
+    }
+}
+
+// Debug always shows a fraction or an exponent: "1.0", "0.1", "-0.0",
+// "1e16", "1.5e-7" (exponent notation below 1e-4 and from 1e16 on).
+impl Debug for Float {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(__flt_debug(self.to_bits()));
+    }
+}
+
+impl String {
+    // parse_float reads a Float as Rust's f64::from_str: an optional sign,
+    // digits with an optional fraction (`1.`, `.5`), an optional exponent
+    // (`e-3`), or `inf` / `infinity` / `nan` in any case. The result is
+    // correctly rounded (any number of digits). No `_` or spaces.
+    fn parse_float(&self) -> Option<Float> {
+        match __flt_parse(*self) {
+            Some(b) => Some(Float::from_bits(b)),
+            None => None,
+        }
+    }
+}
+
+// The sum starts from -0.0 (the identity of `+`, as Rust since 1.82: the
+// sum of [-0.0] is -0.0 and of [] is -0.0).
+impl Sum<Float> for Float {
+    fn sum<I: Iterator<Item = Float>>(mut iter: I) -> Float {
+        let mut s = -0.0;
+        while let Some(x) = iter.next() {
+            s = s + x;
+        }
+        s
+    }
+}
+
+impl Product<Float> for Float {
+    fn product<I: Iterator<Item = Float>>(mut iter: I) -> Float {
+        let mut p = 1.0;
+        while let Some(x) = iter.next() {
+            p = p * x;
+        }
+        p
+    }
+}

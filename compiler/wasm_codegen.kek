@@ -225,6 +225,9 @@ fn wasm_val(m: WasmMod, t: IrTy) -> Int {
     if k == "int" {
         return wasm_i64_t();
     }
+    if k == "float" {
+        return wasm_f64_t();
+    }
     if k == "string" {
         return m.chars_t;
     }
@@ -389,6 +392,9 @@ fn wasm_op_kind(m: WasmMod, name: String) -> String {
     if wasm_is_inline_int_op(name) {
         return "int";
     }
+    if wasm_is_inline_float_op(name) {
+        return "float";
+    }
     if m.target == "workers" && wasm_js_op(name) {
         return "import";
     }
@@ -515,6 +521,8 @@ fn wasm_add_js_helper_imports(m: WasmMod) {
     wasm_kek_import(m, "arr_push", wasm_v2(any, any), wasm_v0());
     wasm_kek_import(m, "box_i64", wasm_v1(i64), wasm_v1(any));
     wasm_kek_import(m, "box_i32", wasm_v1(i32), wasm_v1(any));
+    wasm_kek_import(m, "to_f64", wasm_v1(any), wasm_v1(wasm_f64_t()));
+    wasm_kek_import(m, "box_f64", wasm_v1(wasm_f64_t()), wasm_v1(any));
 }
 
 // wasm_wasi_sig is the signature of a WASI preview 1 function: i32
@@ -867,6 +875,8 @@ fn wasm_lift_to(m: WasmMod, c: Vec<Int>, t: IrTy) {
         cg_i32(c, 0);
     } else if k == "int" {
         cg_call(c, wasm_imp(m, "to_i64"));
+    } else if k == "float" {
+        cg_call(c, wasm_imp(m, "to_f64"));
     } else if k == "bool" {
         cg_call(c, wasm_imp(m, "to_i32"));
     } else if k == "string" {
@@ -1238,6 +1248,8 @@ fn cg_instr(g: CgGen, ins: IrInstr) {
         let k = ins.cst.kind;
         if k == "int" {
             cg_i64(c, ins.cst.int_val);
+        } else if k == "float" {
+            cg_f64(c, ins.cst.int_val);
         } else if k == "bool" {
             if ins.cst.bool_val {
                 cg_i32(c, 1);
@@ -1252,7 +1264,10 @@ fn cg_instr(g: CgGen, ins: IrInstr) {
     } else if op == "copy" {
         cg_arg(g, ins, 0);
     } else if op == "unop" {
-        if ins.name == "neg" {
+        if ins.name == "neg" && cg_ty(g, wasm_at(ins.args, 0)).kind == "float" {
+            cg_arg(g, ins, 0);
+            cg_op(c, 154); // f64.neg
+        } else if ins.name == "neg" {
             cg_i64(c, 0);
             cg_arg(g, ins, 0);
             cg_op(c, 125); // i64.sub
@@ -1276,6 +1291,8 @@ fn cg_instr(g: CgGen, ins: IrInstr) {
             cg_coll_op(g, ins);
         } else if kind == "int" {
             cg_int_op(g, ins);
+        } else if kind == "float" {
+            cg_float_op(g, ins);
         } else if kind == "intrinsic" {
             cg_intrinsic(g, ins);
         } else if kind == "prelude" {
@@ -1505,6 +1522,20 @@ fn cg_binop(g: CgGen, ins: IrInstr) {
             "eq" => cg_op(c, 81),
             "ne" => cg_op(c, 82),
             _ => wasm_fail(m, "codegen: bad int binop " + name),
+        }
+    } else if kind == "float" {
+        match name {
+            "add" => cg_op(c, 160),
+            "sub" => cg_op(c, 161),
+            "mul" => cg_op(c, 162),
+            "div" => cg_op(c, 163),
+            "eq" => cg_op(c, 97),
+            "ne" => cg_op(c, 98),
+            "lt" => cg_op(c, 99),
+            "gt" => cg_op(c, 100),
+            "le" => cg_op(c, 101),
+            "ge" => cg_op(c, 102),
+            _ => wasm_fail(m, "codegen: bad float binop " + name),
         }
     } else if kind == "bool" || kind == "unit" {
         match name {

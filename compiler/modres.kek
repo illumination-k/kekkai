@@ -1165,6 +1165,7 @@ fn mr_struct_name(cx: MrCx, name: String, pos: AstPos) -> String {
 fn mr_expr(cx: MrCx, e0: AstExpr) -> AstExpr {
     match e0 {
         AstExpr::IntLit(_) => e0,
+        AstExpr::FloatLit(_) => e0,
         AstExpr::BoolLit(_) => e0,
         AstExpr::StrLit(_) => e0,
         AstExpr::UnitLit(_) => e0,

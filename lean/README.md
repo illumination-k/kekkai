@@ -170,6 +170,7 @@ Kekkai の P0 性質（capability 渡しによる副作用の制御と、線形�
 | ファイル | 内容 |
 | --- | --- |
 | `Kekkai/IR/Arith.lean` | 64 ビット 2 の補数算術（`wrap`、全域な `div`/`rem`、ビット演算）と、その性質の証明（`wrap_inRange`, `wrap_wrap`, `wrap_add_wrap`, `i64Div_min_neg_one` など） |
+| `Kekkai/IR/Float.lean` | `Float`（IEEE 754 binary64）のうち結果が整数・ビット列になる操作をビット列から正確に計算する（`to_bits` の NaN の正準化、飽和する切り捨て `trunc_to_int`、`trunc`） |
 | `Kekkai/IR/Syntax.lean`, `Value.lean` | IR の構文、実行時の値とヒープ（struct・`Vec` は参照） |
 | `Kekkai/IR/Json.lean` | `kek ir -json` の出力（省略されたゼロ値のフィールド、空のリストの `null`）のデコード |
 | `Kekkai/IR/Host.lean` | 純粋な host 操作（`int.*`, `bool.to_string`, `string.*`, `log.*`, `clock.now_ms`）。UTF-16 の添字、`split`、WHATWG の UTF-8 デコーダ |
@@ -197,10 +198,11 @@ $ kekkai-ref basic.json sum_to 1000000
 {"error":"timeout"}
 ```
 
-値の表現: 整数は JSON の数（i64 を正確に）、unit は `null`、variant は `{"tag":k,"fields":[...]}`（その tag のフィールドだけ）、struct は `{"fields":[...]}`、`Vec` は `{"vec":[...]}`（いずれも参照をたどって表示し、循環は `{"cycle":true}`）、host の不透明値は `{"ext":"Log"}`、初期化されていない参照型ローカルは `{"null":true}`。エラーは `timeout`（fuel 1,000,000 ステップ。命令と終端命令が 1 ステップずつ）、`unreachable`、`null dereference`、`trap`（範囲外の `vec.at`）、`stack overflow`（呼び出しの深さ 10000）、`unsupported host op <名前>`、`unsupported await <名前>`（非同期操作は v1 の対象外）。使い方や IR の誤りは標準エラーに出力し、終了コード 1（使い方の誤りは 2）。
+値の表現: 整数は JSON の数（i64 を正確に）、`Float` はビット列 `{"float":<i64>}`（引数も同じ形）、unit は `null`、variant は `{"tag":k,"fields":[...]}`（その tag のフィールドだけ）、struct は `{"fields":[...]}`、`Vec` は `{"vec":[...]}`（いずれも参照をたどって表示し、循環は `{"cycle":true}`）、host の不透明値は `{"ext":"Log"}`、初期化されていない参照型ローカルは `{"null":true}`。エラーは `timeout`（fuel 1,000,000 ステップ。命令と終端命令が 1 ステップずつ）、`unreachable`、`null dereference`、`trap`（範囲外の `vec.at`）、`stack overflow`（呼び出しの深さ 10000）、`unsupported host op <名前>`、`unsupported await <名前>`（非同期操作は v1 の対象外）。使い方や IR の誤りは標準エラーに出力し、終了コード 1（使い方の誤りは 2）。
 
 意味論の要点（WasmGC と一致させている点）:
 
+- `Float` は Lean の `Float`（binary64）。`+ - * /`・`sqrt`・比較・`floor`・`ceil`・`abs`・単項 `-` は IEEE 754 の正しく丸めた演算で wasm の `f64` 命令と一致する。`Int` からの変換は `Int64.toFloat`（最近接偶数丸め、`f64.convert_i64_s`）。`to_bits` はどの NaN にも正準な quiet NaN `0x7ff8000000000000` を返し（バックエンドも同じ）、NaN のペイロードと符号は観測できない。`trunc_to_int` は 0 方向に切り捨てて i64 の範囲で飽和し、NaN は 0（`i64.trunc_sat_f64_s`）。`%`（fmod）・表示・`parse_float` は core ライブラリの普通のコード（ビット列の上の整数演算）として IR に含まれる
 - 算術は毎回 `[-2^63, 2^63)` に wrap。`x / 0 = 0`、`x / -1 = 0 - x`（したがって `MIN / -1 = MIN`）、それ以外は 0 方向への切り捨て。`x % 0 = x`、それ以外は被除数の符号を持つ剰余（`Int.tmod`）
 - ローカルは型の既定値（`0`, `false`, `ref.null`）で初期化される。`br` は真なら第 1 ターゲット、`switch` は整数の値 `k` と `0, 1, ...` を比べ、どれでもなければ最後のターゲット
 - `vfield` で値と異なる tag のスロットを読むと、そのスロットの型の既定値になる（wasm は全 tag のスロットを持ち、使わないスロットを既定値で埋めるため）

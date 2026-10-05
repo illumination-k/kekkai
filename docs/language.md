@@ -11,17 +11,18 @@
   - `use foo::bar;`・`use foo::{a, b as c};`・`use foo::*;`・`use crate::util;` はそのファイルだけに効く。core と prelude の名前はどこからでも見える。trait のメソッドは `use` しなくても見つかる。
   - `#[main]`・`#[handler]` はルートモジュールに置く。診断・`kek caps`・`kek test` などはモジュールの項目を `foo::bar` と表示する。
 - トップレベルは `use` と `struct`・`enum`・`trait`・`impl`・`fn`・`type`・`const`（それぞれ `pub` を付けられる）のみ。グローバル変数はない（＝暗黙の権限がない）。`const` は純粋な値で、使うたびに評価される（下記「定数」）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`Vec`／`Int`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`／`BTreeMap`／`BTreeSet`／`VecDeque`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`Vec`／`Int`／`Float`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`／`BTreeMap`／`BTreeSet`／`VecDeque`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
-- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`#[test(cases = N)]` でケース数を指定）。テストの中でだけ `assert!`・`assert_eq!` などが使える（下記「マクロ」）。
+- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`Float`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`Float` は有限の値だけで、0.0・-0.0・±1・極値・非正規化数に偏らせる。NaN と無限大は生成しない。縮小は 0.0 に向かう）（`#[test(cases = N)]` でケース数を指定）。テストの中でだけ `assert!`・`assert_eq!` などが使える（下記「マクロ」）。
 
 ## 型
 
 | 型 | 説明 |
 | --- | --- |
 | `Int` | 64bit 符号付き整数。演算はラップアラウンド、`x / 0 == 0`、`x % 0 == x`（panic しない） |
+| `Float` | 64bit の IEEE 754 浮動小数点数（Rust の `f64`、Go の `float64`）。`Int` との暗黙の変換はない（下記「浮動小数点数」） |
 | `Bool`, `String`, `()` | 文字列は不変 |
 | `(A, B, ...)` | タプル（不変の値）。要素は `t.0`、`(A,)` は 1 要素 |
 | `Option<T>`, `Result<T, E>` | `Some`/`None`, `Ok`/`Err` |
@@ -40,6 +41,30 @@
 
 - struct・enum・`Vec`・`HashMap` は参照型で、代入や引数渡しは参照の共有になる。capability 以外の `&T`・`&mut T` は型としては `T` と同じで、実行時には何もしないが、どの参照から書き換えられるかを表す（下記「可変性」）。式の `&x`・`&mut x` も同じで、`*x` は何もしない。
 - 型推論は関数本体の中だけで行う（関数のシグネチャは明示）。本体では `_` を型の代わりに書ける（`Vec<_>`）。
+
+### 浮動小数点数（`Float`）
+
+```kek
+let r = 1.5;                         // リテラル：1.5, 0.1, 1e10, 2.5e-3, 1_000.5
+let area = Float::PI * r * r;
+let n = v.len().to_float();          // Int → Float（`Float::from_int(i)` とも）
+let mean = total / n;
+let k = mean.round_to_int();         // Float → Int（飽和、NaN は 0）
+log.info(format!("{} {:?} {:.2}", 0.1 + 0.2, 1.0, area));  // 0.30000000000000004 1.0 7.07
+let x = "3.14".parse_float();        // Option<Float>
+```
+
+- 名前は `Int` に合わせて `Float`（整数型も浮動小数点型も 1 つずつなので幅を名前に入れない）。中身は Rust の `f64` と同じ binary64。
+- リテラルは小数点の後に数字があるか指数を持つ 10 進数（`1.5`、`1e10`、`2.5e-3`、`1_000.5`）。`1.` や `.5` は書けない（`1.max(2)` はメソッド呼び出し、`t.0.1` はタプルの要素）。値は正しく丸められ、`Float` の範囲を超える（`1e400`）とエラー。`kek fmt` は書いた綴りを保つ。パターンには書けない。
+- `+ - * /`・単項 `-`・比較は IEEE 754 の演算（wasm の `f64` 命令）。`%` は切り捨て除算の余り（C の `fmod`、Rust の `f64` の `%`。符号は左辺と同じ、`x % 0.0` は NaN）。`x += 1.0` なども書ける。ビット演算はない。
+- `Int` と混ぜると型エラーで、変換の方法が添えられる（``cannot apply `+` to `Float` and `Int` (there is no implicit conversion: use `i.to_float()` or ...)``）。`as` はないので、`i.to_float()`・`Float::from_int(i)`（最も近い値へ丸める）、`f.trunc_to_int()`・`round_to_int()`・`floor_to_int()`・`ceil_to_int()`（Rust の `as i64` と同じく `Int` の範囲で飽和し、NaN は 0）を使う。
+- `PartialEq`・`PartialOrd` だけを実装し、`Eq`・`Ord`・`Hash` は実装しない（NaN は自分自身と等しくない。Rust と同じ）。したがって `HashMap` のキーや `sort()` には使えず、`Float` を含む型に `Eq`・`Ord`・`Hash` を derive するとエラーになる（`PartialEq`・`PartialOrd`・`Clone`・`Debug`・`Default`・`Serialize`・`Deserialize` は derive できる）。全順序が要るときは `a.total_cmp(&b)`。
+- メソッド：`abs`, `floor`, `ceil`, `trunc`, `round`（0.5 は 0 から遠い方へ）, `round_ties_even`, `fract`, `sqrt`, `powi(n)`, `hypot`, `min`, `max`（NaN を無視する）, `clamp`, `signum`, `copysign`, `recip`, `to_degrees`, `to_radians`, `is_nan`, `is_finite`, `is_infinite`, `is_normal`, `is_sign_negative`, `is_sign_positive`, `to_bits`, `Float::from_bits`, `total_cmp`。関連定数：`Float::NAN`, `INFINITY`, `NEG_INFINITY`, `MAX`, `MIN`, `MIN_POSITIVE`, `EPSILON`, `PI`, `TAU`, `E`, `SQRT_2`, `LN_2`, `LN_10`。`exp`・`ln`・`sin` などの超越関数と `powf`・`mul_add` はまだない。
+- 表示は Rust と同じ。`Display`（`{}`・`to_string()`）は読み戻すと同じ値になる最短の桁で、指数表記を使わない（`1.0` は `1`、`1e21` は `1000000000000000000000`、`1e-7` は `0.0000001`、`-0.0` は `-0`、`NaN`、`inf`、`-inf`）。`Debug`（`{:?}`）は必ず小数部か指数を持つ（`1.0`、`-0.0`、`1e16`、`1.5e-7`。`1e-4` 未満と `1e16` 以上は指数表記）。`{:.2}` は正確な値を偶数丸めで小数 2 桁にする（`{:.1}` で `0.25` は `0.2`、`0.35` は `0.3`）。
+- `s.parse_float() -> Option<Float>` は Rust の `f64::from_str` と同じ文法（符号、`1.`、`.5`、指数、大文字小文字を問わない `inf`・`infinity`・`nan`）で、桁数によらず正しく丸める。
+- NaN のペイロードと NaN の符号は観測できない：`to_bits()` はどの NaN にも正準な quiet NaN（`0x7ff8000000000000`）を返す（wasm の演算が返す NaN のビットは実装によって違いうるため）。
+- 表示・読み込み・`%` は core ライブラリ（`lib/core/flt.kek`）がビット列の上で正確に計算するので、WasmGC と Lean の参照インタプリタで同じ結果になる。
+- 篩型の検査器は `Float` の式を扱わない（QF\_LIA の外。`Float` の比較は事実にならない）。
 
 ## generics
 
@@ -148,14 +173,14 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 - 呼び出しは静的に解決する（trait object 経由の呼び出しも、プログラム全体で使われる型への分岐になる。下記）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Debug, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Debug` の出力は Rust と同じ（`Point { x: 1, y: 2 }`、`Some(3)`、`Circle(Point { .. }, 3)`、文字列は `"a\"b\n"` のように引用・エスケープ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Debug, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Debug` の出力は Rust と同じ（`Point { x: 1, y: 2 }`、`Some(3)`、`Circle(Point { .. }, 3)`、文字列は `"a\"b\n"` のように引用・エスケープ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Float` を含む型には `Eq`・`Ord`・`Hash` を導出できない。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
 
 ### 演算子と core の trait
 
 | trait | 内容 |
 | --- | --- |
-| `PartialEq`, `Eq` | `==`・`!=`。`Int`・`Bool`・`String`・`()` は組み込みの比較 |
-| `PartialOrd`, `Ord` | `<`・`<=`・`>`・`>=`（`Int` は組み込み）、`cmp -> Ordering`、`max`・`min` |
+| `PartialEq`, `Eq` | `==`・`!=`。`Int`・`Float`・`Bool`・`String`・`()` は組み込みの比較（`Float` は `PartialEq` だけ） |
+| `PartialOrd`, `Ord` | `<`・`<=`・`>`・`>=`（`Int`・`Float` は組み込み。`Float` は `PartialOrd` だけ）、`cmp -> Ordering`、`max`・`min` |
 | `Hash`, `Hasher` | `x.hash(&mut h)`、`DefaultHasher::new()`、`h.finish()` |
 | `Default` | `default() -> Self` |
 | `From<T>` | `from(value: T) -> Self`：`?` がエラー型の変換に使う（下記「文と式」） |
@@ -164,7 +189,7 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 | `Add<Rhs>`, `Sub<Rhs>`, `Mul<Rhs>`, `Div<Rhs>`, `Rem<Rhs>`, `Neg` | `+ - * / %` と単項 `-`（下記「演算子のオーバーロード」） |
 | `Iterator`, `DoubleEndedIterator`, `IntoIterator`, `FromIterator<A>`, `Sum<A>`, `Product<A>` | 下記 |
 
-core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone`・`PartialEq`・`Debug` は `HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque` にも、`Clone` は `Labeled` にも。`Display` は `Int`・`Bool`・`String`・`()` と時刻の型だけ、`Debug` は `Ordering`・時刻の型にも）。
+core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Float` は `Eq`・`Ord`・`Hash` 以外。`Clone`・`PartialEq`・`Debug` は `HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque` にも、`Clone` は `Labeled` にも。`Display` は `Int`・`Float`・`Bool`・`String`・`()` と時刻の型だけ、`Debug` は `Ordering`・時刻の型にも）。
 
 ### 表示（`Display`・`Debug`）
 
@@ -202,7 +227,7 @@ fn sum_all<T: Add<Output = T>>(xs: Vec<T>, zero: T) -> T { ... acc = acc + x; ..
 
 - `Int`（`+` では `String` も）以外の値の `a + b` は `Add::add(a, b)` の呼び出しになる（`-`：`Sub`、`*`：`Mul`、`/`：`Div`、`%`：`Rem`、単項 `-`：`Neg`）。右辺の型は trait の引数で、省くと `Self`（Rust の `Rhs = Self`）。結果の型は `Output`。
 - 呼び出しは静的に解決し、`kek assure`・`kek affected` などの依存（defhash）には実装が入る。篩型の検査器は整数の演算としては扱わない。
-- core は `Int`（全部）と `String`（`Add`）に実装しているので、generic な関数から使える。時刻の型には `Duration + Duration`、`Duration - Duration`、`-Duration`、`Duration * Int`、`Timestamp + Duration`、`Timestamp - Duration` がある（2 つの `Timestamp` の差は `t.since(&earlier)`）。
+- core は `Int`・`Float`（全部）と `String`（`Add`）に実装しているので、generic な関数から使える。`Float` の `+ - * /` と単項 `-` は組み込みの演算、`%` は core の `Rem` の実装（fmod）。時刻の型には `Duration + Duration`、`Duration - Duration`、`-Duration`、`Duration * Int`、`Timestamp + Duration`、`Timestamp - Duration` がある（2 つの `Timestamp` の差は `t.since(&earlier)`）。
 - 同じ型に同じ trait を右辺の型ごとに複数実装できる（`Mul<Int>` と `Mul<V2>`）。ただし実装の中では `Self::Output` ではなく具体的な型を書く。
 
 ## trait object と `impl Trait`
@@ -534,8 +559,9 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 - match の腕の本体には、波括弧なしで文を書ける：代入・複合代入 `Some(x) => total += x,`、`None => break,`、`None => continue,`、`_ => return 0,`。値は `()`（`break`・`continue`・`return` は `!`）。`kek fmt` は波括弧を付けずに出力する。クロージャの本体には書けない（クロージャは捕捉した変数に代入できない）
 - `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet`・`BTreeMap`・`VecDeque`・`Option` など）を回る
 - `e?`：`Result` / `Option` の早期リターン。`Result<T, E2>` に `?` を使う関数の戻り値が `Result<U, E>` で `E2` と `E` が違うときは、`impl From<E2> for E` があればエラーを `From::from` で変換して返す（Rust と同じ。実装がなければ `` `?` cannot convert the error type `E2` into `E` `` で、`From` の実装か `map_err` を勧める）。`From` は core の trait。`Into` はない。`Option` の `?` は `Option` を返す関数の中だけ
-- 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
+- 演算子：`+ - * / %`（`String` の `+` は連結、`Float` の `%` は fmod）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
 - 優先順位は Rust と同じ：単項 `- ! & *` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > 比較 > `&&` > `||`（比較は連鎖できない）。`kek fmt` は比較やほかのビット演算の中のビット演算、シフトの中の算術に括弧を付ける（`(a & b) == 0`、`1 << (n - 1)`）
+- 浮動小数点数のリテラル：`1.5`、`0.1`、`1e10`、`2.5e-3`、`1_000.5`（上記「浮動小数点数」）
 - 整数リテラル：`255`、`0xff`、`0o17`、`0b1010`、区切り `1_000_000`。`i64` の範囲を超えるとエラー。文字リテラル `'a'`、`'\n'`（`\r \t \\ \' \" \0 \x7f \u{1F600}`）はその Unicode のコードポイントの `Int`（文字の型はない）、バイトリテラル `b'a'`・`b'\xff'` はそのバイトの `Int`。パターンにも書ける。`kek fmt` は書いた綴りを保つ
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
 - パターン：`_`、変数（`mut x`）、整数・文字・文字列・真偽値リテラル、整数の定数、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、構造体 `S { a, b: p, .. }`・`E::V { a, .. }`、タプル構造体 `S(p, q)`、ユニット構造体 `S`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
@@ -574,9 +600,9 @@ fn parses() {
 
 書式文字列はコンパイル時に解析する。`{}`（`Display`）、`{:?}`（`Debug`）、`{0}`（位置）、`{name}`（スコープの変数を捕捉、または名前付き引数 `name = e`）、`{{`・`}}`（波括弧そのもの）。書式指定は `{:[[fill]align][+][#][0][width][.precision][type]}`：
 
-- `width` と `align`（`<` 左、`^` 中央、`>` 右）・`fill`（任意の 1 文字）は表示した文字列（コードポイント数）を詰める。揃えの既定は数（`Int`）が右、ほかは左。
+- `width` と `align`（`<` 左、`^` 中央、`>` 右）・`fill`（任意の 1 文字）は表示した文字列（コードポイント数）を詰める。揃えの既定は数（`Int`・`Float`）が右、ほかは左。
 - `+`（正でも符号）、`0`（符号と接頭辞の後ろを 0 で埋める）、`#`（`0x`・`0b`・`0o`）、`type` の `x`・`X`・`b`・`o`（16・2・8 進。負の数は Rust の i64 と同じく 2 の補数）は `Int` だけ。
-- `.precision` は `String` だけで、先頭の n 文字に切る。
+- `.precision` は `Float` では小数点以下の桁数（正確な値を偶数丸め：`{:.2}`）、`String` などほかの `Display` では先頭の n 文字、`Int` では無視される（Rust と同じ）。`+`・`0`・`type` は `Float` には使えない。
 - `{:#?}`（整形した Debug）、`{:e}`、`width$` の引数指定は未対応。
 - 誤りはコンパイルエラーになる：引数が足りない（`2 positional arguments in format string, but there is 1 argument`）、使われない引数（`argument never used`）、範囲外の位置、閉じていない `{`・対応のない `}`、知らない書式、文字列リテラルでない書式文字列、`Display`・`Debug` を実装しない値（`#[derive(Debug)]` や `impl Display` を勧める）。
 - 引数はちょうど 1 回、書いた順に評価される。

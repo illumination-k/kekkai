@@ -325,6 +325,9 @@ fn lower_ty(l: Lower, t0: Ty) -> IrTy {
             if n == "Int" {
                 return ir_ty("int");
             }
+            if n == "Float" {
+                return ir_ty("float");
+            }
             if n == "String" {
                 return ir_ty("string");
             }
@@ -1336,6 +1339,12 @@ fn lower_expr(l: Lower, e0: AstExpr) -> Int {
 fn lower_expr0(l: Lower, e0: AstExpr) -> Int {
     match e0 {
         AstExpr::IntLit(e) => lower_intc(l, e.value),
+        AstExpr::FloatLit(e) => lower_constant(l, IrConst {
+            kind: "float",
+            int_val: e.bits,
+            bool_val: false,
+            str_val: "",
+        }),
         AstExpr::BoolLit(e) => lower_constant(l, IrConst {
             kind: "bool",
             int_val: 0,
@@ -1380,7 +1389,8 @@ fn lower_expr0(l: Lower, e0: AstExpr) -> Int {
             match l.info.binops.get(e.id) {
                 // `-x` through Neg (not on Int, which is primitive)
                 Some(mi) => {
-                    if lower_ty(l, mi.recv_ty).kind != "int" {
+                    let rk = lower_ty(l, mi.recv_ty).kind;
+                    if rk != "int" && rk != "float" {
                         match mi.func {
                             Some(tf) => {
                                 return lower_trait_call(
@@ -1605,8 +1615,9 @@ fn lower_binary(l: Lower, e: AstBinary, e0: AstExpr) -> Int {
     match l.info.binops.get(e.id) {
         Some(mi) => {
             let xt = lower_ty(l, mi.recv_ty);
-            // primitive `==` on Int, Bool, String and (); primitive `<` on Int
-            let mut prim = xt.kind == "int";
+            // primitive `==` on Int, Float, Bool, String and (); primitive
+            // `<` on Int and Float (Float's `%` is core's Rem::rem)
+            let mut prim = xt.kind == "int" || (xt.kind == "float" && e.op != "%");
             if e.op == "==" || e.op == "!=" {
                 prim = prim || xt.kind == "bool" || xt.kind == "string" || xt.kind == "unit";
             }

@@ -344,7 +344,7 @@ fn diag_token_len(a: DiagAnalysis, i: Int) -> Int {
     if t.kind == "EOF" {
         return 0;
     }
-    if t.kind == "IDENT" || t.kind == "INT" || t.kind == "LABEL" {
+    if t.kind == "IDENT" || t.kind == "INT" || t.kind == "FLOAT" || t.kind == "LABEL" {
         // spelled as written
         return t.text.to_bytes().len();
     }

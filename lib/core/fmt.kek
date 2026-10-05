@@ -53,6 +53,12 @@ trait Display {
     fn __fmt_numeric(&self) -> Bool {
         false
     }
+
+    // `{:.n}`: the first n characters (Float: n fractional digits; Int
+    // ignores the precision, as in Rust)
+    fn __fmt_precision(&self, n: Int) -> String {
+        __fmt_trunc(&__fmt_display(self), n)
+    }
 }
 
 trait Debug {
@@ -68,6 +74,10 @@ impl Display for Int {
 
     fn __fmt_numeric(&self) -> Bool {
         true
+    }
+
+    fn __fmt_precision(&self, n: Int) -> String {
+        self.to_string()
     }
 }
 
@@ -297,7 +307,19 @@ fn __fmt_pad_auto<T: Display>(x: &T, width: Int, fill: String) -> String {
     __fmt_pad(__fmt_display(x), width, align, fill)
 }
 
-// __fmt_trunc is `{:.n}`: the first n characters of s.
+// __fmt_prec is `{:.n}` (Display::__fmt_precision).
+fn __fmt_prec<T: Display>(x: &T, n: Int) -> String {
+    x.__fmt_precision(n)
+}
+
+// __fmt_prec_auto is `{:width.n}` with the default alignment (numbers to
+// the right).
+fn __fmt_prec_auto<T: Display>(x: &T, n: Int, width: Int, fill: String) -> String {
+    let align = if x.__fmt_numeric() { 2 } else { 0 };
+    __fmt_pad(x.__fmt_precision(n), width, align, fill)
+}
+
+// __fmt_trunc is the first n characters of s.
 fn __fmt_trunc(s: &String, n: Int) -> String {
     let mut seen = 0;
     for i in 0..s.len() {

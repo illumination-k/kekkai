@@ -61,6 +61,8 @@ struct FmtUnit {
 enum FmtList {
     Args(Vec<AstExpr>),
     Fields(AstStructLit),
+    // the arguments of a macro (`name = e` for a named one)
+    Macro(AstMacro),
 }
 
 // FmtBuf accumulates the lines of a container.
@@ -1200,6 +1202,7 @@ fn fmt_expr(p: FmtPrinter, e: AstExpr, ind: Int, col: Int, ns: Bool) -> String {
             fmt_args(p, x.elems, ind, col)
         }
         AstExpr::Block(x) => fmt_block(p, x, ind),
+        AstExpr::Macro(x) => fmt_macro(p, x, ind, col),
         AstExpr::Closure(x) => {
             let mut h = if x.is_move { "move ||" } else { "||" };
             if x.params.len() > 0 {
@@ -1299,6 +1302,16 @@ fn fmt_elem(p: FmtPrinter, l: FmtList, i: Int, ind: Int, col: Int) -> String {
             Some(a) => fmt_expr(p, a, ind, col, false),
             None => "",
         },
+        FmtList::Macro(m) => match m.args.get(i) {
+            Some(a) => {
+                let n = m.arg_names.get(i).unwrap_or("");
+                if n == "" {
+                    return fmt_expr(p, a, ind, col, false);
+                }
+                n + " = " + fmt_expr(p, a, ind, col + n.len() + 3, false)
+            }
+            None => "",
+        },
         FmtList::Fields(e) => match e.fields.get(i) {
             Some(f) => {
                 match f.value {
@@ -1386,6 +1399,28 @@ fn fmt_list(
     out.push(fmt_indent(ind) + close);
     p.flat = flat;
     out.join("")
+}
+
+// fmt_macro prints a macro invocation as written: `name!(args)`,
+// `vec![a, b]`, `vec![x; n]`, `matches!(e, pat)`.
+fn fmt_macro(p: FmtPrinter, m: AstMacro, ind: Int, col: Int) -> String {
+    let h = m.name + "!";
+    let unit = AstExpr::UnitLit(AstUnitLit { id: 0, pos: m.pos });
+    if m.repeat {
+        let x = fmt_expr(p, m.args.get(0).unwrap_or(unit), ind, col + h.len() + 1, false);
+        let c2 = fmt_advance(p, col + h.len() + 1, x) + 2;
+        return h + "[" + x + "; " + fmt_expr(p, m.args.get(1).unwrap_or(unit), ind, c2, false) + "]";
+    }
+    match m.pat {
+        Some(pt) => {
+            let x = fmt_expr(p, m.args.get(0).unwrap_or(unit), ind, col + h.len() + 1, false);
+            return h + "(" + x + ", " + fmt_pat(p, pt) + ")";
+        }
+        None => {}
+    }
+    let close = if m.delim == "[" { "]" } else { ")" };
+    let last = m.args.get(m.args.len() - 1);
+    h + fmt_list(p, m.delim, close, "", m.args.len(), FmtList::Macro(m), last, ind, col + h.len())
 }
 
 fn fmt_args(p: FmtPrinter, args: Vec<AstExpr>, ind: Int, col: Int) -> String {

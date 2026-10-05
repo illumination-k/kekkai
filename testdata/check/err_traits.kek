@@ -23,8 +23,13 @@ impl Hash for Int { // ERROR "only traits defined in this program can be impleme
 
 impl Eq for P {} // ERROR "the trait bound `P: PartialEq` is not satisfied"
 
-#[derive(Debug)] // ERROR "cannot derive `Debug`"
+#[derive(Debug)] // ERROR "the trait bound `P: Debug` is not satisfied (add `#[derive(Debug)]`"
 struct Q {
+    p: P,
+}
+
+#[derive(Display)] // ERROR "cannot derive `Display`"
+struct Q2 {
     p: P,
 }
 

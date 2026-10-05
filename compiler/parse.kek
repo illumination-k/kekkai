@@ -16,6 +16,8 @@ struct ParseState {
     mut no_struct: Bool,
     mut failed: Bool,
     ids: AstIds,
+    // nesting of macro invocations being parsed (compiler/macro.kek)
+    mut mac_depth: Int,
 }
 
 struct ParseResult {
@@ -135,6 +137,7 @@ fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> 
         no_struct: false,
         failed: false,
         ids: ids,
+        mac_depth: 0,
     };
     let f = parse_items(p);
     ParseResult { file: f, errs: ast_sort_errors(p.errs) }
@@ -1283,6 +1286,9 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
     }
     if k == "IDENT" {
         parse_next(p);
+        if parse_at(p, "!") && (parse_peek_at(p, "(") || parse_peek_at(p, "[")) {
+            return mac_parse(p, t);
+        }
         let ty_args = parse_turbofish(p);
         if parse_at(p, "::") {
             parse_next(p);

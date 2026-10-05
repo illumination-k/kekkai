@@ -353,6 +353,7 @@ fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
             asr_w_expr(w, x.x);
             asr_w_expr(w, x.index);
         }
+        AstExpr::Macro(x) => asr_w_expr(w, x.expansion),
     }
 }
 

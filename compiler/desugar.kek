@@ -719,6 +719,18 @@ fn desugar_expr(cx: DsgCx, e0: AstExpr) -> AstExpr {
             x: desugar_expr(cx, e.x),
             index: desugar_expr(cx, e.index),
         }),
+        AstExpr::Macro(m) => AstExpr::Macro(AstMacro {
+            id: m.id,
+            pos: m.pos,
+            name: m.name,
+            delim: m.delim,
+            args: m.args,
+            arg_names: m.arg_names,
+            repeat: m.repeat,
+            pat: m.pat,
+            expansion: desugar_expr(cx, m.expansion),
+            errs: m.errs,
+        }),
     }
 }
 

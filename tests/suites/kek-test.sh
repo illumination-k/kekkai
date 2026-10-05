@@ -111,6 +111,30 @@ t_failing() {
 	rm -rf "$d"
 }
 
+# assert! / assert_eq! / panic! / todo! abort their test with the message
+# (__panic_report in lib/prelude/test.kek), and the other tests still run.
+t_asserts() {
+	d=$(tmpdir)
+	r=
+	set +e
+	"$KEK" test -no-cache testdata/test/asserts.kek >"$d/out" 2>&1
+	code=$?
+	set -e
+	[ $code -eq 1 ] || r="exit $code, want 1"
+	r="$r$(contains "$d/out" "test all_pass ... ok" \
+		"test eq_fails ... FAILED (panicked)" "    panicked at asserts.kek:26:5:" \
+		'    assertion `left == right` failed' \
+		'      left: Pair { a: 4, b: "x" }' '     right: Pair { a: 5, b: "x\n" }' \
+		'    assertion `left == right` failed: double(1) is wrong' "      left: 2" "     right: 3" \
+		"    info: checking" \
+		"    assertion failed: (v.len() > 2 && !(v.len() == 0)) || v.iter().any(|x| x > 5)" \
+		"test panics ... FAILED (panicked)" "    gave up after 3 tries" \
+		"test not_done ... FAILED (panicked)" "    not yet implemented" \
+		"test after_the_failures ... ok" "test result: FAILED. 2 passed; 5 failed")"
+	result asserts "$r" "$d/out"
+	rm -rf "$d"
+}
+
 # A program's own #[handler] is demoted so the harness can take its place.
 t_handler() {
 	d=$(tmpdir)
@@ -267,4 +291,4 @@ if [ "${1:-}" = --case ]; then
 	"t_$2"
 	exit 0
 fi
-run_parallel "$0" discover harness passing failing handler trap no_tests usage mock_options help
+run_parallel "$0" discover harness passing failing asserts handler trap no_tests usage mock_options help

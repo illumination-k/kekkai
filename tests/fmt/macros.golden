@@ -1,0 +1,41 @@
+#[derive(Debug)]
+struct P {
+    x: Int,
+}
+
+impl Display for P {
+    fn fmt(&self, f: &mut Formatter) {
+        write!(f, "<{}>", self.x)
+    }
+}
+
+fn f(log: &Log, n: Int) -> String {
+    let v = vec![1, 2, 3];
+    let w = vec![0; n];
+    let e: Vec<Int> = vec![];
+    log.info(format!("{} {:?} {name}", n, v, name = "x"));
+    let long = format!(
+        "a very long format string that goes past the line width {} {} {}",
+        n,
+        v.len(),
+        w.len(),
+    );
+    let m = matches!(Some(n), Some(_));
+    // a comment before a macro
+    format!("{n:>5}{}", if m { "y" } else { "n" })
+}
+
+#[test]
+fn t() {
+    assert!(1 == 1);
+    assert_eq!(f2(1), 2, "message {}", 1);
+    assert_ne!(1, 2);
+    if false {
+        panic!("no")
+    }
+    let x: Int = if true { 1 } else { unreachable!() };
+}
+
+fn f2(x: Int) -> Int {
+    x * 2
+}

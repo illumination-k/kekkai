@@ -1,0 +1,57 @@
+// Tests with assert!, assert_eq!, assert_ne!, panic! and todo!: a failed
+// one aborts its test with the message (the macros are allowed only in
+// #[test] functions).
+
+#[derive(Debug, PartialEq)]
+struct Pair {
+    a: Int,
+    b: String,
+}
+
+fn double(x: Int) -> Int {
+    x * 2
+}
+
+#[test]
+fn all_pass() {
+    assert!(double(2) == 4);
+    assert!(double(2) == 4, "double of {} is {}", 2, double(2));
+    assert_eq!(double(3), 6);
+    assert_ne!(vec![1], vec![2], "vectors {}", "differ");
+    assert_eq!(Pair { a: 1, b: "x" }, Pair { a: 1, b: "x" });
+}
+
+#[test]
+fn eq_fails() {
+    assert_eq!(Pair { a: double(2), b: "x" }, Pair { a: 5, b: "x\n" });
+}
+
+#[test]
+fn eq_fails_with_message(log: &Log) {
+    log.info("checking");
+    assert_eq!(double(1), 3, "double({}) is wrong", 1);
+}
+
+#[test]
+fn assert_fails() {
+    let v = vec![1, 2];
+    assert!((v.len() > 2 && !(v.len() == 0)) || v.iter().any(|x| x > 5));
+}
+
+#[test]
+fn panics() -> Bool {
+    if double(1) == 2 {
+        panic!("gave up after {} tries", 3);
+    }
+    true
+}
+
+#[test]
+fn not_done() -> Result<(), String> {
+    todo!()
+}
+
+#[test]
+fn after_the_failures() -> Bool {
+    matches!(Some(double(1)), Some(2))
+}

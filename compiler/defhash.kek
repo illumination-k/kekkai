@@ -552,6 +552,11 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
             if x.op == "-" || x.op == "!" {
                 dh_emit(w, "un:" + x.op);
             }
+            match w.info.binops.get(x.id) {
+                // `-x` through Neg
+                Some(m) => dh_func_dep(w, m.func),
+                None => {}
+            }
             dh_expr(w, x.x);
         }
         AstExpr::Call(x) => {
@@ -668,6 +673,7 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
             dh_expr(w, x.x);
             dh_expr(w, x.index);
         }
+        AstExpr::Macro(x) => dh_expr_node(w, x.expansion),
     }
 }
 

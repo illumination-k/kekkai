@@ -655,7 +655,9 @@ the program still go to stderr.
 
 - Tests are listed in declaration order (after `-run` selection).
 - `status` is `ok`, `failed` (returned `false` or `Err`) or `trapped` (the
-  process trapped, e.g. on call stack exhaustion).
+  process trapped, e.g. on call stack exhaustion, or a failed `assert!`,
+  `assert_eq!` or `panic!` ended it: the report then reads
+  `FAILED (panicked)` with `panicked at file.kek:L:C:` and the message).
 - `cached` is true when the result was replayed from the test result cache
   (see below); `ms` is then the time of the run that was cached. `ms` is
   `null` for a trapped test.

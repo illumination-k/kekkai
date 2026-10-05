@@ -1382,6 +1382,7 @@ fn lsp_walk_expr(mut w: LspWalk, fs: &Fs, e0: AstExpr) {
             lsp_walk_expr(w, fs, e.x);
             lsp_walk_expr(w, fs, e.index);
         }
+        AstExpr::Macro(e) => lsp_walk_expr(w, fs, e.expansion),
     }
 }
 
@@ -1407,6 +1408,7 @@ fn lsp_expr_id(e0: AstExpr) -> Int {
         AstExpr::Tuple(e) => e.id,
         AstExpr::Range(e) => e.id,
         AstExpr::Index(e) => e.id,
+        AstExpr::Macro(e) => e.id,
     }
 }
 

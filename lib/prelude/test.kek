@@ -360,3 +360,20 @@ fn __json_object(mut p: __Json, mut rt: __Rt, file: String, db: Bool) -> Bool {
     }
     false
 }
+
+// __panic_report reports a failed assert! or a panic! (compiler/macro.kek;
+// they are only allowed in #[test] functions) on stderr and ends the
+// process with status 101: `panicked at file.kek:L:C:`, the message, and
+// under `kek test` the log lines and outbox of the mocks.
+fn __panic_report(msg: String, at: String) {
+    __eprint("panicked at " + at + ":");
+    __eprint(msg);
+    let rt = __Rt::get();
+    for l in rt.lines {
+        __eprint(l);
+    }
+    for s in rt.sent {
+        __eprint("outbox: " + s);
+    }
+    __exit(101);
+}

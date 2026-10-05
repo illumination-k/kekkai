@@ -755,7 +755,10 @@ test_run_batch() {
 	cat "$_d"/clog.* | awk -v r="$_d/r" '
 		function finish() {
 			if (t == "") return
-			if (crashed) {
+			if (crashed && panic != "") {
+				body = body "test " t " ... FAILED (panicked)\n" panic
+				if (last != "") body = body "    last input: " last "\n"
+			} else if (crashed) {
 				body = body "test " t " ... FAILED (trapped)\n"
 				body = body "    trap: " (trap != "" ? trap : other) "\n"
 				if (last != "") body = body "    last input: " last "\n"
@@ -765,11 +768,14 @@ test_run_batch() {
 			t = ""
 		}
 		/^kek-start / { next }
-		/^kek-test / { finish(); t = $2; body = ""; st = "error"; crashed = 0; trap = ""; last = ""; other = ""; next }
+		/^kek-test / { finish(); t = $2; body = ""; st = "error"; crashed = 0; trap = ""; last = ""; other = ""; panic = ""; next }
 		/^kek-base / { st = $3; next }
 		/^kek-crash/ { crashed = 1; st = "trapped"; next }
 		/^kek-err / {
 			l = substr($0, 9)
+			# a failed assert! / panic! (__panic_report in lib/prelude/test.kek)
+			if (l ~ /^panicked at /) { panic = "    " l "\n"; next }
+			if (panic != "") { panic = panic "    " l "\n"; next }
 			if (l ~ /wasm trap: /) { if (trap == "") { trap = l; sub(/.*wasm trap: /, "", trap) } }
 			else if (l ~ /^kek-case: /) last = substr(l, 11)
 			else if (l != "") other = l

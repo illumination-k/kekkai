@@ -1,0 +1,16 @@
+[1, 2, 3] [[7, 0], [0, 0], [0, 0]] [] 2
+hello Kekkai, n = 42, {literal} 43
+s "s\t\"q\"\n" true () Some(-1)
+Reading { place: "Kyoto", temp: Some(31), tags: ["hot"] }
+-3°C
+20°C str 42
+Ok(1) Err("bad") (1, "two", (3,))
+{"a": 1, "b": 2} {5} Less
+b a b 9
+[    ab] [ab    ] [  ab  ] [ab    ] [    12]
+[***mid***] [1---] [abc] [      ab] [     "q"]
+[00042] [-0042] [+7] [-7] [ff] [FF] [0xff] [101] [0b101] [10] [0o10]
+[ffffffffffffffff] [0x000000ff] [    ff] [+3   ]
+2 1
+true false true
+100°C

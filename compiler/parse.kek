@@ -148,6 +148,7 @@ fn parse_items(p: ParseState) -> AstFile {
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     while !parse_at(p, "EOF") {
         let attrs = parse_attrs(p);
@@ -185,15 +186,20 @@ fn parse_items(p: ParseState) -> AstFile {
             if !p.failed {
                 f.aliases.push(ad);
             }
+        } else if parse_at_const(p) {
+            let cd = parse_const(p);
+            if !p.failed {
+                f.consts.push(cd);
+            }
         } else {
             parse_fail(
                 p,
                 parse_tok(p).pos,
-                "expected item (`fn`, `struct`, `enum`, `trait`, `impl` or `type`), found "
+                "expected item (`fn`, `struct`, `enum`, `trait`, `impl`, `type` or `const`), found "
                     + parse_describe(parse_tok(p)),
             );
         }
-        if attrs.len() > 0 && (k == "impl" || k == "trait" || k == "type") {
+        if attrs.len() > 0 && (k == "impl" || k == "trait" || k == "type" || k == "const") {
             match attrs.get(0) {
                 Some(a) => parse_fail(p, a.pos, "attributes are not allowed on `" + k + "` items"),
                 None => {}
@@ -201,6 +207,25 @@ fn parse_items(p: ParseState) -> AstFile {
         }
     }
     f
+}
+
+// parse_at_const reports whether a `const NAME` item starts here (`const`
+// is not a keyword).
+fn parse_at_const(p: ParseState) -> Bool {
+    let t = parse_tok(p);
+    t.kind == "IDENT" && t.text == "const" && parse_peek_at(p, "IDENT")
+}
+
+// parse_const parses `const NAME: T = value;`.
+fn parse_const(p: ParseState) -> AstConstDecl {
+    let pos = parse_next(p).pos;
+    let name = parse_expect(p, "IDENT").text;
+    parse_expect(p, ":");
+    let ty = parse_type(p);
+    parse_expect(p, "=");
+    let value = parse_expr(p);
+    parse_expect(p, ";");
+    AstConstDecl { id: parse_id(p), pos: pos, name: name, ty: ty, value: value }
 }
 
 // parse_attrs parses attributes `#[name]` / `#[name(arg, ...)]`.
@@ -297,6 +322,8 @@ fn parse_trait(p: ParseState) -> AstTraitDecl {
         let attrs = parse_attrs(p);
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
+        } else if parse_at_const(p) {
+            parse_fail(p, parse_tok(p).pos, "constants in traits are not supported");
         } else {
             let mut fd = parse_func(p, true);
             fd.attrs = attrs;
@@ -423,6 +450,7 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
         wheres: Vec::new(),
         assoc: Vec::new(),
         funcs: Vec::new(),
+        consts: Vec::new(),
     };
     if parse_at(p, "for") {
         parse_next(p);
@@ -435,6 +463,12 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
         let attrs = parse_attrs(p);
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
+        } else if parse_at_const(p) {
+            match attrs.get(0) {
+                Some(a) => parse_fail(p, a.pos, "attributes are not allowed on `const` items"),
+                None => {}
+            }
+            d.consts.push(parse_const(p));
         } else {
             let mut fd = parse_func(p, false);
             fd.attrs = attrs;
@@ -456,7 +490,36 @@ fn parse_struct(p: ParseState) -> AstStructDecl {
         name: name,
         generics: generics,
         fields: Vec::new(),
+        kind: "",
     };
+    if parse_accept(p, ";") {
+        // unit struct `struct S;`
+        d.kind = "unit";
+        return d;
+    }
+    if parse_accept(p, "(") {
+        // tuple struct `struct S(A, mut B);`
+        d.kind = "tuple";
+        while !parse_at(p, ")") {
+            let fp = parse_tok(p).pos;
+            let mutable = parse_accept(p, "mut");
+            let ty = parse_type(p);
+            let fname = d.fields.len().to_string();
+            d.fields.push(AstField {
+                id: parse_id(p),
+                pos: fp,
+                mutable: mutable,
+                name: fname,
+                ty: ty,
+            });
+            if !parse_accept(p, ",") {
+                break;
+            }
+        }
+        parse_expect(p, ")");
+        parse_expect(p, ";");
+        return d;
+    }
     parse_expect(p, "{");
     while !parse_at(p, "}") {
         let fp = parse_tok(p).pos;
@@ -489,8 +552,27 @@ fn parse_enum(p: ParseState) -> AstEnumDecl {
     while !parse_at(p, "}") {
         let vp = parse_tok(p).pos;
         let vname = parse_expect(p, "IDENT").text;
-        let mut v = AstVariant { id: parse_id(p), pos: vp, name: vname, fields: Vec::new() };
-        if parse_accept(p, "(") {
+        let mut v = AstVariant {
+            id: parse_id(p),
+            pos: vp,
+            name: vname,
+            fields: Vec::new(),
+            named: false,
+            names: Vec::new(),
+        };
+        if parse_accept(p, "{") {
+            // struct-like variant `V { a: A, b: B }`
+            v.named = true;
+            while !parse_at(p, "}") {
+                v.names.push(parse_expect(p, "IDENT").text);
+                parse_expect(p, ":");
+                v.fields.push(parse_type(p));
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, "}");
+        } else if parse_accept(p, "(") {
             while !parse_at(p, ")") {
                 v.fields.push(parse_type(p));
                 if !parse_accept(p, ",") {
@@ -766,7 +848,8 @@ fn parse_block(mut p: ParseState) -> AstBlock {
             let mut name = "_";
             let mut pat = None;
             if parse_at(p, "(")
-                || (parse_at(p, "IDENT") && (parse_peek_at(p, "(") || parse_peek_at(p, "::"))) {
+                || (parse_at(p, "IDENT")
+                    && (parse_peek_at(p, "(") || parse_peek_at(p, "::") || parse_peek_at(p, "{"))) {
                 pat = Some(parse_pattern(p));
             } else {
                 mutable = parse_accept(p, "mut");
@@ -822,7 +905,10 @@ fn parse_block(mut p: ParseState) -> AstBlock {
             parse_next(p);
             let mut var = "_";
             let mut pat = None;
-            if parse_at(p, "(") || parse_at(p, "mut") {
+            if parse_at(p, "(")
+                || parse_at(p, "mut")
+                || (parse_at(p, "IDENT")
+                    && (parse_peek_at(p, "(") || parse_peek_at(p, "::") || parse_peek_at(p, "{"))) {
                 pat = Some(parse_pattern(p));
             } else if !parse_accept(p, "_") {
                 var = parse_expect(p, "IDENT").text;
@@ -1202,6 +1288,18 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
             parse_next(p);
             let name = parse_expect(p, "IDENT");
             let targs = parse_turbofish(p);
+            if ty_args.len() == 0
+                && targs.len() == 0
+                && parse_at(p, "{")
+                && !p.no_struct
+                && parse_is_upper(name.text) {
+                // struct-like variant `E::V { f: e }`
+                return parse_struct_lit(p, Tok {
+                    kind: "IDENT",
+                    text: t.text + "::" + name.text,
+                    pos: t.pos,
+                });
+            }
             return AstExpr::Path(AstPathExpr {
                 id: parse_id(p),
                 pos: t.pos,
@@ -1366,6 +1464,9 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         int_value: None,
         bool_lit: None,
         str_value: None,
+        brace: false,
+        fields: Vec::new(),
+        rest: false,
     };
     let k = t.kind;
     if k == "_" {
@@ -1441,6 +1542,48 @@ fn parse_pattern(p: ParseState) -> AstPattern {
                 }
             }
             parse_expect(p, ")");
+            return pat;
+        }
+        if parse_at(p, "{") && parse_is_upper(name) {
+            // struct pattern `S { a, b: p, mut c, .. }`
+            parse_next(p);
+            pat.ctor = name;
+            pat.brace = true;
+            while !parse_at(p, "}") {
+                if parse_accept(p, "..") {
+                    pat.rest = true;
+                    break;
+                }
+                let ft = parse_tok(p);
+                let fmut = parse_accept(p, "mut");
+                let fname = parse_expect(p, "IDENT").text;
+                if !fmut && parse_accept(p, ":") {
+                    pat.args.push(parse_pattern(p));
+                } else {
+                    pat.args.push(AstPattern {
+                        id: parse_id(p),
+                        pos: ft.pos,
+                        wildcard: false,
+                        tuple: false,
+                        mutable: fmut,
+                        bind: fname,
+                        ty: "",
+                        ctor: "",
+                        args: Vec::new(),
+                        int_value: None,
+                        bool_lit: None,
+                        str_value: None,
+                        brace: false,
+                        fields: Vec::new(),
+                        rest: false,
+                    });
+                }
+                pat.fields.push(fname);
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, "}");
             return pat;
         }
         if pat.ctor == "" {

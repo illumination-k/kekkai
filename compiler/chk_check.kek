@@ -292,6 +292,7 @@ fn chk_parse_core_from(mut srcs: Vec<FeSource>) -> ChkCore {
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     let mut errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
@@ -318,14 +319,16 @@ fn chk_with_core(f: AstFile, mut errs: Vec<AstError>, core: ChkCore) -> AstFile 
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     for e in core.errs {
         errs.push(e);
     }
     chk_append_file(out, core.file);
     chk_append_file(out, f);
-    derive_items(out, AstIds { next: core.next }, errs);
-    out
+    let ids = AstIds { next: core.next };
+    derive_items(out, ids, errs);
+    desugar_items(out, ids, errs)
 }
 
 fn chk_append_file(mut out: AstFile, f: AstFile) {
@@ -346,6 +349,9 @@ fn chk_append_file(mut out: AstFile, f: AstFile) {
     }
     for x in f.aliases {
         out.aliases.push(x);
+    }
+    for x in f.consts {
+        out.consts.push(x);
     }
 }
 
@@ -446,6 +452,10 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
                 );
             }
         }
+        return;
+    }
+    if a.name == "const" && ast_attr_has(a, "__const") {
+        // the function of a constant (compiler/desugar.kek)
         return;
     }
     chk_errorf(c, a.pos, "unknown attribute `#[" + a.name + "]`");
@@ -694,7 +704,7 @@ fn chk_declare(mut c: Chk, f: AstFile) {
                             chk_errorf(c, v.pos, "duplicate variant `" + v.name + "`");
                         }
                         seen.insert(v.name, true);
-                        let mut vi = TyVariant { name: v.name, fields: Vec::new() };
+                        let mut vi = TyVariant { name: v.name, fields: Vec::new(), names: v.names };
                         for ft in v.fields {
                             vi.fields.push(chk_resolve_type(c, ft, false));
                         }
@@ -1179,7 +1189,7 @@ fn chk_declare_func(
         declass: Vec::new(),
     };
     for a in fd.attrs {
-        if scope.contains_key("Self") && a.name != "fresh" && a.name != "owned" {
+        if scope.contains_key("Self") && a.name != "fresh" && a.name != "owned" && a.name != "const" {
             chk_errorf(c, a.pos, "attributes are not allowed on methods");
             continue;
         }
@@ -1894,7 +1904,18 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                     Ty::Struct(st, _) => match c.info.fields.get(s.target.id) {
                         Some(i) => match st.fields.get(i) {
                             Some(fi) => {
-                                if !fi.mutable {
+                                if !fi.mutable && parse_int_text(fi.name).is_some() {
+                                    // a tuple struct `struct S(mut T);`
+                                    chk_errorf(
+                                        c,
+                                        s.pos,
+                                        "cannot assign to field `"
+                                            + fi.name
+                                            + "` of `"
+                                            + st.name
+                                            + "`: it is not declared `mut` (write `mut` before its type in the struct)",
+                                    );
+                                } else if !fi.mutable {
                                     chk_errorf(
                                         c,
                                         s.pos,

@@ -86,6 +86,7 @@ fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     let mut errs = Vec::new();
     for s in srcs {
@@ -110,6 +111,9 @@ fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
         }
         for x in pr.file.aliases {
             out.aliases.push(x);
+        }
+        for x in pr.file.consts {
+            out.consts.push(x);
         }
     }
     FeProgram { file: out, errs: ast_sort_errors(errs) }
@@ -616,6 +620,7 @@ fn frontend_parse_cached(mut c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     let mut errs = Vec::new();
     for s in srcs {
@@ -659,6 +664,7 @@ fn parse_file_dummy() -> ParseResult {
             impls: Vec::new(),
             traits: Vec::new(),
             aliases: Vec::new(),
+            consts: Vec::new(),
         },
         errs: Vec::new(),
     }

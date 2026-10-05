@@ -110,6 +110,12 @@ trait Ord: Eq + PartialOrd {
 
 // ---- primitive types ----
 
+impl Int {
+    const MAX: Int = 9223372036854775807;
+    // (-9223372036854775808 is out of the range of a literal)
+    const MIN: Int = -Self::MAX - 1;
+}
+
 impl PartialEq for Int {
     fn eq(&self, other: &Self) -> Bool {
         self == other

@@ -79,7 +79,9 @@ fn chk_ctors(t: Ty) -> ChkCtors {
         Ty::Enum(en, args) => {
             for v in en.variants {
                 let mut n = en.name + "::" + v.name;
-                if v.fields.len() > 0 {
+                if v.names.len() > 0 {
+                    n = n + " { .. }";
+                } else if v.fields.len() > 0 {
                     n = n + "(..)";
                 }
                 out.names.push(n);
@@ -89,6 +91,10 @@ fn chk_ctors(t: Ty) -> ChkCtors {
         Ty::Tuple(ts) => {
             out.names.push("(..)");
             out.fields.push(ts);
+        }
+        Ty::Struct(st, args) => {
+            out.names.push(st.name + " { .. }");
+            out.fields.push(ty_struct_fields(st, args));
         }
         Ty::Prim(n) => {
             if n == "Bool" {
@@ -144,6 +150,9 @@ fn chk_wild_pat() -> AstPattern {
         int_value: None,
         bool_lit: None,
         str_value: None,
+        brace: false,
+        fields: Vec::new(),
+        rest: false,
     }
 }
 
@@ -172,7 +181,9 @@ fn chk_pat_args(info: ChkInfo, p: AstPattern) -> Vec<AstPattern> {
 // chk_exhaustive reports whether the pattern matrix covers every value of
 // the column types.
 fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bool {
-    if tys.len() == 0 {
+    if tys.len() == 0 || rows.len() == 0 {
+        // (no rows cover nothing: every type has a value; stopping here
+        // also keeps a recursive struct from being expanded forever)
         return rows.len() > 0;
     }
     // A row of irrefutable patterns covers everything. Checking this first
@@ -324,6 +335,10 @@ fn chk_pattern(mut c: Chk, p: AstPattern, st0: Ty) {
         chk_tuple_pattern(c, p, pi, st);
         return;
     }
+    if p.brace {
+        chk_struct_pattern(c, p, pi, st);
+        return;
+    }
     if p.int_value.is_some() {
         pi.kind = "int";
         if !ty_unify(st, ty_int()) {
@@ -426,6 +441,44 @@ fn chk_self_is(c: Chk, name: String) -> Bool {
     match c.tscope.get("Self") {
         Some(t) => chk_recv_name(t) == name,
         None => false,
+    }
+}
+
+// chk_struct_pattern checks a struct pattern `S { a: p, b: q }`, which
+// compiler/desugar.kek has given every field in declaration order: it is
+// typed (and lowered) like a tuple pattern of the fields.
+fn chk_struct_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
+    match c.info.structs.get(p.ctor) {
+        Some(sd) => {
+            if ty_is_var(st) {
+                ty_unify(st, Ty::Struct(sd, chk_instantiate(c, sd.params)));
+            }
+            match ty_prune(st) {
+                Ty::Struct(s2, args) => {
+                    if s2.name == sd.name {
+                        pi.kind = "tuple";
+                        pi.ty = ty_prune(st);
+                        chk_subpatterns(c, p, pi, ty_struct_fields(s2, args));
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            if !ty_is_prim(ty_prune(st), "<invalid>") {
+                chk_errorf(
+                    c,
+                    p.pos,
+                    "pattern `" + p.ctor + " { .. }` does not match type `" + ty_str(st) + "`",
+                );
+            }
+        }
+        None => {
+            chk_errorf(c, p.pos, "unknown struct `" + p.ctor + "`");
+        }
+    }
+    pi.kind = "wild";
+    for sub in p.args {
+        chk_pattern(c, sub, ty_invalid());
     }
 }
 

@@ -449,7 +449,15 @@ fn desugar_stmt(cx: DsgCx, s0: AstStmt) -> AstStmt {
             },
             value: desugar_expr(cx, s.value),
         }),
-        AstStmt::Break(_) => s0,
+        AstStmt::Break(s) => match s.value {
+            Some(v) => AstStmt::Break(AstBreakStmt {
+                id: s.id,
+                pos: s.pos,
+                label: s.label,
+                value: Some(desugar_expr(cx, v)),
+            }),
+            None => s0,
+        },
         AstStmt::Continue(_) => s0,
         AstStmt::While(s) => AstStmt::While(AstWhileStmt {
             is_loop: s.is_loop,
@@ -458,6 +466,8 @@ fn desugar_stmt(cx: DsgCx, s0: AstStmt) -> AstStmt {
             pat: desugar_opt_pat(cx, s.pat),
             cond: desugar_expr(cx, s.cond),
             body: desugar_block(cx, s.body),
+            label: s.label,
+            expr: s.expr,
         }),
         AstStmt::For(s) => {
             if s.pat.is_none() {
@@ -475,6 +485,7 @@ fn desugar_stmt(cx: DsgCx, s0: AstStmt) -> AstStmt {
                 iter: desugar_expr(cx, s.iter),
                 end: end,
                 body: desugar_block(cx, s.body),
+                label: s.label,
             })
         }
         AstStmt::Return(s) => {
@@ -701,6 +712,7 @@ fn desugar_expr(cx: DsgCx, e0: AstExpr) -> AstExpr {
                         None => None,
                     },
                     body: desugar_expr(cx, a.body),
+                    bare: a.bare,
                 });
             }
             AstExpr::Match(AstMatch { id: e.id, pos: e.pos, x: desugar_expr(cx, e.x), arms: arms })

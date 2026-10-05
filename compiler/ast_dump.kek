@@ -286,10 +286,27 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
             ast_dump_expr(d, depth + 1, AstExpr::Field(a.target));
             ast_dump_expr(d, depth + 1, a.value);
         }
-        AstStmt::Break(b) => ast_line(d, depth, "break @" + ast_dump_pos(b.pos)),
-        AstStmt::Continue(c) => ast_line(d, depth, "continue @" + ast_dump_pos(c.pos)),
+        AstStmt::Break(b) => {
+            ast_line(d, depth, "break" + ast_dump_label(b.label) + " @" + ast_dump_pos(b.pos));
+            match b.value {
+                Some(v) => ast_dump_expr(d, depth + 1, v),
+                None => {}
+            }
+        }
+        AstStmt::Continue(c) => ast_line(
+            d,
+            depth,
+            "continue" + ast_dump_label(c.label) + " @" + ast_dump_pos(c.pos),
+        ),
         AstStmt::While(w) => {
-            ast_line(d, depth, if w.is_loop { "loop @" } else { "while @" } + ast_dump_pos(w.pos));
+            ast_line(
+                d,
+                depth,
+                if w.is_loop { "loop" } else { "while" }
+                    + ast_dump_label(w.label)
+                    + " @"
+                    + ast_dump_pos(w.pos),
+            );
             match w.pat {
                 Some(pt) => ast_dump_pattern(d, depth + 1, pt),
                 None => {}
@@ -298,7 +315,7 @@ fn ast_dump_stmt(d: AstDumper, depth: Int, s: AstStmt) {
             ast_dump_block(d, depth + 1, w.body);
         }
         AstStmt::For(f) => {
-            ast_line(d, depth, "for " + f.var + " @" + ast_dump_pos(f.pos));
+            ast_line(d, depth, "for" + ast_dump_label(f.label) + " " + f.var + " @" + ast_dump_pos(f.pos));
             match f.pat {
                 Some(pt) => ast_dump_pattern(d, depth + 1, pt),
                 None => {}
@@ -565,4 +582,12 @@ fn ast_dump_pattern(d: AstDumper, depth: Int, p: AstPattern) {
     for a in p.args {
         ast_dump_pattern(d, depth + 1, a);
     }
+}
+
+// ast_dump_label is ` 'a` for a loop label ("" without one).
+fn ast_dump_label(l: String) -> String {
+    if l == "" {
+        return "";
+    }
+    " " + l
 }

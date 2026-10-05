@@ -76,9 +76,22 @@ struct ChkMethodInfo {
     targs: Vec<Ty>,
 }
 
+// conv is the call of `From::from` that converts the error of a `?` on a
+// `Result` into the function's error type (None when they are the same).
 struct ChkTryInfo {
     closure: Option<ChkClosureInfo>,
     target: Ty,
+    conv: Option<ChkMethodInfo>,
+}
+
+// ChkLoop is an enclosing loop: its label ("" without one), whether it is
+// a `loop`, the type of its value (the `break` values of a `loop`) and the
+// number of `break`s that leave it (a `loop` without one diverges).
+struct ChkLoop {
+    label: String,
+    is_loop: Bool,
+    ty: Ty,
+    mut breaks: Int,
 }
 
 struct ChkReturnInfo {
@@ -181,10 +194,10 @@ struct Chk {
     // trait method -> the program's implementations, built on first use
     // (after the declarations)
     mut impl_idx: Option<HashMap<String, Vec<ChkFunc>>>,
+    // the number of enclosing loops visible from here (0 in a closure
+    // body): the last `loops` entries of loop_stack
     mut loops: Int,
-    // per enclosing loop, the number of `break`s seen in it (a `loop`
-    // without one diverges)
-    mut loop_breaks: Vec<Int>,
+    mut loop_stack: Vec<ChkLoop>,
     info: ChkInfo,
     errs: Vec<AstError>,
     mut next_id: Int,
@@ -553,7 +566,7 @@ fn chk_check_full(
     let mut c = Chk {
         impl_idx: None,
         loops: 0,
-        loop_breaks: Vec::new(),
+        loop_stack: Vec::new(),
         info: info,
         errs: core_errs,
         next_id: 0,
@@ -1910,6 +1923,15 @@ fn chk_block(mut c: Chk, b: AstBlock) -> Ty {
             if diverges {
                 t = ty_never();
             }
+            // a trailing `loop` is the block's value
+            match ast_block_loop(b) {
+                Some(w) => {
+                    if !diverges {
+                        t = c.info.types.get(w.id).unwrap_or(ty_unit());
+                    }
+                }
+                None => {}
+            }
         }
     }
     let r = chk_record(c, b.id, t);
@@ -2053,18 +2075,37 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
             false
         }
         AstStmt::Break(s) => {
-            if c.loops == 0 {
-                chk_errorf(c, s.pos, "`break`/`continue` outside of a loop");
-            } else {
-                let n = c.loop_breaks.len();
-                c.loop_breaks.set(n - 1, c.loop_breaks.get(n - 1).unwrap_or(0) + 1);
+            let target = chk_loop_target(c, s.pos, s.label);
+            let mut vt = ty_unit();
+            match s.value {
+                Some(v) => {
+                    vt = chk_expr(c, v);
+                }
+                None => {}
+            }
+            match target {
+                Some(mut lp) => {
+                    lp.breaks = lp.breaks + 1;
+                    if lp.is_loop {
+                        let vp = match s.value {
+                            Some(v) => ast_expr_pos(v),
+                            None => s.pos,
+                        };
+                        chk_expect(c, vp, vt, lp.ty, "`break` value");
+                    } else if s.value.is_some() {
+                        chk_errorf(
+                            c,
+                            s.pos,
+                            "`break` with a value is only allowed in a `loop` (this leaves a `while` or `for` loop)",
+                        );
+                    }
+                }
+                None => {}
             }
             true
         }
         AstStmt::Continue(s) => {
-            if c.loops == 0 {
-                chk_errorf(c, s.pos, "`break`/`continue` outside of a loop");
-            }
+            chk_loop_target(c, s.pos, s.label);
             true
         }
         AstStmt::While(s) => {
@@ -2076,18 +2117,29 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 }
                 None => chk_expect(c, ast_expr_pos(s.cond), ct, ty_bool(), "while condition"),
             }
-            c.loops = c.loops + 1;
-            c.loop_breaks.push(0);
+            let lt = if s.is_loop {
+                chk_new_var(c)
+            } else {
+                ty_unit()
+            };
+            chk_loop_push(c, s.pos, s.label, s.is_loop, lt);
             let bt = chk_block(c, s.body);
-            let breaks = c.loop_breaks.pop().unwrap_or(0);
-            c.loops = c.loops - 1;
+            let breaks = chk_loop_pop(c);
             chk_pop(c);
             chk_expect(c, s.body.end, bt, ty_unit(), if s.is_loop {
                 "loop body"
             } else {
                 "while body"
             });
-            // `loop` without `break` ends only by `return`
+            // `loop` without `break` ends only by `return`; its value is
+            // that of its `break`s
+            chk_record(c, s.id, if !s.is_loop {
+                ty_unit()
+            } else if breaks == 0 {
+                ty_never()
+            } else {
+                lt
+            });
             s.is_loop && breaks == 0
         }
         AstStmt::For(s) => {
@@ -2118,11 +2170,9 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 Some(pat) => chk_irrefutable(c, pat, elem, "`for` loop"),
                 None => chk_bind(c, b),
             }
-            c.loops = c.loops + 1;
-            c.loop_breaks.push(0);
+            chk_loop_push(c, s.pos, s.label, false, ty_unit());
             let bt = chk_block(c, s.body);
-            c.loop_breaks.pop();
-            c.loops = c.loops - 1;
+            chk_loop_pop(c);
             chk_expect(c, s.body.end, bt, ty_unit(), "for body");
             chk_pop(c);
             false
@@ -2234,6 +2284,64 @@ fn chk_for_iter(mut c: Chk, s: AstForStmt, it: Ty) -> Ty {
         }
         None => ty_invalid(),
     }
+}
+
+// chk_loop_push enters a loop (a label may not shadow one of an enclosing
+// loop).
+fn chk_loop_push(mut c: Chk, pos: AstPos, label: String, is_loop: Bool, ty: Ty) {
+    if label != "" && chk_loop_find(c, label).is_some() {
+        chk_errorf(
+            c,
+            pos,
+            "label `" + label + "` shadows the label of an enclosing loop: use another name",
+        );
+    }
+    c.loops = c.loops + 1;
+    c.loop_stack.push(ChkLoop { label: label, is_loop: is_loop, ty: ty, breaks: 0 });
+}
+
+// chk_loop_pop leaves a loop and returns the number of `break`s leaving it.
+fn chk_loop_pop(mut c: Chk) -> Int {
+    c.loops = c.loops - 1;
+    match c.loop_stack.pop() {
+        Some(lp) => lp.breaks,
+        None => 0,
+    }
+}
+
+// chk_loop_find returns the visible loop with the given label.
+fn chk_loop_find(c: Chk, label: String) -> Option<ChkLoop> {
+    let n = c.loop_stack.len();
+    let mut labels = Vec::new();
+    for i in n - c.loops..n {
+        match c.loop_stack.get(i) {
+            Some(lp) => labels.push(lp.label),
+            None => labels.push(""),
+        }
+    }
+    let k = ast_loop_target(labels, label);
+    if k < 0 {
+        return None;
+    }
+    c.loop_stack.get(n - c.loops + k)
+}
+
+// chk_loop_target returns the loop a `break` / `continue` leaves, after
+// reporting a jump outside of a loop or to an unknown label.
+fn chk_loop_target(c: Chk, pos: AstPos, label: String) -> Option<ChkLoop> {
+    if c.loops == 0 {
+        if label != "" {
+            chk_errorf(c, pos, "use of undeclared label `" + label + "`");
+        } else {
+            chk_errorf(c, pos, "`break`/`continue` outside of a loop");
+        }
+        return None;
+    }
+    let lp = chk_loop_find(c, label);
+    if lp.is_none() {
+        chk_errorf(c, pos, "use of undeclared label `" + label + "`");
+    }
+    lp
 }
 
 fn chk_top_ret(c: Chk) -> ChkRet {
@@ -4216,7 +4324,7 @@ fn chk_try(mut c: Chk, e: AstTry) -> Ty {
     }
     let rc = chk_top_ret(c);
     let mut target = ty_prune(rc.ty);
-    c.info.tries.insert(e.id, ChkTryInfo { closure: rc.closure, target: rc.ty });
+    c.info.tries.insert(e.id, ChkTryInfo { closure: rc.closure, target: rc.ty, conv: None });
     match t {
         Ty::Result(tok, terr) => {
             if ty_is_var(target) {
@@ -4227,16 +4335,32 @@ fn chk_try(mut c: Chk, e: AstTry) -> Ty {
             match target {
                 Ty::Result(_, rerr) => {
                     if !ty_unify(terr, rerr) {
-                        let s1 = ty_str(ty_resolve(terr));
-                        chk_errorf(
-                            c,
-                            e.pos,
-                            "`?` cannot convert the error type `"
-                                + s1
-                                + "` into `"
-                                + ty_str(ty_resolve(rerr))
-                                + "`",
-                        );
+                        match chk_try_conv(c, e.pos, terr, rerr) {
+                            Some(mi) => {
+                                c.info.tries.insert(e.id, ChkTryInfo {
+                                    closure: rc.closure,
+                                    target: rc.ty,
+                                    conv: Some(mi),
+                                });
+                            }
+                            None => {
+                                let s1 = ty_str(ty_resolve(terr));
+                                let s2 = ty_str(ty_resolve(rerr));
+                                chk_errorf(
+                                    c,
+                                    e.pos,
+                                    "`?` cannot convert the error type `"
+                                        + s1
+                                        + "` into `"
+                                        + s2
+                                        + "` (implement `From<"
+                                        + s1
+                                        + ">` for `"
+                                        + s2
+                                        + "`, or convert it with `map_err`)",
+                                );
+                            }
+                        }
                     }
                     tok
                 }
@@ -4279,6 +4403,30 @@ fn chk_try(mut c: Chk, e: AstTry) -> Ty {
             );
             ty_invalid()
         }
+    }
+}
+
+// chk_try_conv returns the call of `From::from` that converts the error
+// type from of a `?` into the function's error type to (None without an
+// implementation `impl From<from> for to`).
+fn chk_try_conv(c: Chk, pos: AstPos, from: Ty, to: Ty) -> Option<ChkMethodInfo> {
+    let f = ty_prune(from);
+    let t = ty_prune(to);
+    if ty_is_var(f) || ty_is_var(t) || ty_is_prim(f, "<invalid>") || ty_is_prim(t, "<invalid>") {
+        return None;
+    }
+    let mut args = Vec::new();
+    args.push(f);
+    if !chk_implements(c.info, t, "From", args, 0) {
+        return None;
+    }
+    match c.info.funcs.get("From::from") {
+        Some(tf) => {
+            let mi = chk_trait_call(c, pos, tf, t, true, Vec::new(), Vec::new());
+            ty_unify(mi.targs.get(1).unwrap_or(ty_unit()), f);
+            Some(mi)
+        }
+        None => None,
     }
 }
 

@@ -1,0 +1,10 @@
+// Labels name loops only (no labeled blocks).
+
+fn f() -> Int {
+    let x = 'a: { // ERROR "labeled blocks are not supported: a label names a `loop`, `while` or `for`"
+        break 'a 1;
+    };
+    x
+}
+
+fn main() {}

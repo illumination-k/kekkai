@@ -1,8 +1,12 @@
 // Lowering from the checked AST to IR.
 
+// LowerLoop is an enclosing loop: the blocks `continue` and `break` jump
+// to, its label and the local holding the value of a `loop` (-1 if none).
 struct LowerLoop {
     cont: Int,
     exit: Int,
+    label: String,
+    result: Int,
 }
 
 // LowerExit is the exit of an enclosing transaction body (identified by the
@@ -957,17 +961,81 @@ fn lower_func(mut l: Lower, fun: ChkFunc, targs: Vec<Ty>, name: String) -> IrFun
 }
 
 fn lower_block(l: Lower, b: AstBlock) -> Int {
+    // a trailing `loop` is the block's value
+    let last = match ast_block_loop(b) {
+        Some(w) => w.id,
+        None => -1,
+    };
+    let mut out = -1;
     for s in b.stmts {
-        lower_stmt(l, s);
+        match s {
+            AstStmt::While(w) => {
+                if w.id == last {
+                    out = lower_while(l, w);
+                } else {
+                    lower_stmt(l, s);
+                }
+            }
+            _ => lower_stmt(l, s),
+        }
     }
     match b.tail {
         Some(e) => lower_expr(l, e),
-        None => lower_unit(l),
+        None => if out >= 0 {
+            out
+        } else {
+            lower_unit(l)
+        },
     }
 }
 
-fn lower_top_loop(l: Lower) -> LowerLoop {
-    l.loops.get(l.loops.len() - 1).unwrap_or(LowerLoop { cont: 0, exit: 0 })
+// lower_loop_target is the loop a `break` / `continue` with the given
+// label leaves (the checker resolved the label).
+fn lower_loop_target(l: Lower, label: String) -> LowerLoop {
+    let mut labels = Vec::new();
+    for lp in l.loops {
+        labels.push(lp.label);
+    }
+    let k = ast_loop_target(labels, label);
+    l.loops.get(k).unwrap_or(LowerLoop { cont: 0, exit: 0, label: "", result: -1 })
+}
+
+// lower_while lowers a `while` or `loop` and returns the local holding the
+// value of a `loop` (-1 for a `while` or a diverging `loop`).
+fn lower_while(mut l: Lower, s: AstWhileStmt) -> Int {
+    let head = lower_new_block(l);
+    let body = lower_new_block(l);
+    let exit = lower_new_block(l);
+    let mut res = -1;
+    if s.is_loop {
+        let t = l.info.types.get(s.id).unwrap_or(ty_unit());
+        if !ty_is_prim(ty_prune(t), "!") {
+            res = lower_new_local(l, lower_ty(l, lower_conc(l, t)), "");
+        }
+    }
+    lower_jump(l, head);
+    lower_set_block(l, head);
+    if s.is_loop {
+        // `loop`: exit is reached only by `break` (unreachable
+        // blocks are pruned)
+        lower_jump(l, body);
+    } else {
+        let c = lower_expr(l, s.cond);
+        match s.pat {
+            Some(pat) => {
+                lower_pattern(l, c, pat, exit);
+                lower_jump(l, body);
+            }
+            None => lower_br(l, c, body, exit),
+        }
+    }
+    lower_set_block(l, body);
+    l.loops.push(LowerLoop { cont: head, exit: exit, label: s.label, result: res });
+    lower_block(l, s.body);
+    l.loops.pop();
+    lower_jump(l, head);
+    lower_set_block(l, exit);
+    res
 }
 
 fn lower_stmt(mut l: Lower, s0: AstStmt) {
@@ -1001,34 +1069,26 @@ fn lower_stmt(mut l: Lower, s0: AstStmt) {
             lower_expr(l, s.x);
         }
         AstStmt::While(s) => {
-            let head = lower_new_block(l);
-            let body = lower_new_block(l);
-            let exit = lower_new_block(l);
-            lower_jump(l, head);
-            lower_set_block(l, head);
-            if s.is_loop {
-                // `loop`: exit is reached only by `break` (unreachable
-                // blocks are pruned)
-                lower_jump(l, body);
-            } else {
-                let c = lower_expr(l, s.cond);
-                match s.pat {
-                    Some(pat) => {
-                        lower_pattern(l, c, pat, exit);
-                        lower_jump(l, body);
-                    }
-                    None => lower_br(l, c, body, exit),
-                }
-            }
-            lower_set_block(l, body);
-            l.loops.push(LowerLoop { cont: head, exit: exit });
-            lower_block(l, s.body);
-            l.loops.pop();
-            lower_jump(l, head);
-            lower_set_block(l, exit);
+            lower_while(l, s);
         }
-        AstStmt::Break(_) => lower_jump(l, lower_top_loop(l).exit),
-        AstStmt::Continue(_) => lower_jump(l, lower_top_loop(l).cont),
+        AstStmt::Break(s) => {
+            let mut v = -1;
+            match s.value {
+                Some(e) => {
+                    v = lower_expr(l, e);
+                }
+                None => {}
+            }
+            let lp = lower_loop_target(l, s.label);
+            if lp.result >= 0 {
+                if v < 0 {
+                    v = lower_unit(l);
+                }
+                lower_copy_to(l, lp.result, v);
+            }
+            lower_jump(l, lp.exit);
+        }
+        AstStmt::Continue(s) => lower_jump(l, lower_loop_target(l, s.label).cont),
         AstStmt::FieldAssign(s) => {
             let obj = lower_expr(l, s.target.x);
             let v = lower_expr(l, s.value);
@@ -1136,7 +1196,7 @@ fn lower_for(mut l: Lower, s: AstForStmt) {
         None => {}
     }
     let inc = lower_new_block(l);
-    l.loops.push(LowerLoop { cont: inc, exit: exit });
+    l.loops.push(LowerLoop { cont: inc, exit: exit, label: s.label, result: -1 });
     lower_block(l, s.body);
     l.loops.pop();
     lower_jump(l, inc);
@@ -1215,7 +1275,7 @@ fn lower_for_iter(mut l: Lower, s: AstForStmt, b: ChkBinding, fi: ChkForIter) {
         Some(pat) => lower_irrefutable(l, x, pat),
         None => {}
     }
-    l.loops.push(LowerLoop { cont: head, exit: exit });
+    l.loops.push(LowerLoop { cont: head, exit: exit, label: s.label, result: -1 });
     lower_block(l, s.body);
     l.loops.pop();
     lower_jump(l, head);
@@ -1889,7 +1949,11 @@ fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
     let x = lower_expr(l, e.x);
     let xt = lower_type_of_id(l, ast_expr_id(e.x));
     let agg = lower_agg(l, xt);
-    let ti = l.info.tries.get(e.id).unwrap_or(ChkTryInfo { closure: None, target: ty_unit() });
+    let ti = l.info.tries.get(e.id).unwrap_or(ChkTryInfo {
+        closure: None,
+        target: ty_unit(),
+        conv: None,
+    });
     let target = lower_conc(l, ti.target);
     let mut tg = lower_instr("tag");
     tg.ty = agg;
@@ -1925,7 +1989,24 @@ fn lower_try(l: Lower, e: AstTry, e0: AstExpr) -> Int {
         vf.tag = 1;
         vf.index = 0;
         vf.args = lower_args1(x);
-        let err = lower_emit_to(l, lower_ty(l, err_ty), vf);
+        let mut err = lower_emit_to(l, lower_ty(l, err_ty), vf);
+        match ti.conv {
+            // `From::from(err)` into the function's error type
+            Some(mi) => match mi.func {
+                Some(tf) => {
+                    err = lower_trait_call(
+                        l,
+                        lower_ty(l, lower_conc(l, mi.recv_ty)),
+                        tf,
+                        mi.op,
+                        mi.targs,
+                        lower_args1(err),
+                    );
+                }
+                None => {}
+            },
+            None => {}
+        }
         out = lower_variant(l, lower_ty(l, target), lower_agg(l, target), 1, lower_args1(err));
     }
     lower_ret(l, ti.closure, out);

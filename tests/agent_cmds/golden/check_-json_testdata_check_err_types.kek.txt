@@ -30,7 +30,7 @@
       "end_col": 15,
       "severity": "error",
       "phase": "type",
-      "message": "`?` cannot convert the error type `TxError` into `NetError`"
+      "message": "`?` cannot convert the error type `TxError` into `NetError` (implement `From<TxError>` for `NetError`, or convert it with `map_err`)"
     },
     {
       "file": "testdata/check/err_types.kek",

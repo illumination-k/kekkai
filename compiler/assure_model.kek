@@ -252,7 +252,10 @@ fn asr_w_stmt(w: AsrWalk, s: AstStmt) {
             asr_w_expr(w, a.target.x);
             asr_w_expr(w, a.value);
         }
-        AstStmt::Break(_) => {}
+        AstStmt::Break(b) => match b.value {
+            Some(v) => asr_w_expr(w, v),
+            None => {}
+        },
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             asr_w_expr(w, s.cond);

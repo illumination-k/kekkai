@@ -24,6 +24,11 @@ fn core_sources() -> Vec<FeSource> {
     );
     core_file(
         v,
+        "convert.kek",
+        "// Conversions, as in Rust's core::convert. `e?` on a `Result` converts\n// its error into the function's error type with `From::from` when the two\n// differ (`impl From<ParseError> for AppError`).\n\ntrait From<T> {\n    fn from(value: T) -> Self;\n}\n",
+    );
+    core_file(
+        v,
         "default.kek",
         "// Default values, as in Rust's core::default.\n\ntrait Default {\n    fn default() -> Self;\n}\n\nimpl Default for Int {\n    fn default() -> Int {\n        0\n    }\n}\n\nimpl Default for Bool {\n    fn default() -> Bool {\n        false\n    }\n}\n\nimpl Default for String {\n    fn default() -> String {\n        \"\"\n    }\n}\n\nimpl Default for () {\n    fn default() -> () {\n        ()\n    }\n}\n\nimpl<T> Default for Option<T> {\n    fn default() -> Option<T> {\n        None\n    }\n}\n\nimpl<T> Default for Vec<T> {\n    fn default() -> Vec<T> {\n        Vec::new()\n    }\n}\n",
     );

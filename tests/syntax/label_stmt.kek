@@ -1,0 +1,7 @@
+// A label must be followed by a loop.
+
+fn f() {
+    'a: let x = 1; // ERROR "expected `loop`, `while` or `for` after a label, found `let`"
+}
+
+fn main() {}

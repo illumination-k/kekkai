@@ -166,8 +166,14 @@ fn cov_div_stmt(s: AstStmt, loops: Int) -> Bool {
         AstStmt::Let(l) => cov_div_expr(l.init, loops),
         AstStmt::Assign(a) => cov_div_expr(a.value, loops),
         AstStmt::FieldAssign(a) => cov_div_expr(a.target.x, loops) || cov_div_expr(a.value, loops),
-        AstStmt::Break(_) => loops == 0,
-        AstStmt::Continue(_) => loops == 0,
+        // a labeled `break` / `continue` may leave outer loops too
+        AstStmt::Break(b) => loops == 0
+            || b.label != ""
+            || match b.value {
+                Some(v) => cov_div_expr(v, loops),
+                None => false,
+            },
+        AstStmt::Continue(c) => loops == 0 || c.label != "",
         // `loop` ends only by `break` (or never)
         AstStmt::While(x) => x.is_loop
             || cov_div_expr(x.cond, loops)
@@ -390,7 +396,15 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
                 value: cov_expr(w, a.value),
             })
         }
-        AstStmt::Break(_) => s,
+        AstStmt::Break(x) => match x.value {
+            Some(v) => AstStmt::Break(AstBreakStmt {
+                id: x.id,
+                pos: x.pos,
+                label: x.label,
+                value: Some(cov_expr(w, v)),
+            }),
+            None => s,
+        },
         AstStmt::Continue(_) => s,
         AstStmt::While(x) => {
             // `loop` has no condition to mutate
@@ -406,6 +420,8 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
                 cond: cond,
                 body: cov_block_k(w, x.body, "loop", 0, 0, 0, 0),
                 is_loop: x.is_loop,
+                label: x.label,
+                expr: x.expr,
             })
         }
         AstStmt::For(x) => {
@@ -422,6 +438,7 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
                 iter: iter,
                 end: end,
                 body: cov_block_k(w, x.body, "loop", 0, 0, 0, 0),
+                label: x.label,
             })
         }
         AstStmt::Return(r) => AstStmt::Return(AstReturnStmt {
@@ -637,6 +654,7 @@ fn cov_subst(e: AstExpr, subst: HashMap<Int, AstExpr>) -> AstExpr {
                         None => None,
                     },
                     body: cov_subst(a.body, subst),
+                    bare: a.bare,
                 });
             }
             AstExpr::Match(AstMatch { id: x.id, pos: x.pos, x: cov_subst(x.x, subst), arms: arms })
@@ -740,7 +758,14 @@ fn cov_match(mut w: CovW, x: AstMatch) -> AstExpr {
                 cov_expr(w, other)
             },
         };
-        arms.push(AstMatchArm { id: a.id, pos: a.pos, pat: a.pat, guard: guard, body: body });
+        arms.push(AstMatchArm {
+            id: a.id,
+            pos: a.pos,
+            pat: a.pat,
+            guard: guard,
+            body: body,
+            bare: a.bare,
+        });
         i = i + 1;
     }
     AstExpr::Match(AstMatch { id: x.id, pos: x.pos, x: scrut, arms: arms })

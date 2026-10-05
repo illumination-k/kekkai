@@ -104,6 +104,13 @@ struct MuCx {
     // readonly mode (mu_readonly): owned parameters are taken as shared
     mut ro: Bool,
     flow: Vec<AstError>,
+    // enclosing loops (ids, innermost last), their labels, the values of
+    // the `loop`s (joined over their `break`s) and the `loop` that ends the
+    // function body (its `break` values are returned; -1 if none)
+    mut loops: Vec<Int>,
+    loop_labels: HashMap<Int, String>,
+    loop_vals: HashMap<Int, MuVal>,
+    mut ret_loop: Int,
 }
 
 // mu_enforce reports whether the rules are errors. It was false while the
@@ -215,6 +222,10 @@ fn mu_new_cx(info: ChkInfo, f: AstFile) -> MuCx {
         seen: HashMap::new(),
         ro: false,
         flow: Vec::new(),
+        loops: Vec::new(),
+        loop_labels: HashMap::new(),
+        loop_vals: HashMap::new(),
+        ret_loop: -1,
     };
     mu_relevance(cx);
     for sd in f.structs {
@@ -671,6 +682,10 @@ fn mu_func(mut cx: MuCx, fun: ChkFunc) {
         Some(t) => fmt_typ(t),
         None => "()",
     };
+    cx.ret_loop = match ast_block_loop(fun.decl.body) {
+        Some(w) => w.id,
+        None => -1,
+    };
     let v = mu_block(cx, fun.decl.body);
     match fun.decl.body.tail {
         Some(t) => mu_return(cx, v, t),
@@ -852,8 +867,20 @@ fn mu_block(cx: MuCx, b: AstBlock) -> MuVal {
     }
     match b.tail {
         Some(e) => mu_expr(cx, e),
-        None => mu_val(0),
+        None => match ast_block_loop(b) {
+            // a trailing `loop`: the value of its `break`s
+            Some(w) => mu_temp(cx.loop_vals.get(w.id).unwrap_or(mu_val(0))),
+            None => mu_val(0),
+        },
     }
+}
+
+// mu_loop_body checks the body of the loop with the given id and label.
+fn mu_loop_body(mut cx: MuCx, id: Int, label: String, body: AstBlock) {
+    cx.loop_labels.insert(id, label);
+    cx.loops.push(id);
+    mu_block(cx, body);
+    cx.loops.pop();
 }
 
 fn mu_new_bind(
@@ -968,7 +995,26 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
                 mu_store(cx, v, d, s.value, "field `" + s.target.name + "`");
             }
         }
-        AstStmt::Break(_) => {}
+        AstStmt::Break(s) => match s.value {
+            Some(e) => {
+                let v = mu_expr(cx, e);
+                let mut labels = Vec::new();
+                for id in cx.loops {
+                    labels.push(cx.loop_labels.get(id).unwrap_or(""));
+                }
+                match cx.loops.get(ast_loop_target(labels, s.label)) {
+                    Some(id) => {
+                        let old = cx.loop_vals.get(id).unwrap_or(mu_val(0));
+                        cx.loop_vals.insert(id, mu_join(old, v));
+                        if id == cx.ret_loop {
+                            mu_return(cx, v, e);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        },
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             let v = mu_expr(cx, s.cond);
@@ -976,7 +1022,7 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
                 Some(pat) => mu_pattern(cx, pat, v),
                 None => {}
             }
-            mu_block(cx, s.body);
+            mu_loop_body(cx, s.id, s.label, s.body);
         }
         AstStmt::For(s) => {
             let it = mu_expr(cx, s.iter);
@@ -1009,7 +1055,7 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
                     None => {}
                 },
             }
-            mu_block(cx, s.body);
+            mu_loop_body(cx, s.id, s.label, s.body);
         }
         AstStmt::Return(s) => match s.value {
             Some(e) => {

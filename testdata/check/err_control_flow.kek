@@ -1,0 +1,120 @@
+// Labeled loops, `break value`, statement arm bodies and `?` with `From`:
+// type errors.
+
+struct E1 {
+    code: Int,
+}
+
+struct E2 {
+    msg: String,
+}
+
+struct E3 {
+    n: Int,
+}
+
+impl From<E1> for E2 {
+    fn from(e: E1) -> E2 {
+        E2 { msg: e.code.to_string() }
+    }
+}
+
+fn unknown_label(v: Vec<Int>) {
+    for x in v {
+        if x > 0 {
+            break 'outer; // ERROR "use of undeclared label `'outer`"
+        }
+        continue 'a; // ERROR "use of undeclared label `'a`"
+    }
+}
+
+fn shadowed() {
+    'a: loop {
+        'a: while true { // ERROR "label `'a` shadows the label of an enclosing loop"
+            break 'a;
+        }
+        break;
+    }
+}
+
+fn value_in_while(n: Int) -> Int {
+    let mut i = 0;
+    while i < n {
+        break 5; // ERROR "`break` with a value is only allowed in a `loop`"
+    }
+    'f: for x in 0..n {
+        loop {
+            break 'f x; // ERROR "`break` with a value is only allowed in a `loop`"
+        }
+    }
+    i
+}
+
+fn mixed_values(c: Bool) -> Int {
+    let x = loop {
+        if c {
+            break 1;
+        }
+        break "one"; // ERROR "mismatched types in `break` value: expected `Int`, found `String`"
+    };
+    let y: String = loop { // ERROR "mismatched types in let binding: expected `String`, found `Int`"
+        break 2;
+    };
+    let z = loop {
+        if c {
+            break;
+        }
+        break 3; // ERROR "mismatched types in `break` value: expected `()`, found `Int`"
+    };
+    x
+}
+
+fn closure_label() {
+    'a: loop {
+        let f = |x: Int| {
+            if x > 0 {
+                break 'a; // ERROR "use of undeclared label `'a`"
+            }
+            x
+        };
+        break;
+    }
+}
+
+fn no_break_value() -> Int {
+    loop {
+        if true {
+            break;
+        }
+    }
+} // ERROR "mismatched types in function result: expected `Int`, found `()`"
+
+fn arm_assign(o: Option<Int>) -> Int {
+    let n = 0;
+    match o {
+        Some(x) => n += x, // ERROR "cannot assign twice to immutable variable `n`"
+        None => {}
+    }
+    let mut m = 0;
+    let s = match o {
+        Some(x) => x,
+        None => m = 1, // ERROR "match arms have incompatible types: expected `Int`, found `()`"
+    };
+    s
+}
+
+fn g1() -> Result<Int, E1> {
+    Err(E1 { code: 3 })
+}
+
+fn g3() -> Result<Int, E3> {
+    Err(E3 { n: 1 })
+}
+
+fn converts() -> Result<Int, E2> {
+    let a = g1()?;
+    let b = g3()?; // ERROR "`?` cannot convert the error type `E3` into `E2` (implement `From<E3>` for `E2`"
+    Ok(a + b)
+}
+
+fn main() {}

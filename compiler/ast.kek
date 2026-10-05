@@ -285,19 +285,33 @@ struct AstFieldAssignStmt {
     value: AstExpr,
 }
 
+// `break;`, `break 'a;`, `break value;` or `break 'a value;`. label is
+// the loop's label as written (`'a`) or "" for the innermost loop; a value
+// is allowed only for a `loop`.
 struct AstBreakStmt {
     id: Int,
     pos: AstPos,
+    label: String,
+    value: Option<AstExpr>,
 }
 
+// `continue;` or `continue 'a;`.
 struct AstContinueStmt {
     id: Int,
     pos: AstPos,
+    label: String,
 }
 
 // `while cond { }`, or `while let pat = cond { }` when pat is set.
 // `loop { }` is `while true { }` with is_loop set (the checker treats it
-// as diverging unless its body breaks out of it).
+// as diverging unless its body breaks out of it). label is `'a` of
+// `'a: while ...` ("" without a label).
+//
+// A `loop` is an expression: a block without a tail whose last statement
+// is a `loop` has the loop's value (the type of its `break value`s, `!`
+// without a `break`; see ast_block_loop). A `loop` written in expression
+// position (`let x = loop { ... };`) is such a block of one statement,
+// with expr set (the formatter prints it without the braces).
 struct AstWhileStmt {
     id: Int,
     pos: AstPos,
@@ -305,10 +319,13 @@ struct AstWhileStmt {
     cond: AstExpr,
     body: AstBlock,
     is_loop: Bool,
+    label: String,
+    expr: Bool,
 }
 
 // `for x in start..end { }` (end is Some) or `for x in vec { }`. With pat
 // set, the loop variable is a pattern (`for (k, v) in ...`; var is "_").
+// label as for AstWhileStmt.
 struct AstForStmt {
     id: Int,
     pos: AstPos,
@@ -317,6 +334,7 @@ struct AstForStmt {
     iter: AstExpr,
     end: Option<AstExpr>,
     body: AstBlock,
+    label: String,
 }
 
 struct AstReturnStmt {
@@ -551,13 +569,17 @@ struct AstPattern {
     mut rest: Bool,
 }
 
-// `pat => body` or, with guard set, `pat if guard => body`.
+// `pat => body` or, with guard set, `pat if guard => body`. bare marks an
+// arm whose body is a statement written without braces (`x => n += x,`,
+// `None => break,`, `_ => return 0,`): body is then a block of that one
+// statement (the formatter prints it without the braces).
 struct AstMatchArm {
     id: Int,
     pos: AstPos,
     pat: AstPattern,
     guard: Option<AstExpr>,
     body: AstExpr,
+    bare: Bool,
 }
 
 struct AstMatch {
@@ -592,6 +614,44 @@ struct AstClosure {
 }
 
 // ---- helpers ----
+
+// ast_block_loop returns the `loop` that gives a block its value: its last
+// statement when the block has no tail (Rust's trailing `loop { }`).
+fn ast_block_loop(b: AstBlock) -> Option<AstWhileStmt> {
+    if b.tail.is_some() || b.stmts.len() == 0 {
+        return None;
+    }
+    match b.stmts.get(b.stmts.len() - 1) {
+        Some(s) => match s {
+            AstStmt::While(w) => if w.is_loop {
+                Some(w)
+            } else {
+                None
+            },
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+// ast_loop_target is the index in labels (the labels of the enclosing
+// loops, innermost last; "" for an unlabeled loop) of the loop a `break`
+// or `continue` with the given label leaves: the innermost one for "",
+// -1 when no loop has the label.
+fn ast_loop_target(labels: Vec<String>, label: String) -> Int {
+    let n = labels.len();
+    if label == "" {
+        return n - 1;
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        if labels.get(i).unwrap_or("") == label {
+            return i;
+        }
+        i = i - 1;
+    }
+    -1
+}
 
 fn ast_pos_string(p: AstPos) -> String {
     if p.file != "" {

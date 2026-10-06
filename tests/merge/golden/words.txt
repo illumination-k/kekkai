@@ -1,0 +1,4 @@
+#!/bin/sh
+all="bootstrap check run cover mutate fmt similar e2e"
+echo $all
+--- exit 0

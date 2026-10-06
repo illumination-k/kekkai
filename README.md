@@ -51,6 +51,7 @@ mise run todo-app                          # フロントエンド付きの例�
 | `kek assure plan\|apply\|check <dir>` | 保証の台帳 `kekkai.assure.lock`：保証の変化（強化／変更／弱化／新しい前提）を `kekkai.toml` のポリシーで判定し、承認してロックを更新、CI でドリフトを検出（[docs/assure.md](docs/assure.md)）。篩型の証明（`refine.index_safe`・`refine.no_div_zero`・`refine.no_overflow`）も記録する |
 | `kek similar [-json] [-threshold pct] [-all] [-tests] [-semantic] [-base path \| -diff rev] <file\|dir>` | 重複・類似コードの検出。見つかれば終了コード 1（CI で強制できる） |
 | `kek complexity [-json] [-all] [-tests] [-cognitive n] [-cyclomatic n] [-nesting n] [-lines n] [-base path \| -diff rev] <file\|dir>` | 関数ごとの認知的複雑度・循環的複雑度・ネストの深さ。上限を超えれば終了コード 1（CI で強制できる） |
+| `kek merge [-p] [-no-ast] [-path p] <ours> <base> <theirs>` | 3-way マージ（`git merge-file` と同じく `<ours>` に書く。衝突があれば終了コード 1）。同じ場所への追加は両方残し、`.kek` は構文木（item・メンバー・文）の単位でマージする。`mise run hooks` で git のマージドライバとして登録される（[docs/merge.md](docs/merge.md)） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
 | `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
 | `kek daemon start\|stop\|status\|stats` | コンパイラを常駐させる（構文木をメモリに残し、変わったファイルだけ構文解析する） |
@@ -189,6 +190,20 @@ LLM が既存の実装を探さずに似た関数を書き足すのを防ぐた�
 - `-base <file|dir>`／`-diff <rev>` では、定義ハッシュが基準と同じ関数は報告しません。基準に同じ名前の関数があれば、上限を超えた指標が基準より増えたときだけ報告します（ラチェット：既存の負債には触れても落ちず、悪化させると落ちる）。
 - 意図的に複雑な関数は `#[allow(complexity, reason = "...", owner = "...", expires = "YYYY-MM-DD")]` で抑制でき、`allowed` に理由とともに残ります（`kek assure` の前提にもなります）。
 
+### マージ（`kek merge`）
+
+worktree で並行して実装したブランチを main に戻すときの衝突を減らすためのコマンドです（[docs/merge.md](docs/merge.md)）。`mise run hooks` で git のマージドライバ `kek` が登録され、`.gitattributes` の対象（`*.kek`・`*.md`・`*.sh`・`kek` など）で git の 3-way マージが衝突したファイルだけ `kek merge` でマージし直します。
+
+- 両方のブランチが同じ場所に足した行（表の行、コマンドの `if` ブロック、`case` の腕）は両方残します（ours が先）。git と違って、両側の追加に共通する末尾の `}` を切り離しません
+- 隣り合う行の変更や、同じ行への別々の単語の追加（`all="... cover similar"`）もマージします
+- `.kek` は構文木の単位でマージします。item・`impl` のメンバー・フィールドは名前で、文と `match` の腕は内容で対応づけるので、片側が移動した関数にもう片側の変更が入り、両側が同じ名前の関数を別々に足せば衝突になります。埋め込まれた文字列リテラル（`compiler/prelude_src.kek`）の中身も行でマージします
+- 両側が同じ定義（シェルの `name() {` など）を別々に足したときは、二重にせず衝突として残します
+
+```sh
+mise run hooks                                    # マージドライバを登録（clone の全 worktree で有効）
+./kek merge -p a.kek base.kek b.kek               # 直接使う（-p は標準出力へ）
+```
+
 ### カバレッジ（`kek cover`）
 
 ```sh
@@ -260,6 +275,7 @@ mise run fmt         # kek fmt -w compiler lib testdata/{e2e,run,test} examples 
 mise run fmt-check   # フォーマット検査
 mise run lean        # Lean の証明をビルド
 mise run ci          # test・fmt-check・lean をまとめて実行（CI と同じ）
+mise run hooks       # pre-commit フック（kek assure check）とマージドライバ kek を登録
 ./kek bootstrap-update  # 不動点を確認して bootstrap/ を更新
 ```
 

@@ -1,0 +1,22 @@
+fn run(cmd: String, log: &Log) -> Int {
+    let n = compute(
+        10,
+        2,
+    );
+    if n > 100 {
+        log.info("big");
+    }
+    let code = match cmd {
+        "a" => 1,
+        "b" => 2,
+        "c" => 3,
+        _ => 0,
+    };
+    log.info(n.to_string());
+    code
+}
+
+fn compute(a: Int, b: Int) -> Int {
+    a * b
+}
+--- exit 0

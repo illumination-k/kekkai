@@ -1,0 +1,49 @@
+--- git merge other: exit 0
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let cmd = args.get(0).unwrap_or("");
+    if cmd == "hash" {
+        return 1;
+    }
+    if cmd == "assure" {
+        return 3;
+    }
+    if cmd == "similar" {
+        return 4;
+    }
+    if cmd == "check" {
+        return 2;
+    }
+    log.error("usage: kek (hash|assure|similar|check) ...");
+    2
+}
+| cmd | what |
+| --- | --- |
+| `kek fmt` | format |
+| `kek assure` | ledger |
+| `kek similar` | duplicates |
+
+## Tests
+--- both add f
+--- git merge f2: exit 1
+CONFLICT (content): Merge conflict in lib.kek
+UU lib.kek
+fn a() -> Int {
+    1
+}
+
+fn f() -> Int {
+<<<<<<< ours
+    2
+||||||| base
+=======
+    5
+>>>>>>> theirs
+}
+
+fn g() -> Int {
+    3
+}
+
+fn h() -> Int {
+    4
+}

@@ -1,0 +1,12 @@
+x
+<<<<<<< ours
+limit = 20
+||||||| base
+limit = 10
+=======
+limit = 30
+>>>>>>> theirs
+y
+--- stderr
+kek merge: 1 conflict(s) in conflict.toml
+--- exit 1

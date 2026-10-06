@@ -1,0 +1,17 @@
+fn run(cmd: String, log: &Log) -> Int {
+    let n = compute(
+        10,
+        2,
+    );
+    let code = match cmd {
+        "a" => 1,
+        "b" => 2,
+        _ => 0,
+    };
+    log.info(n.to_string());
+    code
+}
+
+fn compute(a: Int, b: Int) -> Int {
+    a + b
+}

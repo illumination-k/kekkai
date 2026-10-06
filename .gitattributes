@@ -1,0 +1,13 @@
+# Conflicting merges of text files go through `kek merge` (docs/merge.md):
+# both sides' insertions at the same place are kept and .kek files are
+# merged by their syntax tree. Enable it in a clone with `mise run hooks`
+# (scripts/install-hooks.sh); without that, git merges as usual.
+*.kek merge=kek
+*.md merge=kek
+*.sh merge=kek
+/kek merge=kek
+*.toml merge=kek
+*.lean merge=kek
+*.js merge=kek
+*.mjs merge=kek
+*.yml merge=kek

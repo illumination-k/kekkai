@@ -1,0 +1,9 @@
+struct P {
+    x: Int,
+}
+
+impl P {
+    fn get(&self) -> Int {
+        self.x
+    }
+}

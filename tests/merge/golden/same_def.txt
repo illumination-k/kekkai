@@ -1,0 +1,26 @@
+<<<<<<< ours
+ncpu() {
+	getconf _NPROCESSORS_ONLN
+}
+
+||||||| base
+=======
+>>>>>>> theirs
+a() {
+	echo a
+}
+
+b() {
+	echo b
+}
+<<<<<<< ours
+||||||| base
+=======
+
+ncpu() {
+	sysctl -n hw.ncpu
+}
+>>>>>>> theirs
+--- stderr
+kek merge: 2 conflict(s) in same_def.sh
+--- exit 1

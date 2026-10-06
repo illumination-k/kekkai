@@ -1,0 +1,8 @@
+| cmd | what |
+| --- | --- |
+| `kek fmt` | format |
+| `kek assure` | ledger |
+| `kek similar` | duplicates |
+
+## Tests
+--- exit 0

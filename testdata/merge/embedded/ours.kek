@@ -1,0 +1,10 @@
+fn sources() -> Vec<String> {
+    let v = Vec::new();
+    v.push(
+        "fn a() -> Int {\n    10\n}\n\nfn b() -> Int {\n    2\n}\n",
+    );
+    v.push(
+        "fn new_file() {}\n",
+    );
+    v
+}

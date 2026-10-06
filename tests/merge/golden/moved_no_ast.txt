@@ -1,0 +1,34 @@
+// A program.
+
+// helper adds one.
+fn helper(x: Int) -> Int {
+    x + 1
+}
+
+fn main(log: &Log) -> Int {
+    let a = helper(1);
+    let b = helper(a);
+    log.info(b.to_string());
+    0
+<<<<<<< ours
+||||||| base
+}
+
+// helper adds one.
+fn helper(x: Int) -> Int {
+    x + 1
+=======
+}
+
+// helper adds two.
+fn helper(x: Int) -> Int {
+    x + 2
+>>>>>>> theirs
+}
+
+fn other() -> Int {
+    0
+}
+--- stderr
+kek merge: 1 conflict(s) in moved.kek
+--- exit 1

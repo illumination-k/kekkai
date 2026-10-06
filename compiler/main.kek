@@ -43,6 +43,9 @@ fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
     if cmd == "complexity" {
         return cx_main(args, fs, log);
     }
+    if cmd == "merge" {
+        return mg_main(args, fs, log);
+    }
     if cmd == "prelude-check"
         || cmd == "lex"
         || cmd == "ast"
@@ -76,7 +79,7 @@ fn kek_dispatch(args: Vec<String>, fs: &Fs, log: &Log, clock: &Clock) -> Int {
         return prelude_embed_main(args, fs, log);
     }
     log.error(
-        "usage: kek (lex|ast|check|ir|build|test-build|fmt|fix|caps|search|hash|config|similar|complexity|assure|cover-build|cover-report|mutate-build|mutate-report|embed-prelude) ...",
+        "usage: kek (lex|ast|check|ir|build|test-build|fmt|fix|caps|search|hash|config|similar|complexity|merge|assure|cover-build|cover-report|mutate-build|mutate-report|embed-prelude) ...",
     );
     2
 }

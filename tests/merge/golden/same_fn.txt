@@ -1,0 +1,23 @@
+fn a() -> Int {
+    1
+}
+
+fn f() -> Int {
+<<<<<<< ours
+    2
+||||||| base
+=======
+    5
+>>>>>>> theirs
+}
+
+fn g() -> Int {
+    3
+}
+
+fn h() -> Int {
+    4
+}
+--- stderr
+kek merge: 1 conflict(s) in same_fn.kek
+--- exit 1

@@ -1,0 +1,7 @@
+fn sources() -> Vec<String> {
+    let v = Vec::new();
+    v.push(
+        "fn a() -> Int {\n    1\n}\n\nfn b() -> Int {\n    20\n}\n",
+    );
+    v
+}

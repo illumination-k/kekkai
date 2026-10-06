@@ -1,0 +1,18 @@
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let cmd = args.get(0).unwrap_or("");
+    if cmd == "hash" {
+        return 1;
+    }
+    if cmd == "assure" {
+        return 3;
+    }
+    if cmd == "similar" {
+        return 4;
+    }
+    if cmd == "check" {
+        return 2;
+    }
+    log.error("usage: kek (hash|assure|similar|check) ...");
+    2
+}
+--- exit 0

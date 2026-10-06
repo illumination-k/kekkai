@@ -1,0 +1,25 @@
+fn a() -> Int {
+    1
+}
+
+<<<<<<< ours
+||||||| base
+fn b() -> Int {
+    2
+}
+=======
+fn b() -> Int {
+    20
+}
+>>>>>>> theirs
+
+fn c() -> Int {
+    3
+}
+
+fn d() -> Int {
+    4
+}
+--- stderr
+kek merge: 1 conflict(s) in delete_modify.kek
+--- exit 1

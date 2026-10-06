@@ -1,0 +1,1733 @@
+// `kek merge [flags] <ours> <base> <theirs>` (prefix mg_ / Mg*): a
+// three-way merge for git (a merge driver, docs/merge.md), written into
+// <ours> like `git merge-file`. Exit code 0 when clean, 1 with conflicts.
+//
+// Text is merged by lines. Each side's changes are hunks against the base
+// (Myers' diff); hunks of the two sides conflict only when they overlap
+// in the base or insert at the same place, so changes to adjacent lines
+// merge. Conflicting hunks still merge when they are the same, when one
+// side left the region as it was, and when both only inserted: then both
+// insertions are kept, ours first (two branches adding a command, a table
+// row or a test case at the same place). Unlike git, a common tail of the
+// two insertions (the `}` closing both) is not split off.
+//
+// A .kek file whose three versions parse is merged as a tree: top-level
+// items, the members of `impl` and `trait` blocks, struct fields and enum
+// variants are matched by name (so an item one side moved or reformatted
+// still merges with the other side's edit, and both sides adding the same
+// name with different text is a conflict); the statements of a block and
+// the arms of a `match` by content (one side's edit of a statement merges
+// with the other side's edits around it, and statements both sides added
+// at the same place are kept whole). A container whose children are not
+// one per line is merged as text. When the text of a unit conflicts but
+// only its string literals differ, the contents of the literals are
+// merged by lines (compiler/prelude_src.kek embeds whole files as
+// literals).
+
+struct MgCtx {
+    labels: Vec<String>,
+    marker: Int,
+    mut conflicts: Int,
+}
+
+// MgHunk replaces base[bs..be) by side[s..e).
+struct MgHunk {
+    bs: Int,
+    be: Int,
+    s: Int,
+    e: Int,
+}
+
+// MgSeg is a stretch of a three-way alignment: one line of each version
+// (stable), or a region where at least one side changed the base.
+struct MgSeg {
+    stable: Bool,
+    b0: Int,
+    b1: Int,
+    o0: Int,
+    o1: Int,
+    t0: Int,
+    t1: Int,
+}
+
+fn mg_usage() -> String {
+    "merge [-p] [-no-ast] [-path p] [-marker-size n] [-ours-label l] [-base-label l] [-theirs-label l] <ours> <base> <theirs>"
+}
+
+fn mg_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let fl = tool_flags(
+        args,
+        1,
+        "p no-ast path= marker-size# ours-label= base-label= theirs-label=",
+    );
+    if fl.err != "" {
+        return tool_flag_error(fl, mg_usage(), log);
+    }
+    let marker = tool_flag_int(fl, "marker-size", 7);
+    if fl.rest.len() != 3 || marker < 1 {
+        log.error("usage: kek " + mg_usage());
+        return 2;
+    }
+    let texts = match mg_read(fl.rest, fs, log) {
+        Some(v) => v,
+        None => {
+            return 2;
+        }
+    };
+    let ours_path = fl.rest.get(0).unwrap_or("");
+    let path = tool_flag_str(fl, "path", ours_path);
+    let mut c = MgCtx { labels: mg_labels(fl), marker: marker, conflicts: 0 };
+    let kek = !tool_flag_bool(fl, "no-ast") && path.ends_with(".kek");
+    let out = mg_merge(
+        c,
+        kek,
+        texts.get(1).unwrap_or(""),
+        texts.get(0).unwrap_or(""),
+        texts.get(2).unwrap_or(""),
+    );
+    if tool_flag_bool(fl, "p") {
+        log.info(if out.ends_with("\n") {
+            out.slice(0, out.len() - 1)
+        } else {
+            out
+        });
+    } else if !tool_write(fs, log, ours_path, out) {
+        return 2;
+    }
+    if c.conflicts > 0 {
+        log.error("kek merge: " + c.conflicts.to_string() + " conflict(s) in " + path);
+        return 1;
+    }
+    0
+}
+
+fn mg_read(files: Vec<String>, fs: &Fs, log: &Log) -> Option<Vec<String>> {
+    let mut texts = Vec::new();
+    for f in files {
+        match fs.read(f) {
+            Ok(s) => texts.push(s),
+            Err(e) => {
+                log.error(f + ": " + e.message());
+                return None;
+            }
+        }
+    }
+    Some(texts)
+}
+
+fn mg_labels(fl: ToolFlags) -> Vec<String> {
+    let mut labels = Vec::new();
+    labels.push(tool_flag_str(fl, "ours-label", "ours"));
+    labels.push(tool_flag_str(fl, "base-label", "base"));
+    labels.push(tool_flag_str(fl, "theirs-label", "theirs"));
+    labels
+}
+
+// mg_merge merges a file; kek selects the tree merge of Kekkai source.
+fn mg_merge(mut c: MgCtx, kek: Bool, b: String, o: String, t: String) -> String {
+    if o == t || b == t {
+        return o;
+    }
+    if b == o {
+        return t;
+    }
+    if b == "" {
+        // both sides created the file
+        return mg_add_add(c, o, t);
+    }
+    if kek {
+        match mg_tree_merge(c, b, o, t) {
+            Some(out) => {
+                return out;
+            }
+            None => {}
+        }
+    }
+    mg_text(c, b, o, t)
+}
+
+// mg_tree_merge merges Kekkai source by its syntax tree (None when a
+// version does not parse, or the clean result would not).
+fn mg_tree_merge(mut c: MgCtx, b: String, o: String, t: String) -> Option<String> {
+    let bt = mg_tree(b);
+    let ot = mg_tree(o);
+    let tt = mg_tree(t);
+    if !(bt.split && ot.split && tt.split) {
+        return None;
+    }
+    let n0 = c.conflicts;
+    let out = mg_node(c, bt, ot, tt);
+    if c.conflicts > n0 || parse_file("", out, AstIds { next: 0 }).errs.len() == 0 {
+        return Some(out);
+    }
+    c.conflicts = n0;
+    None
+}
+
+// ---- text ----
+
+// mg_text merges three texts by lines.
+fn mg_text(mut c: MgCtx, b: String, o: String, t: String) -> String {
+    if o == t || b == t {
+        return o;
+    }
+    if b == o {
+        return t;
+    }
+    // a final newline is not a line of its own
+    let nl = b.ends_with("\n") && o.ends_with("\n") && t.ends_with("\n");
+    let out = mg_lines(c, mg_split(b, nl), mg_split(o, nl), mg_split(t, nl)).join("\n");
+    if nl { out + "\n" } else { out }
+}
+
+// mg_add_add merges two versions without a base (both sides added
+// them): the lines they share once, every difference a conflict (like
+// git's add/add), never both.
+fn mg_add_add(mut c: MgCtx, o: String, t: String) -> String {
+    let nl = o.ends_with("\n") && t.ends_with("\n");
+    let lo = mg_split(o, nl);
+    let lt = mg_split(t, nl);
+    let mut common = Vec::new();
+    let m = mg_match(lo, lt);
+    for i in 0..lo.len() {
+        if m.get(i).unwrap_or(-1) >= 0 {
+            common.push(lo.get(i).unwrap_or(""));
+        }
+    }
+    let mut out = Vec::new();
+    for g in mg_diff3(common, lo, lt) {
+        let go = mg_sub(lo, g.o0, g.o1);
+        let gt = mg_sub(lt, g.t0, g.t1);
+        if g.stable || mg_eq(go, gt) {
+            mg_extend(out, go);
+        } else {
+            mg_extend(out, mg_conflict(c, Vec::new(), go, gt));
+        }
+    }
+    let text = out.join("\n");
+    if nl { text + "\n" } else { text }
+}
+
+fn mg_split(s: String, nl: Bool) -> Vec<String> {
+    if s == "" {
+        return Vec::new();
+    }
+    if nl {
+        return s.slice(0, s.len() - 1).split("\n");
+    }
+    s.split("\n")
+}
+
+// mg_lines merges three versions of a list of lines.
+fn mg_lines(mut c: MgCtx, b: Vec<String>, o: Vec<String>, t: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let d = MgDups { base: mg_pairs(b), ours: mg_pairs(o), theirs: mg_pairs(t) };
+    for g in mg_diff3(b, o, t) {
+        let go = mg_sub(o, g.o0, g.o1);
+        if g.stable {
+            mg_extend(out, go);
+        } else {
+            mg_extend(out, mg_lines_region(c, d, mg_sub(b, g.b0, g.b1), go, mg_sub(t, g.t0, g.t1)));
+        }
+    }
+    out
+}
+
+// mg_lines_region merges a region a side changed: as a whole, else word by
+// word; a conflict when that keeps code both sides added (in different
+// places, or both here).
+fn mg_lines_region(
+    mut c: MgCtx,
+    d: MgDups,
+    b: Vec<String>,
+    o: Vec<String>,
+    t: Vec<String>,
+) -> Vec<String> {
+    let mut r = mg_resolve(b, o, t);
+    if !r.ok && b.len() == o.len() && b.len() == t.len() {
+        r = mg_words(b, o, t);
+    }
+    if !r.ok || mg_dup_kept(d, r.lines, o, t) {
+        return mg_conflict(c, b, o, t);
+    }
+    r.lines
+}
+
+// mg_dup_kept: the merged lines keep code of a side that the other side
+// also added elsewhere.
+fn mg_dup_kept(d: MgDups, lines: Vec<String>, o: Vec<String>, t: Vec<String>) -> Bool {
+    if mg_eq(o, t) {
+        return false;
+    }
+    (!mg_eq(lines, t) && mg_dup(d, o, true)) || (!mg_eq(lines, o) && mg_dup(d, t, false))
+}
+
+// mg_words merges lines both sides edited, line by line, by words: two
+// branches adding a word to the same list (`all="... similar fmt"`, `a|b|c`)
+// keep both words.
+fn mg_words(b: Vec<String>, o: Vec<String>, t: Vec<String>) -> MgRes {
+    let mut out = Vec::new();
+    for i in 0..b.len() {
+        let wb = mg_tokens(b.get(i).unwrap_or(""));
+        let wo = mg_tokens(o.get(i).unwrap_or(""));
+        let wt = mg_tokens(t.get(i).unwrap_or(""));
+        let mut line = Vec::new();
+        for g in mg_diff3(wb, wo, wt) {
+            let go = mg_sub(wo, g.o0, g.o1);
+            if g.stable {
+                mg_extend(line, go);
+                continue;
+            }
+            let r = mg_resolve(mg_sub(wb, g.b0, g.b1), go, mg_sub(wt, g.t0, g.t1));
+            if !r.ok {
+                return MgRes { ok: false, lines: Vec::new() };
+            }
+            mg_extend(line, r.lines);
+        }
+        out.push(line.join(""));
+    }
+    MgRes { ok: true, lines: out }
+}
+
+// mg_tokens splits a line into words (letters, digits, `_`, `-` and
+// non-ASCII), runs of spaces and single other characters.
+fn mg_tokens(s: String) -> Vec<String> {
+    let mut out = Vec::new();
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        let k = mg_char_class(s.char_at(i).unwrap_or(0));
+        let mut j = i + 1;
+        if k > 0 {
+            while j < n && mg_char_class(s.char_at(j).unwrap_or(0)) == k {
+                j = j + 1;
+            }
+        }
+        out.push(s.slice(i, j));
+        i = j;
+    }
+    out
+}
+
+// mg_char_class is 1 for word characters (letters, digits, `_`, `-`,
+// non-ASCII), 2 for spaces, 0 otherwise.
+fn mg_char_class(ch: Int) -> Int {
+    if lex_is_ident_start(ch) || lex_is_digit(ch) || ch == 45 || ch >= 128 {
+        return 1;
+    }
+    if ch == 32 || ch == 9 {
+        return 2;
+    }
+    0
+}
+
+struct MgRes {
+    ok: Bool,
+    lines: Vec<String>,
+}
+
+// mg_resolve merges a region both sides changed, without conflict markers.
+fn mg_resolve(b: Vec<String>, o: Vec<String>, t: Vec<String>) -> MgRes {
+    if mg_eq(o, t) || mg_eq(b, t) {
+        return MgRes { ok: true, lines: o };
+    }
+    if mg_eq(b, o) {
+        return MgRes { ok: true, lines: t };
+    }
+    if b.len() == 0 {
+        // both inserted: keep both (one may extend the other)
+        if mg_prefix(o, t) || mg_suffix(o, t) {
+            return MgRes { ok: true, lines: t };
+        }
+        if mg_prefix(t, o) || mg_suffix(t, o) {
+            return MgRes { ok: true, lines: o };
+        }
+        let mut both = Vec::new();
+        mg_extend(both, o);
+        mg_extend(both, t);
+        return MgRes { ok: true, lines: both };
+    }
+    MgRes { ok: false, lines: Vec::new() }
+}
+
+// MgDups finds code both sides added: pairs of consecutive substantial
+// lines, and headers (a shell function `name() {`, a Markdown heading),
+// that each side has and the base has not.
+struct MgDups {
+    base: HashMap<String, Bool>,
+    ours: HashMap<String, Bool>,
+    theirs: HashMap<String, Bool>,
+}
+
+fn mg_pairs(v: Vec<String>) -> HashMap<String, Bool> {
+    let mut m: HashMap<String, Bool> = HashMap::new();
+    for l in v {
+        if mg_header(l) {
+            m.insert(l, true);
+        }
+    }
+    for i in 0..v.len() - 1 {
+        let a = v.get(i).unwrap_or("");
+        let b = v.get(i + 1).unwrap_or("");
+        if a.trim().len() >= 6 && b.trim().len() >= 6 {
+            m.insert(a + "\n" + b, true);
+        }
+    }
+    m
+}
+
+// mg_header: a Markdown heading `#... title` or a shell function
+// `name() {`.
+fn mg_header(l: String) -> Bool {
+    if l.starts_with("#") {
+        let mut i = 0;
+        while l.char_at(i).unwrap_or(0) == 35 {
+            i = i + 1;
+        }
+        return i <= 6 && l.char_at(i).unwrap_or(0) == 32 && l.len() > i + 1;
+    }
+    l.ends_with("() {") && l.len() > 4 && mg_ident(l.slice(0, l.len() - 4))
+}
+
+fn mg_ident(s: String) -> Bool {
+    for i in 0..s.len() {
+        let ch = s.char_at(i).unwrap_or(0);
+        if ch == 45 || ch >= 128 || mg_char_class(ch) != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+// mg_dup reports whether lines (one side's insertion) contain a pair the
+// other side also added: both sides added the same definition, maybe in
+// different places, and keeping both insertions would define it twice.
+fn mg_dup(d: MgDups, lines: Vec<String>, ours: Bool) -> Bool {
+    let other = if ours { d.theirs } else { d.ours };
+    for k in mg_pairs(lines).keys() {
+        if other.contains_key(k) && !d.base.contains_key(k) {
+            return true;
+        }
+    }
+    false
+}
+
+// mg_conflict counts a conflict and returns it with markers (diff3 style).
+fn mg_conflict(mut c: MgCtx, b: Vec<String>, o: Vec<String>, t: Vec<String>) -> Vec<String> {
+    c.conflicts = c.conflicts + 1;
+    let mut out = Vec::new();
+    out.push(mg_marker(c, "<") + " " + c.labels.get(0).unwrap_or(""));
+    mg_extend(out, o);
+    out.push(mg_marker(c, "|") + " " + c.labels.get(1).unwrap_or(""));
+    mg_extend(out, b);
+    out.push(mg_marker(c, "="));
+    mg_extend(out, t);
+    out.push(mg_marker(c, ">") + " " + c.labels.get(2).unwrap_or(""));
+    out
+}
+
+fn mg_marker(c: MgCtx, ch: String) -> String {
+    let mut parts = Vec::new();
+    for i in 0..c.marker {
+        parts.push(ch);
+    }
+    parts.join("")
+}
+
+fn mg_sub(v: Vec<String>, a: Int, b: Int) -> Vec<String> {
+    let mut out = Vec::new();
+    for i in a..b {
+        out.push(v.get(i).unwrap_or(""));
+    }
+    out
+}
+
+fn mg_extend(mut v: Vec<String>, w: Vec<String>) {
+    for x in w {
+        v.push(x);
+    }
+}
+
+fn mg_eq(a: Vec<String>, b: Vec<String>) -> Bool {
+    a.len() == b.len() && mg_prefix(a, b)
+}
+
+// mg_prefix: a is a prefix of b.
+fn mg_prefix(a: Vec<String>, b: Vec<String>) -> Bool {
+    if a.len() > b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a.get(i).unwrap_or("") != b.get(i).unwrap_or("") {
+            return false;
+        }
+    }
+    true
+}
+
+// mg_suffix: a is a suffix of b.
+fn mg_suffix(a: Vec<String>, b: Vec<String>) -> Bool {
+    let d = b.len() - a.len();
+    if d < 0 {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a.get(i).unwrap_or("") != b.get(i + d).unwrap_or("") {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- diff ----
+
+// mg_diff3 aligns two sides with their base: stable lines, and regions
+// where hunks of the two sides overlap or insert at the same place (or
+// where one side alone changed the base).
+fn mg_diff3(b: Vec<String>, o: Vec<String>, t: Vec<String>) -> Vec<MgSeg> {
+    let ho = mg_hunks(mg_match(b, o), o.len());
+    let ht = mg_hunks(mg_match(b, t), t.len());
+    let mut segs = Vec::new();
+    let mut cur = MgCur { i: 0, j: 0, bp: 0, op: 0, tp: 0 };
+    while cur.i < ho.len() || cur.j < ht.len() {
+        // the next hunk in base order opens a region
+        let ours = cur.j >= ht.len()
+            || (cur.i < ho.len() && mg_hunk_before(mg_hunk_at(ho, cur.i), mg_hunk_at(ht, cur.j)));
+        mg_stable_to(segs, cur, if ours {
+            mg_hunk_at(ho, cur.i).bs
+        } else {
+            mg_hunk_at(ht, cur.j).bs
+        });
+        segs.push(mg_region(ho, ht, cur, ours));
+    }
+    mg_stable_to(segs, cur, b.len());
+    segs
+}
+
+// MgCur is the walk of mg_diff3: the next hunk of each side, and the line
+// of each version the next segment starts at.
+struct MgCur {
+    mut i: Int,
+    mut j: Int,
+    mut bp: Int,
+    mut op: Int,
+    mut tp: Int,
+}
+
+fn mg_stable_to(mut segs: Vec<MgSeg>, mut cur: MgCur, end: Int) {
+    while cur.bp < end {
+        segs.push(MgSeg {
+            stable: true,
+            b0: cur.bp,
+            b1: cur.bp + 1,
+            o0: cur.op,
+            o1: cur.op + 1,
+            t0: cur.tp,
+            t1: cur.tp + 1,
+        });
+        cur.bp = cur.bp + 1;
+        cur.op = cur.op + 1;
+        cur.tp = cur.tp + 1;
+    }
+}
+
+// mg_region takes the next hunk (of ours or theirs) and the hunks of
+// both sides that conflict with it as one region.
+fn mg_region(ho: Vec<MgHunk>, ht: Vec<MgHunk>, mut cur: MgCur, ours: Bool) -> MgSeg {
+    let h = if ours {
+        mg_hunk_at(ho, cur.i)
+    } else {
+        mg_hunk_at(ht, cur.j)
+    };
+    let gs = h.bs;
+    let mut ge = h.be;
+    // how many lines each side's hunks add
+    let mut dob = 0;
+    let mut dtb = 0;
+    if ours {
+        dob = mg_hunk_delta(h);
+        cur.i = cur.i + 1;
+    } else {
+        dtb = mg_hunk_delta(h);
+        cur.j = cur.j + 1;
+    }
+    let mut grow = true;
+    while grow {
+        let x = mg_hunk_at(ho, cur.i);
+        let y = mg_hunk_at(ht, cur.j);
+        let gx = cur.i < ho.len() && mg_overlaps(x, gs, ge);
+        let gy = !gx && cur.j < ht.len() && mg_overlaps(y, gs, ge);
+        if gx {
+            dob = dob + mg_hunk_delta(x);
+            ge = ge.max(x.be);
+            cur.i = cur.i + 1;
+        } else if gy {
+            dtb = dtb + mg_hunk_delta(y);
+            ge = ge.max(y.be);
+            cur.j = cur.j + 1;
+        }
+        grow = gx || gy;
+    }
+    let o1 = cur.op + (ge - gs) + dob;
+    let t1 = cur.tp + (ge - gs) + dtb;
+    let seg = MgSeg { stable: false, b0: gs, b1: ge, o0: cur.op, o1: o1, t0: cur.tp, t1: t1 };
+    cur.bp = ge;
+    cur.op = o1;
+    cur.tp = t1;
+    seg
+}
+
+fn mg_hunk_delta(h: MgHunk) -> Int {
+    h.e - h.s - (h.be - h.bs)
+}
+
+fn mg_hunk_at(v: Vec<MgHunk>, i: Int) -> MgHunk {
+    v.get(i).unwrap_or(MgHunk { bs: 0, be: 0, s: 0, e: 0 })
+}
+
+fn mg_hunk_before(a: MgHunk, b: MgHunk) -> Bool {
+    a.bs < b.bs || (a.bs == b.bs && a.be <= b.be)
+}
+
+// mg_overlaps reports whether hunk x conflicts with the base region
+// [gs, ge): the ranges overlap, or one inserts inside (or, both inserting,
+// at) the other. Touching ranges do not conflict.
+fn mg_overlaps(x: MgHunk, gs: Int, ge: Int) -> Bool {
+    if x.bs < ge && gs < x.be {
+        return true;
+    }
+    if x.bs == x.be && gs == ge {
+        return x.bs == gs;
+    }
+    if x.bs == x.be {
+        return gs < x.bs && x.bs < ge;
+    }
+    if gs == ge {
+        return x.bs < gs && gs < x.be;
+    }
+    false
+}
+
+// mg_hunks turns a matching (base line -> side line or -1) into hunks.
+fn mg_hunks(m: Vec<Int>, n: Int) -> Vec<MgHunk> {
+    let mut out = Vec::new();
+    let nb = m.len();
+    let mut bi = 0;
+    let mut si = 0;
+    while bi < nb || si < n {
+        if bi < nb && m.get(bi).unwrap_or(-1) == si {
+            bi = bi + 1;
+            si = si + 1;
+            continue;
+        }
+        let bs = bi;
+        let s = si;
+        while bi < nb && m.get(bi).unwrap_or(-1) < 0 {
+            bi = bi + 1;
+        }
+        let e = if bi < nb { m.get(bi).unwrap_or(n) } else { n };
+        out.push(MgHunk { bs: bs, be: bi, s: s, e: e });
+        si = e;
+    }
+    out
+}
+
+// mg_match is a longest common subsequence of a and b (Myers' O(ND)
+// diff): for each line of a, the line of b it is kept as, or -1.
+fn mg_match(a: Vec<String>, b: Vec<String>) -> Vec<Int> {
+    let mut ids: HashMap<String, Int> = HashMap::new();
+    let x = mg_intern(ids, a);
+    let y = mg_intern(ids, b);
+    let n = x.len();
+    let m = y.len();
+    let mut out = Vec::new();
+    for i in 0..n {
+        out.push(-1);
+    }
+    let mut pre = 0;
+    while pre < n && pre < m && x.get(pre).unwrap_or(-1) == y.get(pre).unwrap_or(-2) {
+        out.set(pre, pre);
+        pre = pre + 1;
+    }
+    let mut suf = 0;
+    while suf < n - pre
+        && suf < m - pre
+        && x.get(n - 1 - suf).unwrap_or(-1) == y.get(m - 1 - suf).unwrap_or(-2) {
+        out.set(n - 1 - suf, m - 1 - suf);
+        suf = suf + 1;
+    }
+    mg_myers(x, y, pre, n - suf, pre, m - suf, out);
+    out
+}
+
+fn mg_intern(mut ids: HashMap<String, Int>, v: Vec<String>) -> Vec<Int> {
+    let mut out = Vec::new();
+    for s in v {
+        let id = match ids.get(s) {
+            Some(k) => k,
+            None => {
+                let k = ids.len();
+                ids.insert(s, k);
+                k
+            }
+        };
+        out.push(id);
+    }
+    out
+}
+
+// mg_myers matches x[a0..a1) with y[c0..c1) into out.
+fn mg_myers(x: Vec<Int>, y: Vec<Int>, a0: Int, a1: Int, c0: Int, c1: Int, out: Vec<Int>) {
+    let n = a1 - a0;
+    let m = c1 - c0;
+    if n == 0 || m == 0 {
+        return;
+    }
+    mg_myers_back(mg_myers_trace(x, y, a0, c0, n, m), a0, c0, n, m, out);
+}
+
+// mg_myers_trace runs Myers' search: for each d, the furthest x reached on
+// each diagonal k (-d..d, at index k + d), until the end is reached.
+fn mg_myers_trace(x: Vec<Int>, y: Vec<Int>, a0: Int, c0: Int, n: Int, m: Int) -> Vec<Vec<Int>> {
+    let max = n + m;
+    let off = max + 1;
+    let mut v = Vec::new();
+    for i in 0..2 * max + 3 {
+        v.push(0);
+    }
+    let mut trace: Vec<Vec<Int>> = Vec::new();
+    let mut done = false;
+    let mut d = 0;
+    while !done && d <= max {
+        let mut k = -d;
+        while k <= d {
+            let lo = v.get(off + k - 1).unwrap_or(0);
+            let hi = v.get(off + k + 1).unwrap_or(0);
+            let px = mg_snake(
+                x,
+                y,
+                a0,
+                c0,
+                n,
+                m,
+                k,
+                if mg_down(lo, hi, k, d) { hi } else { lo + 1 },
+            );
+            v.set(off + k, px);
+            done = done || (px >= n && px - k >= m);
+            k = k + 2;
+        }
+        let mut snap = Vec::new();
+        for k2 in -d..d + 1 {
+            snap.push(v.get(off + k2).unwrap_or(0));
+        }
+        trace.push(snap);
+        d = d + 1;
+    }
+    trace
+}
+
+// mg_snake follows diagonal k from x = px while the lines are the same.
+fn mg_snake(x: Vec<Int>, y: Vec<Int>, a0: Int, c0: Int, n: Int, m: Int, k: Int, px: Int) -> Int {
+    let mut p = px;
+    while p < n && p - k < m && x.get(a0 + p).unwrap_or(-1) == y.get(c0 + p - k).unwrap_or(-2) {
+        p = p + 1;
+    }
+    p
+}
+
+// mg_down: the path reaches diagonal k at step d by a step down (from
+// diagonal k + 1, an inserted line) rather than right (from k - 1).
+fn mg_down(lo: Int, hi: Int, k: Int, d: Int) -> Bool {
+    k == -d || (k != d && lo < hi)
+}
+
+// mg_myers_back walks the trace back from (n, m), recording the diagonal
+// moves (kept lines).
+fn mg_myers_back(trace: Vec<Vec<Int>>, a0: Int, c0: Int, n: Int, m: Int, mut out: Vec<Int>) {
+    let mut cx = n;
+    let mut cy = m;
+    let mut d = trace.len() - 1;
+    while d > 0 {
+        let prev = trace.get(d - 1).unwrap_or(Vec::new());
+        let k = cx - cy;
+        // prev holds diagonals -(d-1)..d-1 at index k + d - 1
+        let down = mg_down(prev.get(k + d - 2).unwrap_or(0), prev.get(k + d).unwrap_or(0), k, d);
+        let pk = if down { k + 1 } else { k - 1 };
+        let px = prev.get(pk + d - 1).unwrap_or(0);
+        mg_diagonal(out, a0, c0, k, if down { px } else { px + 1 }, cx);
+        cx = px;
+        cy = px - pk;
+        d = d - 1;
+    }
+    mg_diagonal(out, a0, c0, cx - cy, 0, cx);
+}
+
+// mg_diagonal records the kept lines x in [from, to) of diagonal k.
+fn mg_diagonal(mut out: Vec<Int>, a0: Int, c0: Int, k: Int, from: Int, to: Int) {
+    for px in from..to {
+        out.set(a0 + px, c0 + px - k);
+    }
+}
+
+// ---- string literals ----
+
+// mg_lits merges a unit whose versions differ only inside string
+// literals: the text around the literals merges cleanly, and so does the
+// content of each literal (by lines).
+fn mg_lits(mut c: MgCtx, b: String, o: String, t: String) -> Option<String> {
+    let lb = mg_lit_split(b);
+    let lo = mg_lit_split(o);
+    let lt = mg_lit_split(t);
+    let n = lb.lits.len();
+    if n == 0 || lo.lits.len() != n || lt.lits.len() != n {
+        return None;
+    }
+    let mut out = Vec::new();
+    let parts = mg_clean(c, lb.skel, lo.skel, lt.skel).unwrap_or("").split(mg_hole());
+    if parts.len() != n + 1 {
+        return None;
+    }
+    for i in 0..n {
+        out.push(parts.get(i).unwrap_or(""));
+        let rb = lb.lits.get(i).unwrap_or("");
+        let ro = lo.lits.get(i).unwrap_or("");
+        let rt = lt.lits.get(i).unwrap_or("");
+        match mg_clean(c, mg_unquote(rb), mg_unquote(ro), mg_unquote(rt)) {
+            Some(m) => out.push(if m == mg_unquote(ro) {
+                ro
+            } else if m == mg_unquote(rt) {
+                rt
+            } else {
+                ast_quote(m)
+            }),
+            None => {
+                return None;
+            }
+        }
+    }
+    out.push(parts.get(n).unwrap_or(""));
+    Some(out.join(""))
+}
+
+// mg_clean is the text merge when it has no conflict.
+fn mg_clean(mut c: MgCtx, b: String, o: String, t: String) -> Option<String> {
+    let n0 = c.conflicts;
+    let out = mg_text(c, b, o, t);
+    if c.conflicts > n0 {
+        c.conflicts = n0;
+        return None;
+    }
+    Some(out)
+}
+
+struct MgLitSplit {
+    // the text with every literal replaced by mg_hole()
+    skel: String,
+    lits: Vec<String>,
+}
+
+fn mg_hole() -> String {
+    "\"" + String::from_char(1) + "\""
+}
+
+// mg_lit_split finds the string literals outside comments.
+fn mg_lit_split(s: String) -> MgLitSplit {
+    let mut parts = Vec::new();
+    let mut lits = Vec::new();
+    let n = s.len();
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let ch = s.char_at(i).unwrap_or(0);
+        if ch == 47 && s.char_at(i + 1).unwrap_or(0) == 47 {
+            i = mg_scan_to(s, i, "\n", 0);
+        } else if ch == 47 && s.char_at(i + 1).unwrap_or(0) == 42 {
+            i = mg_scan_to(s, i + 2, "*/", 2);
+        } else if ch == 34 {
+            let e = mg_lit_end(s, i);
+            parts.push(s.slice(start, i));
+            parts.push(mg_hole());
+            lits.push(s.slice(i, e));
+            start = e;
+            i = e;
+        } else {
+            i = i + 1;
+        }
+    }
+    parts.push(s.slice(start, n));
+    MgLitSplit { skel: parts.join(""), lits: lits }
+}
+
+// mg_scan_to is the index of the next `end` at or after i, plus skip (the
+// length of s when there is none).
+fn mg_scan_to(s: String, i: Int, end: String, skip: Int) -> Int {
+    match s.slice(i, s.len()).index_of(end) {
+        Some(k) => i + k + skip,
+        None => s.len(),
+    }
+}
+
+// mg_lit_end is the index after the string literal starting at i.
+fn mg_lit_end(s: String, i: Int) -> Int {
+    let n = s.len();
+    let mut j = i + 1;
+    while j < n && s.char_at(j).unwrap_or(0) != 34 {
+        j = j + if s.char_at(j).unwrap_or(0) == 92 {
+            2
+        } else {
+            1
+        };
+    }
+    (j + 1).min(n)
+}
+
+fn mg_unquote(lit: String) -> String {
+    let lr = lex_file("", lit);
+    match lr.toks.get(0) {
+        Some(t) => t.text,
+        None => "",
+    }
+}
+
+// ---- Kekkai trees ----
+
+// MgNode is a unit of a .kek file (the file, an item, a member, a
+// statement, a match arm): its text and, when split, its children with
+// the lines before (head) and after (foot) them. blanks counts the blank
+// lines before the unit; named children are matched by key, the others
+// by content (key is then the unit's tokens).
+struct MgNode {
+    key: String,
+    // the key with the contents of string literals left out: a second
+    // chance to line up statements (one per embedded file)
+    mut skel: String,
+    blanks: Int,
+    text: String,
+    split: Bool,
+    named: Bool,
+    head: Vec<String>,
+    kids: Vec<MgNode>,
+    foot: Vec<String>,
+}
+
+// MgSpec is a child unit of a container before it is cut out: its key
+// (named containers), first token and what it may contain.
+struct MgSpec {
+    key: String,
+    first: Int,
+    kind: MgKind,
+}
+
+enum MgKind {
+    Leaf,
+    Struct(AstStructDecl),
+    Enum(AstEnumDecl),
+    // a trait or impl block: its associated types and functions
+    Trait(Vec<AstAssocType>, Vec<AstFuncDecl>),
+    Func(AstFuncDecl),
+    Stmt(AstStmt),
+    Expr(AstExpr),
+    Arm(AstMatchArm),
+}
+
+struct MgSrc {
+    lines: Vec<String>,
+    toks: Vec<Tok>,
+    tok_at: HashMap<Int, Int>,
+}
+
+fn mg_leaf(key: String, blanks: Int, text: String) -> MgNode {
+    MgNode {
+        key: key,
+        skel: key,
+        blanks: blanks,
+        text: text,
+        split: false,
+        named: false,
+        head: Vec::new(),
+        kids: Vec::new(),
+        foot: Vec::new(),
+    }
+}
+
+// mg_tree splits a file into its units; split is false when it does not
+// parse.
+fn mg_tree(src: String) -> MgNode {
+    let pr = parse_file("", src, AstIds { next: 0 });
+    let lr = lex_file("", src);
+    if pr.errs.len() > 0 || lr.errs.len() > 0 {
+        return mg_leaf("", 0, src);
+    }
+    let mut s = MgSrc { lines: src.split("\n"), toks: lr.toks, tok_at: HashMap::new() };
+    let mut i = 0;
+    for t in s.toks {
+        s.tok_at.insert(mg_pos_key(t.pos), i);
+        i = i + 1;
+    }
+    let at = MgAt { key: "", blanks: 0, lo: 1, hi: s.lines.len() };
+    mg_container(s, at, -1, s.toks.len() - 1, mg_file_specs(s, pr.file), true)
+}
+
+// MgAt is where a unit is: its key, the blank lines before it and its
+// lines lo..hi.
+struct MgAt {
+    key: String,
+    blanks: Int,
+    lo: Int,
+    hi: Int,
+}
+
+fn mg_leaf_at(s: MgSrc, at: MgAt) -> MgNode {
+    mg_leaf(at.key, at.blanks, mg_line_range(s, at.lo, at.hi).join("\n"))
+}
+
+fn mg_file_specs(s: MgSrc, f: AstFile) -> Vec<MgSpec> {
+    let mut specs = Vec::new();
+    for d in f.structs {
+        specs.push(
+            mg_spec(s, "struct " + d.name, fmt_attrs_start(d.attrs, d.pos), MgKind::Struct(d)),
+        );
+    }
+    for d in f.enums {
+        specs.push(mg_spec(s, "enum " + d.name, fmt_attrs_start(d.attrs, d.pos), MgKind::Enum(d)));
+    }
+    for d in f.traits {
+        specs.push(mg_spec(s, "trait " + d.name, d.pos, MgKind::Trait(d.assoc, d.funcs)));
+    }
+    for d in f.funcs {
+        specs.push(mg_spec(s, "fn " + d.name, fmt_attrs_start(d.attrs, d.pos), MgKind::Func(d)));
+    }
+    for d in f.impls {
+        let first = mg_tok_index(s, d.pos);
+        specs.push(MgSpec {
+            key: mg_head_key(s, first),
+            first: first,
+            kind: MgKind::Trait(d.assoc, d.funcs),
+        });
+    }
+    for d in f.aliases {
+        specs.push(mg_spec(s, "type " + d.name, d.pos, MgKind::Leaf));
+    }
+    specs
+}
+
+// mg_spec starts a unit at pos, or at the `(` opening it (like fmt).
+fn mg_spec(s: MgSrc, key: String, pos: AstPos, kind: MgKind) -> MgSpec {
+    let mut first = mg_tok_index(s, pos);
+    while first > 0 && mg_tok(s, first - 1).kind == "(" {
+        first = first - 1;
+    }
+    MgSpec { key: key, first: first, kind: kind }
+}
+
+fn mg_pos_key(pos: AstPos) -> Int {
+    pos.line * 1048576 + pos.col
+}
+
+fn mg_tok(s: MgSrc, i: Int) -> Tok {
+    match s.toks.get(i) {
+        Some(t) => t,
+        None => Tok { kind: "EOF", text: "", pos: AstPos { file: "", line: 0, col: 0 } },
+    }
+}
+
+fn mg_tok_index(s: MgSrc, pos: AstPos) -> Int {
+    s.tok_at.get(mg_pos_key(pos)).unwrap_or(-1)
+}
+
+fn mg_line(s: MgSrc, i: Int) -> Int {
+    mg_tok(s, i).pos.line
+}
+
+// mg_next_brace is the first `{` at or after token i (-1 if none).
+fn mg_next_brace(s: MgSrc, i: Int) -> Int {
+    if i < 0 {
+        return -1;
+    }
+    let mut j = i;
+    while j < s.toks.len() - 1 {
+        if mg_tok(s, j).kind == "{" {
+            return j;
+        }
+        j = j + 1;
+    }
+    -1
+}
+
+// mg_close is the bracket closing the one at open (-1 if none).
+fn mg_close(s: MgSrc, open: Int) -> Int {
+    if open < 0 {
+        return -1;
+    }
+    let mut depth = 0;
+    for i in open..s.toks.len() {
+        let k = mg_tok(s, i).kind;
+        if k == "{" || k == "(" || k == "[" {
+            depth = depth + 1;
+        } else if k == "}" || k == ")" || k == "]" {
+            depth = depth - 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+    }
+    -1
+}
+
+// mg_head_key is the tokens from first up to the next `{` (an impl's
+// header).
+fn mg_head_key(s: MgSrc, first: Int) -> String {
+    mg_head_key_to(s, first, "{")
+}
+
+// mg_head_key_to is the tokens from first up to the next `stop`.
+fn mg_head_key_to(s: MgSrc, first: Int, stop: String) -> String {
+    let mut parts = Vec::new();
+    let mut i = first;
+    while i >= 0 && i < s.toks.len() - 1 && mg_tok(s, i).kind != stop {
+        parts.push(mg_tok(s, i).text);
+        i = i + 1;
+    }
+    parts.join(" ")
+}
+
+// mg_tok_key is the tokens first..last: the content of a unit, without
+// its layout and comments.
+fn mg_tok_key(s: MgSrc, first: Int, last: Int, lits: Bool) -> String {
+    let mut parts = Vec::new();
+    for i in first..last + 1 {
+        let t = mg_tok(s, i);
+        if t.kind == "STRING" {
+            parts.push(if lits { ast_quote(t.text) } else { "\"\"" });
+        } else {
+            parts.push(t.text);
+        }
+    }
+    parts.join(" ")
+}
+
+fn mg_blank(s: MgSrc, line: Int) -> Bool {
+    s.lines.get(line - 1).unwrap_or("x").trim() == ""
+}
+
+fn mg_line_range(s: MgSrc, a: Int, b: Int) -> Vec<String> {
+    let mut out = Vec::new();
+    for l in a..b + 1 {
+        out.push(s.lines.get(l - 1).unwrap_or(""));
+    }
+    out
+}
+
+// mg_container cuts the lines of a unit into a head, one unit per spec and
+// a foot. open and close are the token indices of the braces (open = -1 at
+// the top level, close is then EOF). A container whose units do not
+// start on their own lines, or that would not print back the same, stays
+// a leaf.
+fn mg_container(
+    s: MgSrc,
+    at: MgAt,
+    open: Int,
+    close: Int,
+    mut specs: Vec<MgSpec>,
+    named: Bool,
+) -> MgNode {
+    let leaf = mg_leaf_at(s, at);
+    if specs.len() == 0 || close < 0 || mg_missing(specs) {
+        return leaf;
+    }
+    mg_sort_specs(specs);
+    let start = mg_first_start(s, at.lo, open, mg_spec_at(specs, 0).first);
+    let cut = mg_cut(s, start, close, open < 0, specs, named);
+    if !cut.ok {
+        return leaf;
+    }
+    let node = MgNode {
+        key: at.key,
+        skel: at.key,
+        blanks: at.blanks,
+        text: leaf.text,
+        split: true,
+        named: named,
+        head: mg_line_range(s, at.lo, start - 1),
+        kids: cut.kids,
+        foot: mg_line_range(s, cut.next, at.hi),
+    };
+    if mg_render(node.head, mg_pieces(node.kids), node.foot) != leaf.text {
+        return leaf;
+    }
+    node
+}
+
+fn mg_missing(specs: Vec<MgSpec>) -> Bool {
+    for sp in specs {
+        if sp.first < 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// mg_first_start is the line the first unit's lines may start at: after
+// the `{`, or at the top level after the head (which ends at the blank
+// lines above the comments attached to the first item).
+fn mg_first_start(s: MgSrc, lo: Int, open: Int, first: Int) -> Int {
+    if open >= 0 {
+        return mg_line(s, open) + 1;
+    }
+    let mut c = mg_line(s, first) - 1;
+    while c >= lo && !mg_blank(s, c) {
+        c = c - 1;
+    }
+    while c >= lo && mg_blank(s, c) {
+        c = c - 1;
+    }
+    c + 1
+}
+
+// MgCut is the units of a container and the line after the last one.
+struct MgCut {
+    ok: Bool,
+    kids: Vec<MgNode>,
+    next: Int,
+}
+
+// mg_cut gives each unit the lines from the end of the one before to its
+// last token: the comments above it, and its blank lines counted apart.
+fn mg_cut(s: MgSrc, start0: Int, close: Int, top: Bool, specs: Vec<MgSpec>, named: Bool) -> MgCut {
+    let mut kids = Vec::new();
+    let mut seen: HashMap<String, Int> = HashMap::new();
+    let close_line = if top {
+        s.lines.len() + 1
+    } else {
+        mg_line(s, close)
+    };
+    let mut start = start0;
+    let n = specs.len();
+    for i in 0..n {
+        let sp = mg_spec_at(specs, i);
+        let last = if i + 1 < n {
+            mg_spec_at(specs, i + 1).first - 1
+        } else {
+            close - 1
+        };
+        let fl = mg_line(s, sp.first);
+        let end = mg_line(s, last);
+        if start > fl || last < sp.first || end >= close_line {
+            return MgCut { ok: false, kids: kids, next: start };
+        }
+        let mut b = 0;
+        while start + b < fl && mg_blank(s, start + b) {
+            b = b + 1;
+        }
+        let key = mg_kid_key(s, sp, last, named, seen);
+        let mut kid = mg_unit(s, MgAt { key: key, blanks: b, lo: start + b, hi: end }, sp);
+        kid.skel = if named {
+            sp.key
+        } else {
+            mg_tok_key(s, sp.first, last, false)
+        };
+        kids.push(kid);
+        start = end + 1;
+    }
+    MgCut { ok: true, kids: kids, next: start }
+}
+
+// mg_kid_key is a unit's key: its name, or its tokens; repeated keys get
+// a count.
+fn mg_kid_key(
+    s: MgSrc,
+    sp: MgSpec,
+    last: Int,
+    named: Bool,
+    mut seen: HashMap<String, Int>,
+) -> String {
+    let k = if named {
+        sp.key
+    } else {
+        mg_tok_key(s, sp.first, last, true)
+    };
+    let dup = seen.get(k).unwrap_or(0);
+    seen.insert(k, dup + 1);
+    if dup > 0 {
+        k + " #" + dup.to_string()
+    } else {
+        k
+    }
+}
+
+fn mg_spec_at(v: Vec<MgSpec>, i: Int) -> MgSpec {
+    v.get(i).unwrap_or(MgSpec { key: "", first: -1, kind: MgKind::Leaf })
+}
+
+fn mg_sort_specs(mut v: Vec<MgSpec>) {
+    let n = v.len();
+    for i in 1..n {
+        let mut j = i;
+        while j > 0 && mg_spec_at(v, j).first < mg_spec_at(v, j - 1).first {
+            let a = mg_spec_at(v, j);
+            v.set(j, mg_spec_at(v, j - 1));
+            v.set(j - 1, a);
+            j = j - 1;
+        }
+    }
+}
+
+// mg_unit builds the node of one unit by its kind.
+fn mg_unit(s: MgSrc, at: MgAt, sp: MgSpec) -> MgNode {
+    match sp.kind {
+        MgKind::Leaf => mg_leaf_at(s, at),
+        MgKind::Struct(d) => mg_braced(s, at, sp.first, mg_field_specs(s, d.fields)),
+        MgKind::Enum(d) => mg_braced(s, at, sp.first, mg_variant_specs(s, d.variants)),
+        MgKind::Trait(assoc, funcs) => mg_braced(s, at, sp.first, mg_member_specs(s, assoc, funcs)),
+        MgKind::Func(d) => if d.has_body {
+            mg_block(s, at, d.body)
+        } else {
+            mg_leaf_at(s, at)
+        },
+        MgKind::Stmt(st) => mg_stmt(s, at, st),
+        MgKind::Expr(e) => mg_expr(s, at, e),
+        MgKind::Arm(a) => mg_expr(s, at, a.body),
+    }
+}
+
+// mg_braced splits the first `{ }` from token first on by name.
+fn mg_braced(s: MgSrc, at: MgAt, first: Int, specs: Vec<MgSpec>) -> MgNode {
+    let open = mg_next_brace(s, first);
+    mg_container(s, at, open, mg_close(s, open), specs, true)
+}
+
+fn mg_field_specs(s: MgSrc, fields: Vec<AstField>) -> Vec<MgSpec> {
+    let mut specs = Vec::new();
+    for f in fields {
+        specs.push(mg_spec(s, "field " + f.name, f.pos, MgKind::Leaf));
+    }
+    specs
+}
+
+fn mg_variant_specs(s: MgSrc, variants: Vec<AstVariant>) -> Vec<MgSpec> {
+    let mut specs = Vec::new();
+    for v in variants {
+        specs.push(mg_spec(s, "variant " + v.name, v.pos, MgKind::Leaf));
+    }
+    specs
+}
+
+fn mg_member_specs(s: MgSrc, assoc: Vec<AstAssocType>, funcs: Vec<AstFuncDecl>) -> Vec<MgSpec> {
+    let mut specs = Vec::new();
+    for a in assoc {
+        specs.push(mg_spec(s, "type " + a.name, a.pos, MgKind::Leaf));
+    }
+    for f in funcs {
+        specs.push(mg_spec(s, "fn " + f.name, fmt_attrs_start(f.attrs, f.pos), MgKind::Func(f)));
+    }
+    specs
+}
+
+fn mg_stmt(s: MgSrc, at: MgAt, st: AstStmt) -> MgNode {
+    match st {
+        AstStmt::While(x) => mg_block(s, at, x.body),
+        AstStmt::For(x) => mg_block(s, at, x.body),
+        AstStmt::Let(x) => mg_expr(s, at, x.init),
+        AstStmt::Expr(x) => mg_expr(s, at, x.x),
+        _ => mg_leaf_at(s, at),
+    }
+}
+
+// mg_block splits a block into its statements (and tail expression).
+fn mg_block(s: MgSrc, at: MgAt, b: AstBlock) -> MgNode {
+    let open = mg_next_brace(s, mg_tok_index(s, b.pos));
+    let mut specs = Vec::new();
+    for st in b.stmts {
+        specs.push(mg_spec(s, "", mg_stmt_pos(st), MgKind::Stmt(st)));
+    }
+    match b.tail {
+        Some(e) => specs.push(mg_spec(s, "", fmt_start_pos(e), MgKind::Expr(e))),
+        None => {}
+    }
+    mg_container(s, at, open, mg_tok_index(s, b.end), specs, false)
+}
+
+fn mg_stmt_pos(st: AstStmt) -> AstPos {
+    match st {
+        AstStmt::Expr(x) => fmt_start_pos(x.x),
+        _ => fmt_stmt_pos(st),
+    }
+}
+
+// mg_expr splits the block of a block, an `if` without `else` or a
+// `match` (into its arms, matched by pattern).
+fn mg_expr(s: MgSrc, at: MgAt, e: AstExpr) -> MgNode {
+    match e {
+        AstExpr::Block(b) => mg_block(s, at, b),
+        AstExpr::If(x) => if x.els.is_none() {
+            mg_block(s, at, x.then)
+        } else {
+            mg_leaf_at(s, at)
+        },
+        AstExpr::Match(m) => mg_arms(s, at, m.arms),
+        _ => mg_leaf_at(s, at),
+    }
+}
+
+fn mg_arms(s: MgSrc, at: MgAt, arms: Vec<AstMatchArm>) -> MgNode {
+    let mut specs = Vec::new();
+    for a in arms {
+        let first = mg_tok_index(s, a.pos);
+        specs.push(MgSpec {
+            key: "arm " + mg_head_key_to(s, first, "=>"),
+            first: first,
+            kind: MgKind::Arm(a),
+        });
+    }
+    // the `{` before the first arm
+    let mut open = mg_spec_at(specs, 0).first - 1;
+    while open > 0 && mg_tok(s, open).kind != "{" {
+        open = open - 1;
+    }
+    if open < 0 {
+        return mg_leaf_at(s, at);
+    }
+    mg_container(s, at, open, mg_close(s, open), specs, true)
+}
+
+// ---- merging trees ----
+
+// MgPiece is a merged unit: blank lines, then text.
+struct MgPiece {
+    blanks: Int,
+    text: String,
+}
+
+fn mg_pieces(kids: Vec<MgNode>) -> Vec<MgPiece> {
+    let mut out = Vec::new();
+    for k in kids {
+        out.push(MgPiece { blanks: k.blanks, text: k.text });
+    }
+    out
+}
+
+fn mg_render(head: Vec<String>, ps: Vec<MgPiece>, foot: Vec<String>) -> String {
+    let mut lines = Vec::new();
+    mg_extend(lines, head);
+    for p in ps {
+        for i in 0..p.blanks {
+            lines.push("");
+        }
+        lines.push(p.text);
+    }
+    mg_extend(lines, foot);
+    lines.join("\n")
+}
+
+// mg_node merges three versions of a unit.
+fn mg_node(mut c: MgCtx, b: MgNode, o: MgNode, t: MgNode) -> String {
+    if o.text == t.text || b.text == t.text {
+        return o.text;
+    }
+    if b.text == o.text {
+        return t.text;
+    }
+    if b.split && o.split && t.split && b.named == o.named && b.named == t.named {
+        let head = mg_lines(c, b.head, o.head, t.head);
+        let ps = if b.named {
+            mg_named(c, b.kids, o.kids, t.kids)
+        } else {
+            mg_seq(c, b.kids, o.kids, t.kids, false)
+        };
+        let foot = mg_lines(c, b.foot, o.foot, t.foot);
+        return mg_render(head, ps, foot);
+    }
+    mg_unit_text(c, b.text, o.text, t.text)
+}
+
+// mg_unit_text merges a unit as text, then by its string literals.
+fn mg_unit_text(mut c: MgCtx, b: String, o: String, t: String) -> String {
+    let n0 = c.conflicts;
+    let out = mg_text(c, b, o, t);
+    if c.conflicts == n0 {
+        return out;
+    }
+    c.conflicts = n0;
+    match mg_lits(c, b, o, t) {
+        Some(x) => x,
+        None => mg_text(c, b, o, t),
+    }
+}
+
+// mg_col is the texts, skeletons or keys of units.
+fn mg_col(v: Vec<MgNode>, what: String) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in v {
+        out.push(if what == "text" {
+            n.text
+        } else if what == "skel" { n.skel } else { n.key });
+    }
+    out
+}
+
+fn mg_node_at(v: Vec<MgNode>, i: Int) -> MgNode {
+    v.get(i).unwrap_or(mg_leaf("", 0, ""))
+}
+
+fn mg_by_key(v: Vec<MgNode>) -> HashMap<String, MgNode> {
+    let mut m: HashMap<String, MgNode> = HashMap::new();
+    for n in v {
+        m.insert(n.key, n);
+    }
+    m
+}
+
+// mg_named merges children matched by key: the order is merged like
+// lines (both sides' new keys are kept), each key's text is merged on its
+// own; a key one side removed is dropped, unless the other side changed
+// it (a conflict), and a key both sides added differently is a conflict.
+fn mg_named(mut c: MgCtx, b: Vec<MgNode>, o: Vec<MgNode>, t: Vec<MgNode>) -> Vec<MgPiece> {
+    let m = MgMaps { b: mg_by_key(b), o: mg_by_key(o), t: mg_by_key(t) };
+    let order = mg_named_order(mg_col(b, "key"), mg_col(o, "key"), mg_col(t, "key"), m);
+    let mut out = Vec::new();
+    let mut done: HashMap<String, Bool> = HashMap::new();
+    for k in mg_with_removed(order, mg_col(b, "key"), m) {
+        if !done.contains_key(k) {
+            done.insert(k, true);
+            match mg_named_piece(c, k, m) {
+                Some(p) => out.push(p),
+                None => {}
+            }
+        }
+    }
+    out
+}
+
+// MgMaps holds the children of the three versions by key.
+struct MgMaps {
+    b: HashMap<String, MgNode>,
+    o: HashMap<String, MgNode>,
+    t: HashMap<String, MgNode>,
+}
+
+// mg_named_order merges the order of the keys; where both sides changed
+// it, ours comes first.
+fn mg_named_order(kb: Vec<String>, ko: Vec<String>, kt: Vec<String>, m: MgMaps) -> Vec<String> {
+    let mut order = Vec::new();
+    for g in mg_diff3(kb, ko, kt) {
+        let go = mg_sub(ko, g.o0, g.o1);
+        let gt = mg_sub(kt, g.t0, g.t1);
+        let r = mg_resolve(mg_sub(kb, g.b0, g.b1), go, gt);
+        if g.stable || !r.ok {
+            mg_extend(order, go);
+        } else {
+            mg_extend(order, r.lines);
+        }
+        if !g.stable && !r.ok {
+            for k in gt {
+                if !m.o.contains_key(k) {
+                    order.push(k);
+                }
+            }
+        }
+    }
+    order
+}
+
+// mg_with_removed adds back the keys one side removed and the other
+// changed (they become conflicts), after the key before them.
+fn mg_with_removed(order: Vec<String>, kb: Vec<String>, m: MgMaps) -> Vec<String> {
+    let mut placed: HashMap<String, Bool> = HashMap::new();
+    for k in order {
+        placed.insert(k, true);
+    }
+    let mut after: HashMap<String, Vec<String>> = HashMap::new();
+    let mut prev = "";
+    for k in kb {
+        if placed.contains_key(k) {
+            prev = k;
+        } else if mg_changed(m, k) {
+            let mut v = after.get(prev).unwrap_or(Vec::new());
+            v.push(k);
+            after.insert(prev, v);
+        }
+    }
+    let mut full = after.get("").unwrap_or(Vec::new());
+    for k in order {
+        full.push(k);
+        mg_extend(full, after.get(k).unwrap_or(Vec::new()));
+    }
+    full
+}
+
+// mg_named_piece merges the versions of one key (None: removed).
+fn mg_named_piece(mut c: MgCtx, k: String, m: MgMaps) -> Option<MgPiece> {
+    let ib = m.b.contains_key(k);
+    let io = m.o.contains_key(k);
+    let it = m.t.contains_key(k);
+    let x = mg_node_at_key(m.b, k);
+    let y = mg_node_at_key(m.o, k);
+    let z = mg_node_at_key(m.t, k);
+    let blanks = if io { y.blanks } else { z.blanks };
+    if io && it {
+        return Some(MgPiece { blanks: blanks, text: mg_both_kept(c, ib, x, y, z) });
+    }
+    if !ib {
+        return Some(MgPiece { blanks: blanks, text: if io { y.text } else { z.text } });
+    }
+    if !(io || it) {
+        return None;
+    }
+    mg_removed(c, x, if io { y } else { z }, io)
+}
+
+// mg_removed: the base's x was removed by one side and kept as k by the
+// other (ours when kept_o); a conflict when the keeping side changed it.
+fn mg_removed(mut c: MgCtx, x: MgNode, k: MgNode, kept_o: Bool) -> Option<MgPiece> {
+    if k.text == x.text {
+        return None;
+    }
+    let text = if kept_o {
+        mg_conflict_text(c, x.text, k.text, "")
+    } else {
+        mg_conflict_text(c, x.text, "", k.text)
+    };
+    Some(MgPiece { blanks: k.blanks, text: text })
+}
+
+// mg_both_kept merges a key both sides have; added by both, what they
+// added differently is a conflict.
+fn mg_both_kept(mut c: MgCtx, ib: Bool, x: MgNode, y: MgNode, z: MgNode) -> String {
+    if ib {
+        return mg_node(c, x, y, z);
+    }
+    mg_add_add(c, y.text, z.text)
+}
+
+// mg_changed: key k of the base was changed by a side that kept it.
+fn mg_changed(m: MgMaps, k: String) -> Bool {
+    let x = mg_node_at_key(m.b, k).text;
+    (m.o.contains_key(k) && mg_node_at_key(m.o, k).text != x)
+        || (m.t.contains_key(k) && mg_node_at_key(m.t, k).text != x)
+}
+
+fn mg_node_at_key(m: HashMap<String, MgNode>, k: String) -> MgNode {
+    m.get(k).unwrap_or(mg_leaf("", 0, ""))
+}
+
+fn mg_conflict_text(mut c: MgCtx, b: String, o: String, t: String) -> String {
+    mg_conflict(c, mg_split(b, false), mg_split(o, false), mg_split(t, false)).join("\n")
+}
+
+// mg_seq merges children matched by content (statements): like lines,
+// with the units both sides kept merged with each other. A region both
+// sides changed is merged unit by unit when the units line up, else lined
+// up again by their skeletons (coarse), else merged as text.
+fn mg_seq(
+    mut c: MgCtx,
+    b: Vec<MgNode>,
+    o: Vec<MgNode>,
+    t: Vec<MgNode>,
+    coarse: Bool,
+) -> Vec<MgPiece> {
+    let mut out = Vec::new();
+    let segs = if coarse {
+        mg_diff3(mg_col(b, "skel"), mg_col(o, "skel"), mg_col(t, "skel"))
+    } else {
+        mg_diff3(mg_col(b, "key"), mg_col(o, "key"), mg_col(t, "key"))
+    };
+    for g in segs {
+        let gb = mg_nodes_sub(b, g.b0, g.b1);
+        let go = mg_nodes_sub(o, g.o0, g.o1);
+        let gt = mg_nodes_sub(t, g.t0, g.t1);
+        if g.stable {
+            let y = mg_node_at(go, 0);
+            out.push(MgPiece {
+                blanks: y.blanks,
+                text: mg_node(c, mg_node_at(gb, 0), y, mg_node_at(gt, 0)),
+            });
+        } else {
+            for p in mg_seq_region(c, gb, go, gt, coarse) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+// mg_seq_region merges a region of units at least one side changed.
+fn mg_seq_region(
+    mut c: MgCtx,
+    b: Vec<MgNode>,
+    o: Vec<MgNode>,
+    t: Vec<MgNode>,
+    coarse: Bool,
+) -> Vec<MgPiece> {
+    let r = mg_resolve(mg_col(b, "text"), mg_col(o, "text"), mg_col(t, "text"));
+    if r.ok {
+        return mg_taken(r.lines, o, t);
+    }
+    if b.len() == o.len() && b.len() == t.len() {
+        let mut ps = Vec::new();
+        for i in 0..b.len() {
+            let y = mg_node_at(o, i);
+            ps.push(MgPiece {
+                blanks: y.blanks,
+                text: mg_node(c, mg_node_at(b, i), y, mg_node_at(t, i)),
+            });
+        }
+        return ps;
+    }
+    if !coarse {
+        return mg_seq(c, b, o, t, true);
+    }
+    let first = if o.len() > 0 {
+        mg_node_at(o, 0)
+    } else {
+        mg_node_at(t, 0)
+    };
+    let mut ps = Vec::new();
+    ps.push(MgPiece {
+        blanks: first.blanks,
+        text: mg_unit_text(c, mg_join_nodes(b), mg_join_nodes(o), mg_join_nodes(t)),
+    });
+    ps
+}
+
+// mg_taken is the units of the side(s) whose texts a resolved region kept:
+// ours, theirs, or both (ours first).
+fn mg_taken(lines: Vec<String>, o: Vec<MgNode>, t: Vec<MgNode>) -> Vec<MgPiece> {
+    let mut ps = Vec::new();
+    let is_o = mg_eq(lines, mg_col(o, "text"));
+    let is_t = mg_eq(lines, mg_col(t, "text"));
+    if is_o || !is_t {
+        mg_extend_pieces(ps, o);
+    }
+    if !is_o {
+        mg_extend_pieces(ps, t);
+    }
+    ps
+}
+
+fn mg_nodes_sub(v: Vec<MgNode>, a: Int, b: Int) -> Vec<MgNode> {
+    let mut out = Vec::new();
+    for i in a..b {
+        out.push(mg_node_at(v, i));
+    }
+    out
+}
+
+fn mg_extend_pieces(mut out: Vec<MgPiece>, v: Vec<MgNode>) {
+    for n in v {
+        out.push(MgPiece { blanks: n.blanks, text: n.text });
+    }
+}
+
+// mg_join_nodes is the text of consecutive units (the first one's blank
+// lines left out).
+fn mg_join_nodes(v: Vec<MgNode>) -> String {
+    let mut ps = mg_pieces(v);
+    match ps.get(0) {
+        Some(p) => {
+            ps.set(0, MgPiece { blanks: 0, text: p.text });
+        }
+        None => {}
+    }
+    mg_render(Vec::new(), ps, Vec::new())
+}

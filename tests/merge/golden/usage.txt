@@ -1,0 +1,10 @@
+--- stderr
+usage: kek merge [-p] [-no-ast] [-path p] [-marker-size n] [-ours-label l] [-base-label l] [-theirs-label l] <ours> <base> <theirs>
+--- exit 2
+--- stderr
+flag provided but not defined: -bogus
+usage: kek merge [-p] [-no-ast] [-path p] [-marker-size n] [-ours-label l] [-base-label l] [-theirs-label l] <ours> <base> <theirs>
+--- exit 2
+--- stderr
+D/missing: ENOENT: no such file or directory, open 'D/missing'
+--- exit 2

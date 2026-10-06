@@ -1,0 +1,18 @@
+// A program.
+
+// helper adds two.
+fn helper(x: Int) -> Int {
+    x + 2
+}
+
+fn main(log: &Log) -> Int {
+    let a = helper(1);
+    let b = helper(a);
+    log.info(b.to_string());
+    0
+}
+
+fn other() -> Int {
+    0
+}
+--- exit 0

@@ -1,0 +1,14 @@
+# Notes
+
+- one
+<<<<<<< ours
+- two
+||||||| base
+=======
+- three
+>>>>>>> theirs
+
+end
+--- stderr
+kek merge: 1 conflict(s) in add_add.md
+--- exit 1

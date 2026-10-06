@@ -59,7 +59,7 @@ dir = "examples/todo-app"
 run = ["../../kek test server", "../../kek assure check server"]
 
 [tasks.hooks]
-description = "Install the pre-commit hook that runs kek assure check on the projects a commit touches"
+description = "Install the pre-commit hook that runs kek assure check on the projects a commit touches, and the merge driver kek (docs/merge.md)"
 run = "scripts/install-hooks.sh"
 
 [tasks.bench]

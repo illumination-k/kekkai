@@ -1,0 +1,12 @@
+x
+<<< HEAD
+limit = 20
+||| merge-base
+limit = 10
+===
+limit = 30
+>>> feature
+y
+--- stderr
+kek merge: 1 conflict(s) in conflict.toml
+--- exit 1

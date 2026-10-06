@@ -1,0 +1,14 @@
+struct P {
+    x: Int,
+    z: Int,
+}
+
+impl P {
+    fn get(&self) -> Int {
+        self.x
+    }
+
+    fn z(&self) -> Int {
+        self.z
+    }
+}

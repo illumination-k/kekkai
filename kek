@@ -373,6 +373,9 @@ Usage:
                  [-base path | -diff rev] <file|dir>
                                   cognitive / cyclomatic complexity and nesting of each function
                                   (exit 1 when one is over the limits)
+  kek merge [-p] [-no-ast] [-path p] [-marker-size n] <ours> <base> <theirs>
+                                  three-way merge into <ours>: both sides' insertions kept,
+                                  .kek by syntax tree (the git merge driver, docs/merge.md)
 
 Compiler internals:
   kek lex <file> | kek ast <file> token / syntax tree dumps

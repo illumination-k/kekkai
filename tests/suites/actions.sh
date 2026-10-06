@@ -93,10 +93,11 @@ t_test_affected() {
 }
 
 # a stage of the compiler for a fresh cache directory (built once by the
-# suite's ./kek, copied rather than rebuilt)
+# suite's ./kek, copied rather than rebuilt; for the single binary, the
+# precompiled compiler)
 fresh_cache() {
 	mkdir -p "$1"
-	for _s in "$ROOT"/.kek-cache/stage-*; do
+	for _s in "$CACHE"/stage-* "$CACHE"/modules; do
 		[ -d "$_s" ] && cp -R "$_s" "$1/"
 	done
 }

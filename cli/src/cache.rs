@@ -38,14 +38,16 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
 }
 
 /// put_dir moves the directory `tmp` to `dest` unless `dest` already
-/// exists (another run won the race: `tmp` is removed).
-pub fn put_dir(tmp: tempfile::TempDir, dest: &Path) -> Result<()> {
+/// exists (another run won the race: `tmp` is removed). Returns whether
+/// this run put it.
+pub fn put_dir(tmp: tempfile::TempDir, dest: &Path) -> Result<bool> {
     if dest.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let tmp = tmp.keep();
     if fs::rename(&tmp, dest).is_err() {
         let _ = fs::remove_dir_all(&tmp);
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }

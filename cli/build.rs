@@ -64,7 +64,8 @@ fn main() {
     println!("cargo:rustc-env=KEK_GIT_REV={rev}");
     // the release workflow sets KEK_VERSION from the tag
     println!("cargo:rerun-if-env-changed=KEK_VERSION");
-    let version = env::var("KEK_VERSION").unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").unwrap());
+    let version =
+        env::var("KEK_VERSION").unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").unwrap());
     println!("cargo:rustc-env=KEK_VERSION={version}");
     println!(
         "cargo:rerun-if-changed={}",

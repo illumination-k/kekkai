@@ -9,6 +9,8 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 KEK=${KEK:-$ROOT/kek}
+# the cache of $KEK (the single binary's is not under the repository)
+CACHE=${KEK_CACHE:-$ROOT/.kek-cache}
 JOBS=${JOBS:-4}
 VERBOSE=${VERBOSE:-0}
 SHORT=${SHORT:-0}

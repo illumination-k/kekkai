@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/illumination-k/kekkai/main/scripts/
 kek run hello.kek
 ```
 
-`check`・`build`・`run`・`fmt`・`lsp`・`assure`・`similar`・`complexity`・`merge` などはそのまま使えます。`test`・`cover`・`mutate`・`daemon` はまだ `./kek` だけにあります。作り方とリリースは [docs/dist.md](docs/dist.md) にあります。
+`./kek` のコマンドはすべて使えます（`test`・`cover`・`mutate`・`daemon` も）。例外は、コンパイラ自身を作り直す `bootstrap-check`／`bootstrap-update` だけです。作り方とリリースは [docs/dist.md](docs/dist.md) にあります。
 
 生成されるモジュールは自己完結しています。文字列・`Vec`・`Response` などの組み込み操作は Kekkai で書いたランタイムの prelude（`lib/prelude`）として、`HashMap`・イテレータ・比較やハッシュの trait は同じく Kekkai で書いた core ライブラリ（`lib/core`）として一緒にコンパイルされます。外とつながるのは capability の操作だけです。
 

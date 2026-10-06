@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"
+regex = "1"
 sha2 = "0.10"
 tar = { version = "0.4", default-features = false }
 tempfile = "3"

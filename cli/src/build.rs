@@ -13,10 +13,10 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use wasmtime::Result;
 use wasmtime::error::Context;
-use wasmtime::{Result, bail};
 
-use crate::{Kek, cache, embedded, wasm};
+use crate::{Kek, cache, die, embedded, remote, wasm};
 
 const BUILD_USAGE: &str = "usage: kek build [-o dir] [-target d1|do] <file|dir>";
 
@@ -75,12 +75,12 @@ pub fn cmd_run(kek: &mut Kek, args: &[String]) -> Result<i32> {
         return Ok(code);
     }
     if out.path().join("kekkai_meta.js").is_file() {
-        bail!(
+        die!(
             "kek run: {src} is a #[handler] program (build it with kek build and serve it with workerd or wrangler)"
         );
     }
     let module_path = out.path().join("module.wasm");
-    let engine = wasm::engine(wasm::Kind::Program)?;
+    let engine = wasm::shared_engine(wasm::Kind::Program)?;
     let module = wasmtime::Module::from_file(&engine, &module_path)?;
     let mut argv = vec![module_path.to_string_lossy().into_owned()];
     argv.extend_from_slice(rest);
@@ -109,6 +109,7 @@ pub fn cached_build(kek: &mut Kek, path: &str, out: &Path, args: &[String]) -> R
     // diagnostics are replayed). wrangler.toml is only written when the
     // output directory has none, as the compiler does.
     let bd = root.join(format!("src-{}", src_digest(kek, path, args)?));
+    remote::action_fetch(&bd)?;
     let has_toml = out.join("wrangler.toml").is_file();
     if bd.join("ok").is_file()
         && (!bd.join("worker.js").is_file() || has_toml || bd.join("wrangler.toml").is_file())
@@ -188,8 +189,7 @@ pub fn cached_build(kek: &mut Kek, path: &str, out: &Path, args: &[String]) -> R
         }
     }
     fs::write(t.path().join("stderr"), &res.stderr)?;
-    fs::write(t.path().join("ok"), "")?;
-    cache::put_dir(t, &bd)?;
+    remote::action_put(t, &bd)?;
     Ok(0)
 }
 
@@ -201,7 +201,7 @@ fn copy_if(from: &Path, to: &Path) -> Result<()> {
 }
 
 /// src_digest: the digest of a build's inputs (Bazel's action key).
-fn src_digest(kek: &Kek, path: &str, args: &[String]) -> Result<String> {
+pub fn src_digest(kek: &Kek, path: &str, args: &[String]) -> Result<String> {
     let mut h = Sha256::new();
     h.update(format!(
         "{}\n{}\n{}\n",
@@ -229,7 +229,7 @@ fn src_digest(kek: &Kek, path: &str, args: &[String]) -> Result<String> {
 /// reads them: the directory's own, sorted, then those of each
 /// subdirectory (a module) in turn. Directories starting with "." and
 /// node_modules are skipped.
-fn prog_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+pub fn prog_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();

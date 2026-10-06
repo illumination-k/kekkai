@@ -71,7 +71,7 @@ description = "Build the single binary kek (cli/, the current compiler embedded)
 run = "scripts/dist.sh"
 
 [tasks.dist-test]
-description = "Run the test suites the single binary supports with KEK=cli/target/release/kek"
+description = "Run the test suites (all but bootstrap, which is ./kek's) with KEK=cli/target/release/kek"
 depends = ["dist"]
 env = { KEK = "{{config_root}}/cli/target/release/kek" }
-run = "tests/run.sh check bad-examples run agent-cmds assure lsp complexity merge smt refine fmt fix"
+run = "tests/run.sh check bad-examples run kek-test pbt test-cache actions daemon lsp cover mutate agent-cmds assure similar complexity merge smt refine fmt fix difftest e2e"

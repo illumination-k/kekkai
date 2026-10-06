@@ -6,28 +6,46 @@
 // the compiler itself (it rebuilds the compiler from the sources).
 mod build;
 mod cache;
+mod cover;
+mod daemon;
 mod diff;
+mod flags;
+mod mutate;
+mod remote;
+mod testcmd;
 mod today;
 mod wasm;
 
+use std::fmt;
 use std::process::exit;
-use wasmtime::Result;
-use wasmtime::{Engine, Module};
+use wasmtime::{Engine, Module, Result};
 
 mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 }
 
-/// The commands of ./kek this binary does not have yet.
-const NOT_YET: &[&str] = &["test", "cover", "mutate", "daemon"];
-
 /// The repository maintenance commands of ./kek.
-const REPO_ONLY: &[&str] = &[
-    "bootstrap-check",
-    "bootstrap-update",
-    "stage",
-    "__cover-one",
-];
+const REPO_ONLY: &[&str] = &["bootstrap-check", "bootstrap-update", "stage"];
+
+/// An error whose message is printed as it is (./kek's `die`).
+#[derive(Debug)]
+pub struct Die(pub String);
+
+impl fmt::Display for Die {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Die {}
+
+/// die!(...) returns the error Die(format!(...)): the message, exit 1.
+#[macro_export]
+macro_rules! die {
+    ($($t:tt)*) => {
+        return Err($crate::Die(format!($($t)*)).into())
+    };
+}
 
 pub struct Kek {
     compiler: Option<(Engine, Module)>,
@@ -45,15 +63,24 @@ impl Kek {
 
     fn compiler(&mut self) -> Result<&(Engine, Module)> {
         if self.compiler.is_none() {
-            let engine = wasm::engine(wasm::Kind::Compiler)?;
-            let module = wasm::compiler_module(&engine, embedded::COMPILER_WASM)?;
+            let engine = wasm::shared_engine(wasm::Kind::Compiler)?;
+            let module = wasm::precompiled(&engine, embedded::COMPILER_WASM)?;
             self.compiler = Some((engine, module));
         }
         Ok(self.compiler.as_ref().unwrap())
     }
 
-    /// run_compiler runs a compiler command (args without argv[0]).
+    /// run_compiler runs a compiler command (args without argv[0]),
+    /// through the daemon when one is running and free.
     pub fn run_compiler(&mut self, args: &[String], capture: bool) -> Result<wasm::Output> {
+        if let Some(out) = daemon::call(self, args, capture)? {
+            return Ok(out);
+        }
+        self.run_compiler_here(args, capture)
+    }
+
+    /// run_compiler_here runs a compiler command in this process.
+    pub fn run_compiler_here(&mut self, args: &[String], capture: bool) -> Result<wasm::Output> {
         let (engine, module) = self.compiler()?;
         let mut argv = vec!["kek".to_string()];
         argv.extend_from_slice(args);
@@ -108,16 +135,26 @@ Usage:
                                   cognitive / cyclomatic complexity and nesting
   kek merge [-p] [-no-ast] [-path p] [-marker-size n] <ours> <base> <theirs>
                                   three-way merge (the git merge driver)
+  kek test [-run re] [-seed n] [-cases n] [-j n] [-json] [-no-cache] [-affected rev]
+           [-clock ms] [-net f.json] [-db f.json] <file|dir>
+                                  run the #[test] functions with mock capabilities
+  kek cover [-json] [-lcov file] [-run re] [-seed n] <file|dir>
+                                  line and branch coverage of the tests
+  kek mutate [-json] [-run re] [-base <file|dir> | -diff rev] [-timeout 2s] <file|dir>
+                                  mutation testing
   kek lsp                         language server on stdin/stdout
+  kek daemon start|stop|status|stats
+                                  keep the compiler running: parses stay in memory between builds
   kek version                     print the version
 
-Not yet in the single binary (use ./kek in a checkout of the repository):
-  kek test, kek cover, kek mutate, kek daemon
-
 Environment:
-  KEK_CACHE         cache directory (default $XDG_CACHE_HOME/kek or ~/.cache/kek)
-  KEK_BUILD_CACHE=0 disable the build cache
-  KEK_TODAY         the date kek assure uses (default today)
+  KEK_CACHE           cache directory (default $XDG_CACHE_HOME/kek or ~/.cache/kek)
+  KEK_BUILD_CACHE=0   disable the build cache
+  KEK_TEST_CACHE=0    run every test (kek test -no-cache)
+  KEK_TEST_TIMEOUT    wall-clock limit of a kek test batch (e.g. 10s)
+  KEK_REMOTE_CACHE    share the action cache over HTTP (Bazel's protocol) or file:// (needs curl)
+  KEK_DAEMON=0        do not use a running daemon
+  KEK_TODAY           the date kek assure uses (default today)
 "#
     );
 }
@@ -127,7 +164,10 @@ fn main() {
     match real_main(args) {
         Ok(code) => exit(code),
         Err(e) => {
-            eprintln!("kek: {e:#}");
+            match e.downcast_ref::<Die>() {
+                Some(d) => eprintln!("{d}"),
+                None => eprintln!("kek: {e:#}"),
+            }
             exit(1);
         }
     }
@@ -159,19 +199,12 @@ fn real_main(args: Vec<String>) -> Result<i32> {
             }
             kek.compiler_cmd(&a)
         }
-        "similar" if rest.iter().any(|a| a == "-semantic" || a == "--semantic") => {
-            // the semantic kind runs property tests (kek test)
-            eprintln!(
-                "kek similar -semantic: not yet in the single binary (it runs kek test); run ./kek in a checkout of the Kekkai repository"
-            );
-            Ok(2)
-        }
-        "similar" => diff::with_diff(
-            &mut kek,
-            "similar",
-            "kek similar [-json] [-threshold pct] [-all] [-tests] [-base path | -diff rev] <file|dir>",
-            rest,
-        ),
+        "similar" => testcmd::cmd_similar(&mut kek, rest),
+        "test" => testcmd::cmd_test(&mut kek, rest, &mut std::io::stdout(), None),
+        "cover" => cover::cmd_cover(&mut kek, rest),
+        "mutate" => mutate::cmd_mutate(&mut kek, rest),
+        "daemon" => daemon::cmd_daemon(&mut kek, rest),
+        "__daemon" => daemon::serve(&mut kek, rest),
         "complexity" => diff::with_diff(
             &mut kek,
             "complexity",
@@ -181,15 +214,13 @@ fn real_main(args: Vec<String>) -> Result<i32> {
         "affected" => diff::cmd_affected(&mut kek, rest),
         "lsp" => {
             // the language server reads lib/core (go to definition) under
-            // the root it is given: the embedded sources, extracted
+            // the root it is given: the embedded sources, extracted. It
+            // reads its standard input for as long as the
+            // editor runs: never through the daemon
             let root = extract_core()?;
-            kek.compiler_cmd(&["lsp".to_string(), root])
-        }
-        c if NOT_YET.contains(&c) => {
-            eprintln!(
-                "kek {c}: not yet in the single binary; run ./kek {c} in a checkout of the Kekkai repository"
-            );
-            Ok(2)
+            Ok(kek
+                .run_compiler_here(&["lsp".to_string(), root], false)?
+                .code)
         }
         c if REPO_ONLY.contains(&c) => {
             eprintln!("kek {c}: a maintenance command of the repository's ./kek");

@@ -3,10 +3,10 @@
 // kek complexity, kek affected). Needs git.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use wasmtime::Result;
 use wasmtime::error::Context;
-use wasmtime::{Result, bail};
 
-use crate::Kek;
+use crate::{Kek, die};
 
 fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
     Command::new("git")
@@ -157,28 +157,28 @@ pub fn cmd_affected(kek: &mut Kek, args: &[String]) -> Result<i32> {
             _ if a.starts_with("-diff=") || a.starts_with("--diff=") => {
                 rev = a.split_once('=').map(|x| x.1.to_string())
             }
-            _ if a.starts_with('-') => bail!("flag provided but not defined: {a}"),
+            _ if a.starts_with('-') => die!("flag provided but not defined: {a}"),
             _ => break,
         }
         i += 1;
     }
     let rest = &args[i..];
     if rest.len() != 1 {
-        bail!("{AFFECTED_USAGE}");
+        die!("{AFFECTED_USAGE}");
     }
     let target = &rest[0];
     if !Path::new(target).exists() {
-        bail!("stat {target}: no such file or directory");
+        die!("stat {target}: no such file or directory");
     }
     let tmp = tempfile::Builder::new().prefix("kek-affected-").tempdir()?;
     if let Some(rev) = rev.filter(|r| !r.is_empty()) {
         if base.as_ref().is_some_and(|b| !b.is_empty()) {
-            bail!("kek affected: -base and -diff are exclusive");
+            die!("kek affected: -base and -diff are exclusive");
         }
         base = Some(extract_rev(&rev, Path::new(target), tmp.path())?);
     }
     let Some(base) = base.filter(|b| !b.is_empty()) else {
-        bail!("kek affected: -base or -diff is required");
+        die!("kek affected: -base or -diff is required");
     };
     let mut full = vec!["affected".to_string()];
     if json {
@@ -190,14 +190,16 @@ pub fn cmd_affected(kek: &mut Kek, args: &[String]) -> Result<i32> {
 
 /// extract_rev writes `path` (a file or a directory) as of `rev` under
 /// `dest` and returns the path of the copy.
-fn extract_rev(rev: &str, path: &Path, dest: &Path) -> Result<String> {
-    let fail = || format!("-diff: cannot read {} at {rev}", path.display());
+pub fn extract_rev(rev: &str, path: &Path, dest: &Path) -> Result<String> {
+    let fail = || format!("kek mutate: -diff: cannot read {} at {rev}", path.display());
     if path.is_dir() {
         let ar = git(path, &["archive", "--format=tar", &format!("{rev}:./")])?;
         if !ar.status.success() {
-            bail!(fail());
+            die!("{}", fail());
         }
-        unpack(&ar.stdout, dest).with_context(fail)?;
+        if unpack(&ar.stdout, dest).is_err() {
+            die!("{}", fail());
+        }
         Ok(dest.to_string_lossy().into_owned())
     } else {
         let name = path
@@ -211,7 +213,7 @@ fn extract_rev(rev: &str, path: &Path, dest: &Path) -> Result<String> {
         };
         let show = git(dir, &["show", &format!("{rev}:./{name}")])?;
         if !show.status.success() {
-            bail!(fail());
+            die!("{}", fail());
         }
         let f = dest.join(&name);
         std::fs::write(&f, &show.stdout)?;

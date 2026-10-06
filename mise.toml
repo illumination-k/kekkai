@@ -73,5 +73,6 @@ run = "scripts/dist.sh"
 [tasks.dist-test]
 description = "Run the test suites (all but bootstrap, which is ./kek's) with KEK=cli/target/release/kek"
 depends = ["dist"]
-env = { KEK = "{{config_root}}/cli/target/release/kek" }
+# the suites look for the binary's cache in KEK_CACHE
+env = { KEK = "{{config_root}}/cli/target/release/kek", KEK_CACHE = "{{config_root}}/.kek-cache/bin" }
 run = "tests/run.sh check bad-examples run kek-test pbt test-cache actions daemon lsp cover mutate agent-cmds assure similar complexity merge smt refine fmt fix difftest e2e"

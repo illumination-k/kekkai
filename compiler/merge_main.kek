@@ -844,6 +844,8 @@ fn mg_lit_split(s: String) -> MgLitSplit {
             i = mg_scan_to(s, i, "\n", 0);
         } else if ch == 47 && s.char_at(i + 1).unwrap_or(0) == 42 {
             i = mg_scan_to(s, i + 2, "*/", 2);
+        } else if ch == 39 {
+            i = mg_char_end(s, i);
         } else if ch == 34 {
             let e = mg_lit_end(s, i);
             parts.push(s.slice(start, i));
@@ -866,6 +868,20 @@ fn mg_scan_to(s: String, i: Int, end: String, skip: Int) -> Int {
         Some(k) => i + k + skip,
         None => s.len(),
     }
+}
+
+// mg_char_end is the index after the character literal (`'"'`, `'\''`)
+// starting at i, or after the `'` of a label.
+fn mg_char_end(s: String, i: Int) -> Int {
+    if s.char_at(i + 1).unwrap_or(0) == 92 {
+        return mg_scan_to(s, i + 3, "'", 1);
+    }
+    for k in 2..4 {
+        if s.char_at(i + k).unwrap_or(0) == 39 {
+            return i + k + 1;
+        }
+    }
+    i + 1
 }
 
 // mg_lit_end is the index after the string literal starting at i.

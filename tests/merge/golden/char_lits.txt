@@ -1,0 +1,5 @@
+fn q(c: Int) -> Bool {
+    log_it("A\nb\nC\n");
+    c == '"' || c == '\''
+}
+--- exit 0

@@ -25,6 +25,7 @@
 # Maintenance:
 #   kek bootstrap-check   rebuild the compiler with itself; require a fixed point
 #   kek bootstrap-update  replace bootstrap/ with the current compiler (after the check)
+#   kek stage             print the module.wasm of the current compiler (scripts/dist.sh)
 set -eu
 
 root=$(cd "$(dirname "$0")" && pwd)
@@ -396,6 +397,7 @@ Daemon:
 Maintenance:
   kek bootstrap-check             rebuild the compiler with itself; require a fixed point
   kek bootstrap-update            replace bootstrap/ with the current compiler (after the check)
+  kek stage                       print the module.wasm of the current compiler
 EOF
 }
 
@@ -1820,6 +1822,14 @@ bootstrap-update)
 	bootstrap_check update
 	cp "$_new" "$root/bootstrap/kek.wasm"
 	echo "bootstrap/ updated"
+	;;
+stage)
+	stage_dir
+	if [ "$_stage_memo" = "$root/bootstrap" ]; then
+		echo "$root/bootstrap/kek.wasm"
+	else
+		echo "$_stage_memo/module.wasm"
+	fi
 	;;
 build) cmd_build "$@" ;;
 daemon) cmd_daemon "$@" ;;

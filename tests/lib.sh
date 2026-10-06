@@ -8,7 +8,7 @@
 set -u
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-KEK=$ROOT/kek
+KEK=${KEK:-$ROOT/kek}
 JOBS=${JOBS:-4}
 VERBOSE=${VERBOSE:-0}
 SHORT=${SHORT:-0}

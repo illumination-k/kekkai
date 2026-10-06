@@ -1,0 +1,23 @@
+[package]
+name = "kek"
+version = "0.1.0"
+edition = "2024"
+description = "The Kekkai toolchain as a single binary: the self-hosted compiler embedded in a wasmtime host"
+publish = false
+
+[[bin]]
+name = "kek"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }
+tempfile = "3"
+wasmtime = "=49.0.2"
+wasmtime-wasi = "=49.0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

@@ -65,3 +65,13 @@ run = "scripts/install-hooks.sh"
 [tasks.bench]
 description = "Time mutate/test/cover/hash/build cold and warm; with a git ref, compare against it (scripts/bench.sh [ref])"
 run = "scripts/bench.sh"
+
+[tasks.dist]
+description = "Build the single binary kek (cli/, the current compiler embedded) into cli/target/release/kek (docs/dist.md)"
+run = "scripts/dist.sh"
+
+[tasks.dist-test]
+description = "Run the test suites the single binary supports with KEK=cli/target/release/kek"
+depends = ["dist"]
+env = { KEK = "{{config_root}}/cli/target/release/kek" }
+run = "tests/run.sh check bad-examples run agent-cmds assure lsp complexity merge smt refine fmt fix"

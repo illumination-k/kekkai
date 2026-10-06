@@ -1,0 +1,97 @@
+name: Release
+
+# A tag v* builds the single binary kek (cli/, with the compiler embedded)
+# for each target and publishes them as a GitHub release; scripts/install.sh
+# installs from it. Pull requests that touch the binary and
+# workflow_dispatch build and smoke-test every target without publishing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - cli/**
+      - scripts/dist.sh
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compiler:
+    name: compiler (built from compiler/ by the bootstrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install_args: wasmtime
+          cache: true
+      - run: ./kek bootstrap-check
+      - run: cp "$(./kek stage)" kek.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compiler
+          path: kek.wasm
+
+  build:
+    name: kek (${{ matrix.target }})
+    needs: compiler
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          # Ubuntu 22.04: glibc 2.35, so the binary runs on older systems too
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: compiler
+          path: cli/embed
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build
+        working-directory: cli
+        env:
+          KEK_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          [ -n "$KEK_VERSION" ] || unset KEK_VERSION
+          cargo build --release --locked
+      - name: smoke test
+        env:
+          KEK_CACHE: ${{ runner.temp }}/kek-cache
+        run: |
+          kek=cli/target/release/kek
+          "$kek" version
+          "$kek" run testdata/run/closures.kek | diff - testdata/run/closures.out
+          "$kek" check examples/todo/todo.kek
+      - name: package
+        run: |
+          name=kek-${{ matrix.target }}
+          tar -czf "$name.tar.gz" -C cli/target/release kek
+          shasum -a 256 "$name.tar.gz" >"$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kek-${{ matrix.target }}
+          path: kek-${{ matrix.target }}.tar.gz*
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kek-*
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --generate-notes kek-*.tar.gz kek-*.tar.gz.sha256

@@ -23,3 +23,17 @@ jobs:
       - run: tests/run.sh --short
       - run: mise run fmt-check
       - run: mise run todo-app-check
+
+  dist:
+    name: single binary (cli/) on the test suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install_args: wasmtime
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - run: mise run dist-test -- --short

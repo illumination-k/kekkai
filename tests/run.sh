@@ -54,6 +54,10 @@
 #   --keep        difftest: keep the generated programs
 #   --short       fewer random programs (difftest 20, fmt 10)
 #   -v            print the output of passing cases too
+#
+# KEK=<path> runs the suites with another kek, e.g. the single binary
+# (scripts/dist.sh; `mise run dist-test` runs every suite but bootstrap with
+# it). The suites find its cache through KEK_CACHE.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"

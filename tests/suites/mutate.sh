@@ -190,7 +190,7 @@ second run: exit $?"
 	cmp -s "$d/out1" "$d/out2" || r="$r
 the reports differ:
 $(diff "$d/out1" "$d/out2")"
-	[ -s "$(ls "$ROOT"/.kek-cache/mutate/pairs-*.tsv 2>/dev/null | head -n 1)" ] || r="$r
+	[ -s "$(ls "$CACHE"/mutate/pairs-*.tsv 2>/dev/null | head -n 1)" ] || r="$r
 no cached results"
 	result cache "$r" "$d/out2"
 	rm -rf "$d"

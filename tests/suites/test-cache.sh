@@ -253,7 +253,7 @@ EOF2
 
 # find_entry <module.wasm>: the build cache entry holding this module.
 find_entry() {
-	for _e in "$ROOT"/.kek-cache/build/*/*/; do
+	for _e in "$CACHE"/build/*/*/; do
 		[ -f "$_e/module.wasm" ] && cmp -s "$_e/module.wasm" "$1" && echo "${_e%/}" && return 0
 	done
 	return 1

@@ -2,3 +2,5 @@
 lean/.lake/
 /.claude/worktrees/
 /.kek-cache/
+/cli/target/
+/cli/embed/

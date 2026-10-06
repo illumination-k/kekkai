@@ -13,7 +13,7 @@ fi
 t_daemon() {
 	d=$(tmpdir)
 	mkdir -p "$d/cache"
-	for s in "$ROOT"/.kek-cache/stage-*; do
+	for s in "$CACHE"/stage-* "$CACHE"/modules; do
 		[ -d "$s" ] && cp -R "$s" "$d/cache/"
 	done
 	export KEK_CACHE="$d/cache"

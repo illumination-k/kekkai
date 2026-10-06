@@ -33,6 +33,17 @@ mise run todo-app                          # フロントエンド付きの例�
 
 `./kek` はシェルスクリプトで、`bootstrap/kek.wasm`（コンパイラ自身をコンパイルした WasmGC + WASI のモジュール）で現在の `compiler/` をビルドし（`.kek-cache/` にキャッシュ）、そのコンパイラを wasmtime で実行します。詳しくは [bootstrap/README.md](bootstrap/README.md) と [docs/selfhost.md](docs/selfhost.md)。
 
+### 単一バイナリ
+
+リポジトリなしで使うときは、コンパイラと wasmtime を 1 つにまとめた `kek` バイナリを入れます（macOS arm64、Linux x86_64 / arm64）。wasmtime も mise も要りません。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/illumination-k/kekkai/main/scripts/install.sh | sh
+kek run hello.kek
+```
+
+`./kek` のコマンドはすべて使えます（`test`・`cover`・`mutate`・`daemon` も）。例外は、コンパイラ自身を作り直す `bootstrap-check`／`bootstrap-update` だけです。作り方とリリースは [docs/dist.md](docs/dist.md) にあります。
+
 生成されるモジュールは自己完結しています。文字列・`Vec`・`Response` などの組み込み操作は Kekkai で書いたランタイムの prelude（`lib/prelude`）として、`HashMap`・イテレータ・比較やハッシュの trait は同じく Kekkai で書いた core ライブラリ（`lib/core`）として一緒にコンパイルされます。外とつながるのは capability の操作だけです。
 
 - `#[main]`：WASI のコマンド（`_start`）。ファイル・ログ・時計・乱数は WASI で実装されています

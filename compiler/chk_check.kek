@@ -76,9 +76,22 @@ struct ChkMethodInfo {
     targs: Vec<Ty>,
 }
 
+// conv is the call of `From::from` that converts the error of a `?` on a
+// `Result` into the function's error type (None when they are the same).
 struct ChkTryInfo {
     closure: Option<ChkClosureInfo>,
     target: Ty,
+    conv: Option<ChkMethodInfo>,
+}
+
+// ChkLoop is an enclosing loop: its label ("" without one), whether it is
+// a `loop`, the type of its value (the `break` values of a `loop`) and the
+// number of `break`s that leave it (a `loop` without one diverges).
+struct ChkLoop {
+    label: String,
+    is_loop: Bool,
+    ty: Ty,
+    mut breaks: Int,
 }
 
 struct ChkReturnInfo {
@@ -93,7 +106,9 @@ struct ChkForIter {
     next: ChkMethodInfo,
 }
 
-// kind: "wild", "bind", "int", "bool", "string", "ctor"
+// kind: "wild", "bind", "int", "bool", "string", "ctor", "tuple", "range",
+// "or" (args: the alternatives, sharing the first one's bindings), "at"
+// (`x @ p`: bind x, args [p])
 struct ChkPatInfo {
     mut kind: String,
     mut ty: Ty,
@@ -145,6 +160,11 @@ struct ChkInfo {
     // functions whose signature mentions a parameter as the resource of a
     // permission (`Can<Edit, d>`): calls substitute the arguments' paths
     path_fns: HashMap<String, Bool>,
+    // opaque result types `impl Trait` (by their type name) and the
+    // coercions of values to trait objects (expression id -> the `dyn`
+    // type), see compiler/chk_dyn.kek
+    opaques: HashMap<String, ChkOpaque>,
+    coercions: HashMap<Int, Ty>,
 }
 
 // A closure's body is a scope with lambda set to the closure's id: a
@@ -174,7 +194,10 @@ struct Chk {
     // trait method -> the program's implementations, built on first use
     // (after the declarations)
     mut impl_idx: Option<HashMap<String, Vec<ChkFunc>>>,
+    // the number of enclosing loops visible from here (0 in a closure
+    // body): the last `loops` entries of loop_stack
     mut loops: Int,
+    mut loop_stack: Vec<ChkLoop>,
     info: ChkInfo,
     errs: Vec<AstError>,
     mut next_id: Int,
@@ -193,6 +216,25 @@ struct Chk {
     // set by chk_lookup: the variable found is captured by a closure
     mut captured: Bool,
     builtins: ChkBuiltins,
+    // where `impl Trait` may appear in the type being resolved: "arg" (a
+    // parameter: an anonymous generic param, collected in anon), "ret" (a
+    // result: an opaque type of function opaque_fn over opaque_ps), ""
+    mut impl_mode: String,
+    mut anon: Vec<TyParam>,
+    mut opaque_fn: String,
+    mut opaque_ps: Vec<TyParam>,
+    // the trait objects written in the program (object safety is checked
+    // after the declarations)
+    dyn_uses: Vec<ChkDynUse>,
+    // the expected type of the `vec![..]` being checked (its elements may
+    // be coerced to trait objects)
+    mut vec_hint: Option<Ty>,
+    // the trait object type expected of the `if`, `match` or block being
+    // checked: its branches are coerced to it
+    mut want_dyn: Option<Ty>,
+    // the binding ids of the parameters used as resources of permissions
+    // in the function being checked: they cannot be reassigned
+    mut resources: HashMap<Int, Bool>,
     // prelude mode: the program includes the runtime prelude, which may
     // define Response / TxError / NetError / IoError as structs and use
     // the `__` intrinsics
@@ -292,10 +334,11 @@ fn chk_parse_core_from(mut srcs: Vec<FeSource>) -> ChkCore {
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     let mut errs = Vec::new();
     let ids = AstIds { next: 1099511627776 };
-    srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples() });
+    srcs.push(FeSource { name: "<core>/tuple.kek", text: derive_tuples(), module: "" });
     for s in srcs {
         let pr = parse_file(s.name, s.text, ids);
         for e in pr.errs {
@@ -318,14 +361,16 @@ fn chk_with_core(f: AstFile, mut errs: Vec<AstError>, core: ChkCore) -> AstFile 
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     for e in core.errs {
         errs.push(e);
     }
     chk_append_file(out, core.file);
     chk_append_file(out, f);
-    derive_items(out, AstIds { next: core.next }, errs);
-    out
+    let ids = AstIds { next: core.next };
+    derive_items(out, ids, errs);
+    desugar_items(out, ids, errs)
 }
 
 fn chk_append_file(mut out: AstFile, f: AstFile) {
@@ -346,6 +391,9 @@ fn chk_append_file(mut out: AstFile, f: AstFile) {
     }
     for x in f.aliases {
         out.aliases.push(x);
+    }
+    for x in f.consts {
+        out.consts.push(x);
     }
 }
 
@@ -448,6 +496,14 @@ fn chk_check_attr(c: Chk, a: AstAttr) {
         }
         return;
     }
+    if a.name == "__mod" || a.name == "__private" {
+        // added by compiler/modres.kek (`__` names cannot be written)
+        return;
+    }
+    if a.name == "const" && ast_attr_has(a, "__const") {
+        // the function of a constant (compiler/desugar.kek)
+        return;
+    }
     chk_errorf(c, a.pos, "unknown attribute `#[" + a.name + "]`");
 }
 
@@ -509,12 +565,15 @@ fn chk_check_full(
         refine_fns: HashMap::new(),
         alias_structs: HashMap::new(),
         path_fns: HashMap::new(),
+        opaques: HashMap::new(),
+        coercions: HashMap::new(),
     };
     let core_errs = Vec::new();
     let f = chk_with_core(user, core_errs, core);
     let mut c = Chk {
         impl_idx: None,
         loops: 0,
+        loop_stack: Vec::new(),
         info: info,
         errs: core_errs,
         next_id: 0,
@@ -527,9 +586,18 @@ fn chk_check_full(
         obls: Vec::new(),
         captured: false,
         builtins: chk_new_builtins(),
+        impl_mode: "",
+        anon: Vec::new(),
+        opaque_fn: "",
+        opaque_ps: Vec::new(),
+        dyn_uses: Vec::new(),
+        vec_hint: None,
+        want_dyn: None,
+        resources: HashMap::new(),
         prelude: prelude,
     };
     chk_declare(c, f);
+    chk_check_dyn_uses(c);
     if prelude {
         chk_add_intrinsics(c);
     }
@@ -544,7 +612,12 @@ fn chk_check_full(
         lin_check(c.info, fun, c.errs);
     }
     // the mutability and refinement passes need a well-typed program
-    let typed = c.errs.len() == 0;
+    let mut typed = c.errs.len() == 0;
+    if typed {
+        // private methods and fields of modules (compiler/modres.kek)
+        mr_check_privacy(c.info, user, c.errs);
+        typed = c.errs.len() == 0;
+    }
     let mut mr = mu_empty_report();
     if typed && mu {
         mr = mu_program(c.info, f);
@@ -587,6 +660,7 @@ fn chk_new_binding(mut c: Chk, name: String, t: Ty, pos: AstPos) -> ChkBinding {
 
 fn chk_reserved(n: String) -> Bool {
     n == "Int"
+        || n == "Float"
         || n == "Bool"
         || n == "String"
         || n == "Result"
@@ -694,7 +768,7 @@ fn chk_declare(mut c: Chk, f: AstFile) {
                             chk_errorf(c, v.pos, "duplicate variant `" + v.name + "`");
                         }
                         seen.insert(v.name, true);
-                        let mut vi = TyVariant { name: v.name, fields: Vec::new() };
+                        let mut vi = TyVariant { name: v.name, fields: Vec::new(), names: v.names };
                         for ft in v.fields {
                             vi.fields.push(chk_resolve_type(c, ft, false));
                         }
@@ -797,6 +871,25 @@ fn chk_preds(c: Chk, fun: ChkFunc) {
             );
         }
     }
+    // a predicate is about the values passed in: a `mut` parameter could
+    // be reassigned before the postcondition is checked
+    for e in fun.decl.preds {
+        for p in fun.params {
+            if p.mutable && p.name != "self" && chk_pred_mentions(e, p.name) {
+                chk_errorf(
+                    c,
+                    ast_expr_pos(e),
+                    "a refinement predicate cannot mention the `mut` parameter `"
+                        + p.name
+                        + "` (take it without `mut` and copy it with `let mut "
+                        + p.name
+                        + " = "
+                        + p.name
+                        + ";`)",
+                );
+            }
+        }
+    }
     chk_push(c, false);
     chk_bind(c, chk_new_binding(c, "result", fun.result, fun.decl.pos));
     for e in fun.decl.preds {
@@ -808,6 +901,29 @@ fn chk_preds(c: Chk, fun: ChkFunc) {
         }
     }
     chk_pop(c);
+}
+
+// chk_pred_mentions reports whether the variable name occurs in the
+// predicate e.
+fn chk_pred_mentions(e: AstExpr, name: String) -> Bool {
+    match e {
+        AstExpr::Ident(x) => x.name == name,
+        AstExpr::Unary(x) => chk_pred_mentions(x.x, name),
+        AstExpr::Binary(x) => chk_pred_mentions(x.x, name) || chk_pred_mentions(x.y, name),
+        AstExpr::Field(x) => chk_pred_mentions(x.x, name),
+        AstExpr::Method(x) => {
+            if chk_pred_mentions(x.recv, name) {
+                return true;
+            }
+            for a in x.args {
+                if chk_pred_mentions(a, name) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 // chk_pred_formula reports a predicate outside the language of
@@ -1179,7 +1295,11 @@ fn chk_declare_func(
         declass: Vec::new(),
     };
     for a in fd.attrs {
-        if scope.contains_key("Self") && a.name != "fresh" && a.name != "owned" {
+        if scope.contains_key("Self")
+            && a.name != "fresh"
+            && a.name != "owned"
+            && a.name != "const"
+            && !a.name.starts_with("__") {
             chk_errorf(c, a.pos, "attributes are not allowed on methods");
             continue;
         }
@@ -1192,6 +1312,8 @@ fn chk_declare_func(
         pi = pi + 1;
     }
     c.paths = paths;
+    c.impl_mode = "arg";
+    c.anon = Vec::new();
     let mut seen: HashMap<String, Bool> = HashMap::new();
     for p in fd.params {
         if p.name != "_" && seen.contains_key(p.name) {
@@ -1231,14 +1353,32 @@ fn chk_declare_func(
         }
         let mut b = chk_new_binding(c, p.name, t, p.pos);
         b.param = true;
+        // `mut n: Int` can be reassigned, as in Rust
+        b.mutable = p.mutable;
         fun.params.push(b);
     }
+    // `impl Trait` parameters are anonymous generic params, after the
+    // declared ones
+    for p in c.anon {
+        tparams.push(p);
+    }
+    c.anon = Vec::new();
+    c.impl_mode = if chk_is_trait_method_name(c, name) {
+        "trait"
+    } else {
+        "ret"
+    };
+    c.opaque_fn = name;
+    c.opaque_ps = tparams;
     match fd.result {
         Some(te) => {
             fun.result = chk_resolve_type(c, te, false);
         }
         None => {}
     }
+    c.impl_mode = "";
+    c.opaque_fn = "";
+    c.opaque_ps = Vec::new();
     c.paths = HashMap::new();
     let mut has_paths = ty_mentions_path(fun.result);
     for b in fun.params {
@@ -1512,6 +1652,12 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
         }
         AstType::Named(te) => {
             let n = te.name;
+            if n.starts_with("dyn ") {
+                return chk_dyn_type(c, te);
+            }
+            if n.starts_with("impl ") {
+                return chk_impl_type(c, te);
+            }
             if n.contains("::") {
                 chk_type_args(c, te, 0);
                 return chk_assoc_type(c, te);
@@ -1534,7 +1680,7 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 chk_errorf(c, te.pos, "`Self` is only available in `impl` blocks");
                 return ty_invalid();
             }
-            if n == "Int" || n == "Bool" || n == "String" {
+            if n == "Int" || n == "Float" || n == "Bool" || n == "String" {
                 chk_type_args(c, te, 0);
                 return Ty::Prim(n);
             }
@@ -1626,6 +1772,13 @@ fn chk_resolve_type(mut c: Chk, te0: AstType, allow_cap: Bool) -> Ty {
                 }
                 None => {}
             }
+            if n == "Box" {
+                // `Box<T>` is T unless the program defines `Box`: values
+                // are references already (`Box::new(x)` is x,
+                // compiler/desugar.kek)
+                let a = chk_type_args(c, te, 1);
+                return chk_ty_at(a, 0);
+            }
             chk_errorf(c, te.pos, "unknown type `" + n + "`");
             ty_unit()
         }
@@ -1646,7 +1799,8 @@ fn chk_expect(c: Chk, pos: AstPos, got: Ty, want: Ty, what: String) {
                 + "`"
                 + chk_pii_hint(got, want)
                 + chk_label_hint(got, want)
-                + chk_can_hint(got, want),
+                + chk_can_hint(got, want)
+                + chk_float_hint(ty_prune(got), ty_prune(want)),
         );
     }
 }
@@ -1684,13 +1838,43 @@ fn chk_func(mut c: Chk, fun: ChkFunc) {
     for p in fun.params {
         chk_bind(c, p);
     }
+    // the parameters the signature names as resources (`Can<A, d>`)
+    c.resources = HashMap::new();
+    let mut named: HashMap<Int, Bool> = HashMap::new();
+    for p in fun.params {
+        chk_path_params(p.ty, fun.name, named);
+    }
+    chk_path_params(fun.result, fun.name, named);
+    let mut pi = 0;
+    for p in fun.params {
+        if named.contains_key(pi) {
+            c.resources.insert(p.id, true);
+        }
+        pi = pi + 1;
+    }
     c.rets = Vec::new();
-    c.rets.push(ChkRet { ty: fun.result, closure: None });
+    // the body of a function returning `impl Trait` is checked against a
+    // variable in place of each opaque type (compiler/chk_dyn.kek)
+    let opaques = chk_opaque_vars(c, fun);
+    let result = if opaques.len() > 0 {
+        chk_hide_opaques(fun.result, opaques)
+    } else {
+        fun.result
+    };
+    c.rets.push(ChkRet { ty: result, closure: None });
+    if ty_is_dyn(ty_prune(result)) || chk_is_dyn_vec(ty_prune(result)) {
+        c.want_dyn = Some(result);
+    }
     let t = chk_block(c, fun.decl.body);
-    chk_expect(c, chk_tail_pos(fun.decl.body), t, fun.result, "function result");
+    match fun.decl.body.tail {
+        Some(e) => chk_coerce(c, e, t, result, "function result"),
+        None => chk_expect(c, chk_tail_pos(fun.decl.body), t, result, "function result"),
+    }
     chk_preds(c, fun);
     chk_pop(c);
+    chk_opaque_oblige(c, opaques);
     chk_check_obls(c);
+    chk_opaque_store(c, opaques);
     c.info.wheres = Vec::new();
     c.cur = chk_dummy_func();
     c.tscope = HashMap::new();
@@ -1790,7 +1974,9 @@ fn chk_record(mut c: Chk, id: Int, t: Ty) -> Ty {
     t
 }
 
-fn chk_block(c: Chk, b: AstBlock) -> Ty {
+fn chk_block(mut c: Chk, b: AstBlock) -> Ty {
+    let want = c.want_dyn;
+    c.want_dyn = None;
     chk_push(c, false);
     let mut diverges = false;
     for s in b.stmts {
@@ -1800,12 +1986,28 @@ fn chk_block(c: Chk, b: AstBlock) -> Ty {
     }
     let mut t = ty_unit();
     match b.tail {
-        Some(e) => {
-            t = chk_expr(c, e);
-        }
+        Some(e) => match want {
+            Some(w) => {
+                let et = chk_expr_expect(c, e, w);
+                chk_coerce(c, e, et, w, "block value");
+                t = w;
+            }
+            None => {
+                t = chk_expr(c, e);
+            }
+        },
         None => {
             if diverges {
                 t = ty_never();
+            }
+            // a trailing `loop` is the block's value
+            match ast_block_loop(b) {
+                Some(w) => {
+                    if !diverges {
+                        t = c.info.types.get(w.id).unwrap_or(ty_unit());
+                    }
+                }
+                None => {}
             }
         }
     }
@@ -1823,11 +2025,21 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 Some(te) => {
                     let want = chk_resolve_type(c, te, false);
                     let got = chk_expr_expect(c, s.init, want);
-                    chk_expect(c, ast_expr_pos(s.init), got, want, "let binding");
+                    chk_coerce(c, s.init, got, want, "let binding");
                     t = want;
                 }
                 None => {
+                    let hint = c.vec_hint;
+                    c.vec_hint = None;
                     t = chk_expr(c, s.init);
+                    match hint {
+                        Some(h) => {
+                            if s.name.starts_with("__vec") {
+                                ty_unify(t, h);
+                            }
+                        }
+                        None => {}
+                    }
                 }
             }
             if ty_is_prim(ty_prune(t), "!") {
@@ -1876,8 +2088,19 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                                 + "` (declare it with `let mut`)",
                         );
                     }
+                    if c.resources.contains_key(b.id) {
+                        chk_errorf(
+                            c,
+                            s.pos,
+                            "cannot assign to `"
+                                + s.name
+                                + "`: it is the resource of a permission `Can<_, "
+                                + s.name
+                                + ">`, which must not outlive the value it was granted for",
+                        );
+                    }
                     c.info.assigns.insert(s.id, b);
-                    chk_expect(c, ast_expr_pos(s.value), t, b.ty, "assignment");
+                    chk_coerce(c, s.value, t, b.ty, "assignment");
                 }
             }
             false
@@ -1894,7 +2117,18 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                     Ty::Struct(st, _) => match c.info.fields.get(s.target.id) {
                         Some(i) => match st.fields.get(i) {
                             Some(fi) => {
-                                if !fi.mutable {
+                                if !fi.mutable && parse_int_text(fi.name).is_some() {
+                                    // a tuple struct `struct S(mut T);`
+                                    chk_errorf(
+                                        c,
+                                        s.pos,
+                                        "cannot assign to field `"
+                                            + fi.name
+                                            + "` of `"
+                                            + st.name
+                                            + "`: it is not declared `mut` (write `mut` before its type in the struct)",
+                                    );
+                                } else if !fi.mutable {
                                     chk_errorf(
                                         c,
                                         s.pos,
@@ -1917,7 +2151,7 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 None => {}
             }
             let vt = chk_expr(c, s.value);
-            chk_expect(c, ast_expr_pos(s.value), vt, ft, "field assignment");
+            chk_coerce(c, s.value, vt, ft, "field assignment");
             match ty_prune(c.info.types.get(ast_expr_id(s.target.x)).unwrap_or(ty_invalid())) {
                 Ty::Struct(st, _) => {
                     if c.info.alias_structs.contains_key(st.name) {
@@ -1929,15 +2163,37 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
             false
         }
         AstStmt::Break(s) => {
-            if c.loops == 0 {
-                chk_errorf(c, s.pos, "`break`/`continue` outside of a loop");
+            let target = chk_loop_target(c, s.pos, s.label);
+            let mut vt = ty_unit();
+            match s.value {
+                Some(v) => {
+                    vt = chk_expr(c, v);
+                }
+                None => {}
+            }
+            match target {
+                Some(mut lp) => {
+                    lp.breaks = lp.breaks + 1;
+                    if lp.is_loop {
+                        let vp = match s.value {
+                            Some(v) => ast_expr_pos(v),
+                            None => s.pos,
+                        };
+                        chk_expect(c, vp, vt, lp.ty, "`break` value");
+                    } else if s.value.is_some() {
+                        chk_errorf(
+                            c,
+                            s.pos,
+                            "`break` with a value is only allowed in a `loop` (this leaves a `while` or `for` loop)",
+                        );
+                    }
+                }
+                None => {}
             }
             true
         }
         AstStmt::Continue(s) => {
-            if c.loops == 0 {
-                chk_errorf(c, s.pos, "`break`/`continue` outside of a loop");
-            }
+            chk_loop_target(c, s.pos, s.label);
             true
         }
         AstStmt::While(s) => {
@@ -1949,12 +2205,22 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 }
                 None => chk_expect(c, ast_expr_pos(s.cond), ct, ty_bool(), "while condition"),
             }
-            c.loops = c.loops + 1;
+            let lt = if s.is_loop { chk_new_var(c) } else { ty_unit() };
+            chk_loop_push(c, s.pos, s.label, s.is_loop, lt);
             let bt = chk_block(c, s.body);
-            c.loops = c.loops - 1;
+            let breaks = chk_loop_pop(c);
             chk_pop(c);
-            chk_expect(c, s.body.end, bt, ty_unit(), "while body");
-            false
+            chk_expect(c, s.body.end, bt, ty_unit(), if s.is_loop {
+                "loop body"
+            } else {
+                "while body"
+            });
+            // `loop` without `break` ends only by `return`; its value is
+            // that of its `break`s
+            chk_record(c, s.id, if !s.is_loop {
+                ty_unit()
+            } else if breaks == 0 { ty_never() } else { lt });
+            s.is_loop && breaks == 0
         }
         AstStmt::For(s) => {
             let it = chk_expr(c, s.iter);
@@ -1984,9 +2250,9 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
                 Some(pat) => chk_irrefutable(c, pat, elem, "`for` loop"),
                 None => chk_bind(c, b),
             }
-            c.loops = c.loops + 1;
+            chk_loop_push(c, s.pos, s.label, false, ty_unit());
             let bt = chk_block(c, s.body);
-            c.loops = c.loops - 1;
+            chk_loop_pop(c);
             chk_expect(c, s.body.end, bt, ty_unit(), "for body");
             chk_pop(c);
             false
@@ -1997,8 +2263,8 @@ fn chk_stmt(mut c: Chk, s0: AstStmt) -> Bool {
             match s.value {
                 None => chk_expect(c, s.pos, ty_unit(), rc.ty, "return"),
                 Some(v) => {
-                    let t = chk_expr(c, v);
-                    chk_expect(c, ast_expr_pos(v), t, rc.ty, "return");
+                    let t = chk_expr_expect(c, v, rc.ty);
+                    chk_coerce(c, v, t, rc.ty, "return");
                 }
             }
             true
@@ -2100,6 +2366,64 @@ fn chk_for_iter(mut c: Chk, s: AstForStmt, it: Ty) -> Ty {
     }
 }
 
+// chk_loop_push enters a loop (a label may not shadow one of an enclosing
+// loop).
+fn chk_loop_push(mut c: Chk, pos: AstPos, label: String, is_loop: Bool, ty: Ty) {
+    if label != "" && chk_loop_find(c, label).is_some() {
+        chk_errorf(
+            c,
+            pos,
+            "label `" + label + "` shadows the label of an enclosing loop: use another name",
+        );
+    }
+    c.loops = c.loops + 1;
+    c.loop_stack.push(ChkLoop { label: label, is_loop: is_loop, ty: ty, breaks: 0 });
+}
+
+// chk_loop_pop leaves a loop and returns the number of `break`s leaving it.
+fn chk_loop_pop(mut c: Chk) -> Int {
+    c.loops = c.loops - 1;
+    match c.loop_stack.pop() {
+        Some(lp) => lp.breaks,
+        None => 0,
+    }
+}
+
+// chk_loop_find returns the visible loop with the given label.
+fn chk_loop_find(c: Chk, label: String) -> Option<ChkLoop> {
+    let n = c.loop_stack.len();
+    let mut labels = Vec::new();
+    for i in n - c.loops..n {
+        match c.loop_stack.get(i) {
+            Some(lp) => labels.push(lp.label),
+            None => labels.push(""),
+        }
+    }
+    let k = ast_loop_target(labels, label);
+    if k < 0 {
+        return None;
+    }
+    c.loop_stack.get(n - c.loops + k)
+}
+
+// chk_loop_target returns the loop a `break` / `continue` leaves, after
+// reporting a jump outside of a loop or to an unknown label.
+fn chk_loop_target(c: Chk, pos: AstPos, label: String) -> Option<ChkLoop> {
+    if c.loops == 0 {
+        if label != "" {
+            chk_errorf(c, pos, "use of undeclared label `" + label + "`");
+        } else {
+            chk_errorf(c, pos, "`break`/`continue` outside of a loop");
+        }
+        return None;
+    }
+    let lp = chk_loop_find(c, label);
+    if lp.is_none() {
+        chk_errorf(c, pos, "use of undeclared label `" + label + "`");
+    }
+    lp
+}
+
 fn chk_top_ret(c: Chk) -> ChkRet {
     match c.rets.get(c.rets.len() - 1) {
         Some(r) => r,
@@ -2117,6 +2441,7 @@ fn chk_expr(c: Chk, e: AstExpr) -> Ty {
 fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
     match e0 {
         AstExpr::IntLit(e) => chk_record(c, e.id, ty_int()),
+        AstExpr::FloatLit(e) => chk_record(c, e.id, ty_float()),
         AstExpr::BoolLit(e) => chk_record(c, e.id, ty_bool()),
         AstExpr::StrLit(e) => chk_record(c, e.id, ty_string()),
         AstExpr::UnitLit(e) => chk_record(c, e.id, ty_unit()),
@@ -2164,8 +2489,19 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 return chk_record(c, e.id, t);
             }
             let t = chk_expr(c, e.x);
+            if e.op == "-" && chk_op_overloaded(c, "Neg", ty_prune(t)) {
+                let r = chk_op_trait(c, e.id, e.pos, "-", "Neg", t, None);
+                return chk_record(c, e.id, r);
+            }
+            if e.op == "-" && ty_is_prim(ty_prune(t), "Float") {
+                return chk_record(c, e.id, ty_float());
+            }
             if e.op == "-" {
                 chk_expect(c, e.pos, t, ty_int(), "negation");
+                return chk_record(c, e.id, ty_int());
+            }
+            if ty_is_prim(ty_prune(t), "Int") {
+                // bitwise not
                 return chk_record(c, e.id, ty_int());
             }
             chk_expect(c, e.pos, t, ty_bool(), "`!`");
@@ -2177,6 +2513,8 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
         }
         AstExpr::Block(b) => chk_block(c, b),
         AstExpr::If(e) => {
+            let want = c.want_dyn;
+            c.want_dyn = None;
             let ct = chk_expr(c, e.cond);
             chk_push(c, false);
             match e.pat {
@@ -2185,6 +2523,7 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                 }
                 None => chk_expect(c, ast_expr_pos(e.cond), ct, ty_bool(), "if condition"),
             }
+            c.want_dyn = want;
             let tt = chk_block(c, e.then);
             chk_pop(c);
             match e.els {
@@ -2193,7 +2532,14 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     chk_record(c, e.id, ty_unit())
                 }
                 Some(els) => {
-                    let et = chk_expr(c, els);
+                    let et = match want {
+                        Some(w) => {
+                            let t1 = chk_expr_expect(c, els, w);
+                            chk_coerce(c, els, t1, w, "`else` branch");
+                            w
+                        }
+                        None => chk_expr(c, els),
+                    };
                     if !ty_unify(tt, et) {
                         chk_errorf(
                             c,
@@ -2253,7 +2599,20 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                         }
                         i = i + 1;
                     }
-                    chk_errorf(c, e.pos, "struct `" + st.name + "` has no field `" + e.name + "`");
+                    if ty_is_dyn(t) || ty_is_opaque_impl(t) {
+                        // trait objects and opaque types have only methods
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "no field `" + e.name + "` on type `" + ty_str(t) + "`",
+                        );
+                    } else {
+                        chk_errorf(
+                            c,
+                            e.pos,
+                            "struct `" + st.name + "` has no field `" + e.name + "`",
+                        );
+                    }
                     chk_record(c, e.id, ty_invalid())
                 }
                 _ => {
@@ -2300,7 +2659,14 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     };
                     let mut seen: HashMap<String, Bool> = HashMap::new();
                     for f in e.fields {
-                        let t = chk_expr(c, f.value);
+                        let t = match chk_struct_field(st, f.name) {
+                            Some(fi) => chk_expr_expect(
+                                c,
+                                f.value,
+                                ty_subst(fi.ty, st.params, args),
+                            ),
+                            None => chk_expr(c, f.value),
+                        };
                         match chk_struct_field(st, f.name) {
                             None => {
                                 chk_errorf(
@@ -2318,9 +2684,9 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                                     );
                                 }
                                 seen.insert(f.name, true);
-                                chk_expect(
+                                chk_coerce(
                                     c,
-                                    ast_expr_pos(f.value),
+                                    f.value,
                                     t,
                                     ty_subst(fi.ty, st.params, args),
                                     "field `" + f.name + "`",
@@ -2377,6 +2743,29 @@ fn chk_expr_cap(mut c: Chk, e0: AstExpr, allow_cap: Bool) -> Ty {
                     chk_record(c, e.id, ty_invalid())
                 }
             }
+        }
+        AstExpr::Macro(e) => {
+            for err in e.errs {
+                chk_errorf(c, err.pos, err.msg);
+            }
+            if e.errs.len() > 0 {
+                // still check the arguments, for their own errors
+                for a in e.args {
+                    chk_expr(c, a);
+                }
+                return chk_record(c, e.id, ty_invalid());
+            }
+            if mac_panicking(e.name) && !ast_has_attr(c.cur.decl, "test") && !chk_is_lib(c.cur) {
+                chk_errorf(
+                    c,
+                    e.pos,
+                    "`"
+                        + e.name
+                        + "!` can only be used in `#[test]` functions: Kekkai code does not panic; return a `Result` or an `Option` and let the caller handle the failure",
+                );
+            }
+            let t = chk_expr_cap(c, e.expansion, allow_cap);
+            chk_record(c, e.id, t)
         }
         AstExpr::Range(e) => {
             let a = chk_expr(c, e.start);
@@ -2527,6 +2916,28 @@ fn chk_param_types(fun: ChkFunc, targs: Vec<Ty>) -> Vec<Ty> {
 
 // chk_call_func checks a call of a user function (or method called by
 // path) with already instantiated type arguments.
+// chk_call_what names a called function in diagnostics; the helpers that
+// format! expands to (compiler/macro.kek) are named by the format spec.
+fn chk_call_what(fun: ChkFunc) -> String {
+    if fun.name == "__fmt_int" {
+        return "an Int format (`{:x}`, `{:X}`, `{:b}`, `{:o}`, `{:+}`, `{:#}`, `{:0N}`)";
+    }
+    "`" + fun.name + "`"
+}
+
+// chk_method_hint explains a missing method: on labeled data, and
+// `to_string` (which comes with Display).
+fn chk_method_hint(rt: Ty, m: String) -> String {
+    let h = chk_pii_hint(rt, ty_unit());
+    if h != "" {
+        return h;
+    }
+    if m == "to_string" {
+        return " (`to_string` comes with the trait `Display`: implement it for the type)";
+    }
+    ""
+}
+
 fn chk_call_func(
     mut c: Chk,
     id: Int,
@@ -2567,7 +2978,7 @@ fn chk_call_func(
         ps = chk_subst_paths(fun, ps, paths);
     }
     chk_check_grant(c, fun, pos);
-    chk_args(c, pos, "`" + fun.name + "`", args, ps);
+    chk_args(c, pos, chk_call_what(fun), args, ps);
     chk_oblige_bounds(c, pos, fun, targs);
     chk_note_call(c, fun, pos);
     let mut result = chk_norm(c.info, ty_subst(fun.result, fun.tparams, targs));
@@ -2625,6 +3036,9 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
         return ty_bool();
     }
     if op == "<" || op == "<=" || op == ">" || op == ">=" {
+        if chk_float_operands(c, e, xt, yt, "comparison") {
+            return ty_bool();
+        }
         if ty_is_prim(ty_prune(xt), "Int") || ty_is_prim(ty_prune(yt), "Int") {
             chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), "comparison");
             chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), "comparison");
@@ -2650,25 +3064,267 @@ fn chk_binary(c: Chk, e: AstBinary) -> Ty {
         }
     }
     let px = ty_prune(xt);
-    match px {
-        Ty::Param(_) => {
+    let tr = chk_op_trait_name(op);
+    if op != "%" && lower_bitop_name(op) == "" && chk_float_operands(c, e, xt, yt, "arithmetic") {
+        // `+ - * /` on Float are primitive; `%` (fmod) is core's Rem
+        return ty_float();
+    }
+    if tr != "" && chk_op_overloaded(c, tr, px) {
+        return chk_op_trait(c, e.id, e.pos, op, tr, xt, Some(yt));
+    }
+    if ty_is_prim(px, "Float") || ty_is_prim(ty_prune(yt), "Float") {
+        // a bit operation on Float, or Int % Float
+        chk_errorf(
+            c,
+            e.pos,
+            "cannot apply `"
+                + op
+                + "` to `"
+                + ty_str(px)
+                + "` and `"
+                + ty_str(ty_prune(yt))
+                + "`"
+                + chk_float_hint(px, ty_prune(yt)),
+        );
+        return if ty_is_prim(px, "Float") {
+            ty_float()
+        } else {
+            ty_int()
+        };
+    }
+    if e.compound && !ty_is_var(px) && !ty_is_prim(px, "Int") && !ty_is_prim(px, "<invalid>") {
+        // `x op= y` on a non-Int x: one error (not one per operand and
+        // one for the assignment)
+        chk_errorf(c, e.pos, "cannot apply `" + op + "=` to a value of type `" + ty_str(px) + "`");
+        return xt;
+    }
+    let what = if lower_bitop_name(op) != "" {
+        "bit operation"
+    } else {
+        "arithmetic"
+    };
+    chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), what);
+    chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), what);
+    ty_int()
+}
+
+// chk_float_operands checks a binary operator whose operands involve
+// Float (true: handled, the operands are both Float or an error was
+// reported). There is no implicit conversion between Int and Float.
+fn chk_float_operands(c: Chk, e: AstBinary, xt: Ty, yt: Ty, what: String) -> Bool {
+    let px = ty_prune(xt);
+    let py = ty_prune(yt);
+    let fx = ty_is_prim(px, "Float");
+    let fy = ty_is_prim(py, "Float");
+    if !fx && !fy {
+        return false;
+    }
+    if (fx || ty_is_var(px)) && (fy || ty_is_var(py)) {
+        chk_expect(c, ast_expr_pos(e.x), xt, ty_float(), what);
+        chk_expect(c, ast_expr_pos(e.y), yt, ty_float(), what);
+        return true;
+    }
+    if ty_is_prim(px, "<invalid>") || ty_is_prim(py, "<invalid>") {
+        return true;
+    }
+    chk_errorf(
+        c,
+        e.pos,
+        "cannot apply `"
+            + e.op
+            + "` to `"
+            + ty_str(px)
+            + "` and `"
+            + ty_str(py)
+            + "`"
+            + chk_float_hint(px, py),
+    );
+    true
+}
+
+// chk_float_hint suggests the explicit conversion between Int and Float.
+fn chk_float_hint(a: Ty, b: Ty) -> String {
+    let ia = ty_is_prim(a, "Int");
+    let ib = ty_is_prim(b, "Int");
+    let fa = ty_is_prim(a, "Float");
+    let fb = ty_is_prim(b, "Float");
+    if (ia && fb) || (fa && ib) {
+        return " (there is no implicit conversion: use `i.to_float()` or `f.trunc_to_int()` / `f.round_to_int()`)";
+    }
+    ""
+}
+
+// chk_op_trait_name is the core trait of an arithmetic operator
+// (lib/core/ops.kek), "" for the others.
+fn chk_op_trait_name(op: String) -> String {
+    if op == "+" {
+        return "Add";
+    }
+    if op == "-" {
+        return "Sub";
+    }
+    if op == "*" {
+        return "Mul";
+    }
+    if op == "/" {
+        return "Div";
+    }
+    if op == "%" {
+        return "Rem";
+    }
+    ""
+}
+
+// chk_op_overloaded reports whether an arithmetic operator (of core trait
+// tr) on a value of type t goes through the operator traits: on a type
+// param, a struct or enum other than Labeled (whose error explains labeled
+// data), and any type with an implementation of tr. The primitives and
+// still unknown types are Int arithmetic.
+fn chk_op_overloaded(c: Chk, tr: String, t: Ty) -> Bool {
+    match t {
+        // Float's `%` is fmod, implemented in the core library
+        Ty::Prim(n) => n == "Float" && tr == "Rem",
+        Ty::Var(_) => false,
+        Ty::Cap(_, _) => false,
+        Ty::Param(_) => true,
+        Ty::Struct(st, _) => st.name != "Labeled",
+        Ty::Enum(_, _) => true,
+        _ => chk_find_impl(c.info, tr, t, Vec::new(), 0).is_some(),
+    }
+}
+
+// chk_op_trait checks the operator op on an operand of type xt (and a
+// right operand of type yt) as a call of the core trait method
+// (`a + b` is `Add::add(a, b)` with Rhs the type of b), recorded in binops
+// (id is the operator's node) for lowering. It returns the trait's Output.
+fn chk_op_trait(
+    mut c: Chk,
+    id: Int,
+    pos: AstPos,
+    op: String,
+    tr: String,
+    xt: Ty,
+    yt: Option<Ty>,
+) -> Ty {
+    let m = tr.to_lower();
+    let what = if yt.is_some() {
+        "binary operation"
+    } else {
+        "unary operation"
+    };
+    let tf = match c.info.funcs.get(tr + "::" + m) {
+        Some(f) => f,
+        None => {
             chk_errorf(
                 c,
-                e.pos,
-                "binary operation `" + op + "` cannot be applied to type `" + ty_str(px) + "`",
+                pos,
+                what + " `" + op + "` cannot be applied to type `" + ty_str(xt) + "`",
             );
             return ty_invalid();
         }
-        _ => {}
+    };
+    let mut args = Vec::new();
+    let mut targs = Vec::new();
+    targs.push(xt);
+    match yt {
+        Some(t) => {
+            args.push(t);
+            targs.push(t);
+        }
+        None => {}
     }
-    chk_expect(c, ast_expr_pos(e.x), xt, ty_int(), "arithmetic");
-    chk_expect(c, ast_expr_pos(e.y), yt, ty_int(), "arithmetic");
-    ty_int()
+    let px = ty_prune(xt);
+    let mut ok = false;
+    let mut out = ty_invalid();
+    match px {
+        Ty::Param(p) => {
+            if chk_param_has(c.info, p, tr, args) {
+                ok = true;
+                out = chk_norm(c.info, Ty::Assoc(xt, tr, "Output"));
+            }
+        }
+        _ => match chk_find_impl(c.info, tr, xt, args, 0) {
+            Some(found) => {
+                ok = true;
+                match yt {
+                    Some(t) => {
+                        // the impl's Rhs (an inference variable on the right
+                        // takes it)
+                        let want = ty_subst(
+                            found.im.trait_args.get(0).unwrap_or(t),
+                            found.im.tparams,
+                            found.targs,
+                        );
+                        ty_unify(t, want);
+                    }
+                    None => {}
+                }
+                for i in 0..found.im.assoc_names.len() {
+                    if found.im.assoc_names.get(i).unwrap_or("") == "Output" {
+                        let a = found.im.assoc_tys.get(i).unwrap_or(ty_invalid());
+                        out = chk_norm(c.info, ty_subst(a, found.im.tparams, found.targs));
+                    }
+                }
+            }
+            None => {}
+        },
+    }
+    if !ok {
+        let mut hint = "";
+        match px {
+            Ty::Param(p) => {
+                hint = " (add the bound `" + p.name + ": " + tr + "`)";
+            }
+            _ => {
+                hint = " (implement the trait `" + tr + "` for it)";
+            }
+        }
+        let mut msg = what + " `" + op + "` cannot be applied to type `" + ty_str(xt) + "`";
+        match yt {
+            Some(t) => {
+                if chk_find_impl(c.info, tr, xt, Vec::new(), 0).is_some() {
+                    msg = "cannot apply `"
+                        + op
+                        + "` to `"
+                        + ty_str(xt)
+                        + "` and `"
+                        + ty_str(t)
+                        + "`: there is no `impl "
+                        + tr
+                        + "<"
+                        + ty_str(t)
+                        + "> for "
+                        + ty_str(xt)
+                        + "`";
+                    hint = "";
+                }
+            }
+            None => {}
+        }
+        if !ty_is_prim(px, "<invalid>") {
+            chk_errorf(c, pos, msg + hint);
+        }
+        return ty_invalid();
+    }
+    c.info.binops.insert(id, ChkMethodInfo {
+        kind: "trait",
+        builtin: None,
+        op: tr,
+        recv_ty: xt,
+        closure: None,
+        func: Some(tf),
+        targs: targs,
+    });
+    out
 }
 
 // chk_builtin_eq reports the types whose `==` is a primitive operation.
 fn chk_builtin_eq(t: Ty) -> Bool {
-    ty_is_prim(t, "Int") || ty_is_prim(t, "Bool") || ty_is_prim(t, "String") || ty_is_prim(t, "()")
+    ty_is_prim(t, "Int")
+        || ty_is_prim(t, "Float")
+        || ty_is_prim(t, "Bool")
+        || ty_is_prim(t, "String")
+        || ty_is_prim(t, "()")
 }
 
 // chk_binop_trait records the binary operator e as a call of trait method
@@ -2762,17 +3418,69 @@ fn chk_arg(c: Chk, a0: AstExpr, want: Ty, what: String) {
         }
         _ => {
             let t = chk_expr_expect(c, a, want);
-            chk_expect(c, ast_expr_pos(a), t, want, "argument of " + what);
+            chk_coerce(c, a, t, want, "argument of " + what);
         }
     }
 }
 
 // chk_expr_expect checks e where a value of type want is expected (a
 // closure takes its parameter types from it).
-fn chk_expr_expect(c: Chk, e: AstExpr, want: Ty) -> Ty {
+fn chk_expr_expect(mut c: Chk, e: AstExpr, want: Ty) -> Ty {
+    let w = ty_prune(want);
     match e {
         AstExpr::Closure(cl) => chk_closure(c, cl, Some(want)),
+        AstExpr::Block(b) => {
+            if ty_is_dyn(w) || (chk_is_dyn_vec(w) && !chk_is_vec_macro(b)) {
+                c.want_dyn = Some(w);
+            } else if chk_is_vec_macro(b) && chk_is_dyn_vec(w) {
+                // `vec![a, b]` where `Vec<dyn Trait>` is expected: the
+                // elements are coerced (compiler/macro.kek)
+                c.vec_hint = Some(w);
+            }
+            chk_expr(c, e)
+        }
+        AstExpr::Macro(m) => {
+            match m.expansion {
+                AstExpr::Block(b) => {
+                    if m.errs.len() == 0 && chk_is_vec_macro(b) && chk_is_dyn_vec(w) {
+                        c.vec_hint = Some(w);
+                    }
+                }
+                _ => {}
+            }
+            chk_expr(c, e)
+        }
+        AstExpr::If(_) => {
+            if ty_is_dyn(w) || chk_is_dyn_vec(w) {
+                c.want_dyn = Some(w);
+            }
+            chk_expr(c, e)
+        }
+        AstExpr::Match(_) => {
+            if ty_is_dyn(w) || chk_is_dyn_vec(w) {
+                c.want_dyn = Some(w);
+            }
+            chk_expr(c, e)
+        }
         _ => chk_expr(c, e),
+    }
+}
+
+// chk_is_vec_macro reports whether b is the expansion of `vec![a, ...]`.
+fn chk_is_vec_macro(b: AstBlock) -> Bool {
+    match b.stmts.get(0) {
+        Some(s) => match s {
+            AstStmt::Let(l) => l.name.starts_with("__vec") && l.ty.is_none(),
+            _ => false,
+        },
+        None => false,
+    }
+}
+
+fn chk_is_dyn_vec(t: Ty) -> Bool {
+    match t {
+        Ty::Vec(el) => ty_is_dyn(ty_prune(el)),
+        _ => false,
     }
 }
 
@@ -2846,6 +3554,7 @@ fn chk_closure(mut c: Chk, e: AstClosure, want: Option<Ty>) -> Ty {
         }
         let mut b = chk_new_binding(c, p.name, t, p.pos);
         b.param = true;
+        b.mutable = p.mutable;
         li.params.push(b);
         chk_bind(c, b);
         ps.push(t);
@@ -3038,6 +3747,13 @@ fn chk_call(mut c: Chk, e: AstCall) -> Ty {
                     c.info.calls.insert(e.id, ci);
                     return ci.ty;
                 }
+            }
+            if f.name == "__panic" && !c.info.funcs.contains_key(f.name) {
+                // the builtin of the panicking macros (compiler/macro.kek):
+                // it does not return
+                chk_args(c, e.pos, "`__panic`", e.args, chk_tys1(ty_string()));
+                c.info.calls.insert(e.id, chk_call_info("panic", ty_never()));
+                return ty_never();
             }
             // a local variable (a closure) shadows a function
             if chk_lookup(c, f.name, f.pos).is_some() {
@@ -3322,7 +4038,7 @@ fn chk_path_type(c: Chk, name: String, self_ty: Option<Ty>, ty_args: Vec<Ty>) ->
         }
         None => {}
     }
-    if name == "Int" || name == "Bool" || name == "String" {
+    if name == "Int" || name == "Float" || name == "Bool" || name == "String" {
         return Some(Ty::Prim(name));
     }
     None
@@ -3351,6 +4067,24 @@ fn chk_method(mut c: Chk, e: AstMethodCall) -> Ty {
     if ty_is_prim(rt, "<invalid>") {
         chk_exprs(c, e.args);
         return ty_invalid();
+    }
+    if e.name == "__index_set" {
+        // `v[i] = x` (see AstFieldAssignStmt)
+        let vec = match rt {
+            Ty::Vec(_) => true,
+            _ => false,
+        };
+        if !vec {
+            chk_errorf(
+                c,
+                e.pos,
+                "cannot assign to an element of `"
+                    + ty_str(rt)
+                    + "`: only `Vec` elements can be assigned (`v[i] = x`)",
+            );
+            chk_exprs(c, e.args);
+            return ty_invalid();
+        }
     }
     let mut is_cap = false;
     let mut borrowed = false;
@@ -3420,7 +4154,7 @@ fn chk_method(mut c: Chk, e: AstMethodCall) -> Ty {
                     + "` found for `"
                     + ty_str(rt)
                     + "`"
-                    + chk_pii_hint(rt, ty_unit()),
+                    + chk_method_hint(rt, e.name),
             );
             chk_exprs(c, e.args);
             ty_invalid()
@@ -3495,7 +4229,17 @@ fn chk_user_method(mut c: Chk, e: AstMethodCall, rt: Ty, fun: ChkFunc) -> Ty {
     for i in 1..ps.len() {
         rest.push(ps.get(i).unwrap_or(ty_unit()));
     }
-    chk_args(c, e.pos, "`" + fun.name + "`", e.args, rest);
+    if e.name == "__index_set" && e.args.len() == 2 && rest.len() == 2 {
+        // `v[i] = x` (see AstFieldAssignStmt)
+        let a0 = e.args.get(0).unwrap_or(e.recv);
+        let a1 = e.args.get(1).unwrap_or(e.recv);
+        let w0 = rest.get(0).unwrap_or(ty_int());
+        let w1 = rest.get(1).unwrap_or(ty_int());
+        chk_expect(c, ast_expr_pos(a0), chk_expr(c, a0), w0, "index");
+        chk_coerce(c, a1, chk_expr_expect(c, a1, w1), w1, "element assignment");
+    } else {
+        chk_args(c, e.pos, "`" + fun.name + "`", e.args, rest);
+    }
     chk_oblige_bounds(c, e.pos, fun, targs);
     chk_note_call(c, fun, e.pos);
     c.info.methods.insert(e.id, ChkMethodInfo {
@@ -3740,7 +4484,7 @@ fn chk_try(mut c: Chk, e: AstTry) -> Ty {
     }
     let rc = chk_top_ret(c);
     let mut target = ty_prune(rc.ty);
-    c.info.tries.insert(e.id, ChkTryInfo { closure: rc.closure, target: rc.ty });
+    c.info.tries.insert(e.id, ChkTryInfo { closure: rc.closure, target: rc.ty, conv: None });
     match t {
         Ty::Result(tok, terr) => {
             if ty_is_var(target) {
@@ -3751,16 +4495,32 @@ fn chk_try(mut c: Chk, e: AstTry) -> Ty {
             match target {
                 Ty::Result(_, rerr) => {
                     if !ty_unify(terr, rerr) {
-                        let s1 = ty_str(ty_resolve(terr));
-                        chk_errorf(
-                            c,
-                            e.pos,
-                            "`?` cannot convert the error type `"
-                                + s1
-                                + "` into `"
-                                + ty_str(ty_resolve(rerr))
-                                + "`",
-                        );
+                        match chk_try_conv(c, e.pos, terr, rerr) {
+                            Some(mi) => {
+                                c.info.tries.insert(e.id, ChkTryInfo {
+                                    closure: rc.closure,
+                                    target: rc.ty,
+                                    conv: Some(mi),
+                                });
+                            }
+                            None => {
+                                let s1 = ty_str(ty_resolve(terr));
+                                let s2 = ty_str(ty_resolve(rerr));
+                                chk_errorf(
+                                    c,
+                                    e.pos,
+                                    "`?` cannot convert the error type `"
+                                        + s1
+                                        + "` into `"
+                                        + s2
+                                        + "` (implement `From<"
+                                        + s1
+                                        + ">` for `"
+                                        + s2
+                                        + "`, or convert it with `map_err`)",
+                                );
+                            }
+                        }
                     }
                     tok
                 }
@@ -3803,6 +4563,30 @@ fn chk_try(mut c: Chk, e: AstTry) -> Ty {
             );
             ty_invalid()
         }
+    }
+}
+
+// chk_try_conv returns the call of `From::from` that converts the error
+// type from of a `?` into the function's error type to (None without an
+// implementation `impl From<from> for to`).
+fn chk_try_conv(c: Chk, pos: AstPos, from: Ty, to: Ty) -> Option<ChkMethodInfo> {
+    let f = ty_prune(from);
+    let t = ty_prune(to);
+    if ty_is_var(f) || ty_is_var(t) || ty_is_prim(f, "<invalid>") || ty_is_prim(t, "<invalid>") {
+        return None;
+    }
+    let mut args = Vec::new();
+    args.push(f);
+    if !chk_implements(c.info, t, "From", args, 0) {
+        return None;
+    }
+    match c.info.funcs.get("From::from") {
+        Some(tf) => {
+            let mi = chk_trait_call(c, pos, tf, t, true, Vec::new(), Vec::new());
+            ty_unify(mi.targs.get(1).unwrap_or(ty_unit()), f);
+            Some(mi)
+        }
+        None => None,
     }
 }
 

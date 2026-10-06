@@ -4,7 +4,9 @@
 # mutants (mutate-build -main), prints the same output. The report of
 # testdata/mutate/calc.kek (survivors, a timeout, a mutant killed by the
 # Tx linearity check), testdata/mutate/refine.kek (mutants killed by the
-# refinement checker), -json, the result cache, -base, -diff (in a
+# refinement checker), testdata/mutate/features.kek (bit operations,
+# compound assignments, Float, guards, patterns, match arms, break /
+# continue), testdata/mutate/modules (module paths in the report), -json, the result cache, -base, -diff (in a
 # temporary git repository), the [mutate] min_score threshold and usage
 # errors.
 . "$(dirname "$0")/../lib.sh"
@@ -100,6 +102,66 @@ t_refine() {
 		"  refine.kek:14:15  total: \`+\` → \`-\`" \
 		"generated 12: killed by types 3, killed 7, survived 0, timeout 2, no coverage 0")"
 	result refine "$r" "$d/out"
+	rm -rf "$d"
+}
+
+# the mutants of the newer language features
+t_features() {
+	d=$(tmpdir)
+	f=testdata/mutate/features.kek
+	r=
+	"$KEK" mutate "$f" >"$d/out" 2>&1 || r="exit $?"
+	r="$r$(contains "$d/out" "mutation testing of $f: 143 mutants in 11 functions, 11 tests" \
+		"  features.kek:45:10  scale: \`<\` → \`<=\`" \
+		"  features.kek:45:12  scale: 1.5 → 2.5" \
+		"  features.kek:51:9  grade: range bound 0 → -1" \
+		"      0..=59 => \"F\",   →   -1..=59 => \"F\"," \
+		"  features.kek:60:13  kind: delete alternative \`2\`" \
+		"      1 | 2 => 10,   →   1 => 10," \
+		"  features.kek:61:14  kind: remove guard" \
+		"      x if x > 50 => 20,   →   x => 20," \
+		"features.kek:62:9: unreachable pattern" \
+		"generated 143: killed by types 6, killed 130, survived 7, timeout 0, no coverage 0")"
+	"$KEK" mutate -json "$f" >"$d/json" 2>&1 || r="$r
+-json: exit $?"
+	tr -d ' \n' <"$d/json" >"$d/flat"
+	r="$r$(contains "$d/flat" \
+		'"kind":"bitwise","description":"`&`→`|`","original":"letmutv=a&b;","mutated":"letmutv=a|b;","status":"killed"' \
+		'"kind":"bitwise","description":"`|=`→`&=`","original":"v|=1<<8;","mutated":"v&=1<<8;","status":"killed"' \
+		'"kind":"bitwise","description":"`^=`→`|=`","original":"v^=a|b;","mutated":"v|=a|b;","status":"killed"' \
+		'"kind":"bitwise","description":"`^`→`&`' '"kind":"bitwise","description":"`^`→`|`' \
+		'"kind":"bitwise","description":"`>>`→`<<`' \
+		'"func":"mean","kind":"arith","description":"`+=`→`-=`","original":"s+=x;","mutated":"s-=x;","status":"killed"' \
+		'"func":"mean","kind":"float","description":"0.0→1.0"' \
+		'"func":"mean","kind":"result","description":"result→0.0","original":"s/v.len().to_float()","mutated":"0.0","status":"killed"' \
+		'"func":"scale","kind":"float","description":"2.0→3.0"' \
+		'"func":"scale","kind":"unary","description":"drop`-`"' \
+		'"kind":"guard","description":"negateguard","original":"Some(0)ifstrict=>-1,","mutated":"Some(0)if!(strict)=>-1,","status":"killed"' \
+		'"kind":"guard","description":"removeguard","original":"Some(0)ifstrict=>-1,","mutated":"Some(0)=>-1,","status":"killed"' \
+		'"kind":"pattern","description":"rangebound100→101","original":"80..100=>\"A\",","mutated":"80..101=>\"A\",","status":"killed"' \
+		'"kind":"arm","description":"deletematcharm","original":"0..=59=>\"F\",","mutated":"","status":"killed"' \
+		'"kind":"jump","description":"`break`→`continue`","original":"break;","mutated":"continue;","status":"killed"' \
+		'"func":"prefix","kind":"int","description":"1→0","original":"v[i+1]+=v[i];","mutated":"v[i+0]+=v[i];","status":"killed"')"
+	# derived implementations get no mutants
+	grep -q '"func":"<Point' "$d/flat" && r="$r
+a derived implementation was mutated"
+	result features "$r" "$d/out"
+	rm -rf "$d"
+}
+
+# module items are named by their paths; dyn dispatch is not mutated
+t_modules() {
+	d=$(tmpdir)
+	r=
+	"$KEK" mutate -json testdata/mutate/modules >"$d/out" 2>&1 || r="exit $?"
+	tr -d ' \n' <"$d/out" >"$d/flat"
+	r="$r$(contains "$d/flat" \
+		'"functions":["total","geo::area","<geo::Rectasgeo::Shape>::area"]' \
+		'"func":"geo::area","kind":"arith"' \
+		'"generated":7,"killed_by_types":0,"killed":7')"
+	grep -q '\$' "$d/flat" && r="$r
+a global name (\$) in the report"
+	result modules "$r" "$d/out"
 	rm -rf "$d"
 }
 
@@ -242,4 +304,4 @@ if [ "${1:-}" = --case ]; then
 	esac
 	exit 0
 fi
-run_parallel "$0" report refine json cache shard base diff threshold usage testdata/run/*.kek
+run_parallel "$0" report refine features modules json cache shard base diff threshold usage testdata/run/*.kek

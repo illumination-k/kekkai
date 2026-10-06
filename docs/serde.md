@@ -26,21 +26,21 @@ Response::json(200, Json::to_string(&s))
 | 篩型 | derive した `Deserialize` は、フィールドの型（と `Option`・`Vec` の要素）にある篩型の別名の述語を実行時に調べ、満たさなければ `SerdeError` を返す。調べた条件が篩型の検査器の事実になるので、値の構築に証明が要らない。`Labeled<L, Port>` の中身は調べない（調べた結果がラベル付きの値の性質を漏らすため） |
 | エラー | `SerdeError { path, line, col, msg }`。メッセージはデータの中身を含まず、形（`expected an integer, found a string`）と場所（`servers[1].port`、`line 3, column 5`）だけなので、ログやレスポンスに出してよい |
 | 名前空間 | モジュールがないので、形式は空の struct の関連関数（`Json::parse`）。`Value`・`Serialize`・`Deserialize`・`SerdeError`・`Json`・`Toml` は core の予約名になる |
-| 数値 | `Int`（64bit）だけ。小数・指数のある数は `Value::Float` に書かれたとおりの文字列で持つ（言語に浮動小数点数がない）。`Int` への `Deserialize` は `Float` を拒む。範囲外の整数は parse のエラー |
+| 数値 | 小数・指数のない数は `Value::Int`（64bit、範囲外は parse のエラー）、ある数は `Value::Float`（正しく丸めた `Float`、範囲外は parse のエラー）。`Int` への `Deserialize` は `Float` を拒み、`Float` への `Deserialize` は `Int` も受け取る（JSON の `1` は `Value::Int` なので）。書き出しは読み戻すと同じ値になる最短の桁で、必ず小数部か指数を持つ（`1.0`、`0.1`、`1e21`。`Debug` と同じ）ので、読み戻しても `Float` のまま |
 | 可変性 | `Deserialize::from_value(v: &Value)` の結果は `v` から借用したものではなく所有される。core の関数の結果は「共有の引数を受け取ると共有」が既定なので、`clone` と同じ扱いを `#[owned]`（core と prelude だけが書ける）で宣言する。利用者の `from_value` の実装は通常どおり検査される（`&Value` から借用した `Vec` をそのまま返すとエラー） |
 
 ## データモデル
 
 ```kek
-enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Value>), Map(Vec<(String, Value)>) }
+enum Value { Null, Bool(Bool), Int(Int), Float(Float), Str(String), Seq(Vec<Value>), Map(Vec<(String, Value)>) }
 ```
 
-- `Map` はキーの順序を保つ（JSON・TOML を読んだ順、struct はフィールドの順）。`==` は順序を無視する（キーの重複は parse で拒む）。
+- `Map` はキーの順序を保つ（JSON・TOML を読んだ順、struct はフィールドの順）。`==` は順序を無視する（キーの重複は parse で拒む）。`Float` は `==` で比べるが、`Value` の `==` では NaN どうしは等しい（`Value` は `Eq` を実装するので同値関係にする。`nan` を含む TOML も往復して等しい）。
 - `v.get(key) -> Option<&Value>`、`v.kind()`（`"an integer"` など）。
 
 | 型 | `Value` |
 | --- | --- |
-| `Int`・`Bool`・`String` | `Int`・`Bool`・`Str` |
+| `Int`・`Float`・`Bool`・`String` | `Int`・`Float`・`Bool`・`Str` |
 | `()` | `Null` |
 | `Option<T>` | `None` は `Null`、`Some(x)` は `x` |
 | `Vec<T>` | `Seq` |
@@ -49,7 +49,8 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 | `Labeled<L, T>` | `Deserialize` のみ（`T` として読んでラベルを付ける） |
 | `Timestamp`・`Date`・`Duration` | `Str`（RFC 3339、`YYYY-MM-DD`、`"1h30m"`。[time.md](time.md)） |
 | derive した struct | フィールドの `Map`（フィールドの順）。ないフィールドは `Null` として読む（`Option` なら `None`、それ以外は `missing field`） |
-| derive した enum | 外部タグ：フィールドなしは `"V"`、1つは `{"V": x}`、2つ以上は `{"V": [x, y]}` |
+| derive したタプル構造体・ユニット構造体 | serde と同じ：`struct S;` は `Null`、`struct S(T);`（newtype）は中身の値そのもの、`struct S(A, B);` は `Seq` |
+| derive した enum | 外部タグ：フィールドなしは `"V"`、1つは `{"V": x}`、2つ以上は `{"V": [x, y]}`、構造体のようなバリアント `V { a: A, b: B }` は `{"V": {"a": x, "b": y}}`（ないフィールドは struct と同じく `Null` として読む） |
 
 `#[derive(Serialize, Deserialize)]` は generic な型にも使える（`impl<T: Serialize> Serialize for Wrap<T>`）。`Labeled` を含む型には `Serialize` を derive できない（エラー）。
 
@@ -58,14 +59,14 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 | 関数 | 内容 |
 | --- | --- |
 | `Json::parse(s) -> Result<Value, SerdeError>` | RFC 8259。重複したキー、先頭の 0、制御文字、末尾のデータはエラー。入れ子は 256 段まで |
-| `Json::render(&v)`・`render_pretty(&v)` | 1行／2スペースの字下げ。TOML の `inf`・`nan` は `null`（JavaScript と同じ） |
+| `Json::render(&v)`・`render_pretty(&v)` | 1行／2スペースの字下げ。JSON にない NaN・無限大は `null`（JavaScript と同じ） |
 | `Json::from_str::<T>(s)`・`to_string(&x)`・`to_string_pretty(&x)` | 型との変換 |
 
 ## TOML（`Toml`）
 
 | 関数 | 内容 |
 | --- | --- |
-| `Toml::parse(s) -> Result<Value, SerdeError>` | TOML 1.0：テーブル、テーブルの配列、ドット付きのキー、インラインテーブル、4種の文字列、16・8・2 進数と `_`、`inf`・`nan`。日時（4種）は書かれたとおりの `Str`（存在する日付・時刻であること）。テーブルの再定義、重複したキー、閉じたインラインテーブルの拡張はエラー |
+| `Toml::parse(s) -> Result<Value, SerdeError>` | TOML 1.0：テーブル、テーブルの配列、ドット付きのキー、インラインテーブル、4種の文字列、16・8・2 進数と `_`、浮動小数点数（`inf`・`nan` も。書き出しは最短の桁）。日時（4種）は書かれたとおりの `Str`（存在する日付・時刻であること）。テーブルの再定義、重複したキー、閉じたインラインテーブルの拡張はエラー |
 | `Toml::render(&v) -> Result<String, SerdeError>` | 文書は `Map` であること。各テーブルは普通のキーを先に、子のテーブルとテーブルの配列（要素がすべて `Map` の空でない `Seq`）を後に書く。子のテーブルしかないテーブルのヘッダは省く。日時の形の文字列（10 文字以上）は引用符なしの TOML の日時として書く（読むと `Str` に戻るので値は変わらない）。`Null` のキーは書かない（TOML に null はない）。配列の中の `Null` はエラー |
 | `Toml::from_str::<T>(s)`・`to_string(&x)` | 型との変換 |
 
@@ -75,4 +76,3 @@ enum Value { Null, Bool(Bool), Int(Int), Float(String), Str(String), Seq(Vec<Val
 
 - フィールドの属性（`#[serde(rename = "...")]`、`default`、`skip`）。構文がフィールドの属性を持たないため
 - YAML
-- `Float` の数値としての扱い

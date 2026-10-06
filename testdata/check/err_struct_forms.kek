@@ -1,0 +1,72 @@
+// Tuple structs, unit structs, struct-like variants, struct patterns and
+// constants: the errors.
+
+struct Meters(Int);
+
+struct Marker;
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Rect { w: Int, h: Int },
+    Dot,
+}
+
+const LIMIT: Int = 10;
+
+const NAME: String = "a";
+
+const NOW: Int = clock.now_ms(); // ERROR "cannot find value `clock` in this scope"
+
+const TWICE: Int = 2; // ERROR "the name `TWICE` is defined more than once"
+
+fn TWICE() -> Int {
+    1
+}
+
+impl Point {
+    const ORIGIN: Point = Point { x: 0, y: 0 };
+    const ORIGIN: Int = 0; // ERROR "duplicate definitions with name `ORIGIN` for `Point`"
+}
+
+fn arity() -> Meters {
+    Meters(1, 2) // ERROR "tuple struct `Meters` has 1 field(s), but 2 argument(s) were supplied"
+}
+
+fn patterns(p: Point, m: Meters, s: Shape) -> Int {
+    let Point { x, z } = p; // ERROR "`Point` has no field `z`" ERROR "does not mention field(s) `y`"
+    let Point { y } = p; // ERROR "pattern `Point` does not mention field(s) `x` (add `..` to ignore the other fields)"
+    let Meters(a, b) = m; // ERROR "tuple struct pattern `Meters` expects 1 field(s), found 2"
+    match s {
+        Shape::Rect { w, d: 0 } => w, // ERROR "`Shape::Rect` has no field `d`" ERROR "does not mention field(s) `h`"
+        Shape::Rect(w, h) => w, // ERROR "variant `Shape::Rect` has named fields: write `Shape::Rect { .. }`"
+        Shape::Dot => 0,
+    }
+}
+
+fn literals() -> Shape {
+    let a = Shape::Rect { w: 1 }; // ERROR "missing field(s) `h` in initializer of `Shape::Rect`" ERROR "takes 2 argument(s)"
+    let b = Shape::Rect { w: 1, h: 2, d: 3 }; // ERROR "variant `Shape::Rect` has no field `d`"
+    let c = Shape::Dot { w: 1 }; // ERROR "variant `Shape::Dot` has no named fields"
+    Shape::Rect(1, 2) // ERROR "variant `Shape::Rect` has named fields"
+}
+
+fn shadow() -> Int {
+    let LIMIT = 3; // ERROR "`LIMIT` is a constant: it cannot be used as the name of a variable"
+    match "a" {
+        NAME => 1, // ERROR "constant `NAME` cannot be used as a pattern (only integer constants can"
+    }
+}
+
+fn exhaustive(p: Point) -> Int {
+    match p { // ERROR "non-exhaustive patterns in match on `Point`: missing `Point { .. }`"
+        Point { x: 0, .. } => 0,
+    }
+}
+
+fn assign(mut m: Meters) {
+    m.0 = 1; // ERROR "cannot assign to field `0` of `Meters`: it is not declared `mut`"
+}

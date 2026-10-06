@@ -1,0 +1,1845 @@
+// `lsp <kekkai-root>` (prefix lsp_ / Lsp*): a language server (`kek lsp`).
+// It speaks the Language Server Protocol (JSON-RPC with Content-Length
+// framing) on standard input and output, and answers from the analysis
+// of `check -json` (diag_analyze_files):
+//
+// - diagnostics (textDocument/publishDiagnostics) when a document is
+//   opened, changed or saved, for every file of its program;
+// - hover (the type of a binding; the declaration and its comment),
+//   definition and references of the names the type checker resolved;
+// - document symbols, and workspace symbols (the declarations of the .kek
+//   files under the workspace root).
+//
+// The program of a file is its directory when the directory has several
+// .kek files and no two of them declare the same top-level name
+// (compiler/, examples/todo-app/server), and the file alone otherwise
+// (testdata/run/, where every file has its own `main`). Open documents
+// are analyzed from the editor's text, the other files from disk. The
+// files of lib/ are checked as part of every program, not on their own:
+// they get no diagnostics. <kekkai-root> locates the core library's
+// sources (lib/core) for definitions in it.
+//
+// Positions are UTF-16 code units unless the client offers UTF-8
+// (general.positionEncodings).
+
+struct LspServer {
+    kek_root: String,
+    mut root: String,
+    mut utf8: Bool,
+    // open documents: path -> text
+    docs: HashMap<String, String>,
+    // the program analyzed last
+    mut prog: Option<LspProg>,
+    // files with diagnostics published (to clear them)
+    published: HashMap<String, Bool>,
+    // workspace symbols of each file, with the text they come from
+    wsyms: HashMap<String, LspFileSyms>,
+    mut shutdown: Bool,
+}
+
+struct LspProg {
+    files: Vec<DiagAnalysis>,
+    lib: Bool,
+    mut index: Option<LspIndex>,
+}
+
+// LspText locates lines in a source text (byte offsets of line starts).
+struct LspText {
+    bytes: Vec<Int>,
+    lines: Vec<Int>,
+}
+
+// LspRef is an occurrence of a name (at file:line:col, len bytes) and the
+// position of the name in its declaration (target; has_target false for
+// builtin operations). decl marks the declaration itself.
+struct LspRef {
+    file: String,
+    line: Int,
+    col: Int,
+    len: Int,
+    target: AstPos,
+    has_target: Bool,
+    kind: String, // fn method struct enum variant field trait alias type param local builtin
+    name: String,
+    ty: String,
+    decl: Bool,
+}
+
+struct LspIndex {
+    refs: Vec<LspRef>,
+}
+
+struct LspSym {
+    name: String,
+    kind: Int,
+    container: String,
+    pos: AstPos,
+}
+
+struct LspFileSyms {
+    text: String,
+    syms: Vec<LspSym>,
+}
+
+enum LspReply {
+    None,
+    Ok(IrjVal),
+    Err(Int, String),
+}
+
+fn lsp_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
+    let mut srv = LspServer {
+        kek_root: args.get(1).unwrap_or(""),
+        root: "",
+        utf8: false,
+        docs: HashMap::new(),
+        prog: None,
+        published: HashMap::new(),
+        wsyms: HashMap::new(),
+        shutdown: false,
+    };
+    while true {
+        let body = match lsp_read(fs) {
+            Some(b) => b,
+            None => {
+                return if srv.shutdown { 0 } else { 1 };
+            }
+        };
+        let msg = match tool_json_parse(body) {
+            Ok(v) => v,
+            Err(e) => {
+                lsp_send(fs, lsp_response(IrjVal::Null, LspReply::Err(-32700, e)));
+                continue;
+            }
+        };
+        let method = tool_json_str(tool_json_get(msg, "method"), "");
+        let id = tool_json_get(msg, "id");
+        let is_request = match id {
+            ToolJson::Null => false,
+            _ => true,
+        };
+        if method == "exit" {
+            return if srv.shutdown { 0 } else { 1 };
+        }
+        if method == "" {
+            // a response to a request of ours (we send none)
+            continue;
+        }
+        let reply = if srv.shutdown && is_request {
+            LspReply::Err(-32600, "the server is shut down")
+        } else {
+            lsp_handle(srv, fs, log, method, tool_json_get(msg, "params"), is_request)
+        };
+        if is_request {
+            lsp_send(fs, lsp_response(tool_json_to_irj(id), reply));
+        }
+    }
+    0
+}
+
+fn lsp_handle(
+    mut srv: LspServer,
+    fs: &Fs,
+    log: &Log,
+    method: String,
+    params: ToolJson,
+    is_request: Bool,
+) -> LspReply {
+    if method == "initialize" {
+        return LspReply::Ok(lsp_initialize(srv, fs, params));
+    }
+    if method == "shutdown" {
+        srv.shutdown = true;
+        return LspReply::Ok(IrjVal::Null);
+    }
+    let td = tool_json_get(params, "textDocument");
+    let path = lsp_uri_path(tool_json_str(tool_json_get(td, "uri"), ""));
+    if method == "textDocument/didOpen" {
+        srv.docs.insert(path, tool_json_str(tool_json_get(td, "text"), ""));
+        lsp_publish(srv, fs, log, path);
+        return LspReply::None;
+    }
+    if method == "textDocument/didChange" {
+        // full synchronization: the last change has the whole text
+        for c in tool_json_arr(tool_json_get(params, "contentChanges")) {
+            match tool_json_get(c, "text") {
+                ToolJson::Str(t) => {
+                    srv.docs.insert(path, t);
+                }
+                _ => {}
+            }
+        }
+        lsp_publish(srv, fs, log, path);
+        return LspReply::None;
+    }
+    if method == "textDocument/didSave" {
+        match tool_json_get(params, "text") {
+            ToolJson::Str(t) => {
+                srv.docs.insert(path, t);
+            }
+            _ => {}
+        }
+        lsp_publish(srv, fs, log, path);
+        return LspReply::None;
+    }
+    if method == "textDocument/didClose" {
+        srv.docs.remove(path);
+        return LspReply::None;
+    }
+    if method == "workspace/didChangeWatchedFiles" {
+        // files changed on disk: analyze again on the next request
+        srv.prog = None;
+        return LspReply::None;
+    }
+    let pos = tool_json_get(params, "position");
+    let line = tool_json_int(tool_json_get(pos, "line"), 0);
+    let ch = tool_json_int(tool_json_get(pos, "character"), 0);
+    if method == "textDocument/hover" {
+        return LspReply::Ok(lsp_hover(srv, fs, log, path, line, ch));
+    }
+    if method == "textDocument/definition" {
+        return LspReply::Ok(lsp_definition(srv, fs, log, path, line, ch));
+    }
+    if method == "textDocument/references" {
+        let decl = tool_json_bool(
+            tool_json_get(tool_json_get(params, "context"), "includeDeclaration"),
+            true,
+        );
+        return LspReply::Ok(lsp_references(srv, fs, log, path, line, ch, decl));
+    }
+    if method == "textDocument/documentSymbol" {
+        return LspReply::Ok(lsp_document_symbols(srv, fs, path));
+    }
+    if method == "workspace/symbol" {
+        return LspReply::Ok(
+            lsp_workspace_symbols(srv, fs, tool_json_str(tool_json_get(params, "query"), "")),
+        );
+    }
+    if is_request {
+        return LspReply::Err(-32601, "method not found: " + method);
+    }
+    LspReply::None
+}
+
+fn lsp_initialize(mut srv: LspServer, fs: &Fs, params: ToolJson) -> IrjVal {
+    let mut root = lsp_uri_path(tool_json_str(tool_json_get(params, "rootUri"), ""));
+    if root == "" {
+        root = tool_json_str(tool_json_get(params, "rootPath"), "");
+    }
+    if root == "" {
+        for f in tool_json_arr(tool_json_get(params, "workspaceFolders")) {
+            if root == "" {
+                root = lsp_uri_path(tool_json_str(tool_json_get(f, "uri"), ""));
+            }
+        }
+    }
+    srv.root = frontend_clean_dir(root);
+    if srv.root != "" {
+        // ./kekkai.toml configures the refinement checks
+        fs.set_cwd(srv.root);
+    }
+    let general = tool_json_get(tool_json_get(params, "capabilities"), "general");
+    for e in tool_json_strs(tool_json_get(general, "positionEncodings")) {
+        if e == "utf-8" {
+            srv.utf8 = true;
+        }
+    }
+    let sync = irjson_obj();
+    irjson_set(sync, "openClose", irjson_bool(true));
+    irjson_set(sync, "change", irjson_int(1));
+    let save = irjson_obj();
+    irjson_set(save, "includeText", irjson_bool(false));
+    irjson_set(sync, "save", irjson_val(save));
+    let caps = irjson_obj();
+    irjson_set(caps, "positionEncoding", IrjVal::Str(if srv.utf8 { "utf-8" } else { "utf-16" }));
+    irjson_set(caps, "textDocumentSync", irjson_val(sync));
+    irjson_set(caps, "hoverProvider", irjson_bool(true));
+    irjson_set(caps, "definitionProvider", irjson_bool(true));
+    irjson_set(caps, "referencesProvider", irjson_bool(true));
+    irjson_set(caps, "documentSymbolProvider", irjson_bool(true));
+    irjson_set(caps, "workspaceSymbolProvider", irjson_bool(true));
+    let info = irjson_obj();
+    irjson_set(info, "name", IrjVal::Str("kek"));
+    let r = irjson_obj();
+    irjson_set(r, "capabilities", irjson_val(caps));
+    irjson_set(r, "serverInfo", irjson_val(info));
+    irjson_val(r)
+}
+
+// ---- transport ----
+
+// lsp_read reads the body of the next message; None at the end of input.
+fn lsp_read(fs: &Fs) -> Option<String> {
+    let mut n = -1;
+    while true {
+        let raw = match fs.read_line() {
+            Some(l) => l,
+            None => {
+                return None;
+            }
+        };
+        let l = if raw.ends_with("\r") {
+            raw.slice(0, raw.len() - 1)
+        } else {
+            raw
+        };
+        if l == "" {
+            if n >= 0 {
+                break;
+            }
+            continue;
+        }
+        if l.to_lower().starts_with("content-length:") {
+            n = l.slice(15, l.len()).trim().parse_int().unwrap_or(-1);
+        }
+    }
+    fs.read_stdin(n)
+}
+
+fn lsp_send(fs: &Fs, v: IrjVal) {
+    let body = lsp_json(v);
+    fs.write_stdout("Content-Length: " + body.to_bytes().len().to_string() + "\r\n\r\n" + body);
+}
+
+fn lsp_response(id: IrjVal, reply: LspReply) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "jsonrpc", IrjVal::Str("2.0"));
+    irjson_set(o, "id", id);
+    match reply {
+        LspReply::Err(code, msg) => {
+            let e = irjson_obj();
+            irjson_set(e, "code", irjson_int(code));
+            irjson_set(e, "message", IrjVal::Str(msg));
+            irjson_set(o, "error", irjson_val(e));
+        }
+        LspReply::Ok(v) => irjson_set(o, "result", v),
+        LspReply::None => irjson_set(o, "result", IrjVal::Null),
+    }
+    irjson_val(o)
+}
+
+fn lsp_notify(fs: &Fs, method: String, params: IrjVal) {
+    let o = irjson_obj();
+    irjson_set(o, "jsonrpc", IrjVal::Str("2.0"));
+    irjson_set(o, "method", IrjVal::Str(method));
+    irjson_set(o, "params", params);
+    lsp_send(fs, irjson_val(o));
+}
+
+// lsp_json renders v without whitespace.
+fn lsp_json(v: IrjVal) -> String {
+    let parts = Vec::new();
+    lsp_json_write(parts, v);
+    parts.join("")
+}
+
+fn lsp_json_write(mut parts: Vec<String>, v: IrjVal) {
+    match v {
+        IrjVal::Null => parts.push("null"),
+        IrjVal::Raw(s) => parts.push(s),
+        IrjVal::Str(s) => parts.push(irjson_quote(s, false)),
+        IrjVal::Arr(xs) => {
+            parts.push("[");
+            let mut first = true;
+            for x in xs {
+                if !first {
+                    parts.push(",");
+                }
+                first = false;
+                lsp_json_write(parts, x);
+            }
+            parts.push("]");
+        }
+        IrjVal::Obj(keys, vals) => {
+            parts.push("{");
+            let mut i = 0;
+            for k in keys {
+                if i > 0 {
+                    parts.push(",");
+                }
+                parts.push(irjson_quote(k, false) + ":");
+                lsp_json_write(parts, vals.get(i).unwrap_or(IrjVal::Null));
+                i = i + 1;
+            }
+            parts.push("}");
+        }
+    }
+}
+
+// ---- URIs ----
+
+fn lsp_hex(c: Int) -> Int {
+    if c >= 48 && c <= 57 {
+        return c - 48;
+    }
+    if c >= 97 && c <= 102 {
+        return c - 87;
+    }
+    if c >= 65 && c <= 70 {
+        return c - 55;
+    }
+    -1
+}
+
+// lsp_uri_path is the path of a file: URI ("" for other schemes).
+fn lsp_uri_path(uri: String) -> String {
+    if !uri.starts_with("file://") {
+        return "";
+    }
+    let bs = uri.slice(7, uri.len()).to_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bs.len() {
+        let c = bs.get(i).unwrap_or(0);
+        if c == 37 && i + 2 < bs.len() {
+            let h = lsp_hex(bs.get(i + 1).unwrap_or(0));
+            let l = lsp_hex(bs.get(i + 2).unwrap_or(0));
+            if h >= 0 && l >= 0 {
+                out.push(h * 16 + l);
+                i = i + 3;
+                continue;
+            }
+        }
+        out.push(c);
+        i = i + 1;
+    }
+    String::from_bytes(out)
+}
+
+// lsp_uri is the file: URI of a path; the core library's files ("<core>/")
+// are under <kekkai-root>/lib/core.
+fn lsp_uri(srv: LspServer, path: String) -> String {
+    let p = lsp_disk_path(srv, path);
+    let digits = "0123456789ABCDEF";
+    let mut parts = Vec::new();
+    parts.push("file://");
+    for c in p.to_bytes() {
+        let plain = (c >= 97 && c <= 122)
+            || (c >= 65 && c <= 90)
+            || (c >= 48 && c <= 57)
+            || c == 47
+            || c == 45
+            || c == 46
+            || c == 95
+            || c == 126;
+        if plain {
+            parts.push(String::from_char(c));
+        } else {
+            parts.push("%" + digits.slice(c / 16, c / 16 + 1) + digits.slice(c % 16, c % 16 + 1));
+        }
+    }
+    parts.join("")
+}
+
+fn lsp_disk_path(srv: LspServer, path: String) -> String {
+    if path.starts_with("<core>/") {
+        return srv.kek_root + "/lib/core/" + path.slice(7, path.len());
+    }
+    path
+}
+
+fn lsp_dir(path: String) -> String {
+    let mut i = path.len() - 1;
+    while i >= 0 {
+        if path.char_at(i).unwrap_or(0) == 47 {
+            return path.slice(0, i);
+        }
+        i = i - 1;
+    }
+    ""
+}
+
+// ---- positions ----
+
+fn lsp_text_of(src: String) -> LspText {
+    let bytes = src.to_bytes();
+    let mut lines = Vec::new();
+    lines.push(0);
+    let mut i = 0;
+    for b in bytes {
+        if b == 10 {
+            lines.push(i + 1);
+        }
+        i = i + 1;
+    }
+    LspText { bytes: bytes, lines: lines }
+}
+
+// lsp_offset is the byte offset of a 1-based line and byte column,
+// clamped to the text.
+fn lsp_offset(t: LspText, line: Int, col: Int) -> Int {
+    if line < 1 {
+        return 0;
+    }
+    if line > t.lines.len() {
+        return t.bytes.len();
+    }
+    let start = t.lines.get(line - 1).unwrap_or(0);
+    let mut off = start + col - 1;
+    if off < start {
+        off = start;
+    }
+    if off > t.bytes.len() {
+        off = t.bytes.len();
+    }
+    off
+}
+
+// lsp_char is the LSP character offset of a 1-based byte column.
+fn lsp_char(srv: LspServer, t: LspText, line: Int, col: Int) -> Int {
+    let start = lsp_offset(t, line, 1);
+    let end = lsp_offset(t, line, col);
+    if srv.utf8 {
+        return end - start;
+    }
+    let mut n = 0;
+    let mut i = start;
+    while i < end {
+        let b = t.bytes.get(i).unwrap_or(0);
+        if b >= 240 {
+            n = n + 2;
+        } else if b < 128 || b >= 192 {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+// lsp_col is the 1-based byte column of an LSP character offset.
+fn lsp_col(srv: LspServer, t: LspText, line: Int, ch: Int) -> Int {
+    let start = lsp_offset(t, line, 1);
+    let n = t.bytes.len();
+    let mut i = start;
+    let mut u = 0;
+    while i < n && u < ch {
+        let b = t.bytes.get(i).unwrap_or(0);
+        if b == 10 {
+            break;
+        }
+        if srv.utf8 {
+            u = u + 1;
+        } else if b >= 240 {
+            u = u + 2;
+        } else if b < 128 || b >= 192 {
+            u = u + 1;
+        }
+        i = i + 1;
+        // the rest of a UTF-8 sequence
+        while i < n
+            && t.bytes.get(i).unwrap_or(0) >= 128
+            && t.bytes.get(i).unwrap_or(0) < 192
+            && !srv.utf8 {
+            i = i + 1;
+        }
+    }
+    i - start + 1
+}
+
+fn lsp_position(srv: LspServer, t: LspText, line: Int, col: Int) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "line", irjson_int(if line > 0 { line - 1 } else { 0 }));
+    irjson_set(o, "character", irjson_int(lsp_char(srv, t, line, col)));
+    irjson_val(o)
+}
+
+fn lsp_range(
+    srv: LspServer,
+    t: LspText,
+    line: Int,
+    col: Int,
+    end_line: Int,
+    end_col: Int,
+) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "start", lsp_position(srv, t, line, col));
+    irjson_set(o, "end", lsp_position(srv, t, end_line, end_col));
+    irjson_val(o)
+}
+
+fn lsp_location(srv: LspServer, file: String, t: LspText, line: Int, col: Int, len: Int) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "uri", IrjVal::Str(lsp_uri(srv, file)));
+    irjson_set(o, "range", lsp_range(srv, t, line, col, line, col + len));
+    irjson_val(o)
+}
+
+fn lsp_is_ident_byte(c: Int) -> Bool {
+    (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95
+}
+
+// lsp_name_at finds name as a whole word at or after (line, col), within
+// 512 bytes; the position itself when it is not there.
+fn lsp_name_at(t: LspText, file: String, line: Int, col: Int, name: String) -> AstPos {
+    let nb = name.to_bytes();
+    let n = nb.len();
+    let start = lsp_offset(t, line, col);
+    let mut i = start;
+    let mut ln = line;
+    let mut lstart = lsp_offset(t, line, 1);
+    while i + n <= t.bytes.len() && i < start + 512 && n > 0 {
+        let c = t.bytes.get(i).unwrap_or(0);
+        if c == 10 {
+            ln = ln + 1;
+            lstart = i + 1;
+        } else if c == nb.get(0).unwrap_or(0)
+            && (i == 0 || !lsp_is_ident_byte(t.bytes.get(i - 1).unwrap_or(0))) {
+            let mut j = 1;
+            while j < n && t.bytes.get(i + j).unwrap_or(0) == nb.get(j).unwrap_or(0) {
+                j = j + 1;
+            }
+            if j == n && !lsp_is_ident_byte(t.bytes.get(i + n).unwrap_or(0)) {
+                return AstPos { file: file, line: ln, col: i - lstart + 1 };
+            }
+        }
+        i = i + 1;
+    }
+    AstPos { file: file, line: line, col: col }
+}
+
+// ---- programs ----
+
+// lsp_text is a file's text: the open document's, else the file's.
+fn lsp_text(srv: LspServer, fs: &Fs, path: String) -> Option<String> {
+    match srv.docs.get(path) {
+        Some(t) => Some(t),
+        None => match fs.read(path) {
+            Ok(t) => Some(t),
+            Err(_) => None,
+        },
+    }
+}
+
+// lsp_top_names lists the top-level declarations of a text (lines that
+// start with `fn`, `struct`, `enum`, `trait` or `type`).
+fn lsp_top_names(t: String) -> Vec<String> {
+    let mut out = Vec::new();
+    for l0 in t.split("\n") {
+        let mut l = l0;
+        if l.starts_with("async ") {
+            l = l.slice(6, l.len());
+        }
+        let mut rest = "";
+        for kw in "fn struct enum trait type".split(" ") {
+            if l.starts_with(kw + " ") {
+                rest = l.slice(kw.len() + 1, l.len());
+            }
+        }
+        let bs = rest.to_bytes();
+        let mut j = 0;
+        while j < bs.len() && lsp_is_ident_byte(bs.get(j).unwrap_or(0)) {
+            j = j + 1;
+        }
+        if j > 0 {
+            out.push(rest.slice(0, j));
+        }
+    }
+    out
+}
+
+// lsp_sources lists the files of the program of path (see the top).
+fn lsp_sources(srv: LspServer, fs: &Fs, path: String) -> Vec<FeSource> {
+    let text = lsp_text(srv, fs, path).unwrap_or("");
+    let mut one = Vec::new();
+    one.push(FeSource { name: path, text: text, module: "" });
+    let dir = lsp_dir(path);
+    let entries = match fs.list(if dir == "" { "/" } else { dir }) {
+        Ok(es) => es,
+        Err(_) => {
+            return one;
+        }
+    };
+    let mut srcs = Vec::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for n in entries {
+        if !n.ends_with(".kek") {
+            continue;
+        }
+        let p = dir + "/" + n;
+        let t = if p == path {
+            text
+        } else {
+            match lsp_text(srv, fs, p) {
+                Some(t) => t,
+                None => {
+                    continue;
+                }
+            }
+        };
+        for name in lsp_top_names(t) {
+            match seen.get(name) {
+                Some(other) => {
+                    if other != p {
+                        return one;
+                    }
+                }
+                None => {
+                    seen.insert(name, p);
+                }
+            }
+        }
+        srcs.push(FeSource { name: p, text: t, module: "" });
+    }
+    if srcs.len() < 2 {
+        return one;
+    }
+    srcs
+}
+
+fn lsp_same_sources(p: LspProg, srcs: Vec<FeSource>) -> Bool {
+    if p.files.len() != srcs.len() {
+        return false;
+    }
+    let mut i = 0;
+    for s in srcs {
+        let a = match p.files.get(i) {
+            Some(a) => a,
+            None => {
+                return false;
+            }
+        };
+        if a.name != s.name || a.src != s.text {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// lsp_program analyzes the program of path (or reuses the last analysis
+// when its sources are unchanged).
+fn lsp_program(mut srv: LspServer, fs: &Fs, log: &Log, path: String) -> LspProg {
+    let srcs = lsp_sources(srv, fs, path);
+    match srv.prog {
+        Some(p) => {
+            if lsp_same_sources(p, srcs) {
+                return p;
+            }
+        }
+        None => {}
+    }
+    let cfg = match ref_config_load(fs, log) {
+        Some(c) => c,
+        None => ref_config_default(),
+    };
+    let lib = srv.kek_root != "" && path.starts_with(srv.kek_root + "/lib/");
+    let p = LspProg { files: diag_analyze_files(srcs, cfg), lib: lib, index: None };
+    srv.prog = Some(p);
+    p
+}
+
+fn lsp_file(p: LspProg, path: String) -> Option<DiagAnalysis> {
+    for a in p.files {
+        if a.name == path {
+            return Some(a);
+        }
+    }
+    None
+}
+
+fn lsp_text_of_analysis(a: DiagAnalysis) -> LspText {
+    LspText { bytes: a.bytes, lines: a.lines }
+}
+
+// ---- diagnostics ----
+
+fn lsp_publish(mut srv: LspServer, fs: &Fs, log: &Log, path: String) {
+    if !path.ends_with(".kek") {
+        return;
+    }
+    let p = lsp_program(srv, fs, log, path);
+    for a in p.files {
+        let t = lsp_text_of_analysis(a);
+        let mut ds = Vec::new();
+        if !p.lib {
+            for d in a.diags {
+                ds.push(lsp_diagnostic(srv, a.name, t, d));
+            }
+        }
+        if ds.len() == 0 && a.name != path && !srv.published.contains_key(a.name) {
+            continue;
+        }
+        if ds.len() > 0 {
+            srv.published.insert(a.name, true);
+        } else {
+            srv.published.remove(a.name);
+        }
+        let o = irjson_obj();
+        irjson_set(o, "uri", IrjVal::Str(lsp_uri(srv, a.name)));
+        irjson_set(o, "diagnostics", IrjVal::Arr(ds));
+        lsp_notify(fs, "textDocument/publishDiagnostics", irjson_val(o));
+    }
+}
+
+fn lsp_diagnostic(srv: LspServer, file: String, t: LspText, d: DiagDiag) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "range", lsp_range(srv, t, d.line, d.col, d.end_line, d.end_col));
+    irjson_set(o, "severity", irjson_int(if d.severity == "error" { 1 } else { 2 }));
+    irjson_set(o, "code", IrjVal::Str(d.phase));
+    irjson_set(o, "source", IrjVal::Str("kek"));
+    irjson_set(o, "message", IrjVal::Str(d.message));
+    if d.facts.len() > 0 {
+        // the facts the solver was given, where they come from
+        let mut rel = Vec::new();
+        for u in d.facts {
+            let r = irjson_obj();
+            irjson_set(r, "location", lsp_location(srv, file, t, u.pos.line, u.pos.col, 1));
+            irjson_set(r, "message", IrjVal::Str("fact: " + u.text));
+            rel.push(irjson_val(r));
+        }
+        irjson_set(o, "relatedInformation", IrjVal::Arr(rel));
+    }
+    irjson_val(o)
+}
+
+// ---- the index of names ----
+
+struct LspWalk {
+    srv: LspServer,
+    info: ChkInfo,
+    texts: HashMap<String, LspText>,
+    // type declarations by name, fields by "S.f", variants by "E::V"
+    types: HashMap<String, AstPos>,
+    type_kinds: HashMap<String, String>,
+    fields: HashMap<String, AstPos>,
+    variants: HashMap<String, AstPos>,
+    // declarations' name positions (memo of lsp_walk_name)
+    names: HashMap<String, AstPos>,
+    funcs_by_id: HashMap<Int, ChkFunc>,
+    refs: Vec<LspRef>,
+}
+
+fn lsp_index(mut p: LspProg, srv: LspServer, fs: &Fs) -> LspIndex {
+    match p.index {
+        Some(ix) => {
+            return ix;
+        }
+        None => {}
+    }
+    let a0 = match p.files.get(0) {
+        Some(a) => a,
+        None => {
+            return LspIndex { refs: Vec::new() };
+        }
+    };
+    let mut w = LspWalk {
+        srv: srv,
+        info: a0.info,
+        texts: HashMap::new(),
+        types: HashMap::new(),
+        type_kinds: HashMap::new(),
+        fields: HashMap::new(),
+        variants: HashMap::new(),
+        names: HashMap::new(),
+        funcs_by_id: HashMap::new(),
+        refs: Vec::new(),
+    };
+    for a in p.files {
+        w.texts.insert(a.name, lsp_text_of_analysis(a));
+    }
+    for f in a0.info.func_list {
+        w.funcs_by_id.insert(f.decl.id, f);
+    }
+    lsp_declare_types(w, fs, a0.file);
+    lsp_declare_types(w, fs, chk_parse_core().file);
+    lsp_walk_file(w, fs, a0.file);
+    let ix = LspIndex { refs: w.refs };
+    p.index = Some(ix);
+    ix
+}
+
+// lsp_walk_name is the position of name in the declaration at pos.
+fn lsp_walk_name(mut w: LspWalk, fs: &Fs, pos: AstPos, name: String) -> AstPos {
+    let key = ast_pos_string(pos) + "\t" + name;
+    match w.names.get(key) {
+        Some(p) => {
+            return p;
+        }
+        None => {}
+    }
+    let t = match w.texts.get(pos.file) {
+        Some(t) => t,
+        None => {
+            let t = match fs.read(lsp_disk_path(w.srv, pos.file)) {
+                Ok(s) => lsp_text_of(s),
+                Err(_) => lsp_text_of(""),
+            };
+            w.texts.insert(pos.file, t);
+            t
+        }
+    };
+    let p = lsp_name_at(t, pos.file, pos.line, pos.col, name);
+    w.names.insert(key, p);
+    p
+}
+
+fn lsp_declare_types(mut w: LspWalk, fs: &Fs, file: AstFile) {
+    for st in file.structs {
+        w.types.insert(st.name, lsp_walk_name(w, fs, st.pos, st.name));
+        w.type_kinds.insert(st.name, "struct");
+        for f in st.fields {
+            w.fields.insert(st.name + "." + f.name, lsp_walk_name(w, fs, f.pos, f.name));
+        }
+    }
+    for en in file.enums {
+        w.types.insert(en.name, lsp_walk_name(w, fs, en.pos, en.name));
+        w.type_kinds.insert(en.name, "enum");
+        for v in en.variants {
+            w.variants.insert(en.name + "::" + v.name, lsp_walk_name(w, fs, v.pos, v.name));
+        }
+    }
+    for tr in file.traits {
+        w.types.insert(tr.name, lsp_walk_name(w, fs, tr.pos, tr.name));
+        w.type_kinds.insert(tr.name, "trait");
+    }
+    for al in file.aliases {
+        w.types.insert(al.name, lsp_walk_name(w, fs, al.pos, al.name));
+        w.type_kinds.insert(al.name, "alias");
+    }
+}
+
+// lsp_add records an occurrence of name at (or just after) pos that refers
+// to the declaration at target.
+fn lsp_add(
+    mut w: LspWalk,
+    fs: &Fs,
+    pos: AstPos,
+    name: String,
+    target: AstPos,
+    kind: String,
+    ty: String,
+    decl: Bool,
+) {
+    if name == "" || name == "_" {
+        return;
+    }
+    let at = lsp_walk_name(w, fs, pos, name);
+    let tgt = if decl {
+        at
+    } else {
+        lsp_walk_name(w, fs, target, name)
+    };
+    w.refs.push(LspRef {
+        file: at.file,
+        line: at.line,
+        col: at.col,
+        len: name.to_bytes().len(),
+        target: tgt,
+        has_target: kind != "builtin",
+        kind: kind,
+        name: name,
+        ty: ty,
+        decl: decl,
+    });
+}
+
+fn lsp_ty_of(w: LspWalk, id: Int) -> String {
+    match w.info.types.get(id) {
+        Some(t) => ty_str(ty_resolve(t)),
+        None => "",
+    }
+}
+
+fn lsp_walk_file(mut w: LspWalk, fs: &Fs, file: AstFile) {
+    for st in file.structs {
+        lsp_add(w, fs, st.pos, st.name, st.pos, "struct", "", true);
+        for g in st.generics {
+            lsp_walk_types(w, fs, g.bounds);
+        }
+        for f in st.fields {
+            lsp_add(w, fs, f.pos, f.name, f.pos, "field", "", true);
+            lsp_walk_type(w, fs, f.ty);
+        }
+    }
+    for en in file.enums {
+        lsp_add(w, fs, en.pos, en.name, en.pos, "enum", "", true);
+        for v in en.variants {
+            lsp_add(w, fs, v.pos, v.name, v.pos, "variant", "", true);
+            lsp_walk_types(w, fs, v.fields);
+        }
+    }
+    for al in file.aliases {
+        lsp_add(w, fs, al.pos, al.name, al.pos, "alias", "", true);
+        lsp_walk_type(w, fs, al.ty);
+        match al.pred {
+            Some(e) => lsp_walk_expr(w, fs, e),
+            None => {}
+        }
+    }
+    for tr in file.traits {
+        lsp_add(w, fs, tr.pos, tr.name, tr.pos, "trait", "", true);
+        lsp_walk_types(w, fs, tr.supers);
+        for f in tr.funcs {
+            lsp_walk_func(w, fs, f, "method");
+        }
+    }
+    for im in file.impls {
+        match im.trait_ty {
+            Some(t) => lsp_walk_type(w, fs, t),
+            None => {}
+        }
+        lsp_walk_type(w, fs, im.target);
+        for f in im.funcs {
+            lsp_walk_func(w, fs, f, "method");
+        }
+    }
+    for f in file.funcs {
+        lsp_walk_func(w, fs, f, "fn");
+    }
+}
+
+fn lsp_walk_func(mut w: LspWalk, fs: &Fs, f: AstFuncDecl, kind: String) {
+    lsp_add(w, fs, f.pos, f.name, f.pos, kind, "", true);
+    let cf = w.funcs_by_id.get(f.id);
+    for g in f.generics {
+        lsp_walk_types(w, fs, g.bounds);
+    }
+    for p in f.params {
+        let mut ty = "";
+        match cf {
+            Some(c) => {
+                for b in c.params {
+                    if b.name == p.name {
+                        ty = ty_str(b.ty);
+                    }
+                }
+            }
+            None => {}
+        }
+        lsp_add(w, fs, p.pos, p.name, p.pos, "param", ty, true);
+        match p.ty {
+            Some(t) => lsp_walk_type(w, fs, t),
+            None => {}
+        }
+    }
+    match f.result {
+        Some(t) => lsp_walk_type(w, fs, t),
+        None => {}
+    }
+    for wh in f.wheres {
+        lsp_walk_type(w, fs, wh.ty);
+        lsp_walk_types(w, fs, wh.bounds);
+    }
+    for e in f.preds {
+        lsp_walk_expr(w, fs, e);
+    }
+    if f.has_body {
+        lsp_walk_block(w, fs, f.body);
+    }
+}
+
+fn lsp_walk_types(mut w: LspWalk, fs: &Fs, ts: Vec<AstType>) {
+    for t in ts {
+        lsp_walk_type(w, fs, t);
+    }
+}
+
+fn lsp_walk_type(mut w: LspWalk, fs: &Fs, t0: AstType) {
+    match t0 {
+        AstType::Named(t) => {
+            match w.types.get(t.name) {
+                Some(p) => {
+                    let kind = w.type_kinds.get(t.name).unwrap_or("type");
+                    lsp_add(w, fs, t.pos, t.name, p, kind, "", false);
+                }
+                None => {}
+            }
+            lsp_walk_types(w, fs, t.args);
+        }
+        AstType::Ref(t) => lsp_walk_type(w, fs, t.elem),
+        AstType::Unit(_) => {}
+        AstType::Tuple(t) => lsp_walk_types(w, fs, t.elems),
+        AstType::Fn(t) => {
+            lsp_walk_types(w, fs, t.params);
+            match t.result {
+                Some(r) => lsp_walk_type(w, fs, r),
+                None => {}
+            }
+        }
+    }
+}
+
+fn lsp_walk_block(mut w: LspWalk, fs: &Fs, b: AstBlock) {
+    for s in b.stmts {
+        lsp_walk_stmt(w, fs, s);
+    }
+    match b.tail {
+        Some(e) => lsp_walk_expr(w, fs, e),
+        None => {}
+    }
+}
+
+fn lsp_binding_kind(b: ChkBinding) -> String {
+    if b.param { "param" } else { "local" }
+}
+
+fn lsp_walk_stmt(mut w: LspWalk, fs: &Fs, s0: AstStmt) {
+    match s0 {
+        AstStmt::Let(s) => {
+            match w.info.lets.get(s.id) {
+                Some(b) => lsp_add(
+                    w,
+                    fs,
+                    s.pos,
+                    s.name,
+                    b.pos,
+                    "local",
+                    ty_str(ty_resolve(b.ty)),
+                    true,
+                ),
+                None => {}
+            }
+            match s.pat {
+                Some(p) => lsp_walk_pat(w, fs, p),
+                None => {}
+            }
+            match s.ty {
+                Some(t) => lsp_walk_type(w, fs, t),
+                None => {}
+            }
+            lsp_walk_expr(w, fs, s.init);
+        }
+        AstStmt::Assign(s) => {
+            match w.info.assigns.get(s.id) {
+                Some(b) => lsp_add(
+                    w,
+                    fs,
+                    s.pos,
+                    s.name,
+                    b.pos,
+                    lsp_binding_kind(b),
+                    ty_str(ty_resolve(b.ty)),
+                    false,
+                ),
+                None => {}
+            }
+            lsp_walk_expr(w, fs, s.value);
+        }
+        AstStmt::FieldAssign(s) => {
+            lsp_walk_expr(w, fs, AstExpr::Field(s.target));
+            lsp_walk_expr(w, fs, s.value);
+        }
+        AstStmt::Break(s) => match s.value {
+            Some(v) => lsp_walk_expr(w, fs, v),
+            None => {}
+        },
+        AstStmt::Continue(_) => {}
+        AstStmt::While(s) => {
+            match s.pat {
+                Some(p) => lsp_walk_pat(w, fs, p),
+                None => {}
+            }
+            lsp_walk_expr(w, fs, s.cond);
+            lsp_walk_block(w, fs, s.body);
+        }
+        AstStmt::For(s) => {
+            match w.info.fors.get(s.id) {
+                Some(b) => lsp_add(
+                    w,
+                    fs,
+                    s.pos,
+                    s.var,
+                    b.pos,
+                    "local",
+                    ty_str(ty_resolve(b.ty)),
+                    true,
+                ),
+                None => {}
+            }
+            match s.pat {
+                Some(p) => lsp_walk_pat(w, fs, p),
+                None => {}
+            }
+            lsp_walk_expr(w, fs, s.iter);
+            match s.end {
+                Some(e) => lsp_walk_expr(w, fs, e),
+                None => {}
+            }
+            lsp_walk_block(w, fs, s.body);
+        }
+        AstStmt::Return(s) => {
+            match s.value {
+                Some(e) => lsp_walk_expr(w, fs, e),
+                None => {}
+            }
+        }
+        AstStmt::Expr(s) => lsp_walk_expr(w, fs, s.x),
+    }
+}
+
+fn lsp_walk_pat(mut w: LspWalk, fs: &Fs, p: AstPattern) {
+    match w.info.patterns.get(p.id) {
+        Some(pi) => {
+            if pi.kind == "bind" || pi.kind == "at" {
+                match pi.bind {
+                    Some(b) => lsp_add(
+                        w,
+                        fs,
+                        p.pos,
+                        p.bind,
+                        b.pos,
+                        "local",
+                        ty_str(ty_resolve(b.ty)),
+                        true,
+                    ),
+                    None => {}
+                }
+            } else if pi.kind == "ctor" {
+                match ty_resolve(pi.ty) {
+                    Ty::Enum(en, _) => {
+                        match w.variants.get(en.name + "::" + p.ctor) {
+                            Some(vp) => lsp_add(w, fs, p.pos, p.ctor, vp, "variant", "", false),
+                            None => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None => {}
+    }
+    for a in p.args {
+        lsp_walk_pat(w, fs, a);
+    }
+    for a in p.alts {
+        lsp_walk_pat(w, fs, a);
+    }
+    for a in p.at {
+        lsp_walk_pat(w, fs, a);
+    }
+}
+
+fn lsp_walk_exprs(mut w: LspWalk, fs: &Fs, es: Vec<AstExpr>) {
+    for e in es {
+        lsp_walk_expr(w, fs, e);
+    }
+}
+
+fn lsp_walk_expr(mut w: LspWalk, fs: &Fs, e0: AstExpr) {
+    match e0 {
+        AstExpr::IntLit(_) => {}
+        AstExpr::FloatLit(_) => {}
+        AstExpr::BoolLit(_) => {}
+        AstExpr::StrLit(_) => {}
+        AstExpr::UnitLit(_) => {}
+        AstExpr::Ident(e) => {
+            match w.info.uses.get(e.id) {
+                Some(b) => lsp_add(
+                    w,
+                    fs,
+                    e.pos,
+                    e.name,
+                    b.pos,
+                    lsp_binding_kind(b),
+                    lsp_ty_of(w, e.id),
+                    false,
+                ),
+                None => match w.info.funcs.get(e.name) {
+                    Some(f) => lsp_add(w, fs, e.pos, e.name, f.decl.pos, "fn", "", false),
+                    None => {}
+                },
+            }
+            lsp_walk_types(w, fs, e.targs);
+        }
+        AstExpr::Binary(e) => {
+            lsp_walk_expr(w, fs, e.x);
+            lsp_walk_expr(w, fs, e.y);
+        }
+        AstExpr::Unary(e) => lsp_walk_expr(w, fs, e.x),
+        AstExpr::Call(e) => {
+            lsp_walk_expr(w, fs, e.func);
+            lsp_walk_exprs(w, fs, e.args);
+        }
+        AstExpr::Method(e) => {
+            lsp_walk_expr(w, fs, e.recv);
+            match w.info.methods.get(e.id) {
+                Some(m) => match m.func {
+                    Some(f) => lsp_add(w, fs, e.pos, e.name, f.decl.pos, "method", "", false),
+                    None => lsp_add(
+                        w,
+                        fs,
+                        e.pos,
+                        e.name,
+                        e.pos,
+                        "builtin",
+                        ty_str(ty_resolve(m.recv_ty))
+                            + "."
+                            + e.name
+                            + "(..) -> "
+                            + lsp_ty_of(w, e.id),
+                        false,
+                    ),
+                },
+                None => {}
+            }
+            lsp_walk_types(w, fs, e.targs);
+            lsp_walk_exprs(w, fs, e.args);
+        }
+        AstExpr::Field(e) => {
+            lsp_walk_expr(w, fs, e.x);
+            match w.info.types.get(lsp_expr_id(e.x)) {
+                Some(t) => match ty_resolve(t) {
+                    Ty::Struct(st, _) => match w.fields.get(st.name + "." + e.name) {
+                        Some(fp) => lsp_add(
+                            w,
+                            fs,
+                            e.pos,
+                            e.name,
+                            fp,
+                            "field",
+                            lsp_ty_of(w, e.id),
+                            false,
+                        ),
+                        None => {}
+                    },
+                    _ => {}
+                },
+                None => {}
+            }
+        }
+        AstExpr::Path(e) => {
+            match w.types.get(e.ty) {
+                Some(p) => {
+                    let kind = w.type_kinds.get(e.ty).unwrap_or("type");
+                    lsp_add(w, fs, e.pos, e.ty, p, kind, "", false);
+                }
+                None => {}
+            }
+            let name_pos = lsp_walk_name(
+                w,
+                fs,
+                AstPos {
+                    file: e.pos.file,
+                    line: e.pos.line,
+                    col: e.pos.col + e.ty.to_bytes().len(),
+                },
+                e.name,
+            );
+            match w.variants.get(e.ty + "::" + e.name) {
+                Some(vp) => lsp_add(w, fs, name_pos, e.name, vp, "variant", "", false),
+                None => match w.info.funcs.get(e.ty + "::" + e.name) {
+                    Some(f) => lsp_add(w, fs, name_pos, e.name, f.decl.pos, "fn", "", false),
+                    None => {}
+                },
+            }
+            lsp_walk_types(w, fs, e.ty_args);
+            lsp_walk_types(w, fs, e.targs);
+        }
+        AstExpr::StructLit(e) => {
+            match w.types.get(e.name) {
+                Some(p) => lsp_add(w, fs, e.pos, e.name, p, "struct", "", false),
+                None => {}
+            }
+            for fi in e.fields {
+                match w.fields.get(e.name + "." + fi.name) {
+                    Some(fp) => lsp_add(w, fs, fi.pos, fi.name, fp, "field", "", false),
+                    None => {}
+                }
+                lsp_walk_expr(w, fs, fi.value);
+            }
+        }
+        AstExpr::If(e) => {
+            match e.pat {
+                Some(p) => lsp_walk_pat(w, fs, p),
+                None => {}
+            }
+            lsp_walk_expr(w, fs, e.cond);
+            lsp_walk_block(w, fs, e.then);
+            match e.els {
+                Some(x) => lsp_walk_expr(w, fs, x),
+                None => {}
+            }
+        }
+        AstExpr::Match(e) => {
+            lsp_walk_expr(w, fs, e.x);
+            for arm in e.arms {
+                lsp_walk_pat(w, fs, arm.pat);
+                match arm.guard {
+                    Some(g) => lsp_walk_expr(w, fs, g),
+                    None => {}
+                }
+                lsp_walk_expr(w, fs, arm.body);
+            }
+        }
+        AstExpr::Block(b) => lsp_walk_block(w, fs, b),
+        AstExpr::Try(e) => lsp_walk_expr(w, fs, e.x),
+        AstExpr::Closure(e) => {
+            for p in e.params {
+                lsp_add(w, fs, p.pos, p.name, p.pos, "param", "", true);
+                match p.ty {
+                    Some(t) => lsp_walk_type(w, fs, t),
+                    None => {}
+                }
+            }
+            match e.result {
+                Some(t) => lsp_walk_type(w, fs, t),
+                None => {}
+            }
+            lsp_walk_expr(w, fs, e.body);
+        }
+        AstExpr::Tuple(e) => lsp_walk_exprs(w, fs, e.elems),
+        AstExpr::Range(e) => {
+            lsp_walk_expr(w, fs, e.start);
+            lsp_walk_expr(w, fs, e.end);
+        }
+        AstExpr::Index(e) => {
+            lsp_walk_expr(w, fs, e.x);
+            lsp_walk_expr(w, fs, e.index);
+        }
+        AstExpr::Macro(e) => lsp_walk_expr(w, fs, e.expansion),
+    }
+}
+
+fn lsp_expr_id(e0: AstExpr) -> Int {
+    match e0 {
+        AstExpr::IntLit(e) => e.id,
+        AstExpr::FloatLit(e) => e.id,
+        AstExpr::BoolLit(e) => e.id,
+        AstExpr::StrLit(e) => e.id,
+        AstExpr::UnitLit(e) => e.id,
+        AstExpr::Ident(e) => e.id,
+        AstExpr::Binary(e) => e.id,
+        AstExpr::Unary(e) => e.id,
+        AstExpr::Call(e) => e.id,
+        AstExpr::Method(e) => e.id,
+        AstExpr::Field(e) => e.id,
+        AstExpr::Path(e) => e.id,
+        AstExpr::StructLit(e) => e.id,
+        AstExpr::If(e) => e.id,
+        AstExpr::Match(e) => e.id,
+        AstExpr::Block(e) => e.id,
+        AstExpr::Try(e) => e.id,
+        AstExpr::Closure(e) => e.id,
+        AstExpr::Tuple(e) => e.id,
+        AstExpr::Range(e) => e.id,
+        AstExpr::Index(e) => e.id,
+        AstExpr::Macro(e) => e.id,
+    }
+}
+
+// ---- requests at a position ----
+
+// lsp_ref_at finds the occurrence of a name at an LSP position.
+fn lsp_ref_at(
+    mut srv: LspServer,
+    fs: &Fs,
+    log: &Log,
+    path: String,
+    line0: Int,
+    ch: Int,
+) -> Option<LspRef> {
+    let p = lsp_program(srv, fs, log, path);
+    let a = match lsp_file(p, path) {
+        Some(a) => a,
+        None => {
+            return None;
+        }
+    };
+    let line = line0 + 1;
+    let col = lsp_col(srv, lsp_text_of_analysis(a), line, ch);
+    let ix = lsp_index(p, srv, fs);
+    for r in ix.refs {
+        if r.file == path && r.line == line && r.col <= col && col <= r.col + r.len {
+            return Some(r);
+        }
+    }
+    None
+}
+
+fn lsp_target_text(srv: LspServer, fs: &Fs, p: LspProg, file: String) -> LspText {
+    match lsp_file(p, file) {
+        Some(a) => lsp_text_of_analysis(a),
+        None => match fs.read(lsp_disk_path(srv, file)) {
+            Ok(s) => lsp_text_of(s),
+            Err(_) => lsp_text_of(""),
+        },
+    }
+}
+
+fn lsp_definition(
+    mut srv: LspServer,
+    fs: &Fs,
+    log: &Log,
+    path: String,
+    line: Int,
+    ch: Int,
+) -> IrjVal {
+    match lsp_ref_at(srv, fs, log, path, line, ch) {
+        Some(r) => {
+            if !r.has_target {
+                return IrjVal::Null;
+            }
+            let p = lsp_program(srv, fs, log, path);
+            let t = lsp_target_text(srv, fs, p, r.target.file);
+            lsp_location(srv, r.target.file, t, r.target.line, r.target.col, r.len)
+        }
+        None => IrjVal::Null,
+    }
+}
+
+fn lsp_same_pos(a: AstPos, b: AstPos) -> Bool {
+    a.file == b.file && a.line == b.line && a.col == b.col
+}
+
+fn lsp_references(
+    mut srv: LspServer,
+    fs: &Fs,
+    log: &Log,
+    path: String,
+    line: Int,
+    ch: Int,
+    include_decl: Bool,
+) -> IrjVal {
+    let mut out = Vec::new();
+    let r0 = match lsp_ref_at(srv, fs, log, path, line, ch) {
+        Some(r) => r,
+        None => {
+            return IrjVal::Arr(out);
+        }
+    };
+    if !r0.has_target {
+        return IrjVal::Arr(out);
+    }
+    let p = lsp_program(srv, fs, log, path);
+    let ix = lsp_index(p, srv, fs);
+    for r in ix.refs {
+        if !r.has_target || !lsp_same_pos(r.target, r0.target) || (r.decl && !include_decl) {
+            continue;
+        }
+        let t = lsp_target_text(srv, fs, p, r.file);
+        out.push(lsp_location(srv, r.file, t, r.line, r.col, r.len));
+    }
+    IrjVal::Arr(out)
+}
+
+fn lsp_hover(mut srv: LspServer, fs: &Fs, log: &Log, path: String, line: Int, ch: Int) -> IrjVal {
+    let r = match lsp_ref_at(srv, fs, log, path, line, ch) {
+        Some(r) => r,
+        None => {
+            return IrjVal::Null;
+        }
+    };
+    let p = lsp_program(srv, fs, log, path);
+    let mut md = "";
+    if r.kind == "local" || r.kind == "param" {
+        md = "```kekkai\n" + if r.kind == "local" { "let " } else { "" } + r.name;
+        if r.ty != "" {
+            md = md + ": " + r.ty;
+        }
+        md = md + "\n```";
+    } else if r.kind == "builtin" {
+        md = "```kekkai\n" + r.ty + "\n```\n\nbuiltin operation";
+    } else {
+        let t = lsp_target_text(srv, fs, p, r.target.file);
+        md = lsp_decl_markdown(t, r.target.line, r.kind);
+        if r.ty != "" && r.kind == "field" {
+            md = md + "\n\n`" + r.ty + "`";
+        }
+    }
+    let contents = irjson_obj();
+    irjson_set(contents, "kind", IrjVal::Str("markdown"));
+    irjson_set(contents, "value", IrjVal::Str(md));
+    let o = irjson_obj();
+    irjson_set(o, "contents", irjson_val(contents));
+    match lsp_file(p, path) {
+        Some(a) => irjson_set(
+            o,
+            "range",
+            lsp_range(srv, lsp_text_of_analysis(a), r.line, r.col, r.line, r.col + r.len),
+        ),
+        None => {}
+    }
+    irjson_val(o)
+}
+
+fn lsp_line_text(t: LspText, line: Int) -> String {
+    let start = lsp_offset(t, line, 1);
+    let mut end = start;
+    while end < t.bytes.len() && t.bytes.get(end).unwrap_or(0) != 10 {
+        end = end + 1;
+    }
+    let mut bs = Vec::new();
+    let mut i = start;
+    while i < end {
+        bs.push(t.bytes.get(i).unwrap_or(0));
+        i = i + 1;
+    }
+    String::from_bytes(bs)
+}
+
+// lsp_strip_brace drops the `{` that opens a body at the end of a line.
+fn lsp_strip_brace(s: String) -> String {
+    let t = s.trim();
+    if t.ends_with("{") {
+        let i = s.index_of("{").unwrap_or(s.len());
+        return s.slice(0, i).trim();
+    }
+    s
+}
+
+// lsp_decl_markdown shows the declaration on a line: its signature (up to
+// the `{` of the body, at most 12 lines) and the comment above it.
+fn lsp_decl_markdown(t: LspText, line: Int, kind: String) -> String {
+    let mut sig = Vec::new();
+    let mut l = line;
+    let one_line = kind == "field" || kind == "variant";
+    while l <= t.lines.len() && l < line + 12 {
+        let s = lsp_line_text(t, l);
+        sig.push(lsp_strip_brace(s));
+        if one_line || s.contains("{") || s.trim().ends_with(";") || s.trim().ends_with(",") {
+            break;
+        }
+        l = l + 1;
+    }
+    let mut doc = Vec::new();
+    let mut k = line - 1;
+    while k >= 1 {
+        let s = lsp_line_text(t, k).trim();
+        if s.starts_with("#[") {
+            k = k - 1;
+            continue;
+        }
+        if !s.starts_with("//") {
+            break;
+        }
+        let mut c = s.slice(2, s.len());
+        if c.starts_with(" ") {
+            c = c.slice(1, c.len());
+        }
+        doc.push(c);
+        k = k - 1;
+    }
+    let mut lines = Vec::new();
+    let mut i = doc.len() - 1;
+    while i >= 0 {
+        lines.push(doc.get(i).unwrap_or(""));
+        i = i - 1;
+    }
+    let mut md = "```kekkai\n" + sig.join("\n").trim() + "\n```";
+    if lines.len() > 0 {
+        md = md + "\n\n" + lines.join("\n");
+    }
+    md
+}
+
+// ---- symbols ----
+
+// LSP SymbolKind
+fn lsp_kind_num(kind: String) -> Int {
+    if kind == "fn" {
+        return 12;
+    }
+    if kind == "method" {
+        return 6;
+    }
+    if kind == "struct" {
+        return 23;
+    }
+    if kind == "enum" {
+        return 10;
+    }
+    if kind == "variant" {
+        return 22;
+    }
+    if kind == "field" {
+        return 8;
+    }
+    if kind == "trait" {
+        return 11;
+    }
+    if kind == "impl" {
+        return 3;
+    }
+    26
+}
+
+fn lsp_type_name(t0: AstType) -> String {
+    match t0 {
+        AstType::Named(t) => t.name,
+        AstType::Ref(t) => "&" + lsp_type_name(t.elem),
+        AstType::Unit(_) => "()",
+        AstType::Tuple(_) => "(..)",
+        AstType::Fn(_) => "fn(..)",
+    }
+}
+
+// lsp_file_syms lists the declarations of a parsed file, with their
+// members (container: the enclosing declaration).
+fn lsp_file_syms(file: AstFile, t: LspText, path: String) -> Vec<LspSym> {
+    let mut out = Vec::new();
+    for st in file.structs {
+        if st.pos.file != path {
+            continue;
+        }
+        out.push(lsp_sym(t, st.name, "struct", "", st.pos));
+        for f in st.fields {
+            out.push(lsp_sym(t, f.name, "field", st.name, f.pos));
+        }
+    }
+    for en in file.enums {
+        if en.pos.file != path {
+            continue;
+        }
+        out.push(lsp_sym(t, en.name, "enum", "", en.pos));
+        for v in en.variants {
+            out.push(lsp_sym(t, v.name, "variant", en.name, v.pos));
+        }
+    }
+    for al in file.aliases {
+        if al.pos.file == path {
+            out.push(lsp_sym(t, al.name, "alias", "", al.pos));
+        }
+    }
+    for tr in file.traits {
+        if tr.pos.file != path {
+            continue;
+        }
+        out.push(lsp_sym(t, tr.name, "trait", "", tr.pos));
+        for f in tr.funcs {
+            out.push(lsp_sym(t, f.name, "method", tr.name, f.pos));
+        }
+    }
+    for im in file.impls {
+        if im.pos.file != path {
+            continue;
+        }
+        let mut name = lsp_type_name(im.target);
+        match im.trait_ty {
+            Some(tt) => {
+                name = lsp_type_name(tt) + " for " + name;
+            }
+            None => {}
+        }
+        let container = "impl " + name;
+        out.push(LspSym { name: container, kind: lsp_kind_num("impl"), container: "", pos: im.pos });
+        for f in im.funcs {
+            out.push(lsp_sym(t, f.name, "method", container, f.pos));
+        }
+    }
+    for f in file.funcs {
+        if f.pos.file == path {
+            out.push(lsp_sym(t, f.name, "fn", "", f.pos));
+        }
+    }
+    out
+}
+
+fn lsp_sym(t: LspText, name: String, kind: String, container: String, pos: AstPos) -> LspSym {
+    LspSym {
+        name: name,
+        kind: lsp_kind_num(kind),
+        container: container,
+        pos: lsp_name_at(t, pos.file, pos.line, pos.col, name),
+    }
+}
+
+fn lsp_symbol_info(srv: LspServer, t: LspText, s: LspSym) -> IrjVal {
+    let o = irjson_obj();
+    irjson_set(o, "name", IrjVal::Str(s.name));
+    irjson_set(o, "kind", irjson_int(s.kind));
+    let len = if s.kind == 3 {
+        4
+    } else {
+        s.name.to_bytes().len()
+    };
+    irjson_set(o, "location", lsp_location(srv, s.pos.file, t, s.pos.line, s.pos.col, len));
+    if s.container != "" {
+        irjson_set(o, "containerName", IrjVal::Str(s.container));
+    }
+    irjson_val(o)
+}
+
+fn lsp_document_symbols(srv: LspServer, fs: &Fs, path: String) -> IrjVal {
+    let mut out = Vec::new();
+    let text = match lsp_text(srv, fs, path) {
+        Some(t) => t,
+        None => {
+            return IrjVal::Arr(out);
+        }
+    };
+    let t = lsp_text_of(text);
+    let pr = parse_file(path, text, AstIds { next: 0 });
+    for s in lsp_file_syms(pr.file, t, path) {
+        out.push(lsp_symbol_info(srv, t, s));
+    }
+    IrjVal::Arr(out)
+}
+
+fn lsp_skip_dir(name: String) -> Bool {
+    name.starts_with(".") || name == "node_modules" || name == "out" || name == "target"
+}
+
+// lsp_kek_files lists the .kek files under dir (depth at most 8).
+fn lsp_kek_files(fs: &Fs, dir: String, depth: Int, mut out: Vec<String>) {
+    if depth > 8 {
+        return;
+    }
+    let entries = match fs.list(dir) {
+        Ok(es) => es,
+        Err(_) => {
+            return;
+        }
+    };
+    for n in entries {
+        let p = dir + "/" + n;
+        if n.ends_with(".kek") {
+            out.push(p);
+        } else if !lsp_skip_dir(n) && !n.contains(".") {
+            lsp_kek_files(fs, p, depth + 1, out);
+        }
+    }
+}
+
+fn lsp_workspace_symbols(mut srv: LspServer, fs: &Fs, query: String) -> IrjVal {
+    let mut out = Vec::new();
+    if srv.root == "" {
+        return IrjVal::Arr(out);
+    }
+    let q = query.to_lower();
+    let files = Vec::new();
+    lsp_kek_files(fs, srv.root, 0, files);
+    for path in files {
+        let text = match lsp_text(srv, fs, path) {
+            Some(t) => t,
+            None => {
+                continue;
+            }
+        };
+        let syms = match srv.wsyms.get(path) {
+            Some(c) => {
+                if c.text == text {
+                    c.syms
+                } else {
+                    lsp_parse_syms(srv, path, text)
+                }
+            }
+            None => lsp_parse_syms(srv, path, text),
+        };
+        let mut t: Option<LspText> = None;
+        for s in syms {
+            if out.len() >= 500 {
+                return IrjVal::Arr(out);
+            }
+            if q != "" && !s.name.to_lower().contains(q) {
+                continue;
+            }
+            let tx = match t {
+                Some(x) => x,
+                None => {
+                    let x = lsp_text_of(text);
+                    t = Some(x);
+                    x
+                }
+            };
+            out.push(lsp_symbol_info(srv, tx, s));
+        }
+    }
+    IrjVal::Arr(out)
+}
+
+fn lsp_parse_syms(mut srv: LspServer, path: String, text: String) -> Vec<LspSym> {
+    let pr = parse_file(path, text, AstIds { next: 0 });
+    let syms = lsp_file_syms(pr.file, lsp_text_of(text), path);
+    srv.wsyms.insert(path, LspFileSyms { text: text, syms: syms });
+    syms
+}

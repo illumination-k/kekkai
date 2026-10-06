@@ -1,0 +1,18 @@
+// A refinement predicate is about the arguments: a `mut` parameter could be
+// reassigned before the postcondition is checked.
+fn f(mut n: Int) -> Int
+where
+    result > n, // ERROR "cannot mention the `mut` parameter `n`"
+{
+    n = n - 10;
+    n + 1
+}
+
+fn g(n: Int) -> Int
+where
+    result > n,
+{
+    let mut m = n;
+    m += 1;
+    m
+}

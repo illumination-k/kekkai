@@ -26,7 +26,7 @@ fn mut_check_one(p: CovProg, sel: HashMap<Int, Bool>, c: MutCand) -> String {
     let prog = frontend_parse_all(p.srcs);
     let mut w = cov_new_walk("apply");
     w.real = true;
-    w.active.insert(c.node, mut_one_cand(c));
+    mut_activate(w, c);
     cov_rewrite_file(w, prog.file, p, sel);
     let res = chk_check(prog.file);
     match res.errs.get(0) {
@@ -43,7 +43,7 @@ fn mut_check_set(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) -> Strin
     let mut w = cov_new_walk("apply");
     w.real = true;
     for c in cs {
-        w.active.insert(c.node, mut_one_cand(c));
+        mut_activate(w, c);
     }
     cov_rewrite_file(w, prog.file, p, sel);
     let res = chk_check(prog.file);
@@ -67,6 +67,11 @@ fn mut_bisect(p: CovProg, sel: HashMap<Int, Bool>, cs: Vec<MutCand>) {
     for c in cs {
         if !nodes.insert(c.node) {
             distinct = false;
+        }
+        for n in c.also {
+            if !nodes.insert(n) {
+                distinct = false;
+            }
         }
     }
     if distinct {
@@ -118,12 +123,7 @@ fn mut_schema(p: CovProg, sel: HashMap<Int, Bool>, cands: Vec<MutCand>) -> ChkRe
         if c.status != "" {
             continue;
         }
-        match w.active.get(c.node) {
-            Some(mut v) => v.push(c),
-            None => {
-                w.active.insert(c.node, mut_one_cand(c));
-            }
-        }
+        mut_activate(w, c);
     }
     cov_rewrite_file(w, prog.file, p, sel);
     if !p.main {
@@ -191,11 +191,11 @@ fn mut_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
         let name = p.names.get(fd.id).unwrap_or(fd.name);
         if base != "" && base_hash.get(name).unwrap_or("") == p.hashes.get(fd.id).unwrap_or("") {
-            unchanged.push(name);
+            unchanged.push(ast_display_name(name));
             continue;
         }
         sel.insert(fd.id, true);
-        funcs.push(name);
+        funcs.push(ast_display_name(name));
     }
     let mut w = cov_new_walk("collect");
     w.info = Some(p.info);
@@ -287,7 +287,7 @@ fn mut_cand_json(c: MutCand) -> IrjVal {
     irjson_set(o, "file", IrjVal::Str(c.pos.file));
     irjson_set(o, "line", irjson_int(c.pos.line));
     irjson_set(o, "col", irjson_int(c.pos.col));
-    irjson_set(o, "func", IrjVal::Str(c.func));
+    irjson_set(o, "func", IrjVal::Str(ast_display_name(c.func)));
     irjson_set(o, "kind", IrjVal::Str(c.kind));
     irjson_set(o, "description", IrjVal::Str(c.desc));
     irjson_set(o, "original", IrjVal::Str(c.orig));

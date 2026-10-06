@@ -1,0 +1,75 @@
+// Macros: format strings are checked at compile time, the panicking
+// macros are only allowed in #[test] functions, and labeled data cannot be
+// formatted.
+
+struct User {
+    name: String,
+    email: Labeled<PII, String>,
+}
+
+struct Plain {
+    x: Int,
+}
+
+#[derive(Debug)]
+struct Shown {
+    x: Int,
+}
+
+fn format_errors(n: Int) -> String {
+    let a = format!("{} {}", n); // ERROR "2 positional arguments in format string, but there is 1 argument"
+    let b = format!("{}", n, n); // ERROR "argument never used"
+    let c = format!("{3}", n); // ERROR "invalid reference to positional argument 3 (there is 1 argument)"
+    let d = format!("{:e}", n); // ERROR "unknown format trait `e`"
+    let e = format!("open { brace"); // ERROR "expected `}` but string was terminated"
+    let f = format!("close } brace"); // ERROR "unmatched `}` found"
+    let g = format!(a); // ERROR "format argument must be a string literal"
+    let h = format!("{:#?}", n); // ERROR "pretty `{:#?}` is not supported"
+    let i = format!("{x.y}"); // ERROR "invalid argument name `x.y`"
+    let j = format!("{missing}"); // ERROR "cannot find value `missing` in this scope"
+    let k = format!("{v}", v = n, w = n); // ERROR "named argument `w` never used"
+    let l = format!("{:.2}", Plain { x: n }); // ERROR "the trait bound `Plain: Display` is not satisfied"
+    let m = format!("{:x}", "s"); // ERROR "an Int format (`{:x}`"
+    ""
+}
+
+fn other_macros() {
+    println!("hello"); // ERROR "`println!` is not available: output needs a capability; take `log: &Log` and write `log.info(format!(...))`"
+    let x = frobnicate!(1); // ERROR "cannot find macro `frobnicate`"
+    let v = vec![1, "two"]; // ERROR "mismatched types"
+}
+
+fn not_a_test(n: Int) -> Int {
+    assert!(n > 0); // ERROR "`assert!` can only be used in `#[test]` functions: Kekkai code does not panic; return a `Result` or an `Option`"
+    assert_eq!(n, 1); // ERROR "`assert_eq!` can only be used in `#[test]` functions"
+    if n == 2 {
+        panic!("two"); // ERROR "`panic!` can only be used in `#[test]` functions"
+    }
+    if n == 3 {
+        todo!(); // ERROR "`todo!` can only be used in `#[test]` functions"
+    }
+    match n {
+        4 => unreachable!(), // ERROR "`unreachable!` can only be used in `#[test]` functions"
+        _ => n,
+    }
+}
+
+fn traits(u: User, p: Plain, s: Shown) -> String {
+    let a = format!("{}", u.email); // ERROR "the trait bound `Labeled<PII, String>: Display` is not satisfied (labeled data"
+    let b = format!("{:?}", u.email); // ERROR "the trait bound `Labeled<PII, String>: Debug` is not satisfied (labeled data"
+    let c = u.email.to_string(); // ERROR "Labeled"
+    let d = format!("{}", p); // ERROR "the trait bound `Plain: Display` is not satisfied (implement `Display` for it"
+    let e = format!("{:?}", p); // ERROR "the trait bound `Plain: Debug` is not satisfied (add `#[derive(Debug)]`"
+    let f = format!("{}", s); // ERROR "the trait bound `Shown: Display` is not satisfied"
+    let g = s.to_string(); // ERROR "no method named `to_string` found for `Shown` (`to_string` comes with the trait `Display`"
+    a + b + c + d + e + f + g + format!("{:?} {}", s, u.name)
+}
+
+#[test]
+fn in_a_test() {
+    assert!(1 + 1 == 2, "math {}", "works");
+    assert_eq!(1, 1);
+    assert_ne!("a", "b");
+    assert_eq!(1, "one"); // ERROR "cannot compare `Int` with `String`"
+    let x: Int = if true { 1 } else { unreachable!("never {}", 1) };
+}

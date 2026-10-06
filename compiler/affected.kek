@@ -9,6 +9,9 @@
 //   tests      the #[test] functions among the affected: the tests to run
 //   build      whether the program (and so `kek build`'s output) changed
 //
+// Module items are listed as paths (`geo::area`, not the global name
+// `geo$area`), the names `kek test` gives the tests.
+//
 // The launcher's `kek affected -diff <rev>` extracts the base from git, and
 // `kek test -affected <rev>` runs only the affected tests (the CI mode when
 // no result cache is at hand).
@@ -49,20 +52,20 @@ fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         match old.prog.by_name.get(d.name) {
             Some(o) => {
                 if o.hash != d.hash {
-                    changed.push(d.name);
+                    changed.push(ast_display_name(d.name));
                 }
                 if o.trans != d.trans {
-                    affected.push(d.name);
+                    affected.push(ast_display_name(d.name));
                     if d.fun.test {
-                        tests.push(d.name);
+                        tests.push(ast_display_name(d.name));
                     }
                 }
             }
             None => {
-                added.push(d.name);
-                affected.push(d.name);
+                added.push(ast_display_name(d.name));
+                affected.push(ast_display_name(d.name));
                 if d.fun.test {
-                    tests.push(d.name);
+                    tests.push(ast_display_name(d.name));
                 }
             }
         }
@@ -70,7 +73,7 @@ fn aff_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut removed = Vec::new();
     for o in old.prog.defs {
         if !cur.prog.by_name.contains_key(o.name) {
-            removed.push(o.name);
+            removed.push(ast_display_name(o.name));
         }
     }
     let build = cur.prog.hash != old.prog.hash;

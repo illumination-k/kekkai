@@ -1,0 +1,330 @@
+// Methods of Option and Result, as in Rust's core::option and
+// core::result (`is_some`, `is_ok` and `unwrap_or` are builtins). There is
+// no `unwrap` or `expect`: a missing value is handled, not a panic.
+
+impl<T> Option<T> {
+    fn map<U>(self, f: impl Fn(T) -> U) -> Option<U> {
+        match self {
+            Some(x) => Some(f(x)),
+            None => None,
+        }
+    }
+
+    fn and_then<U>(self, f: impl Fn(T) -> Option<U>) -> Option<U> {
+        match self {
+            Some(x) => f(x),
+            None => None,
+        }
+    }
+
+    fn and<U>(self, other: Option<U>) -> Option<U> {
+        match self {
+            Some(_) => other,
+            None => None,
+        }
+    }
+
+    fn or(self, other: Option<T>) -> Option<T> {
+        match self {
+            Some(x) => Some(x),
+            None => other,
+        }
+    }
+
+    fn or_else(self, f: impl Fn() -> Option<T>) -> Option<T> {
+        match self {
+            Some(x) => Some(x),
+            None => f(),
+        }
+    }
+
+    fn xor(self, other: Option<T>) -> Option<T> {
+        match self {
+            Some(x) => match other {
+                Some(_) => None,
+                None => Some(x),
+            },
+            None => other,
+        }
+    }
+
+    fn filter(self, p: impl Fn(&T) -> Bool) -> Option<T> {
+        match self {
+            Some(x) => if p(&x) { Some(x) } else { None },
+            None => None,
+        }
+    }
+
+    fn unwrap_or_else(self, f: impl Fn() -> T) -> T {
+        match self {
+            Some(x) => x,
+            None => f(),
+        }
+    }
+
+    fn map_or<U>(self, default: U, f: impl Fn(T) -> U) -> U {
+        match self {
+            Some(x) => f(x),
+            None => default,
+        }
+    }
+
+    fn map_or_else<U>(self, default: impl Fn() -> U, f: impl Fn(T) -> U) -> U {
+        match self {
+            Some(x) => f(x),
+            None => default(),
+        }
+    }
+
+    fn ok_or<E>(self, err: E) -> Result<T, E> {
+        match self {
+            Some(x) => Ok(x),
+            None => Err(err),
+        }
+    }
+
+    fn ok_or_else<E>(self, f: impl Fn() -> E) -> Result<T, E> {
+        match self {
+            Some(x) => Ok(x),
+            None => Err(f()),
+        }
+    }
+
+    fn is_some_and(self, p: impl Fn(T) -> Bool) -> Bool {
+        match self {
+            Some(x) => p(x),
+            None => false,
+        }
+    }
+
+    fn is_none_or(self, p: impl Fn(T) -> Bool) -> Bool {
+        match self {
+            Some(x) => p(x),
+            None => true,
+        }
+    }
+
+    fn zip<U>(self, other: Option<U>) -> Option<(T, U)> {
+        match self {
+            Some(x) => match other {
+                Some(y) => Some((x, y)),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    fn inspect(self, f: impl Fn(&T)) -> Option<T> {
+        match self {
+            Some(x) => {
+                f(&x);
+                Some(x)
+            }
+            None => None,
+        }
+    }
+
+    // iter yields the value once, or nothing.
+    #[fresh]
+    fn iter(&self) -> Iter<T> {
+        let mut v = Vec::new();
+        match *self {
+            Some(x) => v.push(x),
+            None => {}
+        }
+        v.iter()
+    }
+}
+
+impl<T: Default> Option<T> {
+    fn unwrap_or_default(self) -> T {
+        match self {
+            Some(x) => x,
+            None => T::default(),
+        }
+    }
+}
+
+impl<T> Option<Option<T>> {
+    fn flatten(self) -> Option<T> {
+        match self {
+            Some(x) => x,
+            None => None,
+        }
+    }
+}
+
+impl<T, E> Option<Result<T, E>> {
+    // transpose turns `Option<Result<T, E>>` into `Result<Option<T>, E>`.
+    fn transpose(self) -> Result<Option<T>, E> {
+        match self {
+            Some(Ok(x)) => Ok(Some(x)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
+    }
+}
+
+impl<T, E> Result<T, E> {
+    fn map<U>(self, f: impl Fn(T) -> U) -> Result<U, E> {
+        match self {
+            Ok(x) => Ok(f(x)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn map_err<F>(self, f: impl Fn(E) -> F) -> Result<T, F> {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => Err(f(e)),
+        }
+    }
+
+    fn and_then<U>(self, f: impl Fn(T) -> Result<U, E>) -> Result<U, E> {
+        match self {
+            Ok(x) => f(x),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn and<U>(self, other: Result<U, E>) -> Result<U, E> {
+        match self {
+            Ok(_) => other,
+            Err(e) => Err(e),
+        }
+    }
+
+    fn or<F>(self, other: Result<T, F>) -> Result<T, F> {
+        match self {
+            Ok(x) => Ok(x),
+            Err(_) => other,
+        }
+    }
+
+    fn or_else<F>(self, f: impl Fn(E) -> Result<T, F>) -> Result<T, F> {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => f(e),
+        }
+    }
+
+    fn ok(self) -> Option<T> {
+        match self {
+            Ok(x) => Some(x),
+            Err(_) => None,
+        }
+    }
+
+    fn err(self) -> Option<E> {
+        match self {
+            Ok(_) => None,
+            Err(e) => Some(e),
+        }
+    }
+
+    fn unwrap_or_else(self, f: impl Fn(E) -> T) -> T {
+        match self {
+            Ok(x) => x,
+            Err(e) => f(e),
+        }
+    }
+
+    fn map_or<U>(self, default: U, f: impl Fn(T) -> U) -> U {
+        match self {
+            Ok(x) => f(x),
+            Err(_) => default,
+        }
+    }
+
+    fn map_or_else<U>(self, default: impl Fn(E) -> U, f: impl Fn(T) -> U) -> U {
+        match self {
+            Ok(x) => f(x),
+            Err(e) => default(e),
+        }
+    }
+
+    fn is_ok_and(self, p: impl Fn(T) -> Bool) -> Bool {
+        match self {
+            Ok(x) => p(x),
+            Err(_) => false,
+        }
+    }
+
+    fn is_err_and(self, p: impl Fn(E) -> Bool) -> Bool {
+        match self {
+            Ok(_) => false,
+            Err(e) => p(e),
+        }
+    }
+
+    fn inspect(self, f: impl Fn(&T)) -> Result<T, E> {
+        match self {
+            Ok(x) => {
+                f(&x);
+                Ok(x)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn inspect_err(self, f: impl Fn(&E)) -> Result<T, E> {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => {
+                f(&e);
+                Err(e)
+            }
+        }
+    }
+
+    // iter yields the Ok value once, or nothing.
+    #[fresh]
+    fn iter(&self) -> Iter<T> {
+        let mut v = Vec::new();
+        match *self {
+            Ok(x) => v.push(x),
+            Err(_) => {}
+        }
+        v.iter()
+    }
+}
+
+impl<T: Default, E> Result<T, E> {
+    fn unwrap_or_default(self) -> T {
+        match self {
+            Ok(x) => x,
+            Err(_) => T::default(),
+        }
+    }
+}
+
+impl<T, E> Result<Option<T>, E> {
+    // transpose turns `Result<Option<T>, E>` into `Option<Result<T, E>>`.
+    fn transpose(self) -> Option<Result<T, E>> {
+        match self {
+            Ok(Some(x)) => Some(Ok(x)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+impl<T, E> Result<Result<T, E>, E> {
+    fn flatten(self) -> Result<T, E> {
+        match self {
+            Ok(x) => x,
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl Bool {
+    // then is `Some(f())` when true.
+    fn then<T>(self, f: impl Fn() -> T) -> Option<T> {
+        if self { Some(f()) } else { None }
+    }
+
+    fn then_some<T>(self, x: T) -> Option<T> {
+        if self { Some(x) } else { None }
+    }
+}

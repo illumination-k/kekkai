@@ -1,0 +1,25 @@
+// The module `geometry::util`, a child of `geometry`.
+
+use super::Point;
+
+pub fn square(n: Int) -> Int {
+    n * n
+}
+
+pub fn cube(n: Int) -> Int {
+    n * square(n)
+}
+
+pub fn abs(n: Int) -> Int {
+    if n < 0 { -n } else { n }
+}
+
+// a descendant may use the private items of its ancestors
+pub fn is_positive(p: Point) -> Bool {
+    p.positive() && crate::banner("x") != ""
+}
+
+#[test]
+fn cube_of_two() -> Bool {
+    cube(2) == 8 && self::square(3) == 9
+}

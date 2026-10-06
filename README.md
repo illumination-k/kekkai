@@ -13,6 +13,8 @@ Kekkai（結界）は、サーバーサイドの典型的なバグ（トラン�
 - **時刻**：`Timestamp`・`Duration`・`Date`（core ライブラリ、RFC 3339）。時計を読むのは `Timestamp::now(&Clock)` だけ（[docs/time.md](docs/time.md)）
 - **コア計算の健全性を Lean で証明**（`lean/`）
 
+- **Rust / Go 相当の言語機能**：パターン（ガード・or・範囲・`@`・struct）、`const`、タプル struct・struct 形式の variant、`loop` の値とラベル、let-else、複合代入、ビット演算、`format!`・`vec!`・`assert!` などのマクロ、`Display`/`Debug`、演算子の多重定義、`?` の `From` 変換、`dyn Trait`・`impl Trait`、`Float`、モジュール（`pub`・`use`）、`BTreeMap`・`VecDeque`・entry API などのコレクション。対応状況は [docs/features.md](docs/features.md)
+
 設計は [docs/design.md](docs/design.md) を参照してください。
 
 ## クイックスタート
@@ -54,6 +56,7 @@ mise run todo-app                          # フロントエンド付きの例�
 | `kek merge [-p] [-no-ast] [-path p] <ours> <base> <theirs>` | 3-way マージ（`git merge-file` と同じく `<ours>` に書く。衝突があれば終了コード 1）。同じ場所への追加は両方残し、`.kek` は構文木（item・メンバー・文）の単位でマージする。`mise run hooks` で git のマージドライバとして登録される（[docs/merge.md](docs/merge.md)） |
 | `kek cover [-json] [-lcov f] <file>` | テストの行・分岐カバレッジ（AST に計測を埋め込む。lcov 出力、`[cover] min_line`） |
 | `kek affected [-json] -diff <rev> <file>` | git の revision からの変更で、振る舞いが変わりうる定義・走らせるべきテスト・ビルド出力が変わるかを表示（`kek test -affected <rev>` でそのテストだけ実行） |
+| `kek lsp` | Language Server（標準入出力）。診断・hover・定義へのジャンプ・参照・シンボル。エディタと Claude Code から使う（[docs/tooling.md](docs/tooling.md)） |
 | `kek daemon start\|stop\|status\|stats` | コンパイラを常駐させる（構文木をメモリに残し、変わったファイルだけ構文解析する） |
 | `kek hash [-json] <file>` | 定義ハッシュ（α同値で正規化、`trans` は依存先と型宣言を含む）。テスト・ビルド・カバレッジ・ミューテーションのキャッシュ、`similar`、`complexity`、`assure` の土台 |
 | `kek config` | `kekkai.toml`（プロジェクトの設定：`[similar]`・`[complexity]`・`[cover]`・`[mutate]`・`[net]` など）を JSON で表示して構文を確認 |
@@ -226,15 +229,19 @@ mise run hooks                                    # マージドライバを登�
 
 | 種類 | 変異 |
 | --- | --- |
-| 算術 | `Int` の `+`↔`-`、`*`↔`/`、`%`→`*` |
+| 算術 | `Int`・`Float` の `+`↔`-`、`*`↔`/`、`%`→`*`（`Float` は `/`）。複合代入も（`+=`↔`-=`、`%=`→`/=` など） |
+| ビット演算 | `Int` の `&`↔`\|`、`^`→`&`・`\|`、`<<`↔`>>`（`&=`↔`\|=` など複合代入も） |
 | 比較 | 境界（`<`↔`<=`、`>`↔`>=`）と否定（`<`→`>=`、`==`↔`!=`） |
-| 論理 | `&&`↔`\|\|`、`if`・`while` の条件の否定、`!x`・`-x` → `x` |
-| リテラル | 整数 n → n+1・0、真偽値の反転、文字列 → `""` |
-| 文・結果 | 呼び出しや代入の文の削除、関数の結果を `0`・`""`・`None`・`Vec::new()` に（`Bool` は否定） |
+| 論理 | `&&`↔`\|\|`、`if`・`while` の条件の否定、`!x`・`-x` → `x`、`break`↔`continue` |
+| パターン | match のガードの否定・削除、範囲パターンの境界 ±1、or パターンの選択肢の削除、最後に `_` がある match の腕の削除 |
+| リテラル | 整数 n → n+1・0、`Float` x → x+1.0・0.0、真偽値の反転、文字列 → `""` |
+| 文・結果 | 呼び出しや代入の文の削除、関数の結果を `0`・`0.0`・`""`・`None`・`Vec::new()` に（`Bool` は否定） |
+
+マクロは引数だけを変異させ（展開されたコードは変異させない）、derive の実装と `dyn` の呼び分けも対象外です。モジュールの項目は `geo::area` のようにパスで表示します。
 
 文の削除や結果の置き換えは 1 つずつ型検査し、通らないものを**型で検出**（killed by types）として別に数えます。たとえば `tx.commit()?;` の削除は `Tx` の線形性検査で弾かれます。篩型を使う関数ではすべての変異体をこうして検査し、証明が崩れる変異体（`v[i]` の前の `i < n` を `i <= n` にするなど）も型で検出になります。型で検出された割合は、型システムがどれだけバグを防いでいるかの指標です。
 
-残りの変異体は**ミュータントスキーマ**として 1 つのモジュールにまとめます。各箇所は `__mut_iop(k, x, y, op, alt)` や `if __mut_on(k) { 変異 } else { 元 }` のような prelude の呼び出しになり、実行時に 1 つを選びます。型が付かないかもしれない変異体（文の削除・結果の置き換え）は、まとめて型検査して失敗したグループだけを二分探索します（変異体ごとにプログラム全体を検査し直さない）。
+残りの変異体は**ミュータントスキーマ**として 1 つのモジュールにまとめます。各箇所は `__mut_iop(k, x, y, op, alt)` や `if __mut_on(k) { 変異 } else { 元 }` のような prelude の呼び出しになり、実行時に 1 つを選びます。型が付かないかもしれない変異体（文の削除・結果の置き換え・ガードやパターンの変異）は、まとめて型検査して失敗したグループだけを二分探索します（変異体ごとにプログラム全体を検査し直さない）。
 
 実行は mutrim と同じ方針です。
 
@@ -266,6 +273,12 @@ KEK_REMOTE_CACHE=https://cache.example ./kek test src   # CI と手元でキャ�
 ```
 
 `KEK_REMOTE_CACHE` は Bazel のリモートキャッシュと同じ HTTP プロトコル（`GET`/`PUT <url>/ac/<sha256>`）で、bazel-remote（`--disable_http_ac_validation`）や `file://` の共有ディレクトリが使えます。設計と現状は [docs/parallel-build.md](docs/parallel-build.md)。
+
+### エディタと Claude Code（`kek lsp`）
+
+`./kek lsp` は Language Server Protocol を話す言語サーバーです。診断は `kek check -json` と同じもので、ディレクトリが 1 つのプログラムのとき（`compiler/` など）はファイルをまたいで定義・参照をたどります。
+
+このリポジトリはそのまま Claude Code のプラグインのマーケットプレイスになっていて（`.claude-plugin/marketplace.json`、プラグインは `editors/claude-code`）、`.claude/settings.json` で有効にしています。リポジトリを Claude Code で開いてマーケットプレイスを信頼すると、`.kek` を編集するたびに Claude が診断を受け取り、LSP ツール（定義・参照・hover・シンボル）を使えるようになります。読み込まれないときは `/plugin` で `kekkai-lsp@kekkai` をインストールしてください。サーバーは `${CLAUDE_PROJECT_DIR}/kek lsp` で起動するので、wasmtime が PATH にあること（`mise install`）が前提です。
 
 ## 開発
 

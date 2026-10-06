@@ -1,0 +1,32 @@
+fn f(mut n: Int) -> Int {
+    n += 3;
+    n = n * 2;
+    n
+}
+
+fn g(log: &Log, mut s: String) {
+    s = s + "!";
+    log.info(s);
+}
+
+fn digits(mut n: Int) -> Vec<Int> {
+    let mut out = Vec::new();
+    while n > 0 {
+        out.push(n % 10);
+        n /= 10;
+    }
+    out
+}
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    log.info(f(1).to_string());
+    g(log, "hi");
+    let h = |mut x: Int| {
+        x += 1;
+        x * 10
+    };
+    log.info(h(2).to_string());
+    log.info(format!("{:?}", digits(1203)));
+    0
+}

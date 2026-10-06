@@ -154,6 +154,21 @@ fn dh_declare(mut w: DhWalk, name: String) {
     w.next_local = w.next_local + 1;
 }
 
+// dh_declare_label numbers a loop label like a local (labels start with
+// `'`, so they never meet a variable): renamed labels hash alike.
+fn dh_declare_label(w: DhWalk, label: String) {
+    if label != "" {
+        dh_declare(w, label);
+    }
+}
+
+// dh_label emits the loop a `break` / `continue` names.
+fn dh_label(w: DhWalk, label: String) {
+    if label != "" {
+        dh_emit(w, "label#" + dh_lookup(w, label).to_string());
+    }
+}
+
 fn dh_scope_mark(w: DhWalk) -> Int {
     w.scope_names.len()
 }
@@ -246,6 +261,40 @@ fn dh_pattern(w: DhWalk, p: AstPattern) {
 fn dh_pattern_node(w: DhWalk, p: AstPattern) {
     if p.wildcard {
         dh_emit(w, "p_");
+        return;
+    }
+    if p.alts.len() > 0 {
+        dh_emit(w, "por/" + p.alts.len().to_string());
+        for a in p.alts {
+            dh_pattern(w, a);
+        }
+        return;
+    }
+    match p.at.get(0) {
+        Some(sub) => {
+            dh_emit(w, "pat");
+            dh_declare(w, p.bind);
+            dh_pattern(w, sub);
+            return;
+        }
+        None => {}
+    }
+    if p.range {
+        let mut r = "";
+        match p.range_lo {
+            Some(n) => {
+                r = n.to_string();
+            }
+            None => {}
+        }
+        r = r + if p.range_incl { "..=" } else { ".." };
+        match p.range_hi {
+            Some(n) => {
+                r = r + n.to_string();
+            }
+            None => {}
+        }
+        dh_lit(w, p.pos, "lit:range=" + r);
         return;
     }
     if p.tuple {
@@ -344,11 +393,22 @@ fn dh_stmt_node(w: DhWalk, s: AstStmt) {
             dh_expr(w, a.target.x);
             dh_expr(w, a.value);
         }
-        AstStmt::Break(_) => dh_emit(w, "break"),
-        AstStmt::Continue(_) => dh_emit(w, "continue"),
+        AstStmt::Break(b) => {
+            dh_emit(w, "break");
+            dh_label(w, b.label);
+            match b.value {
+                Some(v) => dh_expr(w, v),
+                None => {}
+            }
+        }
+        AstStmt::Continue(c) => {
+            dh_emit(w, "continue");
+            dh_label(w, c.label);
+        }
         AstStmt::While(s) => {
             let mark = dh_scope_mark(w);
-            dh_emit(w, "while");
+            dh_emit(w, if s.is_loop { "loop" } else { "while" });
+            dh_declare_label(w, s.label);
             dh_expr(w, s.cond);
             match s.pat {
                 Some(p) => {
@@ -363,6 +423,7 @@ fn dh_stmt_node(w: DhWalk, s: AstStmt) {
         AstStmt::For(s) => {
             let mark = dh_scope_mark(w);
             dh_emit(w, "for");
+            dh_declare_label(w, s.label);
             dh_expr(w, s.iter);
             match s.end {
                 Some(e) => {
@@ -497,6 +558,7 @@ fn dh_expr(w: DhWalk, e: AstExpr) {
 fn dh_expr_node(w: DhWalk, e: AstExpr) {
     match e {
         AstExpr::IntLit(x) => dh_lit(w, x.pos, "lit:int=" + x.value.to_string()),
+        AstExpr::FloatLit(x) => dh_lit(w, x.pos, "lit:float=" + x.bits.to_string()),
         AstExpr::BoolLit(x) => dh_lit(w, x.pos, "lit:bool=" + x.value.to_string()),
         AstExpr::StrLit(x) => dh_lit(w, x.pos, "lit:str=" + x.value),
         AstExpr::UnitLit(_) => dh_emit(w, "()"),
@@ -517,6 +579,11 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
             // `&`, `&mut ` and `*` do nothing
             if x.op == "-" || x.op == "!" {
                 dh_emit(w, "un:" + x.op);
+            }
+            match w.info.binops.get(x.id) {
+                // `-x` through Neg
+                Some(m) => dh_func_dep(w, m.func),
+                None => {}
             }
             dh_expr(w, x.x);
         }
@@ -592,6 +659,13 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
                 let mark = dh_scope_mark(w);
                 dh_emit(w, "arm");
                 dh_pattern(w, arm.pat);
+                match arm.guard {
+                    Some(g) => {
+                        dh_emit(w, "guard");
+                        dh_expr(w, g);
+                    }
+                    None => {}
+                }
                 dh_expr(w, arm.body);
                 dh_scope_reset(w, mark);
             }
@@ -599,6 +673,17 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
         AstExpr::Block(b) => dh_block(w, b),
         AstExpr::Try(x) => {
             dh_emit(w, "try");
+            match w.info.tries.get(x.id) {
+                // the error converted with `From::from`
+                Some(ti) => match ti.conv {
+                    Some(mi) => {
+                        dh_emit(w, "from");
+                        dh_func_dep(w, mi.func);
+                    }
+                    None => {}
+                },
+                None => {}
+            }
             dh_expr(w, x.x);
         }
         AstExpr::Closure(x) => {
@@ -627,6 +712,7 @@ fn dh_expr_node(w: DhWalk, e: AstExpr) {
             dh_expr(w, x.x);
             dh_expr(w, x.index);
         }
+        AstExpr::Macro(x) => dh_expr_node(w, x.expansion),
     }
 }
 
@@ -759,6 +845,7 @@ fn dh_types_hash(f: AstFile) -> String {
         xs.push(
             "struct "
                 + s.name
+                + s.kind
                 + "/"
                 + s.generics.len().to_string()
                 + "["
@@ -778,7 +865,11 @@ fn dh_types_hash(f: AstFile) -> String {
             for t in v.fields {
                 ts.push(dh_type(t));
             }
-            vs.push(v.name + "(" + ts.join(",") + ")");
+            if v.named {
+                vs.push(v.name + "{" + v.names.join(",") + ":" + ts.join(",") + "}");
+            } else {
+                vs.push(v.name + "(" + ts.join(",") + ")");
+            }
         }
         let mut attrs = Vec::new();
         for a in e.attrs {
@@ -1043,15 +1134,19 @@ fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         let mut fns = Vec::new();
         for d in l.prog.defs {
             let o = irjson_obj();
-            irjson_set(o, "name", IrjVal::Str(d.name));
+            irjson_set(o, "name", IrjVal::Str(ast_display_name(d.name)));
             irjson_set(o, "file", IrjVal::Str(d.pos.file));
             irjson_set(o, "line", irjson_int(d.pos.line));
-            irjson_set(o, "sig", IrjVal::Str(d.sig));
+            irjson_set(o, "sig", IrjVal::Str(ast_display_name(d.sig)));
             irjson_set(o, "caps", irjson_strs(d.caps));
             irjson_set(o, "hash", IrjVal::Str(d.hash));
             irjson_set(o, "hash_lits", IrjVal::Str(d.hash_lits));
             irjson_set(o, "trans", IrjVal::Str(d.trans));
-            irjson_set(o, "deps", irjson_strs(d.deps));
+            let mut deps = Vec::new();
+            for x in d.deps {
+                deps.push(ast_display_name(x));
+            }
+            irjson_set(o, "deps", irjson_strs(deps));
             fns.push(irjson_val(o));
         }
         let o = irjson_obj();
@@ -1065,7 +1160,7 @@ fn dh_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
     let mut lines = Vec::new();
     lines.push("program " + l.prog.hash);
     for d in l.prog.defs {
-        lines.push(dh_short(d.hash) + " " + dh_short(d.trans) + " " + d.name);
+        lines.push(dh_short(d.hash) + " " + dh_short(d.trans) + " " + ast_display_name(d.name));
     }
     frontend_print(log, lines);
     0

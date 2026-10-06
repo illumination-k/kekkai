@@ -1,0 +1,40 @@
+enum E {
+    A(Int),
+    B(Int),
+    C,
+}
+
+fn f(e: E, o: Option<Int>) -> Int {
+    let x = match e {
+        E::A(n) | E::B(n) if n > 1_000 => n,
+        E::A(n) | E::B(n) => -n,
+        E::C => 0,
+    };
+    let y = match o {
+        Some(1 | 2 | 3) => 1,
+        Some(n @ 1_000..=2_000) => n,
+        Some(n @ (4 | 5)) if n % 2 == 0 && x > 0 => n, // even
+        Some(-10..-1) => -1,
+        Some(..=-10) => -2,
+        Some(100..) => 100,
+        mut whole @ Some(_) => {
+            whole = None;
+            7
+        }
+        None => 0,
+    };
+    if let Some(0..=9) | None = o {
+        x
+    } else {
+        y
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut v: Vec<Int> = Vec::new();
+    while let 0..=3 = v.len() {
+        v.push(1);
+    }
+    f(E::C, None)
+}

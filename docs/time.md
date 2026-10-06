@@ -21,7 +21,7 @@ Duration::parse("1h30m")?                         // 5400000 ms
 | 表現 | `Timestamp` は UNIX 時刻のミリ秒（UTC）、`Duration` はミリ秒。フィールドは `__` で始まる名前なので、作るのは関連関数だけ（`Date` は存在する日付しか作れない） |
 | 暦 | 先発グレゴリオ暦（Howard Hinnant の `days_from_civil`）。閏秒は扱わない。文字列としての年は 0000〜9999 |
 | タイムゾーン | UTC と固定のオフセット（`DateTime.offset_minutes`）だけ。tz データベースと夏時間の規則は持たない（純粋な計算で、Lean の参照インタプリタと同じ結果になる範囲に留める） |
-| 演算 | 演算子のオーバーロードがないのでメソッド（`t.add(d)`・`t.since(&u)`・`d.mul(3)`）。比較は `Ord` を derive しているので `<` などが使える |
+| 演算 | 演算子（lib/core/ops.kek）：`t + d`・`t - d`（`Timestamp` と `Duration`）、`d1 + d2`・`d1 - d2`・`-d`・`d * 3`。同じことをするメソッド（`t.add(d)`・`d.mul(3)`）と、2 つの時刻の差 `t.since(&u)` もある。比較は `Ord` を derive しているので `<` などが使える。`{}`・`{:?}` は RFC 3339・`YYYY-MM-DD`・`"1h30m"` |
 | シリアライズ | `Timestamp` は RFC 3339 の UTC（`"2026-10-05T09:30:00.123Z"`。ミリ秒が 0 なら省く）、`Date` は `"YYYY-MM-DD"`、`Duration` は単位付きの文字列（`"1d12h"`）で書く。`Duration` はミリ秒の整数も読める。TOML では日時が文字列として読まれ（serde.md）、日時の形の文字列は引用符なしの TOML の日時として書かれるので、`since = 2026-10-05T18:30:00+09:00` を `Timestamp` に読め、書くときも TOML の日時になる |
 
 ## API

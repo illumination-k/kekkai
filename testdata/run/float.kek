@@ -1,0 +1,123 @@
+// Float: IEEE 754 binary64 arithmetic, conversions and Rust's text format.
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Default, Serialize, Deserialize)]
+struct Sample {
+    name: String,
+    value: Float,
+    weights: Vec<Float>,
+}
+
+fn mean(xs: &Vec<Float>) -> Float {
+    let total: Float = xs.iter().sum();
+    total / xs.len().to_float()
+}
+
+fn largest<T: PartialOrd + Clone>(xs: &Vec<T>, d: T) -> T {
+    let mut best = d;
+    for x in xs.iter() {
+        if x > best {
+            best = x.clone();
+        }
+    }
+    best
+}
+
+fn show(log: &Log, x: Float) {
+    log.info(format!("{} | {:?} | {:.3} | {:>10.2}|", x, x, x, x));
+}
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    // shortest round-trip output (Display / Debug / precision)
+    show(log, 0.1 + 0.2);
+    show(log, 1.0);
+    show(log, -0.0);
+    show(log, 1.0 / 3.0);
+    show(log, 1e21);
+    show(log, 1e-7);
+    show(log, 1e300 * 1e10);
+    show(log, -1e300 * 1e10);
+    show(log, 0.0 / 0.0);
+    show(log, 123456.789e3);
+    show(log, 5e-324);
+    show(log, Float::MAX);
+    show(log, 1_000.5);
+    show(log, 2.5e-3);
+    log.info(format!("{:.1} {:.1} {:.0} {:.0} {:.1}", 0.25, 0.35, 2.5, 3.5, -0.001));
+    log.info(format!("[{:8}] [{:<8}] [{:^8.1}]", 1.5, 1.5, 1.5));
+    // arithmetic
+    log.info(format!("{} {} {}", 7.5 % 2.0, -7.5 % 2.0, 7.5 % -2.0));
+    log.info(format!("{} {}", (1.0 % 0.0).is_nan(), 5.0 % Float::INFINITY));
+    log.info(format!("{} {}", 2.0.sqrt(), (-1.0).sqrt().is_nan()));
+    let mut acc = 1.0;
+    acc *= 3.0;
+    acc -= 0.5;
+    acc /= 2.0;
+    acc += 10.0;
+    log.info(acc.to_string());
+    // comparisons and NaN
+    let nan = Float::NAN;
+    log.info(
+        format!("{} {} {} {}", nan == nan, nan != nan, nan < 1.0, nan.partial_cmp(&1.0).is_none()),
+    );
+    log.info(
+        format!("{} {} {}", -0.0 == 0.0, (-0.0).is_sign_negative(), 0.0.total_cmp(&-0.0).is_gt()),
+    );
+    log.info(format!("{} {}", nan.max(1.0), 2.0.min(nan)));
+    // conversions
+    log.info(format!("{} {} {}", 7.to_float(), Float::from_int(-3), 9007199254740993.to_float()));
+    log.info(
+        format!(
+            "{} {} {} {}",
+            2.7.trunc_to_int(),
+            (-2.7).trunc_to_int(),
+            2.5.round_to_int(),
+            (-2.5).round_to_int(),
+        ),
+    );
+    log.info(format!("{} {} {}", 1e300.trunc_to_int(), (-1e300).trunc_to_int(), nan.trunc_to_int()));
+    log.info(
+        format!("{} {} {} {}", 2.5.floor(), (-2.5).ceil(), (-2.5).round(), 2.5.round_ties_even()),
+    );
+    log.info(format!("{:x} {:x}", 1.0.to_bits(), nan.to_bits()));
+    log.info(format!("{}", Float::from_bits(4614253070214989087)));
+    log.info(format!("{} {} {}", 2.0.powi(10), 2.0.powi(-2), 3.0.hypot(4.0)));
+    log.info(format!("{} {}", 1.5.clamp(0.0, 1.0), (-1.5).abs()));
+    // parsing
+    for s in vec![
+        "3.14",
+        "-0",
+        "1e400",
+        "inf",
+        "NaN",
+        ".5",
+        "1.",
+        "1_0",
+        "abc",
+        "2.2250738585072011e-308",
+    ] {
+        log.info(s + " -> " + format!("{:?}", s.parse_float()));
+    }
+    // derive, generics, serde
+    let s = Sample { name: "a", value: 2.5, weights: vec![0.5, 1.5, 4.0] };
+    log.info(format!("{:?}", s));
+    log.info(format!("{:?} {}", Sample::default(), s == s.clone()));
+    log.info(format!("{} {}", mean(&s.weights), largest(&s.weights, 0.0)));
+    log.info(Json::to_string(&s));
+    let back: Result<Sample, SerdeError> = Json::from_str(
+        "{\"name\":\"b\",\"value\":1,\"weights\":[1e21,0.1,-0.0]}",
+    );
+    match back {
+        Ok(b) => log.info(format!("{:?}", b)),
+        Err(e) => log.info(e.msg),
+    }
+    match Toml::to_string(&s) {
+        Ok(t) => log.info(t),
+        Err(e) => log.info(e.msg),
+    }
+    match Toml::parse("a = 1.5e3\nb = -inf\nc = 1_000.25\n") {
+        Ok(v) => log.info(Json::render(&v)),
+        Err(e) => log.info(e.msg),
+    }
+    0
+}

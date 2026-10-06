@@ -12,7 +12,8 @@
 //     (`x`, `x#1`, ...), an immutable `let x = e` adds `x == e`;
 //   - the facts on a path are the preconditions, the predicates of refined
 //     parameters, `len(v) >= 0`, branch conditions (`if`, `while`, `match`
-//     integer patterns, `&&` / `||`), `for` ranges, callee postconditions
+//     integer, range and or-patterns, `@` bindings and guards, `&&` /
+//     `||`), `for` ranges, callee postconditions
 //     and the bounds of indexes already performed;
 //   - at a join (after `if` / `match`), the variables that differ get a
 //     new version and the branch facts become one disjunction;
@@ -560,9 +561,9 @@ fn ref_mentions(e: AstExpr, name: String) -> Bool {
 fn ref_prec(e: AstExpr) -> Int {
     match e {
         AstExpr::Binary(b) => fmt_precedence(b.op),
-        AstExpr::Unary(_) => 6,
+        AstExpr::Unary(_) => 10,
         AstExpr::Range(_) => 0,
-        _ => 8,
+        _ => 12,
     }
 }
 
@@ -591,12 +592,13 @@ fn ref_show(e: AstExpr) -> String {
 fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
     match e {
         AstExpr::IntLit(x) => x.value.to_string(),
+        AstExpr::FloatLit(x) => x.text,
         AstExpr::BoolLit(x) => if x.value { "true" } else { "false" },
         AstExpr::StrLit(x) => ast_quote(x.value),
         AstExpr::UnitLit(_) => "()",
         AstExpr::Ident(x) => if x.name == from { to } else { x.name },
         AstExpr::Path(x) => x.ty + "::" + x.name,
-        AstExpr::Unary(u) => u.op + ref_show_sub(u.x, ref_prec(u.x) < 6, from, to),
+        AstExpr::Unary(u) => u.op + ref_show_sub(u.x, ref_prec(u.x) < 10, from, to),
         AstExpr::Binary(b) => {
             let p = fmt_precedence(b.op);
             ref_show_sub(b.x, ref_prec(b.x) < p, from, to)
@@ -605,22 +607,32 @@ fn ref_show_r(e: AstExpr, from: String, to: String) -> String {
                 + " "
                 + ref_show_sub(b.y, ref_prec(b.y) <= p, from, to)
         }
-        AstExpr::Call(c) => ref_show_sub(c.func, ref_prec(c.func) < 7, from, to)
+        AstExpr::Call(c) => ref_show_sub(c.func, ref_prec(c.func) < 11, from, to)
             + ref_show_args(c.args, from, to),
-        AstExpr::Method(m) => ref_show_sub(m.recv, ref_prec(m.recv) < 7, from, to)
-            + "."
-            + m.name
-            + ref_show_args(m.args, from, to),
-        AstExpr::Field(f) => ref_show_sub(f.x, ref_prec(f.x) < 7, from, to) + "." + f.name,
-        AstExpr::Index(x) => ref_show_sub(x.x, ref_prec(x.x) < 7, from, to)
+        AstExpr::Method(m) => if m.name == "__index_set" && m.args.len() == 2 {
+            // `v[i] = x` (see AstFieldAssignStmt)
+            ref_show_sub(m.recv, ref_prec(m.recv) < 11, from, to)
+                + "["
+                + ref_show_r(m.args.get(0).unwrap_or(m.recv), from, to)
+                + "] = "
+                + ref_show_r(m.args.get(1).unwrap_or(m.recv), from, to)
+        } else {
+            ref_show_sub(m.recv, ref_prec(m.recv) < 11, from, to)
+                + "."
+                + m.name
+                + ref_show_args(m.args, from, to)
+        },
+        AstExpr::Field(f) => ref_show_sub(f.x, ref_prec(f.x) < 11, from, to) + "." + f.name,
+        AstExpr::Index(x) => ref_show_sub(x.x, ref_prec(x.x) < 11, from, to)
             + "["
             + ref_show_r(x.index, from, to)
             + "]",
-        AstExpr::Try(t) => ref_show_sub(t.x, ref_prec(t.x) < 7, from, to) + "?",
+        AstExpr::Try(t) => ref_show_sub(t.x, ref_prec(t.x) < 11, from, to) + "?",
         AstExpr::Tuple(t) => ref_show_args(t.elems, from, to),
         AstExpr::Range(r) => ref_show_r(r.start, from, to)
             + if r.inclusive { "..=" } else { ".." }
             + ref_show_r(r.end, from, to),
+        AstExpr::Macro(m) => m.name + "!(..)",
         _ => "...",
     }
 }
@@ -986,6 +998,8 @@ struct RefScan {
     fresh: HashMap<Int, Bool>,
     escaped: HashMap<Int, Bool>,
     loops: Vec<Int>,
+    // the label of each loop (by id)
+    labels: HashMap<Int, String>,
     mut closure: Int,
 }
 
@@ -997,6 +1011,7 @@ fn ref_scan_new() -> RefScan {
         fresh: HashMap::new(),
         escaped: HashMap::new(),
         loops: Vec::new(),
+        labels: HashMap::new(),
         closure: 0,
     }
 }
@@ -1099,8 +1114,17 @@ fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
             ref_scan_expr(cx, sc, s.target.x, false);
             ref_scan_expr(cx, sc, s.value, false);
         }
-        AstStmt::Break(_) => {
-            match sc.loops.get(sc.loops.len() - 1) {
+        AstStmt::Break(s) => {
+            match s.value {
+                Some(v) => ref_scan_expr(cx, sc, v, false),
+                None => {}
+            }
+            // the loop it leaves has no exit fact
+            let mut labels = Vec::new();
+            for id in sc.loops {
+                labels.push(sc.labels.get(id).unwrap_or(""));
+            }
+            match sc.loops.get(ast_loop_target(labels, s.label)) {
                 Some(id) => {
                     cx.loop_break.insert(id, true);
                 }
@@ -1110,6 +1134,7 @@ fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             cx.loop_touch.insert(s.id, HashMap::new());
+            sc.labels.insert(s.id, s.label);
             sc.loops.push(s.id);
             ref_scan_expr(cx, sc, s.cond, false);
             ref_scan_block(cx, sc, s.body);
@@ -1122,6 +1147,7 @@ fn ref_scan_stmt(mut cx: RefCtx, mut sc: RefScan, s0: AstStmt) {
                 None => {}
             }
             cx.loop_touch.insert(s.id, HashMap::new());
+            sc.labels.insert(s.id, s.label);
             sc.loops.push(s.id);
             ref_scan_block(cx, sc, s.body);
             sc.loops.pop();
@@ -1268,6 +1294,10 @@ fn ref_scan_expr(cx: RefCtx, mut sc: RefScan, e: AstExpr, recv: Bool) {
         AstExpr::Match(x) => {
             ref_scan_expr(cx, sc, x.x, false);
             for a in x.arms {
+                match a.guard {
+                    Some(g) => ref_scan_expr(cx, sc, g, false),
+                    None => {}
+                }
                 ref_scan_expr(cx, sc, a.body, false);
             }
         }
@@ -1300,6 +1330,7 @@ fn ref_scan_expr(cx: RefCtx, mut sc: RefScan, e: AstExpr, recv: Bool) {
             ref_scan_expr(cx, sc, x.x, true);
             ref_scan_expr(cx, sc, x.index, false);
         }
+        AstExpr::Macro(m) => ref_scan_expr(cx, sc, m.expansion, false),
         _ => {}
     }
 }
@@ -2043,7 +2074,13 @@ fn ref_stmt(cx: RefCtx, mut st: RefSt, s0: AstStmt) {
                 None => {}
             }
         }
-        AstStmt::Break(_) => {
+        AstStmt::Break(s) => {
+            match s.value {
+                Some(v) => {
+                    ref_expr(cx, st, v);
+                }
+                None => {}
+            }
             st.dead = true;
         }
         AstStmt::Continue(_) => {
@@ -2549,6 +2586,10 @@ fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
         },
         AstExpr::Unary(u) => {
             let v = ref_expr(cx, st, u.x);
+            if u.op == "-" && !ty_is_prim(ref_ty_of(cx, u.x), "Int") {
+                // Float (not in QF_LIA) and Neg implementations
+                return ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), u.pos);
+            }
             if u.op == "-" {
                 let x = ref_int_or_fresh(cx, st, v, u.x);
                 let r = ref_lscale(x, -1);
@@ -2562,7 +2603,8 @@ fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
                 if v.kind == "bool" {
                     return ref_val_bool(SmtF::Not(v.f));
                 }
-                return ref_fresh(cx, st, ty_bool(), ref_show(e), u.pos);
+                // (on Int: bitwise not, not modeled)
+                return ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), u.pos);
             }
             v
         }
@@ -2647,6 +2689,7 @@ fn ref_expr(mut cx: RefCtx, st: RefSt, e: AstExpr) -> RefVal {
             ref_val_other()
         }
         AstExpr::Index(x) => ref_index(cx, st, x, e),
+        AstExpr::Macro(m) => ref_expr(cx, st, m.expansion),
         _ => ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), ast_expr_pos(e)),
     }
 }
@@ -2790,6 +2833,36 @@ fn ref_binary(cx: RefCtx, mut st: RefSt, b: AstBinary, e: AstExpr) -> RefVal {
         }
         return r;
     }
+    if op == "&" {
+        // a mask: `x & c` is in 0..=c for a constant c >= 0 (other bit
+        // operations are not modeled)
+        let mask = match ref_lconst(y) {
+            Some(k) => Some(k),
+            None => ref_lconst(x),
+        };
+        match mask {
+            Some(k) => {
+                if k >= 0 {
+                    let r = ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos);
+                    match ref_lscale(r.lin, -1) {
+                        Some(nr) => match ref_ladd(r.lin, ref_lc(k), -1) {
+                            Some(d) => ref_fact(
+                                cx,
+                                st,
+                                ref_and2(SmtF::Le(nr), SmtF::Le(d)),
+                                b.pos,
+                                "`" + ref_show(e) + "` is in `0..=" + k.to_string() + "`",
+                            ),
+                            None => {}
+                        },
+                        None => {}
+                    }
+                    return r;
+                }
+            }
+            None => {}
+        }
+    }
     ref_fresh(cx, st, ty_int(), "(" + ref_show(e) + ")", b.pos)
 }
 
@@ -2865,12 +2938,38 @@ fn ref_if(cx: RefCtx, st: RefSt, x: AstIf, e: AstExpr) -> RefVal {
     let mut brs = Vec::new();
     let mut vals = Vec::new();
     match x.pat {
-        Some(_) => {
-            ref_expr(cx, st, x.cond);
+        Some(p) => {
+            let cv = ref_expr(cx, st, x.cond);
             let s1 = ref_clone(st);
+            let s2 = ref_clone(st);
+            if cv.kind == "int" {
+                // `if let 1..=9 = e`, `if let n @ (1 | 2) = e`
+                match ref_pat_fact(cx, p, cv.lin) {
+                    Some(f) => {
+                        let text = ref_show(x.cond);
+                        let pt = ref_pat_text(cx, p);
+                        ref_fact(cx, s1, f, p.pos, "`if let` `" + text + "` matches `" + pt + "`");
+                        ref_fact(
+                            cx,
+                            s2,
+                            SmtF::Not(f),
+                            p.pos,
+                            "`if let` `" + text + "` does not match `" + pt + "`",
+                        );
+                        match cx.info.patterns.get(p.id) {
+                            Some(pi) => match pi.bind {
+                                Some(bnd) => ref_assign_new(cx, s1, bnd, cv, p.pos),
+                                None => {}
+                            },
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+            }
+            ref_at_facts(cx, s1, p);
             vals.push(ref_block(cx, s1, x.then));
             brs.push(s1);
-            let s2 = ref_clone(st);
             match x.els {
                 Some(el) => vals.push(ref_expr(cx, s2, el)),
                 None => vals.push(ref_val_other()),
@@ -2907,10 +3006,14 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
     let mut brs = Vec::new();
     let mut vals = Vec::new();
     let mut prev = Vec::new();
+    // negated facts of earlier unguarded range / or-pattern arms
+    let mut prev_f = Vec::new();
+    let mut prev_t = Vec::new();
     for arm in m.arms {
         let s = ref_clone(st);
         let p = arm.pat;
         let text = ref_show(m.x);
+        let guarded = arm.guard.is_some();
         match p.int_value {
             Some(k) => {
                 if sv.kind == "int" {
@@ -2921,10 +3024,34 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
                         p.pos,
                         "`match` arm `" + text + " == " + k.to_string() + "`",
                     );
-                    prev.push(k);
+                    if !guarded {
+                        prev.push(k);
+                    }
                 }
             }
-            None => {}
+            None => {
+                if sv.kind == "int" {
+                    match ref_pat_fact(cx, p, sv.lin) {
+                        Some(f) => {
+                            let pt = ref_pat_text(cx, p);
+                            ref_fact(
+                                cx,
+                                s,
+                                f,
+                                p.pos,
+                                "`match` arm `" + text + "` matches `" + pt + "`",
+                            );
+                            if !guarded {
+                                prev_f.push(SmtF::Not(f));
+                                prev_t.push(
+                                    "`match` arm `" + text + "` does not match `" + pt + "`",
+                                );
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
         }
         match p.bool_lit {
             Some(bv) => {
@@ -2940,7 +3067,8 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
             }
             None => {}
         }
-        if (p.wildcard || (p.bind != "" && p.ctor == "")) && sv.kind == "int" {
+        let at = p.at.len() > 0;
+        if (p.wildcard || (p.bind != "" && p.ctor == "" && !at)) && sv.kind == "int" {
             for k in prev {
                 match ref_cmp("!=", sv.lin, ref_lc(k)) {
                     Some(f) => ref_fact(
@@ -2953,6 +3081,13 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
                     None => {}
                 }
             }
+            let mut i = 0;
+            for f in prev_f {
+                ref_fact(cx, s, f, p.pos, prev_t.get(i).unwrap_or(""));
+                i = i + 1;
+            }
+        }
+        if (p.wildcard || (p.bind != "" && p.ctor == "")) && sv.kind == "int" {
             match cx.info.patterns.get(p.id) {
                 Some(pi) => match pi.bind {
                     Some(bnd) => ref_assign_new(cx, s, bnd, sv, p.pos),
@@ -2961,10 +3096,154 @@ fn ref_match(cx: RefCtx, st: RefSt, m: AstMatch, e: AstExpr) -> RefVal {
                 None => {}
             }
         }
+        ref_at_facts(cx, s, p);
+        // the guard holds in the arm (its negation is not kept for the
+        // later arms)
+        match arm.guard {
+            Some(g) => {
+                let gf = ref_cond(cx, s, g);
+                ref_fact(cx, s, gf, ast_expr_pos(g), "`match` guard `" + ref_show(g) + "`");
+            }
+            None => {}
+        }
         vals.push(ref_expr(cx, s, arm.body));
         brs.push(s);
     }
     ref_join(cx, st, brs, vals, t, m.pos)
+}
+
+// ref_pat_fact is the fact that the Int x matches a literal, range,
+// or- or `@` pattern; None when the pattern says nothing (or a bound does
+// not fit in 64 bits), so that the fact can be negated.
+fn ref_pat_fact(cx: RefCtx, p: AstPattern, x: SmtLin) -> Option<SmtF> {
+    let pi = match cx.info.patterns.get(p.id) {
+        Some(pi) => pi,
+        None => {
+            return None;
+        }
+    };
+    if pi.kind == "int" {
+        return ref_cmp("==", x, ref_lc(p.int_value.unwrap_or(0)));
+    }
+    if pi.kind == "range" {
+        let mut fs = Vec::new();
+        match p.range_lo {
+            Some(lo) => match ref_cmp("<=", ref_lc(lo), x) {
+                Some(f) => fs.push(f),
+                None => {
+                    return None;
+                }
+            },
+            None => {}
+        }
+        match p.range_hi {
+            Some(hi) => match ref_cmp(if p.range_incl { "<=" } else { "<" }, x, ref_lc(hi)) {
+                Some(f) => fs.push(f),
+                None => {
+                    return None;
+                }
+            },
+            None => {}
+        }
+        return Some(SmtF::And(fs));
+    }
+    if pi.kind == "at" {
+        return match p.at.get(0) {
+            Some(sub) => ref_pat_fact(cx, sub, x),
+            None => None,
+        };
+    }
+    if pi.kind == "or" {
+        let mut fs = Vec::new();
+        for a in p.alts {
+            match ref_pat_fact(cx, a, x) {
+                Some(f) => fs.push(f),
+                None => {
+                    return None;
+                }
+            }
+        }
+        return Some(SmtF::Or(fs));
+    }
+    None
+}
+
+// ref_at_facts: an Int bound by `n @ p` inside a pattern (`Some(n @
+// 1..=9)`) matches p. Alternatives of or-patterns are skipped (only one
+// of them matched); a binding already in st (the scrutinee's) is kept.
+fn ref_at_facts(cx: RefCtx, mut st: RefSt, p: AstPattern) {
+    let pi = match cx.info.patterns.get(p.id) {
+        Some(pi) => pi,
+        None => {
+            return;
+        }
+    };
+    if pi.kind == "or" {
+        return;
+    }
+    if pi.kind == "at" {
+        match pi.bind {
+            Some(b) => {
+                let key = "v" + b.id.to_string();
+                if ty_is_prim(ty_prune(b.ty), "Int") && !st.env.contains_key(key) {
+                    let a = ref_atom(cx, b.name, b.name);
+                    st.env.insert(key, a);
+                    match ref_pat_fact(cx, p, ref_la(a)) {
+                        Some(f) => ref_fact(
+                            cx,
+                            st,
+                            f,
+                            p.pos,
+                            "pattern `" + b.name + " @ " + ref_pat_text(cx, p) + "`",
+                        ),
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    for a in pi.args {
+        ref_at_facts(cx, st, a);
+    }
+}
+
+// ref_pat_text shows a pattern ref_pat_fact understands.
+fn ref_pat_text(cx: RefCtx, p: AstPattern) -> String {
+    if p.alts.len() > 0 {
+        let mut ts = Vec::new();
+        for a in p.alts {
+            ts.push(ref_pat_text(cx, a));
+        }
+        return ts.join(" | ");
+    }
+    match p.at.get(0) {
+        Some(sub) => {
+            return ref_pat_text(cx, sub);
+        }
+        None => {}
+    }
+    if p.range {
+        let mut t = "";
+        match p.range_lo {
+            Some(lo) => {
+                t = lo.to_string();
+            }
+            None => {}
+        }
+        t = t + if p.range_incl { "..=" } else { ".." };
+        match p.range_hi {
+            Some(hi) => {
+                t = t + hi.to_string();
+            }
+            None => {}
+        }
+        return t;
+    }
+    match p.int_value {
+        Some(k) => k.to_string(),
+        None => "_",
+    }
 }
 
 // ref_len is the length of a Vec / String expression (an atom of its
@@ -2979,6 +3258,30 @@ fn ref_len_of(cx: RefCtx, st: RefSt, v: RefVal, e: AstExpr) -> SmtLin {
 fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
     let bv = ref_expr(cx, st, x.x);
     let iv = ref_expr(cx, st, x.index);
+    ref_bounds(cx, st, x, bv, iv, "`" + ref_show(e) + "` is in bounds");
+    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), x.pos)
+}
+
+// ref_no_calls reports an expression of variables, fields, elements,
+// literals and operators (it changes no Vec).
+fn ref_no_calls(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::IntLit(_) => true,
+        AstExpr::FloatLit(_) => true,
+        AstExpr::BoolLit(_) => true,
+        AstExpr::StrLit(_) => true,
+        AstExpr::Ident(_) => true,
+        AstExpr::Field(f) => ref_no_calls(f.x),
+        AstExpr::Index(x) => ref_no_calls(x.x) && ref_no_calls(x.index),
+        AstExpr::Unary(u) => ref_no_calls(u.x),
+        AstExpr::Binary(b) => ref_no_calls(b.x) && ref_no_calls(b.y),
+        _ => false,
+    }
+}
+
+// ref_bounds checks that the index of x (values bv and iv) is in bounds
+// and then assumes it (fact: the label of the fact).
+fn ref_bounds(cx: RefCtx, st: RefSt, x: AstIndex, bv: RefVal, iv: RefVal, fact: String) {
     let n = ref_len_of(cx, st, bv, x.x);
     let i = ref_int_or_fresh(cx, st, iv, x.index);
     let lo = SmtF::Le(ref_lscale(i, -1).unwrap_or(ref_lc(1)));
@@ -3003,9 +3306,8 @@ fn ref_index(cx: RefCtx, st: RefSt, x: AstIndex, e: AstExpr) -> RefVal {
     );
     // past the access (it traps otherwise), the bounds hold
     if ref_lscale(i, -1).is_some() && ref_cmp("<", i, n).is_some() {
-        ref_fact(cx, st, goal, x.pos, "`" + ref_show(e) + "` is in bounds");
+        ref_fact(cx, st, goal, x.pos, fact);
     }
-    ref_fresh(cx, st, ref_ty_of(cx, e), ref_show(e), x.pos)
 }
 
 // ref_call checks a call of fun with argument values args (exprs: the
@@ -3138,6 +3440,20 @@ fn ref_call_expr(cx: RefCtx, st: RefSt, c: AstCall, e: AstExpr) -> RefVal {
     if ci.kind == "func" {
         match ci.func {
             Some(fun) => {
+                // a constant with an integer literal value is that value
+                if ast_has_attr(fun.decl, "const") {
+                    match fun.decl.body.tail {
+                        Some(t) => match desugar_int_value(t) {
+                            Some(v) => {
+                                if v.abs() <= 1152921504606846976 {
+                                    return ref_val_int(ref_lc(v));
+                                }
+                            }
+                            None => {}
+                        },
+                        None => {}
+                    }
+                }
                 return ref_call(cx, st, fun, args, c.args, c.pos, ref_show(e));
             }
             None => {}
@@ -3160,6 +3476,32 @@ fn ref_method(cx: RefCtx, st: RefSt, m: AstMethodCall, e: AstExpr) -> RefVal {
         args.push(ref_expr(cx, st, a));
     }
     let mi = cx.info.methods.get(m.id);
+    if m.name == "__index_set" && m.args.len() == 2 && ref_is_vec(rt) {
+        // `v[i] = x`: the bounds of `v[i]` (the length does not change).
+        // `v[i] += x` read `v[i]` already (when x cannot change v).
+        let ix = AstIndex {
+            id: m.id,
+            pos: m.pos,
+            x: m.recv,
+            index: m.args.get(0).unwrap_or(m.recv),
+        };
+        let compound = match m.args.get(1) {
+            Some(AstExpr::Binary(b)) => b.compound && ref_no_calls(b.y),
+            _ => false,
+        };
+        if compound {
+            return ref_fresh(cx, st, ty_unit(), ref_show(e), m.pos);
+        }
+        ref_bounds(
+            cx,
+            st,
+            ix,
+            rv,
+            args.get(0).unwrap_or(ref_val_other()),
+            "`" + ref_show(AstExpr::Index(ix)) + "` is in bounds",
+        );
+        return ref_fresh(cx, st, ty_unit(), ref_show(e), m.pos);
+    }
     if m.name == "len" && m.args.len() == 0 && ref_is_seq(rt) {
         return ref_val_int(ref_len_of(cx, st, rv, m.recv));
     }

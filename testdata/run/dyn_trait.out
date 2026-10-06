@@ -1,0 +1,13 @@
+total 37
+Circle(r=2): circle with area 12
+Rect(3x4): a 3x4 rectangle
+Circle(r=1): circle with area 3
+Rect(5x2): a 5x2 rectangle
+scene 34 focus Rect(1x1)
+Rect(2x5)
+bumped 22
+[1] [two] [Circle(r=3)]
+[Point { x: 1, y: 2 }, Some(3), ["a"]]
+[1, 2, 3] [30, 20, 10]
+sum 6
+upcast Rect(1x2)

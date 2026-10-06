@@ -38,9 +38,12 @@ struct TyStruct {
     fields: Vec<TyField>,
 }
 
+// names are the field names of a struct-like variant `V { a: A }`
+// (empty for `V(A)`).
 struct TyVariant {
     name: String,
     fields: Vec<Ty>,
+    names: Vec<String>,
 }
 
 struct TyEnum {
@@ -50,7 +53,7 @@ struct TyEnum {
 }
 
 enum Ty {
-    // "()", "Bool", "Int", "String", "!" (never), "<invalid>"
+    // "()", "Bool", "Int", "Float", "String", "!" (never), "<invalid>"
     Prim(String),
     // Request, Response, TxError, NetError, IoError
     Opaque(String),
@@ -82,6 +85,10 @@ fn ty_bool() -> Ty {
 
 fn ty_int() -> Ty {
     Ty::Prim("Int")
+}
+
+fn ty_float() -> Ty {
+    Ty::Prim("Float")
 }
 
 fn ty_string() -> Ty {
@@ -150,7 +157,14 @@ fn ty_str(t: Ty) -> String {
         } else {
             n
         },
-        Ty::Struct(s, args) => s.name + ty_args_str(args),
+        Ty::Struct(s, args) => if s.name.starts_with("impl ") {
+            // an opaque type `impl Trait` ("impl Trait#function#k")
+            s.name.slice(0, s.name.index_of("#").unwrap_or(s.name.len()))
+        } else if s.name.starts_with("dyn ") {
+            ty_dyn_str(s, args)
+        } else {
+            s.name + ty_args_str(args)
+        },
         Ty::Enum(e, args) => e.name + ty_args_str(args),
         Ty::Param(p) => p.name,
         Ty::Assoc(s, tr, n) => "<" + ty_str(s) + " as " + tr + ">::" + n,
@@ -174,6 +188,46 @@ fn ty_str(t: Ty) -> String {
             Some(r) => ty_str(r),
             None => "?" + v.id.to_string(),
         },
+    }
+}
+
+// ty_dyn_str renders a trait object type `dyn Trait<A, Name = T>`: its
+// params are named after the associated types they bind ("" for the
+// trait's own arguments).
+fn ty_dyn_str(s: TyStruct, args: Vec<Ty>) -> String {
+    if args.len() == 0 {
+        return s.name;
+    }
+    let mut parts = Vec::new();
+    for i in 0..args.len() {
+        let t = ty_str(args.get(i).unwrap_or(ty_unit()));
+        let n = match s.params.get(i) {
+            Some(p) => p.name,
+            None => "",
+        };
+        if n == "" {
+            parts.push(t);
+        } else {
+            parts.push(n + " = " + t);
+        }
+    }
+    s.name + "<" + parts.join(", ") + ">"
+}
+
+// ty_is_dyn reports whether t (pruned) is a trait object type `dyn Trait`.
+fn ty_is_dyn(t: Ty) -> Bool {
+    match t {
+        Ty::Struct(s, _) => s.name.starts_with("dyn "),
+        _ => false,
+    }
+}
+
+// ty_is_opaque_impl reports whether t (pruned) is an opaque `impl Trait`
+// result type.
+fn ty_is_opaque_impl(t: Ty) -> Bool {
+    match t {
+        Ty::Struct(s, _) => s.name.starts_with("impl "),
+        _ => false,
     }
 }
 

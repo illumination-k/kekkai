@@ -1,0 +1,103 @@
+// VecDeque (lib/core/vecdeque.kek): a double-ended queue in a ring buffer.
+
+// breadth-first search over a small graph, the usual use of a queue
+fn bfs(adj: &Vec<Vec<Int>>, start: Int) -> Vec<Int> {
+    let mut order = Vec::new();
+    let mut seen: HashSet<Int> = HashSet::new();
+    let mut q: VecDeque<Int> = VecDeque::new();
+    q.push_back(start);
+    seen.insert(start);
+    while let Some(n) = q.pop_front() {
+        order.push(n);
+        for m in adj.get(n).unwrap_or(Vec::new()) {
+            if seen.insert(m) {
+                q.push_back(m);
+            }
+        }
+    }
+    order
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut q: VecDeque<Int> = VecDeque::new();
+    log.info(
+        format!(
+            "empty {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
+            q,
+            q.len(),
+            q.is_empty(),
+            q.front(),
+            q.back(),
+            q.pop_front(),
+            q.pop_back(),
+            q.get(0),
+        ),
+    );
+    for i in 1..5 {
+        q.push_back(i);
+        q.push_front(-i);
+    }
+    log.info(
+        format!("{:?} {} {:?} {:?} {:?} {:?}", q, q.len(), q.front(), q.back(), q.get(2), q.get(8)),
+    );
+    log.info(format!("{:?} {:?} {:?}", q.pop_front(), q.pop_back(), q));
+
+    // wrap around the ring many times
+    let mut r: VecDeque<Int> = VecDeque::with_capacity(3);
+    let mut out = Vec::new();
+    for i in 0..20 {
+        r.push_back(i);
+        if r.len() > 3 {
+            out.push(r.pop_front().unwrap_or(-1));
+        }
+    }
+    log.info(format!("ring {:?} {:?} {}", r, out, r.capacity() >= 3));
+
+    // set, swap, insert, remove, truncate, retain, rotate
+    let mut d: VecDeque<Int> = (0..6).collect();
+    d.push_front(9);
+    log.info(format!("{} {} {:?}", d.set(1, 50), d.set(10, 1), d));
+    d.swap(0, 6);
+    d.swap(0, 60);
+    d.insert(2, 7);
+    d.insert(-3, 8);
+    d.insert(100, 11);
+    log.info(format!("{:?} {:?} {:?} {:?}", d, d.remove(1), d.remove(100), d));
+    d.retain(|x| x % 2 == 1);
+    log.info(format!("retain {:?}", d));
+    d.rotate_left(1);
+    log.info(format!("rotate_left {:?}", d));
+    d.rotate_right(7);
+    log.info(format!("rotate_right {:?}", d));
+    d.truncate(2);
+    log.info(format!("truncate {:?} {} {}", d, d.contains(&9), d.contains(&4)));
+
+    // iter (both ends), extend, append, make_contiguous, clear
+    let mut e: VecDeque<String> = VecDeque::new();
+    e.extend(vec!["b", "c"].iter());
+    e.push_front("a");
+    let mut f: VecDeque<String> = VecDeque::new();
+    f.push_back("d");
+    e.append(&mut f);
+    log.info(
+        format!(
+            "{:?} {:?} {} {:?}",
+            e.iter().rev().collect::<Vec<String>>(),
+            e.make_contiguous(),
+            f.is_empty(),
+            e.iter().map(|s| s.len()).sum::<Int>(),
+        ),
+    );
+    let c = e.clone();
+    e.clear();
+    let mut joined = "";
+    for s in c {
+        joined = joined + s;
+    }
+    log.info(format!("{:?} {:?} {} {} {}", e, c, joined, c == c.clone(), e == VecDeque::default()));
+
+    let adj = vec![vec![1, 2], vec![3], vec![3, 4], vec![], vec![0]];
+    log.info(format!("bfs {:?}", bfs(&adj, 0)));
+    0
+}

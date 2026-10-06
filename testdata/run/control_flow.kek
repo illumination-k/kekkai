@@ -1,0 +1,228 @@
+// Labeled loops, `loop` as an expression (`break value`), statements as
+// match arm bodies and `?` converting the error with `From`.
+
+struct ParseError {
+    at: Int,
+}
+
+struct ReadError {
+    path: String,
+}
+
+enum AppError {
+    Parse(Int),
+    Io(String),
+}
+
+impl From<ParseError> for AppError {
+    fn from(e: ParseError) -> AppError {
+        AppError::Parse(e.at)
+    }
+}
+
+impl From<ReadError> for AppError {
+    fn from(e: ReadError) -> AppError {
+        AppError::Io(e.path)
+    }
+}
+
+fn parse_digit(s: String, i: Int) -> Result<Int, ParseError> {
+    let c = s.char_at(i).unwrap_or(0);
+    if c >= '0' && c <= '9' {
+        Ok(c - '0')
+    } else {
+        Err(ParseError { at: i })
+    }
+}
+
+fn read(path: String) -> Result<String, ReadError> {
+    if path == "" {
+        return Err(ReadError { path: "<empty>" });
+    }
+    Ok("1" + path)
+}
+
+fn sum_digits(path: String) -> Result<Int, AppError> {
+    let s = read(path)?;
+    let mut total = 0;
+    for i in 0..s.len() {
+        total += parse_digit(s, i)?;
+    }
+    Ok(total)
+}
+
+// a generic error type converted with a `From` bound
+fn first_digit<E: From<ParseError>>(s: String) -> Result<Int, E> {
+    let d = parse_digit(s, 0)?;
+    Ok(d)
+}
+
+fn in_closure(s: String) -> Result<Int, AppError> {
+    let f = |i: Int| -> Result<Int, AppError> {
+        Ok(parse_digit(s, i)? * 10)
+    };
+    f(1)
+}
+
+fn show(r: Result<Int, AppError>) -> String {
+    match r {
+        Ok(n) => "ok " + n.to_string(),
+        Err(AppError::Parse(at)) => "parse error at " + at.to_string(),
+        Err(AppError::Io(p)) => "io error " + p,
+    }
+}
+
+// the first pair (i, j) with v[i] + v[j] == target
+fn pair_sum(v: Vec<Int>, target: Int) -> (Int, Int) {
+    let mut found = (-1, -1);
+    'outer: for i in 0..v.len() {
+        for j in i + 1..v.len() {
+            if v[i] + v[j] == target {
+                found = (i, j);
+                break 'outer;
+            }
+        }
+    }
+    found
+}
+
+// the rows without a negative number
+fn clean_rows(rows: Vec<Vec<Int>>) -> Int {
+    let mut n = 0;
+    'rows: for row in rows {
+        for x in row {
+            if x < 0 {
+                continue 'rows;
+            }
+        }
+        n += 1;
+    }
+    n
+}
+
+fn first_square_over(limit: Int) -> Int {
+    let mut i = 0;
+    let sq = loop {
+        i += 1;
+        if i * i > limit {
+            break i * i;
+        }
+    };
+    sq
+}
+
+fn search(grid: Vec<Vec<Int>>, x: Int) -> Option<(Int, Int)> {
+    let mut r = 0;
+    'scan: loop {
+        if r >= grid.len() {
+            break None;
+        }
+        let row = grid[r];
+        let mut c = 0;
+        while c < row.len() {
+            if row[c] == x {
+                break 'scan Some((r, c));
+            }
+            c += 1;
+        }
+        r += 1;
+    }
+}
+
+fn collatz_steps(n0: Int) -> Int {
+    let mut n = n0;
+    let mut steps = 0;
+    loop {
+        if n == 1 {
+            break steps;
+        }
+        n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 };
+        steps += 1;
+    }
+}
+
+fn nested_value() -> Int {
+    let mut a = 0;
+    let v = 'a: loop {
+        let mut b = 0;
+        loop {
+            b += 1;
+            a += 1;
+            if a > 10 {
+                break 'a a * 100 + b;
+            }
+            if b == 3 {
+                break;
+            }
+        }
+    };
+    v
+}
+
+fn total_some(xs: Vec<Option<Int>>) -> Int {
+    let mut total = 0;
+    let mut nones = 0;
+    for x in xs {
+        match x {
+            Some(n) => total += n,
+            None => nones += 1,
+        }
+    }
+    total * 10 + nones
+}
+
+fn until_none(xs: Vec<Option<Int>>) -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < xs.len() {
+        let n = match xs[i] {
+            Some(n) => n,
+            None => break,
+        };
+        i += 1;
+        if n < 0 {
+            continue;
+        }
+        total += n;
+    }
+    total
+}
+
+fn sign(n: Int) -> String {
+    let mut s = "zero";
+    match n {
+        0 => return s,
+        x if x < 0 => s = "negative",
+        _ => s = "positive",
+    }
+    s + "!"
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    log.info(show(sum_digits("234")));
+    log.info(show(sum_digits("2x4")));
+    log.info(show(sum_digits("")));
+    log.info(show(first_digit("7")) + ", " + show(first_digit("x")));
+    log.info(show(in_closure("12")) + ", " + show(in_closure("1-")));
+    let (i, j) = pair_sum(vec![3, 8, 1, 9, 4], 13);
+    log.info(i.to_string() + " " + j.to_string());
+    log.info(clean_rows(vec![vec![1, 2], vec![3, -1], vec![], vec![-5]]).to_string());
+    log.info(first_square_over(50).to_string());
+    match search(vec![vec![1, 2], vec![3, 4, 5]], 5) {
+        Some((r, c)) => log.info("found " + r.to_string() + " " + c.to_string()),
+        None => log.info("not found"),
+    }
+    log.info(search(vec![vec![1]], 7).is_none().to_string());
+    log.info(collatz_steps(27).to_string());
+    log.info(nested_value().to_string());
+    log.info(total_some(vec![Some(1), None, Some(5), None, None]).to_string());
+    log.info(until_none(vec![Some(1), Some(-2), Some(4), None, Some(100)]).to_string());
+    log.info(sign(0) + " " + sign(-3) + " " + sign(8));
+    log.info(
+        loop {
+            break 7;
+        }.to_string(),
+    );
+    0
+}

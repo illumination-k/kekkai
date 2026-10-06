@@ -16,11 +16,24 @@ struct ParseState {
     mut no_struct: Bool,
     mut failed: Bool,
     ids: AstIds,
+    // nesting of macro invocations being parsed (compiler/macro.kek)
+    mut mac_depth: Int,
+    // ids of the `pub` items, fields and methods; the `use` declarations;
+    // whether a path starts with `crate`, `self` or `super`
+    pubs: HashMap<Int, Bool>,
+    uses: Vec<AstUse>,
+    mut mod_paths: Bool,
 }
 
+// pubs, uses and mod_paths are the module syntax of the file (see
+// ParseState), read by the name resolution (compiler/modres.kek) and the
+// formatter.
 struct ParseResult {
     file: AstFile,
     errs: Vec<AstError>,
+    pubs: HashMap<Int, Bool>,
+    uses: Vec<AstUse>,
+    mod_paths: Bool,
 }
 
 fn parse_id(mut p: ParseState) -> Int {
@@ -99,8 +112,14 @@ fn parse_describe(t: Tok) -> String {
     if t.kind == "INT" {
         return "integer `" + t.text + "`";
     }
+    if t.kind == "FLOAT" {
+        return "float `" + t.text + "`";
+    }
     if t.kind == "STRING" {
         return "string literal";
+    }
+    if t.kind == "LABEL" {
+        return "label `" + t.text + "`";
     }
     lex_kind_name(t.kind)
 }
@@ -114,7 +133,7 @@ fn parse_file(name: String, src: String, ids: AstIds) -> ParseResult {
 // parse_file_at is parse_file with every position replaced by at (when
 // set): for generated code.
 fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> ParseResult {
-    let lr = lex_file(name, src);
+    let mut lr = lex_file(name, src);
     match at {
         Some(pos) => {
             for mut t in lr.toks {
@@ -127,6 +146,13 @@ fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> 
         Some(t) => t,
         None => Tok { kind: "EOF", text: "", pos: AstPos { file: name, line: 1, col: 1 } },
     };
+    if at.is_none() && !name.starts_with("<prelude>") && !name.starts_with("<core>") {
+        for t in lr.toks {
+            if t.kind == "IDENT" && t.text.contains("$") {
+                lr.errs.push(AstError { pos: t.pos, msg: "unexpected character `$`" });
+            }
+        }
+    }
     let p = ParseState {
         toks: lr.toks,
         pos: 0,
@@ -135,12 +161,92 @@ fn parse_file_at(name: String, src: String, ids: AstIds, at: Option<AstPos>) -> 
         no_struct: false,
         failed: false,
         ids: ids,
+        mac_depth: 0,
+        pubs: HashMap::new(),
+        uses: Vec::new(),
+        mod_paths: false,
     };
     let f = parse_items(p);
-    ParseResult { file: f, errs: ast_sort_errors(p.errs) }
+    ParseResult {
+        file: f,
+        errs: ast_sort_errors(p.errs),
+        pubs: p.pubs,
+        uses: p.uses,
+        mod_paths: p.mod_paths,
+    }
 }
 
-fn parse_items(p: ParseState) -> AstFile {
+// parse_pub accepts `pub` (true when present).
+fn parse_pub(p: ParseState) -> Bool {
+    let t = parse_tok(p);
+    if t.kind == "IDENT" && t.text == "pub" {
+        parse_next(p);
+        return true;
+    }
+    false
+}
+
+// parse_mark_pub records the node id as `pub` when is_pub.
+fn parse_mark_pub(mut p: ParseState, is_pub: Bool, id: Int) {
+    if is_pub {
+        p.pubs.insert(id, true);
+    }
+}
+
+// parse_use parses `use a::b;`, `use a::b as c;`, `use a::{b, c as d};`
+// and `use a::*;` (after `use`).
+fn parse_use(mut p: ParseState, pos: AstPos) -> AstUse {
+    let mut u = AstUse {
+        id: parse_id(p),
+        pos: pos,
+        path: Vec::new(),
+        items: Vec::new(),
+        glob: false,
+        braces: false,
+    };
+    while true {
+        if parse_accept(p, "*") {
+            u.glob = true;
+            break;
+        }
+        if parse_accept(p, "{") {
+            u.braces = true;
+            while !parse_at(p, "}") {
+                let t = parse_expect(p, "IDENT");
+                let mut item = AstUseItem { pos: t.pos, name: t.text, alias: "" };
+                if parse_at(p, "IDENT") && parse_tok(p).text == "as" {
+                    parse_next(p);
+                    item.alias = parse_expect(p, "IDENT").text;
+                }
+                u.items.push(item);
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, "}");
+            break;
+        }
+        let t = parse_expect(p, "IDENT");
+        if p.failed {
+            break;
+        }
+        if parse_accept(p, "::") {
+            u.path.push(t.text);
+            continue;
+        }
+        let mut item = AstUseItem { pos: t.pos, name: t.text, alias: "" };
+        if parse_at(p, "IDENT") && parse_tok(p).text == "as" {
+            parse_next(p);
+            item.alias = parse_expect(p, "IDENT").text;
+        }
+        u.items.push(item);
+        break;
+    }
+    parse_expect(p, ";");
+    u
+}
+
+fn parse_items(mut p: ParseState) -> AstFile {
     let mut f = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
@@ -148,25 +254,43 @@ fn parse_items(p: ParseState) -> AstFile {
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
     while !parse_at(p, "EOF") {
         let attrs = parse_attrs(p);
+        let ut = parse_tok(p);
+        if attrs.len() == 0 && ut.kind == "IDENT" && ut.text == "use" && parse_peek_at(p, "IDENT") {
+            parse_next(p);
+            let u = parse_use(p, ut.pos);
+            if !p.failed {
+                p.uses.push(u);
+            }
+            continue;
+        }
+        let pubt = parse_tok(p);
+        let is_pub = parse_pub(p);
         let k = parse_tok(p).kind;
+        if is_pub && k == "impl" {
+            parse_fail(p, pubt.pos, "`pub` is not allowed on `impl` blocks");
+        }
         if k == "fn" {
             let mut fd = parse_func(p, false);
             fd.attrs = attrs;
+            parse_mark_pub(p, is_pub, fd.id);
             if !p.failed {
                 f.funcs.push(fd);
             }
         } else if k == "struct" {
             let mut sd = parse_struct(p);
             sd.attrs = attrs;
+            parse_mark_pub(p, is_pub, sd.id);
             if !p.failed {
                 f.structs.push(sd);
             }
         } else if k == "enum" {
             let mut ed = parse_enum(p);
             ed.attrs = attrs;
+            parse_mark_pub(p, is_pub, ed.id);
             if !p.failed {
                 f.enums.push(ed);
             }
@@ -177,23 +301,31 @@ fn parse_items(p: ParseState) -> AstFile {
             }
         } else if k == "trait" {
             let td = parse_trait(p);
+            parse_mark_pub(p, is_pub, td.id);
             if !p.failed {
                 f.traits.push(td);
             }
         } else if k == "type" {
             let ad = parse_type_alias(p);
+            parse_mark_pub(p, is_pub, ad.id);
             if !p.failed {
                 f.aliases.push(ad);
+            }
+        } else if parse_at_const(p) {
+            let cd = parse_const(p);
+            parse_mark_pub(p, is_pub, cd.id);
+            if !p.failed {
+                f.consts.push(cd);
             }
         } else {
             parse_fail(
                 p,
                 parse_tok(p).pos,
-                "expected item (`fn`, `struct`, `enum`, `trait`, `impl` or `type`), found "
+                "expected item (`fn`, `struct`, `enum`, `trait`, `impl`, `type`, `const` or `use`), found "
                     + parse_describe(parse_tok(p)),
             );
         }
-        if attrs.len() > 0 && (k == "impl" || k == "trait" || k == "type") {
+        if attrs.len() > 0 && (k == "impl" || k == "trait" || k == "type" || k == "const") {
             match attrs.get(0) {
                 Some(a) => parse_fail(p, a.pos, "attributes are not allowed on `" + k + "` items"),
                 None => {}
@@ -201,6 +333,25 @@ fn parse_items(p: ParseState) -> AstFile {
         }
     }
     f
+}
+
+// parse_at_const reports whether a `const NAME` item starts here (`const`
+// is not a keyword).
+fn parse_at_const(p: ParseState) -> Bool {
+    let t = parse_tok(p);
+    t.kind == "IDENT" && t.text == "const" && parse_peek_at(p, "IDENT")
+}
+
+// parse_const parses `const NAME: T = value;`.
+fn parse_const(p: ParseState) -> AstConstDecl {
+    let pos = parse_next(p).pos;
+    let name = parse_expect(p, "IDENT").text;
+    parse_expect(p, ":");
+    let ty = parse_type(p);
+    parse_expect(p, "=");
+    let value = parse_expr(p);
+    parse_expect(p, ";");
+    AstConstDecl { id: parse_id(p), pos: pos, name: name, ty: ty, value: value }
 }
 
 // parse_attrs parses attributes `#[name]` / `#[name(arg, ...)]`.
@@ -223,7 +374,12 @@ fn parse_attrs(p: ParseState) -> Vec<AstAttr> {
                         arg = arg + " = " + ast_quote(v.text);
                     } else if v.kind == "INT" {
                         parse_next(p);
-                        arg = arg + " = " + v.text;
+                        match parse_int_text(v.text) {
+                            Some(n) => {
+                                arg = arg + " = " + n.to_string();
+                            }
+                            None => parse_fail(p, v.pos, parse_int_error(v.text)),
+                        }
                     } else {
                         parse_fail(
                             p,
@@ -297,6 +453,8 @@ fn parse_trait(p: ParseState) -> AstTraitDecl {
         let attrs = parse_attrs(p);
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
+        } else if parse_at_const(p) {
+            parse_fail(p, parse_tok(p).pos, "constants in traits are not supported");
         } else {
             let mut fd = parse_func(p, true);
             fd.attrs = attrs;
@@ -423,6 +581,7 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
         wheres: Vec::new(),
         assoc: Vec::new(),
         funcs: Vec::new(),
+        consts: Vec::new(),
     };
     if parse_at(p, "for") {
         parse_next(p);
@@ -433,11 +592,21 @@ fn parse_impl(p: ParseState) -> AstImplDecl {
     parse_expect(p, "{");
     while !parse_at(p, "}") && !parse_at(p, "EOF") {
         let attrs = parse_attrs(p);
+        let is_pub = parse_pub(p);
         if parse_at(p, "type") {
             d.assoc.push(parse_assoc_type(p));
+        } else if parse_at_const(p) {
+            match attrs.get(0) {
+                Some(a) => parse_fail(p, a.pos, "attributes are not allowed on `const` items"),
+                None => {}
+            }
+            let cd = parse_const(p);
+            parse_mark_pub(p, is_pub, cd.id);
+            d.consts.push(cd);
         } else {
             let mut fd = parse_func(p, false);
             fd.attrs = attrs;
+            parse_mark_pub(p, is_pub, fd.id);
             d.funcs.push(fd);
         }
     }
@@ -456,15 +625,44 @@ fn parse_struct(p: ParseState) -> AstStructDecl {
         name: name,
         generics: generics,
         fields: Vec::new(),
+        kind: "",
     };
+    if parse_accept(p, ";") {
+        // unit struct `struct S;`
+        d.kind = "unit";
+        return d;
+    }
+    if parse_accept(p, "(") {
+        // tuple struct `struct S(A, mut B);`
+        d.kind = "tuple";
+        while !parse_at(p, ")") {
+            let fpub = parse_pub(p);
+            let fp = parse_tok(p).pos;
+            let mutable = parse_accept(p, "mut");
+            let ty = parse_type(p);
+            let fname = d.fields.len().to_string();
+            let fid = parse_id(p);
+            parse_mark_pub(p, fpub, fid);
+            d.fields.push(AstField { id: fid, pos: fp, mutable: mutable, name: fname, ty: ty });
+            if !parse_accept(p, ",") {
+                break;
+            }
+        }
+        parse_expect(p, ")");
+        parse_expect(p, ";");
+        return d;
+    }
     parse_expect(p, "{");
     while !parse_at(p, "}") {
+        let fpub = parse_pub(p);
         let fp = parse_tok(p).pos;
         let mutable = parse_accept(p, "mut");
         let fname = parse_expect(p, "IDENT").text;
         parse_expect(p, ":");
         let ty = parse_type(p);
-        d.fields.push(AstField { id: parse_id(p), pos: fp, mutable: mutable, name: fname, ty: ty });
+        let fid = parse_id(p);
+        parse_mark_pub(p, fpub, fid);
+        d.fields.push(AstField { id: fid, pos: fp, mutable: mutable, name: fname, ty: ty });
         if !parse_accept(p, ",") {
             break;
         }
@@ -489,8 +687,27 @@ fn parse_enum(p: ParseState) -> AstEnumDecl {
     while !parse_at(p, "}") {
         let vp = parse_tok(p).pos;
         let vname = parse_expect(p, "IDENT").text;
-        let mut v = AstVariant { id: parse_id(p), pos: vp, name: vname, fields: Vec::new() };
-        if parse_accept(p, "(") {
+        let mut v = AstVariant {
+            id: parse_id(p),
+            pos: vp,
+            name: vname,
+            fields: Vec::new(),
+            named: false,
+            names: Vec::new(),
+        };
+        if parse_accept(p, "{") {
+            // struct-like variant `V { a: A, b: B }`
+            v.named = true;
+            while !parse_at(p, "}") {
+                v.names.push(parse_expect(p, "IDENT").text);
+                parse_expect(p, ":");
+                v.fields.push(parse_type(p));
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, "}");
+        } else if parse_accept(p, "(") {
             while !parse_at(p, ")") {
                 v.fields.push(parse_type(p));
                 if !parse_accept(p, ",") {
@@ -635,6 +852,26 @@ fn parse_type(p: ParseState) -> AstType {
         }
         return AstType::Tuple(AstTupleType { id: parse_id(p), pos: t.pos, elems: elems });
     }
+    if (t.kind == "impl" || (t.kind == "IDENT" && t.text == "dyn")) && parse_peek_at(p, "IDENT") {
+        let n = parse_peek_text(p);
+        if n != "Fn" && n != "FnMut" && n != "FnOnce" {
+            // `impl Trait<Args>` / `dyn Trait<Args>`: a named type whose
+            // name carries the prefix ("impl Iterator", "dyn Shape")
+            parse_next(p);
+            let prefix = if t.kind == "impl" { "impl " } else { "dyn " };
+            let tn = parse_expect(p, "IDENT");
+            let mut nt = AstNamedType {
+                id: parse_id(p),
+                pos: t.pos,
+                name: prefix + tn.text,
+                args: Vec::new(),
+            };
+            if parse_at(p, "<") {
+                nt.args = parse_type_args(p);
+            }
+            return AstType::Named(nt);
+        }
+    }
     if t.kind == "fn" || t.kind == "impl" || (t.kind == "IDENT" && t.text == "dyn") {
         return parse_fn_type(p);
     }
@@ -646,10 +883,16 @@ fn parse_type(p: ParseState) -> AstType {
     if t.kind == "IDENT" {
         parse_next(p);
         let mut nt = AstNamedType { id: parse_id(p), pos: t.pos, name: t.text, args: Vec::new() };
-        if parse_at(p, "::") && parse_peek_at(p, "IDENT") {
-            // an associated type `T::Item`
+        parse_note_mod_path(p, t.text);
+        let mut assoc = false;
+        while parse_at(p, "::") && parse_peek_at(p, "IDENT") {
+            // an associated type `T::Item`, or a path `m::T` / `m::n::T`
+            // (compiler/modres.kek)
             parse_next(p);
-            nt.name = t.text + "::" + parse_expect(p, "IDENT").text;
+            nt.name = nt.name + "::" + parse_expect(p, "IDENT").text;
+            assoc = true;
+        }
+        if assoc && !parse_at(p, "<") {
             return AstType::Named(nt);
         }
         if parse_at(p, "<") {
@@ -681,13 +924,6 @@ fn parse_fn_type(p: ParseState) -> AstType {
     } else if t.kind == "impl" || t.text == "dyn" {
         let prefix = if t.kind == "impl" { "impl " } else { "dyn " };
         let n = parse_expect(p, "IDENT");
-        if n.text != "Fn" && n.text != "FnMut" && n.text != "FnOnce" {
-            parse_fail(
-                p,
-                n.pos,
-                "only `" + prefix + "Fn(...)` is supported, found `" + prefix + n.text + "`",
-            );
-        }
         kind = prefix + n.text;
     }
     let mut ft = AstFnType {
@@ -740,6 +976,14 @@ fn parse_type_args(p: ParseState) -> Vec<AstType> {
 }
 
 // parse_turbofish parses `::<A, B>` when present.
+// parse_note_mod_path notes a path starting with `crate`, `self` or
+// `super` (resolved by compiler/modres.kek).
+fn parse_note_mod_path(mut p: ParseState, head: String) {
+    if head == "crate" || head == "super" || head == "self" {
+        p.mod_paths = true;
+    }
+}
+
 fn parse_turbofish(p: ParseState) -> Vec<AstType> {
     if parse_at(p, "::") && parse_peek_at(p, "<") {
         parse_next(p);
@@ -766,7 +1010,8 @@ fn parse_block(mut p: ParseState) -> AstBlock {
             let mut name = "_";
             let mut pat = None;
             if parse_at(p, "(")
-                || (parse_at(p, "IDENT") && (parse_peek_at(p, "(") || parse_peek_at(p, "::"))) {
+                || (parse_at(p, "IDENT")
+                    && (parse_peek_at(p, "(") || parse_peek_at(p, "::") || parse_peek_at(p, "{"))) {
                 pat = Some(parse_pattern(p));
             } else {
                 mutable = parse_accept(p, "mut");
@@ -782,6 +1027,13 @@ fn parse_block(mut p: ParseState) -> AstBlock {
             }
             parse_expect(p, "=");
             let init = parse_expr(p);
+            if parse_at(p, "else") {
+                let ep = parse_next(p).pos;
+                let els = parse_block(p);
+                parse_expect(p, ";");
+                b.stmts.push(parse_let_else(p, sp, pat, ty, init, ep, els));
+                continue;
+            }
             parse_expect(p, ";");
             b.stmts.push(
                 AstStmt::Let(AstLetStmt {
@@ -792,99 +1044,50 @@ fn parse_block(mut p: ParseState) -> AstBlock {
                     pat: pat,
                     ty: ty,
                     init: init,
+                    let_else: false,
                 }),
             );
             continue;
         }
-        if k == "while" {
-            parse_next(p);
-            let mut pat = None;
-            if parse_accept(p, "let") {
-                pat = Some(parse_pattern(p));
-                parse_expect(p, "=");
-            }
-            p.no_struct = true;
-            let cond = parse_expr(p);
-            p.no_struct = false;
-            let body = parse_block(p);
-            b.stmts.push(
-                AstStmt::While(AstWhileStmt {
-                    id: parse_id(p),
-                    pos: sp,
-                    pat: pat,
-                    cond: cond,
-                    body: body,
-                }),
-            );
+        if k == "LABEL" && parse_peek_at(p, ":") {
+            b.stmts.push(parse_loop(p));
             continue;
         }
-        if k == "for" {
-            parse_next(p);
-            let mut var = "_";
-            let mut pat = None;
-            if parse_at(p, "(") || parse_at(p, "mut") {
-                pat = Some(parse_pattern(p));
-            } else if !parse_accept(p, "_") {
-                var = parse_expect(p, "IDENT").text;
-            }
-            parse_expect(p, "in");
-            p.no_struct = true;
-            let mut iter = parse_expr(p);
-            let mut end = None;
-            match iter {
-                AstExpr::Range(r) => {
-                    if !r.inclusive {
-                        iter = r.start;
-                        end = Some(r.end);
-                    }
+        if k == "loop" || k == "while" || k == "for" {
+            let st = parse_loop(p);
+            if k == "loop" && (parse_at(p, ".") || parse_at(p, "?")) {
+                // `loop { ... }.f()`: the loop is an operand
+                let e0 = AstExpr::Block(parse_loop_block(p, st));
+                let e = parse_binary_rest(p, parse_postfix(p, e0), 0);
+                if parse_accept(p, ";") {
+                    b.stmts.push(
+                        AstStmt::Expr(AstExprStmt { id: parse_id(p), pos: sp, x: e, semi: true }),
+                    );
+                    continue;
                 }
-                _ => {}
+                if parse_at(p, "}") {
+                    b.tail = Some(e);
+                    break;
+                }
+                parse_fail(
+                    p,
+                    parse_tok(p).pos,
+                    "expected `;` or `}`, found " + parse_describe(parse_tok(p)),
+                );
             }
-            p.no_struct = false;
-            let body = parse_block(p);
-            b.stmts.push(
-                AstStmt::For(AstForStmt {
-                    id: parse_id(p),
-                    pos: sp,
-                    var: var,
-                    pat: pat,
-                    iter: iter,
-                    end: end,
-                    body: body,
-                }),
-            );
+            b.stmts.push(st);
             continue;
         }
-        if k == "return" {
-            parse_next(p);
-            let mut value = None;
-            if !parse_at(p, ";") && !parse_at(p, "}") {
-                value = Some(parse_expr(p));
-            }
+        if k == "return" || k == "break" || k == "continue" {
+            let st = parse_jump(p, sp);
             if !parse_accept(p, ";") && !parse_at(p, "}") {
                 parse_fail(
                     p,
                     parse_tok(p).pos,
-                    "expected `;` after return, found " + parse_describe(parse_tok(p)),
+                    "expected `;` after `" + k + "`, found " + parse_describe(parse_tok(p)),
                 );
             }
-            b.stmts.push(AstStmt::Return(AstReturnStmt { id: parse_id(p), pos: sp, value: value }));
-            continue;
-        }
-        if k == "break" || k == "continue" {
-            parse_next(p);
-            if !parse_accept(p, ";") && !parse_at(p, "}") {
-                parse_fail(
-                    p,
-                    parse_tok(p).pos,
-                    "expected `;`, found " + parse_describe(parse_tok(p)),
-                );
-            }
-            if k == "break" {
-                b.stmts.push(AstStmt::Break(AstBreakStmt { id: parse_id(p), pos: sp }));
-            } else {
-                b.stmts.push(AstStmt::Continue(AstContinueStmt { id: parse_id(p), pos: sp }));
-            }
+            b.stmts.push(st);
             continue;
         }
         let mut e = AstExpr::UnitLit(AstUnitLit { id: 0, pos: sp });
@@ -898,28 +1101,18 @@ fn parse_block(mut p: ParseState) -> AstBlock {
         } else {
             e = parse_expr(p);
         }
-        if parse_accept(p, "=") {
+        let aop = parse_op(p);
+        if aop == "=" || (aop.ends_with("=") && parse_prec(aop.slice(0, aop.len() - 1)) >= 4) {
+            let op_pos = parse_tok(p).pos;
+            parse_skip_op(p, aop);
             let val = parse_expr(p);
             parse_expect(p, ";");
-            match e {
-                AstExpr::Ident(t) => b.stmts.push(
-                    AstStmt::Assign(AstAssignStmt {
-                        id: parse_id(p),
-                        pos: sp,
-                        name: t.name,
-                        value: val,
-                    }),
-                ),
-                AstExpr::Field(t) => b.stmts.push(
-                    AstStmt::FieldAssign(AstFieldAssignStmt {
-                        id: parse_id(p),
-                        pos: sp,
-                        target: t,
-                        value: val,
-                    }),
-                ),
-                _ => parse_fail(p, sp, "invalid assignment target"),
-            }
+            let op = if aop == "=" {
+                ""
+            } else {
+                aop.slice(0, aop.len() - 1)
+            };
+            parse_assign(p, b, sp, e, op, op_pos, val);
             continue;
         }
         if parse_accept(p, ";") {
@@ -943,6 +1136,162 @@ fn parse_block(mut p: ParseState) -> AstBlock {
     b.end = parse_expect(p, "}").pos;
     p.no_struct = saved;
     b
+}
+
+// parse_loop parses `loop { }`, `while ... { }` or `for ... { }`, with an
+// optional label `'a:` before it.
+fn parse_loop(mut p: ParseState) -> AstStmt {
+    let sp = parse_tok(p).pos;
+    let mut label = "";
+    if parse_at(p, "LABEL") {
+        label = parse_next(p).text;
+        parse_expect(p, ":");
+        if !parse_at(p, "loop") && !parse_at(p, "while") && !parse_at(p, "for") {
+            let msg = if parse_at(p, "{") {
+                "labeled blocks are not supported: a label names a `loop`, `while` or `for`"
+            } else {
+                "expected `loop`, `while` or `for` after a label, found "
+                    + parse_describe(parse_tok(p))
+            };
+            parse_fail(p, parse_tok(p).pos, msg);
+        }
+    }
+    let k = parse_tok(p).kind;
+    if k == "loop" {
+        parse_next(p);
+        let body = parse_block(p);
+        return AstStmt::While(AstWhileStmt {
+            id: parse_id(p),
+            pos: sp,
+            pat: None,
+            cond: AstExpr::BoolLit(AstBoolLit { id: parse_id(p), pos: sp, value: true }),
+            body: body,
+            is_loop: true,
+            label: label,
+            expr: false,
+        });
+    }
+    if k == "while" {
+        parse_next(p);
+        let mut pat = None;
+        if parse_accept(p, "let") {
+            pat = Some(parse_top_pattern(p));
+            parse_expect(p, "=");
+        }
+        let saved = p.no_struct;
+        p.no_struct = true;
+        let cond = parse_expr(p);
+        p.no_struct = saved;
+        let body = parse_block(p);
+        return AstStmt::While(AstWhileStmt {
+            id: parse_id(p),
+            pos: sp,
+            pat: pat,
+            cond: cond,
+            body: body,
+            is_loop: false,
+            label: label,
+            expr: false,
+        });
+    }
+    parse_expect(p, "for");
+    let mut var = "_";
+    let mut pat = None;
+    if parse_at(p, "(")
+        || parse_at(p, "mut")
+        || (parse_at(p, "IDENT")
+            && (parse_peek_at(p, "(") || parse_peek_at(p, "::") || parse_peek_at(p, "{"))) {
+        pat = Some(parse_pattern(p));
+    } else if !parse_accept(p, "_") {
+        var = parse_expect(p, "IDENT").text;
+    }
+    parse_expect(p, "in");
+    let saved = p.no_struct;
+    p.no_struct = true;
+    let mut iter = parse_expr(p);
+    let mut end = None;
+    match iter {
+        AstExpr::Range(r) => {
+            if !r.inclusive {
+                iter = r.start;
+                end = Some(r.end);
+            }
+        }
+        _ => {}
+    }
+    p.no_struct = saved;
+    let body = parse_block(p);
+    AstStmt::For(AstForStmt {
+        id: parse_id(p),
+        pos: sp,
+        var: var,
+        pat: pat,
+        iter: iter,
+        end: end,
+        body: body,
+        label: label,
+    })
+}
+
+// parse_loop_block wraps a `loop` statement in expression position into
+// the block that is its value (marked expr for the formatter).
+fn parse_loop_block(p: ParseState, st: AstStmt) -> AstBlock {
+    let mut s = st;
+    let mut pos = parse_tok(p).pos;
+    match st {
+        AstStmt::While(w) => {
+            pos = w.pos;
+            s = AstStmt::While(AstWhileStmt {
+                id: w.id,
+                pos: w.pos,
+                pat: w.pat,
+                cond: w.cond,
+                body: w.body,
+                is_loop: w.is_loop,
+                label: w.label,
+                expr: true,
+            });
+        }
+        _ => {}
+    }
+    let mut stmts = Vec::new();
+    stmts.push(s);
+    AstBlock { id: parse_id(p), pos: pos, stmts: stmts, tail: None, end: pos }
+}
+
+// parse_jump parses `return`, `break` or `continue` (with a label or a
+// value) up to its end, without the `;`.
+fn parse_jump(mut p: ParseState, sp: AstPos) -> AstStmt {
+    let k = parse_next(p).kind;
+    if k == "return" {
+        let mut value = None;
+        if !parse_jump_end(p) {
+            value = Some(parse_expr(p));
+        }
+        return AstStmt::Return(AstReturnStmt { id: parse_id(p), pos: sp, value: value });
+    }
+    let mut label = "";
+    if parse_at(p, "LABEL") {
+        label = parse_next(p).text;
+    }
+    if k == "continue" {
+        return AstStmt::Continue(AstContinueStmt { id: parse_id(p), pos: sp, label: label });
+    }
+    let mut value = None;
+    if !parse_jump_end(p) {
+        value = Some(parse_expr(p));
+    }
+    AstStmt::Break(AstBreakStmt { id: parse_id(p), pos: sp, label: label, value: value })
+}
+
+// parse_jump_end reports whether a `return` / `break` ends here (no value).
+fn parse_jump_end(p: ParseState) -> Bool {
+    parse_at(p, ";")
+        || parse_at(p, "}")
+        || parse_at(p, ",")
+        || parse_at(p, ")")
+        || parse_at(p, "]")
+        || parse_at(p, "EOF")
 }
 
 fn parse_block_like(e: AstExpr) -> Bool {
@@ -970,6 +1319,9 @@ fn parse_expr(p: ParseState) -> AstExpr {
     x
 }
 
+// parse_prec is the precedence of a binary operator (0: not one), as in
+// Rust: `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > comparisons > `&&` >
+// `||`.
 fn parse_prec(k: String) -> Int {
     if k == "||" {
         return 1;
@@ -980,13 +1332,56 @@ fn parse_prec(k: String) -> Int {
     if k == "==" || k == "!=" || k == "<" || k == "<=" || k == ">" || k == ">=" {
         return 3;
     }
-    if k == "+" || k == "-" {
+    if k == "|" {
         return 4;
     }
-    if k == "*" || k == "/" || k == "%" {
+    if k == "^" {
         return 5;
     }
+    if k == "&" {
+        return 6;
+    }
+    if k == "<<" || k == ">>" {
+        return 7;
+    }
+    if k == "+" || k == "-" {
+        return 8;
+    }
+    if k == "*" || k == "/" || k == "%" {
+        return 9;
+    }
     0
+}
+
+// parse_op returns the operator at the current token: its kind, or `<<`,
+// `>>`, `<<=`, `>>=` for adjacent `<` `<` / `<` `<=` (and `>`), which the
+// lexer keeps apart for nested generics (`Vec<Vec<Int>>`).
+fn parse_op(p: ParseState) -> String {
+    let t = parse_tok(p);
+    if (t.kind == "<" || t.kind == ">") && !p.failed {
+        match p.toks.get(p.pos + 1) {
+            Some(n) => {
+                if n.pos.line == t.pos.line && n.pos.col == t.pos.col + 1 {
+                    if n.kind == t.kind {
+                        return t.kind + t.kind;
+                    }
+                    if n.kind == t.kind + "=" {
+                        return t.kind + n.kind;
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    t.kind
+}
+
+// parse_skip_op consumes the tokens of the operator op (from parse_op).
+fn parse_skip_op(p: ParseState, op: String) {
+    parse_next(p);
+    if op == "<<" || op == ">>" || op == "<<=" || op == ">>=" {
+        parse_next(p);
+    }
 }
 
 fn parse_binary(p: ParseState, min_prec: Int) -> AstExpr {
@@ -997,20 +1392,350 @@ fn parse_binary(p: ParseState, min_prec: Int) -> AstExpr {
 fn parse_binary_rest(p: ParseState, x0: AstExpr, min_prec: Int) -> AstExpr {
     let mut x = x0;
     while true {
-        let op = parse_tok(p).kind;
+        let op = parse_op(p);
         let prec = parse_prec(op);
         if prec == 0 || prec <= min_prec {
             return x;
         }
-        let pos = parse_next(p).pos;
+        let pos = parse_tok(p).pos;
+        parse_skip_op(p, op);
         let y = parse_binary(p, prec);
-        if prec == 3 && parse_prec(parse_tok(p).kind) == 3 {
+        if prec == 3 && parse_prec(parse_op(p)) == 3 {
             // comparisons are non-associative
             parse_fail(p, parse_tok(p).pos, "comparison operators cannot be chained");
         }
-        x = AstExpr::Binary(AstBinary { id: parse_id(p), pos: pos, op: op, x: x, y: y });
+        x = AstExpr::Binary(AstBinary {
+            id: parse_id(p),
+            pos: pos,
+            op: op,
+            x: x,
+            y: y,
+            compound: false,
+        });
     }
     x
+}
+
+// parse_assign adds the assignment `target op= val` to b (op is "" for
+// `=`): `x = e`, `s.f = e` or `v[i] = e` (see AstFieldAssignStmt).
+fn parse_assign(
+    p: ParseState,
+    mut b: AstBlock,
+    sp: AstPos,
+    target: AstExpr,
+    op: String,
+    op_pos: AstPos,
+    val: AstExpr,
+) {
+    let mut value = val;
+    if op != "" {
+        match parse_reid(p, target) {
+            Some(x) => {
+                value = AstExpr::Binary(AstBinary {
+                    id: parse_id(p),
+                    pos: op_pos,
+                    op: op,
+                    x: x,
+                    y: val,
+                    compound: true,
+                });
+            }
+            None => {
+                parse_fail(
+                    p,
+                    sp,
+                    "the target of `"
+                        + op
+                        + "=` must be a variable, a field or an element `v[i]` without calls (it is read and written)",
+                );
+                return;
+            }
+        }
+    }
+    match target {
+        AstExpr::Ident(t) => b.stmts.push(
+            AstStmt::Assign(AstAssignStmt { id: parse_id(p), pos: sp, name: t.name, value: value }),
+        ),
+        AstExpr::Field(t) => b.stmts.push(
+            AstStmt::FieldAssign(AstFieldAssignStmt {
+                id: parse_id(p),
+                pos: sp,
+                target: t,
+                value: value,
+            }),
+        ),
+        AstExpr::Index(t) => {
+            let mut args = Vec::new();
+            args.push(t.index);
+            args.push(value);
+            let call = AstExpr::Method(AstMethodCall {
+                id: parse_id(p),
+                pos: t.pos,
+                recv: t.x,
+                name: "__index_set",
+                targs: Vec::new(),
+                args: args,
+            });
+            b.stmts.push(
+                AstStmt::Expr(AstExprStmt { id: parse_id(p), pos: sp, x: call, semi: true }),
+            );
+        }
+        _ => parse_fail(p, sp, "invalid assignment target"),
+    }
+}
+
+// parse_reid copies the target of a compound assignment with fresh ids
+// (None when it is not a path of variables, fields and elements: it is
+// evaluated twice).
+fn parse_reid(p: ParseState, e: AstExpr) -> Option<AstExpr> {
+    match e {
+        AstExpr::Ident(x) => Some(
+            AstExpr::Ident(AstIdent { id: parse_id(p), pos: x.pos, name: x.name, targs: x.targs }),
+        ),
+        AstExpr::IntLit(x) => Some(
+            AstExpr::IntLit(AstIntLit { id: parse_id(p), pos: x.pos, value: x.value }),
+        ),
+        AstExpr::FloatLit(x) => Some(
+            AstExpr::FloatLit(AstFloatLit {
+                id: parse_id(p),
+                pos: x.pos,
+                text: x.text,
+                bits: x.bits,
+            }),
+        ),
+        AstExpr::Field(x) => match parse_reid(p, x.x) {
+            Some(r) => Some(
+                AstExpr::Field(AstFieldExpr { id: parse_id(p), pos: x.pos, x: r, name: x.name }),
+            ),
+            None => None,
+        },
+        AstExpr::Index(x) => match parse_reid(p, x.x) {
+            Some(r) => match parse_reid(p, x.index) {
+                Some(i) => Some(
+                    AstExpr::Index(AstIndex { id: parse_id(p), pos: x.pos, x: r, index: i }),
+                ),
+                None => None,
+            },
+            None => None,
+        },
+        AstExpr::Unary(x) => if x.op == "&" || x.op == "&mut " {
+            None
+        } else {
+            match parse_reid(p, x.x) {
+                Some(r) => Some(
+                    AstExpr::Unary(AstUnary { id: parse_id(p), pos: x.pos, op: x.op, x: r }),
+                ),
+                None => None,
+            }
+        },
+        AstExpr::Binary(x) => match parse_reid(p, x.x) {
+            Some(l) => match parse_reid(p, x.y) {
+                Some(r) => Some(
+                    AstExpr::Binary(AstBinary {
+                        id: parse_id(p),
+                        pos: x.pos,
+                        op: x.op,
+                        x: l,
+                        y: r,
+                        compound: false,
+                    }),
+                ),
+                None => None,
+            },
+            None => None,
+        },
+        AstExpr::Method(x) => if x.name == "len" && x.args.len() == 0 && x.targs.len() == 0 {
+            match parse_reid(p, x.recv) {
+                Some(r) => Some(
+                    AstExpr::Method(AstMethodCall {
+                        id: parse_id(p),
+                        pos: x.pos,
+                        recv: r,
+                        name: x.name,
+                        targs: x.targs,
+                        args: x.args,
+                    }),
+                ),
+                None => None,
+            }
+        } else {
+            None
+        },
+        _ => None,
+    }
+}
+
+// parse_let_else desugars `let pat = init else { els };` (see AstLetStmt).
+fn parse_let_else(
+    p: ParseState,
+    sp: AstPos,
+    opat: Option<AstPattern>,
+    ty: Option<AstType>,
+    init: AstExpr,
+    ep: AstPos,
+    els: AstBlock,
+) -> AstStmt {
+    let pat = match opat {
+        Some(x) => x,
+        None => {
+            parse_fail(
+                p,
+                sp,
+                "`let ... else` needs a refutable pattern such as `Some(x)` (a plain `let` binds a variable)",
+            );
+            parse_wild(p, sp)
+        }
+    };
+    if ty.is_some() {
+        parse_fail(p, sp, "`let ... else` does not take a type annotation");
+    }
+    if !parse_block_diverges(els) {
+        parse_fail(
+            p,
+            ep,
+            "the `else` block of `let ... else` must diverge: end it with `return`, `break` or `continue`",
+        );
+    }
+    let mut binds = Vec::new();
+    parse_pat_binds(pat, binds);
+    let mut arms = Vec::new();
+    let mut elems = Vec::new();
+    let mut pats = Vec::new();
+    for bp in binds {
+        elems.push(
+            AstExpr::Ident(AstIdent {
+                id: parse_id(p),
+                pos: bp.pos,
+                name: bp.bind,
+                targs: Vec::new(),
+            }),
+        );
+        let mut lp = parse_wild(p, bp.pos);
+        lp.wildcard = false;
+        lp.bind = bp.bind;
+        lp.mutable = bp.mutable;
+        pats.push(lp);
+    }
+    let mut name = "_";
+    let mut mutable = false;
+    let mut lpat = None;
+    let mut body = AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: ep });
+    if pats.len() == 1 {
+        let bp = pats.get(0).unwrap_or(pat);
+        name = bp.bind;
+        mutable = bp.mutable;
+        body = elems.get(0).unwrap_or(body);
+    } else if pats.len() > 1 {
+        let mut tp = parse_wild(p, pat.pos);
+        tp.wildcard = false;
+        tp.tuple = true;
+        for x in pats {
+            tp.args.push(x);
+        }
+        lpat = Some(tp);
+        body = AstExpr::Tuple(AstTupleLit { id: parse_id(p), pos: pat.pos, elems: elems });
+    }
+    arms.push(AstMatchArm {
+        id: parse_id(p),
+        pos: pat.pos,
+        pat: pat,
+        guard: None,
+        body: body,
+        bare: false,
+    });
+    arms.push(AstMatchArm {
+        id: parse_id(p),
+        pos: ep,
+        pat: parse_wild(p, ep),
+        guard: None,
+        body: AstExpr::Block(els),
+        bare: false,
+    });
+    let m = AstExpr::Match(AstMatch { id: parse_id(p), pos: sp, x: init, arms: arms });
+    AstStmt::Let(AstLetStmt {
+        id: parse_id(p),
+        pos: sp,
+        mutable: mutable,
+        name: name,
+        pat: lpat,
+        ty: None,
+        init: m,
+        let_else: true,
+    })
+}
+
+// parse_wild is a wildcard pattern `_`.
+fn parse_wild(p: ParseState, pos: AstPos) -> AstPattern {
+    let mut w = ast_new_pattern(parse_id(p), pos);
+    w.wildcard = true;
+    w
+}
+
+// parse_pat_binds collects the variables a pattern binds, in order (a bare
+// uppercase name is a constructor).
+fn parse_pat_binds(pat: AstPattern, mut out: Vec<AstPattern>) {
+    match pat.alts.get(0) {
+        // every alternative of an or-pattern binds the same names
+        Some(a) => {
+            parse_pat_binds(a, out);
+            return;
+        }
+        None => {}
+    }
+    if pat.bind != "" && pat.ctor == "" && (pat.mutable || !parse_is_upper(pat.bind)) {
+        out.push(pat);
+    }
+    for a in pat.at {
+        parse_pat_binds(a, out);
+    }
+    for a in pat.args {
+        parse_pat_binds(a, out);
+    }
+}
+
+// parse_block_diverges reports whether a block syntactically ends in
+// `return`, `break` or `continue` (or `loop`, or an `if` / `match` whose
+// branches all do).
+fn parse_block_diverges(b: AstBlock) -> Bool {
+    match b.tail {
+        Some(t) => {
+            return parse_expr_diverges(t);
+        }
+        None => {}
+    }
+    match b.stmts.get(b.stmts.len() - 1) {
+        Some(s) => match s {
+            AstStmt::Return(_) => true,
+            AstStmt::Break(_) => true,
+            AstStmt::Continue(_) => true,
+            AstStmt::While(w) => w.is_loop,
+            AstStmt::Expr(x) => parse_expr_diverges(x.x),
+            _ => false,
+        },
+        None => false,
+    }
+}
+
+fn parse_expr_diverges(e: AstExpr) -> Bool {
+    match e {
+        AstExpr::Block(b) => parse_block_diverges(b),
+        AstExpr::If(x) => match x.els {
+            Some(els) => parse_block_diverges(x.then) && parse_expr_diverges(els),
+            None => false,
+        },
+        AstExpr::Match(m) => {
+            if m.arms.len() == 0 {
+                return false;
+            }
+            for a in m.arms {
+                if !parse_expr_diverges(a.body) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 fn parse_unary(p: ParseState) -> AstExpr {
@@ -1058,6 +1783,11 @@ fn parse_postfix(mut p: ParseState, x0: AstExpr) -> AstExpr {
             if parse_at(p, "INT") {
                 // tuple element `x.0`
                 let it = parse_next(p);
+                if it.text.contains("_")
+                    || it.text.contains("'")
+                    || (it.text.len() > 1 && it.text.starts_with("0")) {
+                    parse_fail(p, it.pos, "invalid tuple index `" + it.text + "`");
+                }
                 x = AstExpr::Field(AstFieldExpr {
                     id: parse_id(p),
                     pos: it.pos,
@@ -1104,7 +1834,11 @@ fn parse_postfix(mut p: ParseState, x0: AstExpr) -> AstExpr {
     x
 }
 
-fn parse_is_upper(s: String) -> Bool {
+fn parse_is_upper(s0: String) -> Bool {
+    // the global name `m$Name` of a module item (generated code,
+    // compiler/modres.kek)
+    let parts = s0.split("$");
+    let s = parts.get(parts.len() - 1).unwrap_or(s0);
     // runtime prelude types are spelled `__Name`
     let t = if s.starts_with("__") {
         s.slice(2, s.len())
@@ -1115,22 +1849,144 @@ fn parse_is_upper(s: String) -> Bool {
     c >= 65 && c <= 90
 }
 
-// parse_int_text parses a string of decimal digits as an Int (None when
-// out of range).
-fn parse_int_text(s: String) -> Option<Int> {
+// parse_int_text parses an integer literal as written (decimal, `0x`,
+// `0o` or `0b`, with `_` separators, or a character / byte literal) as an
+// Int (None when out of range or malformed; parse_int_error says why).
+fn parse_int_text(s0: String) -> Option<Int> {
+    let q = s0.char_at(0).unwrap_or(0);
+    if q == 39 || (q == 98 && s0.char_at(1).unwrap_or(0) == 39) {
+        return Some(parse_char_value(s0));
+    }
+    let s = s0.replace("_", "");
+    let mut radix = 10;
+    let mut start = 0;
+    if s.len() >= 2 && s.char_at(0).unwrap_or(0) == 48 {
+        let c1 = s.char_at(1).unwrap_or(0);
+        if c1 == 120 {
+            radix = 16;
+        } else if c1 == 111 {
+            radix = 8;
+        } else if c1 == 98 {
+            radix = 2;
+        }
+        if radix != 10 {
+            start = 2;
+        }
+    }
     let n = s.len();
-    if n == 0 {
+    if n <= start {
         return None;
     }
     let mut v = 0;
-    for i in 0..n {
-        let d = s.char_at(i).unwrap_or(0) - 48;
-        if v > (9223372036854775807 - d) / 10 {
+    for i in start..n {
+        let c = s.char_at(i).unwrap_or(0);
+        let mut d = 99;
+        if c >= 48 && c <= 57 {
+            d = c - 48;
+        } else if c >= 97 && c <= 102 {
+            d = c - 87;
+        } else if c >= 65 && c <= 70 {
+            d = c - 55;
+        }
+        if d >= radix {
             return None;
         }
-        v = v * 10 + d;
+        if v > (9223372036854775807 - d) / radix {
+            return None;
+        }
+        v = v * radix + d;
     }
     Some(v)
+}
+
+// parse_int_error is the message for an integer literal that
+// parse_int_text rejects.
+fn parse_int_error(s0: String) -> String {
+    let s = s0.replace("_", "");
+    let mut radix = 10;
+    let mut start = 0;
+    let mut name = "";
+    if s.starts_with("0x") {
+        radix = 16;
+        name = "hexadecimal";
+    } else if s.starts_with("0o") {
+        radix = 8;
+        name = "octal";
+    } else if s.starts_with("0b") {
+        radix = 2;
+        name = "binary";
+    }
+    if radix != 10 {
+        start = 2;
+        if s.len() == 2 {
+            return "no valid digits in " + name + " literal `" + s0 + "`";
+        }
+    }
+    for i in start..s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        let mut d = 99;
+        if c >= 48 && c <= 57 {
+            d = c - 48;
+        } else if c >= 97 && c <= 102 {
+            d = c - 87;
+        } else if c >= 65 && c <= 70 {
+            d = c - 55;
+        }
+        if d >= radix {
+            return "invalid digit `"
+                + String::from_char(c)
+                + "` in "
+                + name
+                + " literal `"
+                + s0
+                + "`";
+        }
+    }
+    "integer literal out of range"
+}
+
+// parse_char_value is the code point of a character literal `'a'` /
+// `b'a'` that the lexer accepted.
+fn parse_char_value(s: String) -> Int {
+    let mut i = 1;
+    if s.char_at(0).unwrap_or(0) == 98 {
+        i = 2;
+    }
+    let c = s.char_at(i).unwrap_or(0);
+    if c != 92 {
+        if c >= 55296 && c <= 56319 {
+            // a surrogate pair (the source text is UTF-16)
+            let lo = s.char_at(i + 1).unwrap_or(56320);
+            return 65536 + (c - 55296) * 1024 + (lo - 56320);
+        }
+        return c;
+    }
+    let e = s.char_at(i + 1).unwrap_or(0);
+    if e == 110 {
+        return 10;
+    }
+    if e == 114 {
+        return 13;
+    }
+    if e == 116 {
+        return 9;
+    }
+    if e == 48 {
+        return 0;
+    }
+    if e == 120 || e == 117 {
+        let mut v = 0;
+        let mut j = i + 2;
+        while j < s.len() - 1 {
+            let h = s.char_at(j).unwrap_or(0);
+            if lex_is_hex(h) {
+                v = v * 16 + lex_hex_val(h);
+            }
+            j = j + 1;
+        }
+        return v;
+    }
+    e
 }
 
 fn parse_primary(mut p: ParseState) -> AstExpr {
@@ -1143,9 +1999,33 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
             Some(n) => {
                 v = n;
             }
-            None => parse_fail(p, t.pos, "integer literal out of range"),
+            None => parse_fail(p, t.pos, parse_int_error(t.text)),
         }
         return AstExpr::IntLit(AstIntLit { id: parse_id(p), pos: t.pos, value: v });
+    }
+    if k == "FLOAT" {
+        parse_next(p);
+        let mut bits = 0;
+        match flit_bits(t.text) {
+            Some(b) => {
+                bits = b;
+                if b == 9218868437227405312 {
+                    // +inf
+                    parse_fail(
+                        p,
+                        t.pos,
+                        "float literal `" + t.text + "` is out of range for `Float`",
+                    );
+                }
+            }
+            None => parse_fail(p, t.pos, "invalid float literal `" + t.text + "`"),
+        }
+        return AstExpr::FloatLit(AstFloatLit {
+            id: parse_id(p),
+            pos: t.pos,
+            text: t.text,
+            bits: bits,
+        });
     }
     if k == "STRING" {
         parse_next(p);
@@ -1190,6 +2070,23 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
     if k == "match" {
         return parse_match(p);
     }
+    if k == "loop" || (k == "LABEL" && parse_peek_at(p, ":")) {
+        let st = parse_loop(p);
+        match st {
+            AstStmt::While(w) => {
+                if w.is_loop {
+                    return AstExpr::Block(parse_loop_block(p, st));
+                }
+            }
+            _ => {}
+        }
+        parse_fail(
+            p,
+            t.pos,
+            "a labeled `while` or `for` is a statement: only `loop` can be used as a value",
+        );
+        return AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: t.pos });
+    }
     if k == "|"
         || k == "||"
         || (k == "IDENT" && t.text == "move" && (parse_peek_at(p, "|") || parse_peek_at(p, "||"))) {
@@ -1197,15 +2094,47 @@ fn parse_primary(mut p: ParseState) -> AstExpr {
     }
     if k == "IDENT" {
         parse_next(p);
-        let ty_args = parse_turbofish(p);
+        if parse_at(p, "!") && (parse_peek_at(p, "(") || parse_peek_at(p, "[")) {
+            return mac_parse(p, t);
+        }
+        let mut ty_args = parse_turbofish(p);
         if parse_at(p, "::") {
+            parse_note_mod_path(p, t.text);
             parse_next(p);
-            let name = parse_expect(p, "IDENT");
-            let targs = parse_turbofish(p);
+            let mut ty = t.text;
+            let mut name = parse_expect(p, "IDENT");
+            let mut targs = parse_turbofish(p);
+            // a longer path `m::f`, `m::T::f`, `m::E::V` (compiler/modres.kek)
+            while parse_at(p, "::") && parse_peek_at(p, "IDENT") && !p.failed {
+                parse_next(p);
+                if ty_args.len() > 0 {
+                    parse_fail(
+                        p,
+                        name.pos,
+                        "type arguments are only allowed on the last two segments of a path",
+                    );
+                }
+                ty = ty + "::" + name.text;
+                ty_args = targs;
+                name = parse_expect(p, "IDENT");
+                targs = parse_turbofish(p);
+            }
+            if ty_args.len() == 0
+                && targs.len() == 0
+                && parse_at(p, "{")
+                && !p.no_struct
+                && parse_is_upper(name.text) {
+                // struct-like variant `E::V { f: e }` (or a struct `m::S { f: e }`)
+                return parse_struct_lit(p, Tok {
+                    kind: "IDENT",
+                    text: ty + "::" + name.text,
+                    pos: t.pos,
+                });
+            }
             return AstExpr::Path(AstPathExpr {
                 id: parse_id(p),
                 pos: t.pos,
-                ty: t.text,
+                ty: ty,
                 ty_args: ty_args,
                 name: name.text,
                 targs: targs,
@@ -1307,7 +2236,7 @@ fn parse_if(mut p: ParseState) -> AstIf {
     let pos = parse_expect(p, "if").pos;
     let mut pat = None;
     if parse_accept(p, "let") {
-        pat = Some(parse_pattern(p));
+        pat = Some(parse_top_pattern(p));
         parse_expect(p, "=");
     }
     let saved = p.no_struct;
@@ -1336,12 +2265,62 @@ fn parse_match(mut p: ParseState) -> AstExpr {
     parse_expect(p, "{");
     while !parse_at(p, "}") {
         let ap = parse_tok(p).pos;
-        let pat = parse_pattern(p);
+        let pat = parse_top_pattern(p);
+        let mut guard = None;
+        if parse_accept(p, "if") {
+            guard = Some(parse_expr(p));
+        }
         parse_expect(p, "=>");
-        let body = parse_expr(p);
-        m.arms.push(AstMatchArm { id: parse_id(p), pos: ap, pat: pat, body: body });
+        let bp = parse_tok(p).pos;
+        let mut bare = false;
+        let mut body = AstExpr::UnitLit(AstUnitLit { id: 0, pos: bp });
+        if parse_at(p, "return") || parse_at(p, "break") || parse_at(p, "continue") {
+            // `None => break,`: a statement as the arm's body
+            let mut blk = AstBlock {
+                id: parse_id(p),
+                pos: bp,
+                stmts: Vec::new(),
+                tail: None,
+                end: bp,
+            };
+            blk.stmts.push(parse_jump(p, bp));
+            body = AstExpr::Block(blk);
+            bare = true;
+        } else {
+            body = parse_expr(p);
+            let aop = parse_op(p);
+            if aop == "=" || (aop.ends_with("=") && parse_prec(aop.slice(0, aop.len() - 1)) >= 4) {
+                // `Some(x) => total += x,`: an assignment as the arm's body
+                let op_pos = parse_tok(p).pos;
+                parse_skip_op(p, aop);
+                let val = parse_expr(p);
+                let op = if aop == "=" {
+                    ""
+                } else {
+                    aop.slice(0, aop.len() - 1)
+                };
+                let blk = AstBlock {
+                    id: parse_id(p),
+                    pos: bp,
+                    stmts: Vec::new(),
+                    tail: None,
+                    end: bp,
+                };
+                parse_assign(p, blk, bp, body, op, op_pos, val);
+                body = AstExpr::Block(blk);
+                bare = true;
+            }
+        }
+        m.arms.push(AstMatchArm {
+            id: parse_id(p),
+            pos: ap,
+            pat: pat,
+            guard: guard,
+            body: body,
+            bare: bare,
+        });
         if !parse_accept(p, ",") {
-            if parse_block_like(body) && !p.failed {
+            if parse_block_like(body) && !bare && !p.failed {
                 continue;
             }
             break;
@@ -1351,22 +2330,61 @@ fn parse_match(mut p: ParseState) -> AstExpr {
     AstExpr::Match(m)
 }
 
+// parse_top_pattern parses the pattern of a match arm, `if let` or
+// `while let`, which may start with `|`.
+fn parse_top_pattern(p: ParseState) -> AstPattern {
+    parse_accept(p, "|");
+    parse_pattern(p)
+}
+
+// parse_pattern parses a pattern, an or-pattern `p | q | ...` included.
 fn parse_pattern(p: ParseState) -> AstPattern {
+    let pos = parse_tok(p).pos;
+    let first = parse_pattern_no_alt(p);
+    if !parse_at(p, "|") {
+        return first;
+    }
+    let mut pat = ast_new_pattern(parse_id(p), pos);
+    pat.alts.push(first);
+    while parse_accept(p, "|") {
+        pat.alts.push(parse_pattern_no_alt(p));
+    }
+    pat
+}
+
+// parse_kind_ahead is the kind of the token n places after the current one.
+fn parse_kind_ahead(p: ParseState, n: Int) -> String {
+    if p.failed {
+        return "";
+    }
+    match p.toks.get(p.pos + n) {
+        Some(t) => t.kind,
+        None => "",
+    }
+}
+
+// parse_pattern_int parses an integer literal pattern, optionally negated.
+fn parse_pattern_int(p: ParseState) -> Int {
+    let neg = parse_accept(p, "-");
+    let it = parse_expect(p, "INT");
+    let mut v = 0;
+    match parse_int_text(it.text) {
+        Some(n) => {
+            v = n;
+        }
+        None => parse_fail(p, it.pos, parse_int_error(it.text)),
+    }
+    if neg {
+        v = -v;
+    }
+    v
+}
+
+// parse_pattern_no_alt parses a pattern other than an or-pattern (one
+// alternative of it).
+fn parse_pattern_no_alt(p: ParseState) -> AstPattern {
     let t = parse_tok(p);
-    let mut pat = AstPattern {
-        id: parse_id(p),
-        pos: t.pos,
-        wildcard: false,
-        tuple: false,
-        mutable: false,
-        bind: "",
-        ty: "",
-        ctor: "",
-        args: Vec::new(),
-        int_value: None,
-        bool_lit: None,
-        str_value: None,
-    };
+    let mut pat = ast_new_pattern(parse_id(p), t.pos);
     let k = t.kind;
     if k == "_" {
         parse_next(p);
@@ -1391,6 +2409,22 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         pat.tuple = true;
         return pat;
     }
+    if (k == "IDENT" && parse_peek_at(p, "@"))
+        || (k == "mut" && parse_peek_at(p, "IDENT") && parse_kind_ahead(p, 2) == "@") {
+        // `name @ p`
+        pat.mutable = parse_accept(p, "mut");
+        pat.bind = parse_expect(p, "IDENT").text;
+        parse_expect(p, "@");
+        pat.at.push(parse_pattern_no_alt(p));
+        return pat;
+    }
+    if k == "..=" {
+        parse_next(p);
+        pat.range = true;
+        pat.range_incl = true;
+        pat.range_hi = Some(parse_pattern_int(p));
+        return pat;
+    }
     if k == "mut" {
         parse_next(p);
         let it = parse_expect(p, "IDENT");
@@ -1399,17 +2433,19 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         return pat;
     }
     if k == "INT" || k == "-" {
-        let neg = parse_accept(p, "-");
-        let it = parse_expect(p, "INT");
-        let mut v = 0;
-        match parse_int_text(it.text) {
-            Some(n) => {
-                v = n;
+        let v = parse_pattern_int(p);
+        if parse_at(p, "..=") || parse_at(p, "..") {
+            // `lo..=hi`, `lo..hi` or `lo..`
+            pat.range = true;
+            pat.range_lo = Some(v);
+            pat.range_incl = parse_at(p, "..=");
+            parse_next(p);
+            if parse_at(p, "INT") || parse_at(p, "-") {
+                pat.range_hi = Some(parse_pattern_int(p));
+            } else if pat.range_incl {
+                parse_fail(p, parse_tok(p).pos, "expected the end of the range pattern");
             }
-            None => parse_fail(p, it.pos, "integer literal out of range"),
-        }
-        if neg {
-            v = -v;
+            return pat;
         }
         pat.int_value = Some(v);
         return pat;
@@ -1428,8 +2464,15 @@ fn parse_pattern(p: ParseState) -> AstPattern {
         parse_next(p);
         let mut name = t.text;
         if parse_accept(p, "::") {
+            parse_note_mod_path(p, t.text);
             pat.ty = name;
             name = parse_expect(p, "IDENT").text;
+            while parse_at(p, "::") && parse_peek_at(p, "IDENT") {
+                // a path `m::E::V` / `m::S` (compiler/modres.kek)
+                parse_next(p);
+                pat.ty = pat.ty + "::" + name;
+                name = parse_expect(p, "IDENT").text;
+            }
             pat.ctor = name;
         }
         if parse_accept(p, "(") {
@@ -1441,6 +2484,35 @@ fn parse_pattern(p: ParseState) -> AstPattern {
                 }
             }
             parse_expect(p, ")");
+            return pat;
+        }
+        if parse_at(p, "{") && parse_is_upper(name) {
+            // struct pattern `S { a, b: p, mut c, .. }`
+            parse_next(p);
+            pat.ctor = name;
+            pat.brace = true;
+            while !parse_at(p, "}") {
+                if parse_accept(p, "..") {
+                    pat.rest = true;
+                    break;
+                }
+                let ft = parse_tok(p);
+                let fmut = parse_accept(p, "mut");
+                let fname = parse_expect(p, "IDENT").text;
+                if !fmut && parse_accept(p, ":") {
+                    pat.args.push(parse_pattern(p));
+                } else {
+                    let mut fp = ast_new_pattern(parse_id(p), ft.pos);
+                    fp.mutable = fmut;
+                    fp.bind = fname;
+                    pat.args.push(fp);
+                }
+                pat.fields.push(fname);
+                if !parse_accept(p, ",") {
+                    break;
+                }
+            }
+            parse_expect(p, "}");
             return pat;
         }
         if pat.ctor == "" {

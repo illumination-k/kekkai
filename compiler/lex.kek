@@ -1,10 +1,17 @@
 // Lexer.
 //
-// Token kinds are strings: "EOF", "IDENT", "INT", "STRING" for the token
-// classes, and the source spelling for keywords and punctuation ("fn",
-// "(", "->", ...). The lexer scans the UTF-8 bytes of the source (columns
-// count bytes) and keeps a parallel UTF-16 offset so that token texts can
-// be sliced from the source string.
+// Token kinds are strings: "EOF", "IDENT", "INT", "FLOAT", "STRING", "LABEL" for
+// the token classes, and the source spelling for keywords and punctuation
+// ("fn", "(", "->", ...). An INT token's text is the literal as written:
+// decimal or `0x`/`0o`/`0b`, with `_` separators, or a character / byte
+// literal (`'a'`, `'\n'`, `b'a'`); the parser computes its value. A FLOAT
+// token is a decimal literal with a fraction and/or an exponent (`1.5`,
+// `1e10`, `2.5e-3`, `1_000.5`), also kept as written. A LABEL
+// is `'name` not closed by a quote (reserved for loop labels).
+//
+// The lexer scans the UTF-8 bytes of the source (columns count bytes) and
+// keeps a parallel UTF-16 offset so that token texts can be sliced from
+// the source string.
 
 struct Tok {
     kind: String,
@@ -57,8 +64,14 @@ fn lex_kind_name(k: String) -> String {
     if k == "INT" {
         return "integer literal";
     }
+    if k == "FLOAT" {
+        return "float literal";
+    }
     if k == "STRING" {
         return "string literal";
+    }
+    if k == "LABEL" {
+        return "label";
     }
     "`" + k + "`"
 }
@@ -71,6 +84,7 @@ fn lex_is_keyword(w: String) -> Bool {
         || w == "else"
         || w == "match"
         || w == "while"
+        || w == "loop"
         || w == "return"
         || w == "true"
         || w == "false"
@@ -124,6 +138,13 @@ fn lex_is_ident_start(c: Int) -> Bool {
     c == 95 || (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
 }
 
+// lex_digits skips decimal digits and `_` separators.
+fn lex_digits(mut lx: LexState) {
+    while lx.off < lx.n && (lex_is_digit(lex_peek(lx, 0)) || lex_peek(lx, 0) == 95) {
+        lex_advance(lx);
+    }
+}
+
 fn lex_is_digit(c: Int) -> Bool {
     c >= 48 && c <= 57
 }
@@ -159,12 +180,19 @@ fn lex_two_char(a: Int, b: Int) -> String {
     if a == 46 && b == 46 {
         return "..";
     }
+    // compound assignment `+=` ... `^=` (`<<=` and `>>=` are lexed as `<`
+    // `<=` and `>` `>=` and joined by the parser, like `<<` and `>>`)
+    if b == 61
+        && (a == 43 || a == 45 || a == 42 || a == 47 || a == 37 || a == 38 || a == 124 || a == 94) {
+        return String::from_char(a) + "=";
+    }
     ""
 }
 
 fn lex_one_char(c: Int) -> String {
-    // ( ) { } [ ] , ; : . & | ? # ! = < > + - * / %
+    // ( ) { } [ ] , ; : . & | ? # ! = < > + - * / % @ ^
     if c == 40
+        || c == 94
         || c == 41
         || c == 123
         || c == 125
@@ -186,7 +214,8 @@ fn lex_one_char(c: Int) -> String {
         || c == 45
         || c == 42
         || c == 47
-        || c == 37 {
+        || c == 37
+        || c == 64 {
         return String::from_char(c);
     }
     ""
@@ -313,10 +342,22 @@ fn lex_run(lx: LexState) {
                 lex_advance(lx);
                 lex_comment(lx, pos, ustart);
             }
+        } else if c == 98 && lex_peek(lx, 1) == 39 {
+            // byte literal b'a'
+            let start = lx.uoff;
+            lex_advance(lx);
+            lex_char_lit(lx, pos, start, true);
+        } else if c == 39 {
+            lex_char_lit(lx, pos, lx.uoff, false);
         } else if lex_is_ident_start(c) {
             let start = lx.uoff;
+            // `$` continues an identifier only in the module-qualified
+            // names of generated code (compiler/modres.kek; parse_file_at
+            // rejects it in sources)
             while lx.off < lx.n
-                && (lex_is_ident_start(lex_peek(lx, 0)) || lex_is_digit(lex_peek(lx, 0))) {
+                && (lex_is_ident_start(lex_peek(lx, 0))
+                    || lex_is_digit(lex_peek(lx, 0))
+                    || lex_peek(lx, 0) == 36) {
                 lex_advance(lx);
             }
             let word = lx.src.slice(start, lx.uoff);
@@ -333,10 +374,46 @@ fn lex_run(lx: LexState) {
             }
         } else if lex_is_digit(c) {
             let start = lx.uoff;
-            while lx.off < lx.n && (lex_is_digit(lex_peek(lx, 0)) || lex_peek(lx, 0) == 95) {
+            let mut kind = "INT";
+            let c1 = lex_peek(lx, 1);
+            if c == 48 && (c1 == 120 || c1 == 111 || c1 == 98) {
+                // 0x / 0o / 0b: the parser checks the digits
                 lex_advance(lx);
+                lex_advance(lx);
+                while lx.off < lx.n
+                    && (lex_is_ident_start(lex_peek(lx, 0)) || lex_is_digit(lex_peek(lx, 0))) {
+                    lex_advance(lx);
+                }
+            } else {
+                lex_digits(lx);
+                // a fraction `.5` and an exponent `e10` make a FLOAT; not
+                // after `.` (`t.0.1` is two tuple fields) and not `1..2`
+                // or `1.max(2)` (a digit must follow the dot)
+                let after_dot = match lx.toks.get(lx.toks.len() - 1) {
+                    Some(t) => t.kind == ".",
+                    None => false,
+                };
+                if !after_dot {
+                    if lex_peek(lx, 0) == 46 && lex_is_digit(lex_peek(lx, 1)) {
+                        lex_advance(lx);
+                        lex_digits(lx);
+                        kind = "FLOAT";
+                    }
+                    let e = lex_peek(lx, 0);
+                    let e1 = lex_peek(lx, 1);
+                    if (e == 101 || e == 69)
+                        && (lex_is_digit(e1)
+                            || ((e1 == 43 || e1 == 45) && lex_is_digit(lex_peek(lx, 2)))) {
+                        lex_advance(lx);
+                        if e1 == 43 || e1 == 45 {
+                            lex_advance(lx);
+                        }
+                        lex_digits(lx);
+                        kind = "FLOAT";
+                    }
+                }
             }
-            lex_emit(lx, "INT", lx.src.slice(start, lx.uoff).replace("_", ""), pos);
+            lex_emit(lx, kind, lx.src.slice(start, lx.uoff), pos);
         } else if c == 34 {
             lex_string(lx, pos);
         } else {
@@ -462,4 +539,130 @@ fn lex_unexpected_rune(lx: LexState, pos: AstPos) {
         q = lx.src.slice(ustart, lx.uoff);
     }
     lex_error(lx, pos, "unexpected character '" + q + "'");
+}
+
+fn lex_is_hex(c: Int) -> Bool {
+    lex_is_digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70)
+}
+
+fn lex_hex_val(c: Int) -> Int {
+    if c >= 97 {
+        return c - 87;
+    }
+    if c >= 65 {
+        return c - 55;
+    }
+    c - 48
+}
+
+// lex_char_lit scans a character literal `'a'` (or a byte literal `b'a'`,
+// whose `b` is consumed already) from its opening quote, and emits it as
+// an INT token spelled as written (from ustart). `'name` not followed by a
+// quote is a LABEL.
+fn lex_char_lit(lx: LexState, pos: AstPos, ustart: Int, byte: Bool) {
+    lex_advance(lx); // opening quote
+    let c = lex_peek(lx, 0);
+    if lx.off >= lx.n || c == 10 || c == 13 {
+        lex_error(lx, pos, "unterminated character literal");
+        lex_emit(lx, "INT", "0", pos);
+        return;
+    }
+    if c == 39 {
+        lex_advance(lx);
+        lex_error(lx, pos, "empty character literal");
+        lex_emit(lx, "INT", "0", pos);
+        return;
+    }
+    if c == 92 {
+        lex_advance(lx);
+        let e = lex_peek(lx, 0);
+        let epos = AstPos { file: lx.file, line: lx.line, col: lx.col - 1 };
+        if e == 110 || e == 114 || e == 116 || e == 92 || e == 39 || e == 34 || e == 48 {
+            lex_advance(lx);
+        } else if e == 120 {
+            lex_advance(lx);
+            let h1 = lex_peek(lx, 0);
+            let h2 = lex_peek(lx, 1);
+            if !lex_is_hex(h1) || !lex_is_hex(h2) {
+                lex_error(lx, epos, "invalid escape: `\\x` takes two hex digits");
+            } else {
+                lex_advance(lx);
+                lex_advance(lx);
+                if !byte && lex_hex_val(h1) > 7 {
+                    lex_error(
+                        lx,
+                        epos,
+                        "`\\x` escape out of range: a character literal takes at most `\\x7f` (write `\\u{...}`)",
+                    );
+                }
+            }
+        } else if e == 117 && !byte {
+            lex_advance(lx);
+            let mut ok = lex_peek(lx, 0) == 123;
+            let mut v = 0;
+            let mut nd = 0;
+            if ok {
+                lex_advance(lx);
+                while lex_is_hex(lex_peek(lx, 0)) || lex_peek(lx, 0) == 95 {
+                    let h = lex_advance(lx);
+                    if h != 95 {
+                        if nd < 8 {
+                            v = v * 16 + lex_hex_val(h);
+                        }
+                        nd = nd + 1;
+                    }
+                }
+                ok = lex_peek(lx, 0) == 125 && nd >= 1 && nd <= 6;
+                if lex_peek(lx, 0) == 125 {
+                    lex_advance(lx);
+                }
+            }
+            if !ok {
+                lex_error(
+                    lx,
+                    epos,
+                    "invalid unicode escape: write `\\u{` and 1 to 6 hex digits `}`",
+                );
+            } else if v > 1114111 || (v >= 55296 && v <= 57343) {
+                lex_error(lx, epos, "invalid unicode escape: not a Unicode scalar value");
+            }
+        } else {
+            lex_error(lx, epos, "unknown character escape \\" + String::from_char(e));
+            if e != 39 && e != 10 && lx.off < lx.n {
+                lex_advance(lx);
+            }
+        }
+    } else {
+        // one character: a UTF-8 sequence
+        lex_advance(lx);
+        while lx.off < lx.n && lex_peek(lx, 0) >= 128 && lex_peek(lx, 0) < 192 {
+            lex_advance(lx);
+        }
+        if lex_peek(lx, 0) != 39 && lex_is_ident_start(c) && !byte {
+            // `'name`: a label, not a character literal
+            while lx.off < lx.n
+                && (lex_is_ident_start(lex_peek(lx, 0)) || lex_is_digit(lex_peek(lx, 0))) {
+                lex_advance(lx);
+            }
+            if lex_peek(lx, 0) == 39 {
+                // `'ab'`
+                lex_advance(lx);
+                lex_error(lx, pos, "a character literal holds one character (strings use `\"`)");
+                lex_emit(lx, "INT", "0", pos);
+                return;
+            }
+            lex_emit(lx, "LABEL", lx.src.slice(ustart, lx.uoff), pos);
+            return;
+        }
+        if byte && c >= 128 {
+            lex_error(lx, pos, "non-ASCII character in a byte literal (write `\\x..`)");
+        }
+    }
+    if lex_peek(lx, 0) != 39 {
+        lex_error(lx, pos, "unterminated character literal");
+        lex_emit(lx, "INT", "0", pos);
+        return;
+    }
+    lex_advance(lx);
+    lex_emit(lx, "INT", lx.src.slice(ustart, lx.uoff), pos);
 }

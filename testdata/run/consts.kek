@@ -1,0 +1,69 @@
+// Constants: `const NAME: T = e;` at the top level and associated
+// constants in impl blocks (`P::ORIGIN`, `Self::ORIGIN`). A constant is
+// evaluated at each use; its initializer is pure.
+
+const LIMIT: Int = 10;
+const GREETING: String = "hello";
+const DOUBLE_LIMIT: Int = LIMIT * 2;
+const PRIMES: Vec<Int> = primes_below(LIMIT);
+const ADD_ONE: fn(Int) -> Int = |x| x + 1;
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Point {
+    const ORIGIN_X: Int = 0;
+    const ORIGIN: Point = Point { x: Self::ORIGIN_X, y: 0 };
+
+    fn dist1(&self) -> Int {
+        (self.x - Self::ORIGIN.x).abs() + (self.y - Point::ORIGIN.y).abs()
+    }
+}
+
+fn primes_below(n: Int) -> Vec<Int> {
+    let mut out = Vec::new();
+    for i in 2..n {
+        let mut prime = true;
+        for d in 2..i {
+            if i % d == 0 {
+                prime = false;
+            }
+        }
+        if prime {
+            out.push(i);
+        }
+    }
+    out
+}
+
+fn clamp(x: Int) -> Int {
+    if x > LIMIT { LIMIT } else { x }
+}
+
+// an integer constant in a pattern matches its value
+fn at_limit(x: Int) -> String {
+    match x {
+        LIMIT => "limit",
+        0 => "zero",
+        _ => "other",
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    log.info(GREETING + " " + LIMIT.to_string() + " " + DOUBLE_LIMIT.to_string());
+    log.info(clamp(3).to_string() + " " + clamp(30).to_string());
+    let mut ps = PRIMES;
+    ps.push(11);
+    // a fresh value at each use
+    log.info(ps.len().to_string() + " " + PRIMES.len().to_string());
+    log.info(ADD_ONE(41).to_string());
+    let p = Point { x: 3, y: -4 };
+    log.info(p.dist1().to_string() + " " + Point::ORIGIN.x.to_string());
+    log.info(Int::MAX.to_string() + " " + Int::MIN.to_string());
+    log.info((Int::MAX + 1 == Int::MIN).to_string());
+    log.info(at_limit(10) + " " + at_limit(0) + " " + at_limit(5));
+    0
+}

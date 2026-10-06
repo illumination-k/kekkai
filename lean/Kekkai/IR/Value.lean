@@ -1,4 +1,5 @@
 import Kekkai.IR.Syntax
+import Kekkai.IR.Float
 
 /-!
 # Runtime values and the heap
@@ -16,6 +17,8 @@ inductive Val where
   | bool (b : Bool)
   /-- always within the signed 64-bit range -/
   | int (i : Int)
+  /-- IEEE 754 binary64 -/
+  | float (f : Float)
   | str (s : String)
   /-- reference to a heap object (struct or Vec) -/
   | ref (addr : Nat)
@@ -72,6 +75,7 @@ def Ty.default (t : Ty) : Val :=
   | .unit => .unit
   | .bool => .bool false
   | .int => .int 0
+  | .float => .float (fOfBits 0)
   | .string | .ext | .agg => .null
 
 end Kekkai.IR

@@ -1,0 +1,33 @@
+// Refinement types and constants: an integer constant with a literal value
+// is known, in bodies and in predicates.
+
+const LIMIT: Int = 3;
+
+type Small = Int where 0 <= self && self < LIMIT;
+
+struct Buf {
+    n: Small,
+}
+
+impl Buf {
+    const CAP: Int = 4;
+}
+
+fn third(v: Vec<Int>) -> Int {
+    if v.len() > LIMIT { v[LIMIT] } else { 0 }
+}
+
+fn cap(v: Vec<Int>) -> Int
+where
+    v.len() > Buf::CAP,
+{
+    v[3]
+}
+
+fn mk() -> Buf {
+    Buf { n: LIMIT - 1 }
+}
+
+fn bad() -> Buf {
+    Buf { n: LIMIT } // ERROR "cannot prove field `n` is a `Small` (`0 <= self && self < 3`)"
+}

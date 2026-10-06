@@ -104,6 +104,13 @@ struct MuCx {
     // readonly mode (mu_readonly): owned parameters are taken as shared
     mut ro: Bool,
     flow: Vec<AstError>,
+    // enclosing loops (ids, innermost last), their labels, the values of
+    // the `loop`s (joined over their `break`s) and the `loop` that ends the
+    // function body (its `break` values are returned; -1 if none)
+    mut loops: Vec<Int>,
+    loop_labels: HashMap<Int, String>,
+    loop_vals: HashMap<Int, MuVal>,
+    mut ret_loop: Int,
 }
 
 // mu_enforce reports whether the rules are errors. It was false while the
@@ -215,6 +222,10 @@ fn mu_new_cx(info: ChkInfo, f: AstFile) -> MuCx {
         seen: HashMap::new(),
         ro: false,
         flow: Vec::new(),
+        loops: Vec::new(),
+        loop_labels: HashMap::new(),
+        loop_vals: HashMap::new(),
+        ret_loop: -1,
     };
     mu_relevance(cx);
     for sd in f.structs {
@@ -352,9 +363,17 @@ fn mu_rel_shape(cx: MuCx, t: Ty, params: Bool) -> Bool {
         Ty::Result(a, b) => mu_rel_shape(cx, ty_prune(a), params)
             || mu_rel_shape(cx, ty_prune(b), params),
         Ty::Tuple(ts) => mu_rel_any(cx, ts, params),
-        Ty::Struct(st, args) => cx.always.contains_key(st.name) || mu_rel_any(cx, args, params),
+        Ty::Struct(st, args) => mu_abstract(t)
+            || cx.always.contains_key(st.name)
+            || mu_rel_any(cx, args, params),
         Ty::Enum(en, args) => cx.always.contains_key(en.name) || mu_rel_any(cx, args, params),
     }
+}
+
+// mu_abstract reports a trait object or opaque type (`dyn Trait`, `impl
+// Trait`): like a type parameter, its values may hold mutable state.
+fn mu_abstract(t: Ty) -> Bool {
+    ty_is_dyn(t) || ty_is_opaque_impl(t)
 }
 
 fn mu_rel_any(cx: MuCx, ts: Vec<Ty>, params: Bool) -> Bool {
@@ -603,11 +622,17 @@ fn mu_store(cx: MuCx, v: MuVal, demand: Int, e: AstExpr, dest: String) {
     if v.view <= demand {
         return;
     }
+    // the local of a `vec![..]` expansion (compiler/macro.kek)
+    let place = if dest.starts_with("`__vec") {
+        "`vec![..]`"
+    } else {
+        dest
+    };
     mu_error(
         cx,
         ast_expr_pos(e),
         "cannot store a borrowed value in "
-            + dest
+            + place
             + ": it comes from "
             + v.src
             + " ("
@@ -656,6 +681,10 @@ fn mu_func(mut cx: MuCx, fun: ChkFunc) {
     cx.ret_ty = match fun.decl.result {
         Some(t) => fmt_typ(t),
         None => "()",
+    };
+    cx.ret_loop = match ast_block_loop(fun.decl.body) {
+        Some(w) => w.id,
+        None => -1,
     };
     let v = mu_block(cx, fun.decl.body);
     match fun.decl.body.tail {
@@ -838,8 +867,20 @@ fn mu_block(cx: MuCx, b: AstBlock) -> MuVal {
     }
     match b.tail {
         Some(e) => mu_expr(cx, e),
-        None => mu_val(0),
+        None => match ast_block_loop(b) {
+            // a trailing `loop`: the value of its `break`s
+            Some(w) => mu_temp(cx.loop_vals.get(w.id).unwrap_or(mu_val(0))),
+            None => mu_val(0),
+        },
     }
+}
+
+// mu_loop_body checks the body of the loop with the given id and label.
+fn mu_loop_body(mut cx: MuCx, id: Int, label: String, body: AstBlock) {
+    cx.loop_labels.insert(id, label);
+    cx.loops.push(id);
+    mu_block(cx, body);
+    cx.loops.pop();
 }
 
 fn mu_new_bind(
@@ -954,7 +995,26 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
                 mu_store(cx, v, d, s.value, "field `" + s.target.name + "`");
             }
         }
-        AstStmt::Break(_) => {}
+        AstStmt::Break(s) => match s.value {
+            Some(e) => {
+                let v = mu_expr(cx, e);
+                let mut labels = Vec::new();
+                for id in cx.loops {
+                    labels.push(cx.loop_labels.get(id).unwrap_or(""));
+                }
+                match cx.loops.get(ast_loop_target(labels, s.label)) {
+                    Some(id) => {
+                        let old = cx.loop_vals.get(id).unwrap_or(mu_val(0));
+                        cx.loop_vals.insert(id, mu_join(old, v));
+                        if id == cx.ret_loop {
+                            mu_return(cx, v, e);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        },
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             let v = mu_expr(cx, s.cond);
@@ -962,7 +1022,7 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
                 Some(pat) => mu_pattern(cx, pat, v),
                 None => {}
             }
-            mu_block(cx, s.body);
+            mu_loop_body(cx, s.id, s.label, s.body);
         }
         AstStmt::For(s) => {
             let it = mu_expr(cx, s.iter);
@@ -995,7 +1055,7 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
                     None => {}
                 },
             }
-            mu_block(cx, s.body);
+            mu_loop_body(cx, s.id, s.label, s.body);
         }
         AstStmt::Return(s) => match s.value {
             Some(e) => {
@@ -1014,7 +1074,23 @@ fn mu_stmt(mut cx: MuCx, s0: AstStmt) {
 fn mu_pattern(mut cx: MuCx, p: AstPattern, v: MuVal) {
     match cx.info.patterns.get(p.id) {
         Some(pi) => {
-            if pi.kind == "bind" {
+            if pi.kind == "or" {
+                // the alternatives bind the same variables
+                for a in p.alts {
+                    mu_pattern(cx, a, v);
+                }
+                // `kek fix` would have to add `mut` in every alternative
+                for cb in chk_pat_bindings(cx.info, p) {
+                    match cx.binds.get(cb.id) {
+                        Some(mut b) => {
+                            b.kind = "";
+                        }
+                        None => {}
+                    }
+                }
+                return;
+            }
+            if pi.kind == "bind" || pi.kind == "at" {
                 match pi.bind {
                     Some(cb) => {
                         let rel = mu_rel(cx, cb.ty);
@@ -1037,6 +1113,10 @@ fn mu_pattern(mut cx: MuCx, p: AstPattern, v: MuVal) {
                     }
                     None => {}
                 }
+                // `x @ p`: p is matched against the same value
+                for a in p.at {
+                    mu_pattern(cx, a, v);
+                }
                 return;
             }
             let sub = MuVal { view: mu_elem(v.view), mutable: true, root: 0, path: "", src: v.src };
@@ -1053,6 +1133,7 @@ fn mu_pattern(mut cx: MuCx, p: AstPattern, v: MuVal) {
 fn mu_expr(cx: MuCx, e0: AstExpr) -> MuVal {
     match e0 {
         AstExpr::IntLit(_) => mu_val(0),
+        AstExpr::FloatLit(_) => mu_val(0),
         AstExpr::BoolLit(_) => mu_val(0),
         AstExpr::StrLit(_) => mu_val(0),
         AstExpr::UnitLit(_) => mu_val(0),
@@ -1139,6 +1220,12 @@ fn mu_expr(cx: MuCx, e0: AstExpr) -> MuVal {
             let mut out = mu_val(0);
             for arm in e.arms {
                 mu_pattern(cx, arm.pat, x);
+                match arm.guard {
+                    Some(g) => {
+                        mu_expr(cx, g);
+                    }
+                    None => {}
+                }
                 out = mu_join(out, mu_expr(cx, arm.body));
             }
             out
@@ -1182,6 +1269,7 @@ fn mu_expr(cx: MuCx, e0: AstExpr) -> MuVal {
             };
             MuVal { view: view, mutable: b.mutable, root: b.root, path: "", src: b.src }
         }
+        AstExpr::Macro(e) => mu_expr(cx, e.expansion),
         AstExpr::StructLit(e) => {
             let mut taint = 0;
             let mut src = "";
@@ -1900,6 +1988,9 @@ fn mu_contents_rel(cx: MuCx, t: Ty) -> Bool {
         Ty::Result(a, b) => mu_rel(cx, a) || mu_rel(cx, b),
         Ty::Tuple(ts) => mu_rel_any(cx, ts, true),
         Ty::Struct(st, args) => {
+            if mu_abstract(ty_prune(t)) {
+                return true;
+            }
             if cx.info.lib_types.contains_key(st.name) {
                 return mu_rel_any(cx, args, true);
             }
@@ -1941,6 +2032,9 @@ fn mu_top_mutable(cx: MuCx, t: Ty) -> Bool {
         Ty::Param(_) => true,
         Ty::Assoc(_, _, _) => true,
         Ty::Struct(st, _) => {
+            if mu_abstract(ty_prune(t)) {
+                return true;
+            }
             for f in st.fields {
                 if f.mutable {
                     return true;

@@ -1,0 +1,9 @@
+// Float literals keep their spelling.
+fn f(t: (Int, (Int, Int))) -> Float {
+    let a = 1_000.5;   let b = 2.5e-3 + 1e10;
+    let c = -0.0 * 1E+5;
+    let d = t.1.0;
+    let e = 3.max(4);
+    let r=1..2;
+    (a+b)*c/2.0%0.5 + d.to_float() + 1.5.sqrt()
+}

@@ -1,0 +1,61 @@
+// Operator overloading through the core traits Add, Sub, Mul, Div, Rem
+// and Neg.
+
+#[derive(Clone)]
+struct V2 {
+    x: Int,
+    y: Int,
+}
+
+impl Add for V2 {
+    type Output = V2;
+
+    fn add(self, rhs: V2) -> V2 {
+        V2 { x: self.x + rhs.x, y: self.y + rhs.y }
+    }
+}
+
+impl Mul<Int> for V2 {
+    type Output = V2;
+
+    fn mul(self, k: Int) -> V2 {
+        V2 { x: self.x * k, y: self.y * k }
+    }
+}
+
+struct Plain {}
+
+struct User {
+    age: Labeled<PII, Int>,
+}
+
+fn uses(a: V2, b: V2, p: Plain, u: User) -> Int {
+    let c: V2 = a + b;
+    let d: V2 = a * 3;
+    let e = a - b; // ERROR "binary operation `-` cannot be applied to type `V2` (implement the trait `Sub` for it)"
+    let f = a + 1; // ERROR "cannot apply `+` to `V2` and `Int`: there is no `impl Add<Int> for V2`"
+    let g = -a; // ERROR "unary operation `-` cannot be applied to type `V2` (implement the trait `Neg` for it)"
+    let h = p * p; // ERROR "binary operation `*` cannot be applied to type `Plain`"
+    let i: Int = a + b; // ERROR "expected `Int`, found `V2`"
+    let j = u.age + 1; // ERROR "labeled data"
+    let k = Duration::seconds(1) + Duration::ms(5);
+    let l = Timestamp::from_unix_ms(0) + k;
+    let m = Timestamp::from_unix_ms(0) + Timestamp::from_unix_ms(0); // ERROR "there is no `impl Add<Timestamp> for Timestamp`"
+    0
+}
+
+fn generic<T: Add<Output = T>>(a: T, b: T) -> T {
+    a + b
+}
+
+fn generic_missing<T>(a: T, b: T) -> T {
+    a * b // ERROR "binary operation `*` cannot be applied to type `T` (add the bound `T: Mul`)"
+}
+
+impl Add<Int> for Plain {
+    type Output = Int;
+
+    fn add(self, rhs: String) -> Int { // ERROR "method `add` has an incompatible type for trait: expected `Int`, found `String`"
+        0
+    }
+}

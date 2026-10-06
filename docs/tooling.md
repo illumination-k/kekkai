@@ -168,6 +168,53 @@ long).
   errors (type errors stop the fixing; refinement checks are skipped) are
   printed to stderr; the exit status is then 1.
 
+## `kek lsp`
+
+A language server (the Language Server Protocol over standard input and
+output, `compiler/lsp.kek`) for editors and for Claude Code's LSP tool.
+It answers from the same analysis as `check -json`, so its diagnostics
+are exactly those of `kek check -json` (with `phase` as the diagnostic's
+`code` and the refinement facts as `relatedInformation`).
+
+| Request | Answer |
+| --- | --- |
+| `didOpen` / `didChange` / `didSave` | `publishDiagnostics` for every file of the document's program that has diagnostics (or had them) |
+| `textDocument/hover` | a binding's type (`let x: T`), a builtin operation's type, or the declaration (signature up to the body) and the comment above it |
+| `textDocument/definition` | the declaration of a local, parameter, function, method (also in the core library: `lib/core`), struct, field, enum, variant, trait or type alias |
+| `textDocument/references` | every occurrence that resolves to the same declaration, across the files of the program |
+| `textDocument/documentSymbol` | the declarations of the file and their members |
+| `workspace/symbol` | the declarations of the `.kek` files under the workspace root whose name contains the query (case-insensitive) |
+
+- **Programs.** The program of a file is its directory when the directory
+  has several `.kek` files and no two of them declare the same top-level
+  name (`compiler/`, `examples/todo-app/server`); otherwise the file alone
+  (`testdata/run/`, where every file has its own `main`). Open documents
+  are analyzed from the editor's text, the other files from disk; the
+  analysis is reused while none of the texts change.
+- Files under `lib/` (the prelude and the core library) get no
+  diagnostics: they are checked as part of every program.
+- Names are resolved by the type checker (`ChkInfo`): a method call goes
+  to the method the checker chose, a field to the field of the
+  receiver's struct type. Programs with parse errors have no
+  definitions or references (the checker does not run).
+- Positions are UTF-16 code units, or UTF-8 bytes when the client offers
+  `utf-8` in `general.positionEncodings`. Synchronization is full (the
+  whole text on each change).
+- `./kek lsp` runs the current compiler directly, never through
+  `kek daemon`. It reads `./kekkai.toml` (the `[refine]` section) of the
+  workspace root.
+- For checking the whole compiler (`compiler/`, about 40,000 lines) a
+  change takes about 2 s; a single-file program about 0.1 s.
+
+### Claude Code
+
+The repository is a plugin marketplace (`.claude-plugin/marketplace.json`)
+with one plugin, `kekkai-lsp` (`editors/claude-code`), whose `.lsp.json`
+starts `${CLAUDE_PROJECT_DIR}/kek lsp` for `.kek` files. With it, Claude
+gets the diagnostics after each edit of a `.kek` file and can use the LSP
+tool (`goToDefinition`, `findReferences`, `hover`, `documentSymbol`,
+`workspaceSymbol`). See the README for enabling it.
+
 ## `kek search [-json] [-limit n] '<signature>' [file.kek]`
 
 A Hoogle-style search by type, as described under 型検索 in
@@ -220,9 +267,15 @@ Line and branch coverage of the program's `#[test]` functions. The
 compiler (`cover-build`, `compiler/cover_walk.kek`) inserts probes
 `__cov_hit(k);` into the AST of every user function (not `#[test]`
 functions) before type checking: at function entry, in both branches of
-every `if` (an implicit empty `else` included), in every `match` arm, in
-loop and closure bodies, and after every statement that can leave its block
-early (`return`, `?`, `break`, `continue`). Each test runs in its own
+every `if` (an implicit empty `else` included), in every `match` arm and
+both outcomes of its guard, in both outcomes of every `?` and `let ... else`,
+in loop and closure bodies, and after every statement that can leave its
+block early (`return`, `?`, `break`, `continue`, a labeled `break 'a` /
+`continue 'a` that leaves an outer loop). `e?` is instrumented as
+`e.__cov_try(k0, k1)?` (the value is passed through unchanged, so types,
+the `From` conversion of the error and the order of evaluation stay the
+same); the code a macro adds (the failing branch of `assert!`) is not
+instrumented, only its arguments. Each test runs in its own
 process; the probes it hit are written at exit to the file named by
 `KEK_COVER_OUT`. Functions marked `#[rare]` are reported separately and are
 not counted. The exit status is 1 when a test fails or the line coverage is
@@ -246,9 +299,19 @@ below `[cover] min_line` of `kekkai.toml`.
 
 - `status` of a test: `ok`, `failed` or `trapped`. `hits` is the number of
   tests that entered the function.
-- `kind` of a site: `fn`, `then`, `else`, `arm`, `loop`, `closure`, `seq`
-  (after an early exit). Branch sites (`then`, `else`, `arm`) carry their
-  index in the decision and the decision's line.
+- `kind` of a site: `fn`, `then`, `else`, `arm`, `guard`, `let-else`,
+  `try`, `loop`, `closure`, `seq` (after an early exit). Branch sites
+  carry their index in the decision (`branch`) and the decision's line:
+  `then` 0 / `else` 1; `arm` i; `guard` 0 (true) / 1 (false), at the
+  guard; `let-else` 0 (the pattern matched) at the pattern / 1 (the `else`
+  block ran) at `else`; `try` 0 (continued: `Ok` / `Some`) / 1 (returned
+  early: `Err` / `None`), at the `?`. `guard` and `try` sites cover no
+  lines of their own.
+- Functions are named as in diagnostics: `area`, `Type::method`,
+  `<Type as Trait>::method`, and `a::b::f` for items of submodules
+  (`kek cover` takes a directory program; its tests in submodules run
+  too). The dispatch functions of `dyn Trait` are not the program's and
+  are not reported.
 - `-lcov file` writes an lcov tracefile (`SF`, `FN`/`FNDA`, `BRDA`, `DA`,
   `LF`/`LH`); counts are numbers of tests.
 - Results are cached per test in `.kek-cache/cover/`, keyed by the
@@ -256,12 +319,38 @@ below `[cover] min_line` of `kekkai.toml`.
 
 ## `kek mutate [-json] [-run re] [-base <file|dir> | -diff <rev>] [-shard i/n] [-results f] [-merge f,...] [-j n] <file|dir>`
 
-Mutation testing on the typed AST (`compiler/mutate_gen.kek`). Mutants:
-arithmetic swaps on `Int`, comparison boundaries and negations, `&&`/`||`,
-negated `if`/`while` conditions, dropped `!`/`-`, integer literals (n+1, 0),
-flipped booleans, strings to `""`, deleted call/assignment statements, and
-function results replaced by `0`, `""`, `None`, `Vec::new()` (negated for
-`Bool`). `#[test]` and `#[rare]` functions are not mutated. Statement
+Mutation testing on the typed AST (`compiler/mutate_gen.kek`). Mutants
+(the `kind` of the report in parentheses):
+
+| Kind | Mutation |
+| --- | --- |
+| `arith` | on `Int` and `Float`: `+` ↔ `-`, `*` ↔ `/`, `%` → `*` (`Int`) or `%` → `/` (`Float`); compound assignments likewise: `+=` ↔ `-=`, `*=` ↔ `/=`, `%=` → `/=` |
+| `bitwise` | on `Int`: `&` ↔ `\|`, `^` → `&` and `^` → `\|`, `<<` ↔ `>>`; `&=` ↔ `\|=`, `^=` → `\|=`, `<<=` ↔ `>>=` |
+| `boundary` | on `Int` and `Float`: `<` ↔ `<=`, `>` ↔ `>=` |
+| `negate` | comparisons of any type: `<` → `>=`, `==` → `!=`, ... |
+| `logic` | `&&` ↔ `\|\|` |
+| `cond` | the condition of `if` / `while` negated |
+| `guard` | a match guard negated (`if g =>` → `if !(g) =>`) or removed |
+| `pattern` | a bound of a range pattern ± 1 (`0..=9` → `0..=10`; not to an empty range), one alternative of an or-pattern deleted (`A \| B` → `A`) |
+| `arm` | a match arm deleted, when a last `_` arm catches the rest |
+| `jump` | `break` ↔ `continue` |
+| `unary` | `!x` (`Bool`, and the bitwise not of `Int`) and `-x` (`Int`, `Float`) → `x` |
+| `int` | integer literal n → n + 1, n → 0 |
+| `float` | `Float` literal x → x + 1.0 (`1.5` → `2.5`), x → `0.0` |
+| `bool` | boolean literal flipped |
+| `string` | string literal → `""` |
+| `stmt` | a call or assignment statement deleted |
+| `result` | the function's result replaced by `0`, `0.0`, `""`, `None`, `Vec::new()`, or negated (`Bool`) |
+
+The same mutation of copies of one source (the target of `v[i + 1] += x`,
+read and written) is one mutant. `#[test]` and `#[rare]` functions are not
+mutated, and neither are derived implementations, the dispatch of `dyn`
+calls and the code a macro expands to (its arguments are mutated). Module
+items are reported by their paths (`geo::area`). A removed guard, a
+pattern mutant or a deleted `break`'s replacement can leave a match
+non-exhaustive, make an arm unreachable or a `loop` without its value:
+such mutants are killed by types. As a schema, a pattern or arm mutant
+duplicates its `match` (`if mutant k { mutated match } else { match }`). Statement
 deletions and result replacements are type-checked by group testing (all
 at once, bisecting only a group that fails); the rejected ones are
 **killed by types** (e.g. deleting `tx.commit()?;` breaks `Tx` linearity).
@@ -532,7 +621,7 @@ src/fees.kek:68:1  deep (Vec<Vec<Int>>) -> Int
 
 | Metric | How | Default limit |
 | --- | --- | --- |
-| `cognitive` | SonarSource's cognitive complexity: +1 for each `if`, `else if`, `else`, `match`, `while`, `for`, sequence of like boolean operators (`a && b && c` is 1, `a && b \|\| c` is 2) and direct recursive call. `if`, `match` and loops also add their nesting level. | 15 |
+| `cognitive` | SonarSource's cognitive complexity: +1 for each `if`, `else if`, `else`, `match`, `while`, `for`, sequence of like boolean operators (`a && b && c` is 1, `a && b \|\| c` is 2), `break 'label` / `continue 'label` and direct recursive call. `if`, `match` and loops also add their nesting level. | 15 |
 | `cyclomatic` | McCabe: 1 + each `if`, `while`, `for`, `match` arm beyond the first, `&&`, `\|\|` and `?`. | 10 |
 | `nesting` | The deepest nesting of `if` / `match` / loop bodies and closures. `deepest` is where it starts. | 4 |
 | `lines` | From the `fn` line to the closing brace. | 0 (off) |
@@ -608,7 +697,9 @@ the program still go to stderr.
 
 - Tests are listed in declaration order (after `-run` selection).
 - `status` is `ok`, `failed` (returned `false` or `Err`) or `trapped` (the
-  process trapped, e.g. on call stack exhaustion).
+  process trapped, e.g. on call stack exhaustion, or a failed `assert!`,
+  `assert_eq!` or `panic!` ended it: the report then reads
+  `FAILED (panicked)` with `panicked at file.kek:L:C:` and the message).
 - `cached` is true when the result was replayed from the test result cache
   (see below); `ms` is then the time of the run that was cached. `ms` is
   `null` for a trapped test.

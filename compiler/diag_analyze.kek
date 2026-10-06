@@ -21,6 +21,8 @@ struct DiagDiag {
 }
 
 struct DiagAnalysis {
+    // the file name in positions ("" for a single source)
+    name: String,
     src: String,
     bytes: Vec<Int>,
     // byte offset of the start of each line
@@ -45,6 +47,30 @@ fn diag_analyze(src: String) -> DiagAnalysis {
 
 // diag_analyze_cfg is diag_analyze with a `[refine]` configuration.
 fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
+    let mut srcs = Vec::new();
+    srcs.push(FeSource { name: "", text: src, module: "" });
+    let prog = frontend_parse_all(srcs);
+    let res = chk_check_cfg(prog.file, false, chk_parse_core(), cfg);
+    diag_file("", src, prog, res)
+}
+
+// diag_analyze_files parses and type-checks the files of one program
+// together (`kek lsp`): one analysis per file, in order, sharing the
+// program's syntax tree and type information. Positions name their file
+// (FeSource.name), and each analysis has the diagnostics of its file.
+fn diag_analyze_files(srcs: Vec<FeSource>, cfg: RefConfig) -> Vec<DiagAnalysis> {
+    let prog = frontend_parse_all(srcs);
+    let res = chk_check_cfg(prog.file, false, chk_parse_core(), cfg);
+    let mut out = Vec::new();
+    for s in srcs {
+        out.push(diag_file(s.name, s.text, prog, res));
+    }
+    out
+}
+
+// diag_file is the analysis of the source text of file name, one of the
+// files of the checked program prog: its lines, tokens and diagnostics.
+fn diag_file(name: String, src: String, prog: FeProgram, res: ChkResult) -> DiagAnalysis {
     let bytes = src.to_bytes();
     let mut lines = Vec::new();
     lines.push(0);
@@ -55,27 +81,26 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
         }
         i = i + 1;
     }
-    let lr = lex_file("", src);
+    let lr = lex_file(name, src);
     let mut tok_at: HashMap<Int, Int> = HashMap::new();
     let mut k = 0;
     for t in lr.toks {
         tok_at.insert(diag_pos_key(t.pos.line, t.pos.col), k);
         k = k + 1;
     }
-    let pr = parse_file("", src, AstIds { next: 0 });
-    let res = chk_check_cfg(pr.file, false, chk_parse_core(), cfg);
     let mut a = DiagAnalysis {
+        name: name,
         src: src,
         bytes: bytes,
         lines: lines,
         toks: lr.toks,
         tok_at: tok_at,
-        file: pr.file,
+        file: prog.file,
         info: res.info,
-        parse_ok: pr.errs.len() == 0,
+        parse_ok: prog.errs.len() == 0,
         diags: Vec::new(),
     };
-    diag_add_errors(a, pr.errs, "parse");
+    diag_add_errors(a, prog.errs, "parse");
     if a.parse_ok {
         // refinement errors are among res.errs: report them with their
         // phase and details instead
@@ -115,7 +140,7 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
         diag_add_errors(a, flow_errs, "flow");
         diag_add_lints(a);
         for d in res.refine.diags {
-            if d.severity == "note" {
+            if d.severity == "note" || d.pos.file != name {
                 continue;
             }
             a.diags.push(DiagDiag {
@@ -125,7 +150,7 @@ fn diag_analyze_cfg(src: String, cfg: RefConfig) -> DiagAnalysis {
                 end_col: diag_token_end(a, d.pos.line, d.pos.col),
                 severity: d.severity,
                 phase: d.phase,
-                message: d.msg,
+                message: ast_display_name(d.msg),
                 cex: d.cex,
                 facts: d.facts,
                 refine: true,
@@ -210,8 +235,12 @@ fn diag_rune_size(a: DiagAnalysis, off: Int) -> Int {
     size
 }
 
+// diag_add_errors adds the errors located in a's file.
 fn diag_add_errors(mut a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
     for e in errs {
+        if e.pos.file != a.name {
+            continue;
+        }
         let end = diag_token_end(a, e.pos.line, e.pos.col);
         let mut d = DiagDiag {
             line: e.pos.line,
@@ -220,7 +249,7 @@ fn diag_add_errors(mut a: DiagAnalysis, errs: Vec<AstError>, phase: String) {
             end_col: end,
             severity: "error",
             phase: phase,
-            message: e.msg,
+            message: ast_display_name(e.msg),
             cex: Vec::new(),
             facts: Vec::new(),
             refine: false,
@@ -263,7 +292,7 @@ fn diag_add_lints(mut a: DiagAnalysis) {
             continue;
         }
         for c in diag_caps(fun) {
-            if c.uses == 0 && c.name != "_" {
+            if c.uses == 0 && c.name != "_" && c.pos.file == a.name {
                 a.diags.push(DiagDiag {
                     line: c.pos.line,
                     col: c.pos.col,
@@ -315,20 +344,9 @@ fn diag_token_len(a: DiagAnalysis, i: Int) -> Int {
     if t.kind == "EOF" {
         return 0;
     }
-    if t.kind == "IDENT" {
+    if t.kind == "IDENT" || t.kind == "INT" || t.kind == "FLOAT" || t.kind == "LABEL" {
+        // spelled as written
         return t.text.to_bytes().len();
-    }
-    if t.kind == "INT" {
-        let mut j = off;
-        while j < n {
-            let c = diag_byte(a, j);
-            if c == 95 || (c >= 48 && c <= 57) {
-                j = j + 1;
-            } else {
-                break;
-            }
-        }
-        return j - off;
     }
     if t.kind == "STRING" {
         let mut j = off + 1;

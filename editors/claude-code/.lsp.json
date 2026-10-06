@@ -1,0 +1,13 @@
+{
+  "kekkai": {
+    "command": "${CLAUDE_PROJECT_DIR}/kek",
+    "args": ["lsp"],
+    "extensionToLanguage": {
+      ".kek": "kekkai"
+    },
+    "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
+    "startupTimeout": 180000,
+    "restartOnCrash": true,
+    "maxRestarts": 3
+  }
+}

@@ -1,0 +1,10 @@
+// Only `loop` is an expression; a labeled `while` is a statement.
+
+fn f(n: Int) -> Int {
+    let x = 'a: while n > 0 { // ERROR "a labeled `while` or `for` is a statement: only `loop` can be used as a value"
+        break 'a;
+    };
+    x
+}
+
+fn main() {}

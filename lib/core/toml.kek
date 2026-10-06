@@ -5,7 +5,9 @@
 //   Toml::from_str::<T>(s) -> Result<T, SerdeError>
 //   Toml::to_string(&x) -> Result<String, SerdeError>
 //
-// Floats (also inf and nan) become Value::Float as written (without `_`);
+// Floats (also inf and nan) become Value::Float (correctly rounded) and
+// are written with the shortest digits that read back the same (`1.0`,
+// `1e21`, `inf`, `nan`);
 // dates and times become Value::Str as written. TOML has no null: render
 // leaves out the keys whose value is null and refuses null elsewhere.
 // Tables keep the order in which their keys first appear.
@@ -715,7 +717,14 @@ impl __TomlParser {
             return Ok(Value::Bool(false));
         }
         if t == "inf" || t == "+inf" || t == "-inf" || t == "nan" || t == "+nan" || t == "-nan" {
-            return Ok(Value::Float(t));
+            let x = if t.ends_with("nan") {
+                Float::NAN
+            } else if t == "-inf" {
+                Float::NEG_INFINITY
+            } else {
+                Float::INFINITY
+            };
+            return Ok(Value::Float(x));
         }
         if __toml_is_date(t.slice(0, 10)) || (t.len() >= 8 && t.char_at(2).unwrap_or(0) == 58) {
             if __toml_datetime_ok(t) {
@@ -968,7 +977,17 @@ fn __toml_number(t: String) -> Option<Value> {
     let sign = if t.starts_with("-") {
         "-"
     } else if t.starts_with("+") { "+" } else { "" };
-    Some(Value::Float(sign + f))
+    match __flt_parse(sign + f) {
+        Some(b) => {
+            if b.bit_and(9223372036854775807) == 9218868437227405312 {
+                // out of range
+                None
+            } else {
+                Some(Value::Float(Float::from_bits(b)))
+            }
+        }
+        None => None,
+    }
 }
 
 fn __toml_float_ok(f: String) -> Bool {
@@ -1150,6 +1169,18 @@ fn __toml_has_tables(es: &Vec<(String, Value)>) -> Bool {
     false
 }
 
+// __toml_float writes a float: shortest digits with a fraction or an
+// exponent, `inf`, `-inf`, `nan`.
+fn __toml_float(f: Float) -> String {
+    if f.is_nan() {
+        return "nan";
+    }
+    if f.is_infinite() {
+        return if f > 0.0 { "inf" } else { "-inf" };
+    }
+    __flt_debug(f.to_bits())
+}
+
 // __toml_inline writes v as an inline value (arrays and inline tables).
 fn __toml_inline(mut out: Vec<String>, v: &Value) -> Result<(), SerdeError> {
     match v {
@@ -1158,7 +1189,7 @@ fn __toml_inline(mut out: Vec<String>, v: &Value) -> Result<(), SerdeError> {
         }
         Value::Bool(b) => out.push(if b { "true" } else { "false" }),
         Value::Int(n) => out.push(n.to_string()),
-        Value::Float(f) => out.push(f),
+        Value::Float(f) => out.push(__toml_float(f)),
         Value::Str(s) => {
             // dates and times read as strings, so they are written back
             // as TOML dates and times (Timestamp, Date)

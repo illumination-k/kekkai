@@ -12,7 +12,10 @@ struct ChkTag {
     refutable: Bool,
 }
 
-fn chk_match(c: Chk, e: AstMatch) -> Ty {
+fn chk_match(mut c: Chk, e: AstMatch) -> Ty {
+    // a trait object type expected of the match (its arms are coerced)
+    let want = c.want_dyn;
+    c.want_dyn = None;
     let mut st = ty_prune(chk_expr(c, e.x));
     if ty_is_prim(st, "<invalid>") {
         st = chk_new_var(c);
@@ -29,10 +32,26 @@ fn chk_match(c: Chk, e: AstMatch) -> Ty {
         if rows.len() > 0 && chk_exhaustive(c.info, rows, chk_tys1(st)) {
             chk_errorf(c, arm.pos, "unreachable pattern");
         }
-        let mut row = Vec::new();
-        row.push(arm.pat);
-        rows.push(row);
-        let at = chk_expr(c, arm.body);
+        match arm.guard {
+            Some(g) => {
+                // a guarded arm does not count toward exhaustiveness
+                let gt = chk_expr(c, g);
+                chk_expect(c, ast_expr_pos(g), gt, ty_bool(), "match guard");
+            }
+            None => {
+                let mut row = Vec::new();
+                row.push(arm.pat);
+                rows.push(row);
+            }
+        }
+        let at = match want {
+            Some(w) => {
+                let t1 = chk_expr_expect(c, arm.body, w);
+                chk_coerce(c, arm.body, t1, w, "match arm");
+                w
+            }
+            None => chk_expr(c, arm.body),
+        };
         if !ty_unify(result, at) {
             let s1 = ty_str(ty_resolve(result));
             chk_errorf(
@@ -79,7 +98,9 @@ fn chk_ctors(t: Ty) -> ChkCtors {
         Ty::Enum(en, args) => {
             for v in en.variants {
                 let mut n = en.name + "::" + v.name;
-                if v.fields.len() > 0 {
+                if v.names.len() > 0 {
+                    n = n + " { .. }";
+                } else if v.fields.len() > 0 {
                     n = n + "(..)";
                 }
                 out.names.push(n);
@@ -89,6 +110,10 @@ fn chk_ctors(t: Ty) -> ChkCtors {
         Ty::Tuple(ts) => {
             out.names.push("(..)");
             out.fields.push(ts);
+        }
+        Ty::Struct(st, args) => {
+            out.names.push(st.name + " { .. }");
+            out.fields.push(ty_struct_fields(st, args));
         }
         Ty::Prim(n) => {
             if n == "Bool" {
@@ -122,8 +147,20 @@ fn chk_pat_tag(info: ChkInfo, p: AstPattern) -> ChkTag {
                 }
                 return ChkTag { tag: 0, refutable: true };
             }
-            if pi.kind == "int" || pi.kind == "string" {
+            if pi.kind == "int" || pi.kind == "string" || pi.kind == "range" {
                 return ChkTag { tag: -1, refutable: true };
+            }
+            if pi.kind == "at" {
+                match pi.args.get(0) {
+                    Some(sub) => {
+                        return chk_pat_tag(info, sub);
+                    }
+                    None => {}
+                }
+            }
+            if pi.kind == "or" {
+                // expanded by chk_expand_rows before it is specialized
+                return ChkTag { tag: -2, refutable: true };
             }
             ChkTag { tag: 0, refutable: false }
         }
@@ -131,20 +168,9 @@ fn chk_pat_tag(info: ChkInfo, p: AstPattern) -> ChkTag {
 }
 
 fn chk_wild_pat() -> AstPattern {
-    AstPattern {
-        id: -1,
-        pos: chk_dummy_pos(),
-        wildcard: true,
-        tuple: false,
-        mutable: false,
-        bind: "",
-        ty: "",
-        ctor: "",
-        args: Vec::new(),
-        int_value: None,
-        bool_lit: None,
-        str_value: None,
-    }
+    let mut p = ast_new_pattern(-1, chk_dummy_pos());
+    p.wildcard = true;
+    p
 }
 
 fn chk_pat_at(r: Vec<AstPattern>, i: Int) -> AstPattern {
@@ -169,10 +195,42 @@ fn chk_pat_args(info: ChkInfo, p: AstPattern) -> Vec<AstPattern> {
     }
 }
 
+// chk_expand_rows replaces a leading `x @ p` by p and splits a row whose
+// first pattern is an or-pattern into one row per alternative.
+fn chk_expand_rows(info: ChkInfo, rows: Vec<Vec<AstPattern>>) -> Vec<Vec<AstPattern>> {
+    let mut out = Vec::new();
+    for r in rows {
+        chk_expand_row(info, r, out);
+    }
+    out
+}
+
+fn chk_expand_row(info: ChkInfo, r: Vec<AstPattern>, mut out: Vec<Vec<AstPattern>>) {
+    if r.len() > 0 {
+        match info.patterns.get(chk_pat_at(r, 0).id) {
+            Some(pi) => {
+                if pi.kind == "at" || pi.kind == "or" {
+                    for a in pi.args {
+                        let mut row = Vec::new();
+                        row.push(a);
+                        chk_expand_row(info, chk_append_rest(row, r), out);
+                    }
+                    return;
+                }
+            }
+            None => {}
+        }
+    }
+    out.push(r);
+}
+
 // chk_exhaustive reports whether the pattern matrix covers every value of
 // the column types.
-fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bool {
-    if tys.len() == 0 {
+fn chk_exhaustive(info: ChkInfo, rows0: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bool {
+    let rows = chk_expand_rows(info, rows0);
+    if tys.len() == 0 || rows.len() == 0 {
+        // (no rows cover nothing: every type has a value; stopping here
+        // also keeps a recursive struct from being expanded forever)
         return rows.len() > 0;
     }
     // A row of irrefutable patterns covers everything. Checking this first
@@ -241,7 +299,8 @@ fn chk_exhaustive(info: ChkInfo, rows: Vec<Vec<AstPattern>>, tys: Vec<Ty>) -> Bo
 }
 
 // chk_missing names the top-level constructors that are not fully covered.
-fn chk_missing(info: ChkInfo, rows: Vec<Vec<AstPattern>>, t: Ty) -> String {
+fn chk_missing(info: ChkInfo, rows0: Vec<Vec<AstPattern>>, t: Ty) -> String {
+    let rows = chk_expand_rows(info, rows0);
     let cs = chk_ctors(t);
     if !cs.finite {
         return ": add a `_` arm";
@@ -320,8 +379,34 @@ fn chk_pattern(mut c: Chk, p: AstPattern, st0: Ty) {
         pi.kind = "wild";
         return;
     }
+    if p.alts.len() > 0 {
+        chk_or_pattern(c, p, pi, st);
+        return;
+    }
+    match p.at.get(0) {
+        Some(sub) => {
+            // `name @ sub`
+            pi.kind = "at";
+            pi.args = p.at;
+            let mut b = chk_new_binding(c, p.bind, st, p.pos);
+            b.mutable = p.mutable;
+            chk_bind(c, b);
+            pi.bind = Some(b);
+            chk_pattern(c, sub, st);
+            return;
+        }
+        None => {}
+    }
+    if p.range {
+        chk_range_pattern(c, p, pi, st);
+        return;
+    }
     if p.tuple {
         chk_tuple_pattern(c, p, pi, st);
+        return;
+    }
+    if p.brace {
+        chk_struct_pattern(c, p, pi, st);
         return;
     }
     if p.int_value.is_some() {
@@ -429,6 +514,44 @@ fn chk_self_is(c: Chk, name: String) -> Bool {
     }
 }
 
+// chk_struct_pattern checks a struct pattern `S { a: p, b: q }`, which
+// compiler/desugar.kek has given every field in declaration order: it is
+// typed (and lowered) like a tuple pattern of the fields.
+fn chk_struct_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
+    match c.info.structs.get(p.ctor) {
+        Some(sd) => {
+            if ty_is_var(st) {
+                ty_unify(st, Ty::Struct(sd, chk_instantiate(c, sd.params)));
+            }
+            match ty_prune(st) {
+                Ty::Struct(s2, args) => {
+                    if s2.name == sd.name {
+                        pi.kind = "tuple";
+                        pi.ty = ty_prune(st);
+                        chk_subpatterns(c, p, pi, ty_struct_fields(s2, args));
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            if !ty_is_prim(ty_prune(st), "<invalid>") {
+                chk_errorf(
+                    c,
+                    p.pos,
+                    "pattern `" + p.ctor + " { .. }` does not match type `" + ty_str(st) + "`",
+                );
+            }
+        }
+        None => {
+            chk_errorf(c, p.pos, "unknown struct `" + p.ctor + "`");
+        }
+    }
+    pi.kind = "wild";
+    for sub in p.args {
+        chk_pattern(c, sub, ty_invalid());
+    }
+}
+
 // chk_tuple_pattern checks `(p, q, ...)` (`()` matches the unit value).
 fn chk_tuple_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
     if p.args.len() == 0 {
@@ -471,5 +594,149 @@ fn chk_tuple_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
     pi.kind = "wild";
     for sub in p.args {
         chk_pattern(c, sub, ty_invalid());
+    }
+}
+
+// chk_range_pattern checks `lo..=hi`, `lo..hi`, `..=hi` and `lo..`.
+fn chk_range_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
+    pi.kind = "range";
+    if !ty_unify(st, ty_int()) {
+        chk_errorf(c, p.pos, "range pattern used on `" + ty_str(st) + "`");
+        return;
+    }
+    let lo = p.range_lo.unwrap_or(0);
+    let hi = p.range_hi.unwrap_or(0);
+    if p.range_lo.is_some() && p.range_hi.is_some() {
+        if p.range_incl && lo > hi {
+            chk_errorf(c, p.pos, "lower range bound must be less than or equal to upper");
+        } else if !p.range_incl && lo >= hi {
+            chk_errorf(c, p.pos, "lower range bound must be less than upper");
+        }
+    }
+}
+
+// chk_or_pattern checks `p | q | ...`: every alternative is checked
+// against st and must bind the same variables with the same types. The
+// first alternative's bindings are in scope; the others' binding patterns
+// are redirected to them, so each variable is one binding.
+fn chk_or_pattern(c: Chk, p: AstPattern, mut pi: ChkPatInfo, st: Ty) {
+    pi.kind = "or";
+    pi.args = p.alts;
+    let mut first: Vec<ChkBinding> = Vec::new();
+    let mut i = 0;
+    for alt in p.alts {
+        if i == 0 {
+            chk_pattern(c, alt, st);
+            first = chk_pat_bindings(c.info, alt);
+        } else {
+            chk_push(c, false);
+            chk_pattern(c, alt, st);
+            chk_pop(c);
+            let bs = chk_pat_bindings(c.info, alt);
+            for b in bs {
+                match chk_find_binding(first, b.name) {
+                    Some(f) => {
+                        if !ty_unify(f.ty, b.ty) {
+                            chk_errorf(
+                                c,
+                                b.pos,
+                                "mismatched types: variable `"
+                                    + b.name
+                                    + "` is `"
+                                    + ty_str(ty_resolve(f.ty))
+                                    + "` in the first alternative and `"
+                                    + ty_str(ty_resolve(b.ty))
+                                    + "` here",
+                            );
+                        } else if f.mutable != b.mutable {
+                            chk_errorf(
+                                c,
+                                b.pos,
+                                "variable `"
+                                    + b.name
+                                    + "` is bound with different mutability in the alternatives",
+                            );
+                        }
+                        chk_share_binding(c.info, alt, f);
+                    }
+                    None => {
+                        chk_errorf(
+                            c,
+                            b.pos,
+                            "variable `" + b.name + "` is not bound in all patterns",
+                        );
+                    }
+                }
+            }
+            for f in first {
+                if chk_find_binding(bs, f.name).is_none() {
+                    chk_errorf(c, alt.pos, "variable `" + f.name + "` is not bound in all patterns");
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn chk_find_binding(bs: Vec<ChkBinding>, name: String) -> Option<ChkBinding> {
+    for b in bs {
+        if b.name == name {
+            return Some(b);
+        }
+    }
+    None
+}
+
+// chk_pat_bindings lists the variables a checked pattern binds (for an
+// or-pattern, those of its first alternative).
+fn chk_pat_bindings(info: ChkInfo, p: AstPattern) -> Vec<ChkBinding> {
+    let mut out = Vec::new();
+    chk_collect_bindings(info, p, out);
+    out
+}
+
+fn chk_collect_bindings(info: ChkInfo, p: AstPattern, mut out: Vec<ChkBinding>) {
+    match info.patterns.get(p.id) {
+        Some(pi) => {
+            match pi.bind {
+                Some(b) => {
+                    if b.name != "_" {
+                        out.push(b);
+                    }
+                }
+                None => {}
+            }
+            if pi.kind == "or" {
+                match pi.args.get(0) {
+                    Some(a) => chk_collect_bindings(info, a, out),
+                    None => {}
+                }
+                return;
+            }
+            for a in pi.args {
+                chk_collect_bindings(info, a, out);
+            }
+        }
+        None => {}
+    }
+}
+
+// chk_share_binding makes the binding patterns for f.name in p bind f.
+fn chk_share_binding(info: ChkInfo, p: AstPattern, f: ChkBinding) {
+    match info.patterns.get(p.id) {
+        Some(mut pi) => {
+            match pi.bind {
+                Some(b) => {
+                    if b.name == f.name {
+                        pi.bind = Some(f);
+                    }
+                }
+                None => {}
+            }
+            for a in pi.args {
+                chk_share_binding(info, a, f);
+            }
+        }
+        None => {}
     }
 }

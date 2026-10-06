@@ -20,6 +20,39 @@ struct AstFile {
     impls: Vec<AstImplDecl>,
     traits: Vec<AstTraitDecl>,
     aliases: Vec<AstTypeAlias>,
+    consts: Vec<AstConstDecl>,
+}
+
+// `use a::b;` (path ["a"], items [b]), `use a::b as c;`, `use a::{b, c as
+// d};` (braces) or `use a::*;` (glob, no items). A use is not an item of
+// AstFile: ParseResult.uses keeps those of a file (compiler/modres.kek
+// resolves them per file).
+struct AstUse {
+    id: Int,
+    pos: AstPos,
+    path: Vec<String>,
+    items: Vec<AstUseItem>,
+    mut glob: Bool,
+    mut braces: Bool,
+}
+
+// alias is "" without `as`.
+struct AstUseItem {
+    pos: AstPos,
+    name: String,
+    mut alias: String,
+}
+
+// `const NAME: T = value;` at the top level or in an inherent `impl`
+// (an associated constant, `Type::NAME`). The checker sees a constant as a
+// pure function without parameters, called at every use
+// (compiler/desugar.kek).
+struct AstConstDecl {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    ty: AstType,
+    value: AstExpr,
 }
 
 // `type Name = T;` or `type Name = T where pred;` (a refined alias: pred
@@ -112,6 +145,9 @@ struct AstGeneric {
     bounds: Vec<AstType>,
 }
 
+// kind is "" for `struct S { f: T }`, "tuple" for a tuple struct
+// `struct S(T, U);` (its fields are named "0", "1", ...) and "unit" for
+// `struct S;` (no fields).
 struct AstStructDecl {
     id: Int,
     pos: AstPos,
@@ -119,13 +155,18 @@ struct AstStructDecl {
     name: String,
     generics: Vec<AstGeneric>,
     fields: Vec<AstField>,
+    mut kind: String,
 }
 
+// A variant `V`, `V(A, B)` or, with names set (one per field), the
+// struct-like `V { a: A, b: B }` (named is true even for `V {}`).
 struct AstVariant {
     id: Int,
     pos: AstPos,
     name: String,
     fields: Vec<AstType>,
+    mut named: Bool,
+    names: Vec<String>,
 }
 
 struct AstEnumDecl {
@@ -208,6 +249,7 @@ struct AstImplDecl {
     mut wheres: Vec<AstWhere>,
     assoc: Vec<AstAssocType>,
     funcs: Vec<AstFuncDecl>,
+    consts: Vec<AstConstDecl>,
 }
 
 // ---- statements ----
@@ -225,6 +267,12 @@ enum AstStmt {
 }
 
 // `let x = e;` or, with pat set, `let (a, b) = e;` (name is then "_").
+//
+// let_else marks the desugaring of `let P = e else { ... };`: it binds the
+// variables of P (in order) from `match e { P => (a, b), _ => { ... } }`
+// (one variable: `let a = match e { P => a, ... }`, none: `let _ = ...`
+// with `()`). The original is the match: x, arm 0's pattern and arm 1's
+// block.
 struct AstLetStmt {
     id: Int,
     pos: AstPos,
@@ -233,8 +281,11 @@ struct AstLetStmt {
     pat: Option<AstPattern>,
     ty: Option<AstType>,
     init: AstExpr,
+    let_else: Bool,
 }
 
+// `x = e;`. `x += e;` (and the other compound assignments) is `x = x + e;`
+// whose Binary value is marked compound.
 struct AstAssignStmt {
     id: Int,
     pos: AstPos,
@@ -242,6 +293,11 @@ struct AstAssignStmt {
     value: AstExpr,
 }
 
+// `s.f = e;` (`s.f += e;`: a compound Binary value as for AstAssignStmt).
+//
+// `v[i] = e;` is the statement `v.__index_set(i, e);` (a core method of
+// Vec with the bounds of `v[i]` as preconditions) and `v[i] += e;` is
+// `v.__index_set(i, v[i] + e);` with a compound Binary.
 struct AstFieldAssignStmt {
     id: Int,
     pos: AstPos,
@@ -249,27 +305,47 @@ struct AstFieldAssignStmt {
     value: AstExpr,
 }
 
+// `break;`, `break 'a;`, `break value;` or `break 'a value;`. label is
+// the loop's label as written (`'a`) or "" for the innermost loop; a value
+// is allowed only for a `loop`.
 struct AstBreakStmt {
     id: Int,
     pos: AstPos,
+    label: String,
+    value: Option<AstExpr>,
 }
 
+// `continue;` or `continue 'a;`.
 struct AstContinueStmt {
     id: Int,
     pos: AstPos,
+    label: String,
 }
 
 // `while cond { }`, or `while let pat = cond { }` when pat is set.
+// `loop { }` is `while true { }` with is_loop set (the checker treats it
+// as diverging unless its body breaks out of it). label is `'a` of
+// `'a: while ...` ("" without a label).
+//
+// A `loop` is an expression: a block without a tail whose last statement
+// is a `loop` has the loop's value (the type of its `break value`s, `!`
+// without a `break`; see ast_block_loop). A `loop` written in expression
+// position (`let x = loop { ... };`) is such a block of one statement,
+// with expr set (the formatter prints it without the braces).
 struct AstWhileStmt {
     id: Int,
     pos: AstPos,
     pat: Option<AstPattern>,
     cond: AstExpr,
     body: AstBlock,
+    is_loop: Bool,
+    label: String,
+    expr: Bool,
 }
 
 // `for x in start..end { }` (end is Some) or `for x in vec { }`. With pat
 // set, the loop variable is a pattern (`for (k, v) in ...`; var is "_").
+// label as for AstWhileStmt.
 struct AstForStmt {
     id: Int,
     pos: AstPos,
@@ -278,6 +354,7 @@ struct AstForStmt {
     iter: AstExpr,
     end: Option<AstExpr>,
     body: AstBlock,
+    label: String,
 }
 
 struct AstReturnStmt {
@@ -297,6 +374,7 @@ struct AstExprStmt {
 
 enum AstExpr {
     IntLit(AstIntLit),
+    FloatLit(AstFloatLit),
     BoolLit(AstBoolLit),
     StrLit(AstStringLit),
     UnitLit(AstUnitLit),
@@ -316,6 +394,28 @@ enum AstExpr {
     Tuple(AstTupleLit),
     Range(AstRange),
     Index(AstIndex),
+    Macro(AstMacro),
+}
+
+// `name!(args)` or `name![args]`, expanded by the parser
+// (compiler/macro.kek). args (with arg_names, "" or the name of a
+// `name = e` argument of a format macro), repeat (`vec![x; n]`) and pat
+// (`matches!(e, pat)`) are the invocation as written, for the formatter;
+// expansion is the code every later pass walks instead (it contains the
+// argument expressions themselves). errs are expansion errors (a bad
+// format string, an unknown macro), reported by the type checker.
+struct AstMacro {
+    id: Int,
+    pos: AstPos,
+    name: String,
+    // "(" or "["
+    delim: String,
+    args: Vec<AstExpr>,
+    arg_names: Vec<String>,
+    mut repeat: Bool,
+    mut pat: Option<AstPattern>,
+    mut expansion: AstExpr,
+    errs: Vec<AstError>,
 }
 
 // `x[i]`: element i of a Vec (the refinement checker proves the bounds).
@@ -339,6 +439,16 @@ struct AstIntLit {
     id: Int,
     pos: AstPos,
     value: Int,
+}
+
+// A Float literal: text is the spelling as written (`1_000.5`, `2.5e-3`;
+// kept by the formatter), bits the IEEE 754 binary64 bit pattern of its
+// correctly rounded value.
+struct AstFloatLit {
+    id: Int,
+    pos: AstPos,
+    text: String,
+    bits: Int,
 }
 
 struct AstBoolLit {
@@ -373,16 +483,19 @@ struct AstIdent {
     targs: Vec<AstType>,
 }
 
-// op is a token kind ("+", "==", "&&", ...).
+// op is the operator ("+", "==", "&&", "<<", ...). compound marks the
+// value of a compound assignment `x op= y` (x is then a copy of the
+// target, with fresh ids).
 struct AstBinary {
     id: Int,
     pos: AstPos,
     op: String,
     x: AstExpr,
     y: AstExpr,
+    compound: Bool,
 }
 
-// op is "-", "!", or one of "&", "&mut ", "*" (no-ops at run time:
+// op is "-", "!" (on Bool: not; on Int: bitwise not), or one of "&", "&mut ", "*" (no-ops at run time:
 // values of structs and collections are references already; `&` and
 // `&mut ` borrow shared or mutably for the mutability pass).
 struct AstUnary {
@@ -434,6 +547,8 @@ struct AstFieldInit {
     value: AstExpr,
 }
 
+// `S { f: e }`, or `E::V { f: e }` for a struct-like variant (name is
+// then "E::V").
 struct AstStructLit {
     id: Int,
     pos: AstPos,
@@ -453,6 +568,14 @@ struct AstIf {
 
 // Pattern in a match arm. Patterns nest: `Ok(Some(n))`. A tuple pattern
 // `(p, q)` has tuple set and its elements in args (`()` has none).
+// An or-pattern `p | q` has its alternatives in alts. A range pattern
+// `lo..=hi` / `lo..hi` / `..=hi` / `lo..` has range set (incl for `..=`).
+// `name @ p` has bind set and p as the single element of at. A struct
+// pattern `S { a, b: p, .. }` / `E::V { a, .. }` has brace set, the field
+// names in fields (parallel to args; `a` is short for `a: a`) and rest set
+// for `..`. compiler/desugar.kek rewrites struct patterns of structs (and
+// tuple structs `S(p, q)`) to list every field in declaration order, and
+// those of struct-like variants to positional `E::V(p, q)`.
 struct AstPattern {
     id: Int,
     pos: AstPos,
@@ -466,13 +589,28 @@ struct AstPattern {
     mut int_value: Option<Int>,
     mut bool_lit: Option<Bool>,
     mut str_value: Option<String>,
+    alts: Vec<AstPattern>,
+    mut range: Bool,
+    mut range_lo: Option<Int>,
+    mut range_hi: Option<Int>,
+    mut range_incl: Bool,
+    at: Vec<AstPattern>,
+    mut brace: Bool,
+    mut fields: Vec<String>,
+    mut rest: Bool,
 }
 
+// `pat => body` or, with guard set, `pat if guard => body`. bare marks an
+// arm whose body is a statement written without braces (`x => n += x,`,
+// `None => break,`, `_ => return 0,`): body is then a block of that one
+// statement (the formatter prints it without the braces).
 struct AstMatchArm {
     id: Int,
     pos: AstPos,
     pat: AstPattern,
+    guard: Option<AstExpr>,
     body: AstExpr,
+    bare: Bool,
 }
 
 struct AstMatch {
@@ -508,6 +646,40 @@ struct AstClosure {
 
 // ---- helpers ----
 
+// ast_block_loop returns the `loop` that gives a block its value: its last
+// statement when the block has no tail (Rust's trailing `loop { }`).
+fn ast_block_loop(b: AstBlock) -> Option<AstWhileStmt> {
+    if b.tail.is_some() || b.stmts.len() == 0 {
+        return None;
+    }
+    match b.stmts.get(b.stmts.len() - 1) {
+        Some(s) => match s {
+            AstStmt::While(w) => if w.is_loop { Some(w) } else { None },
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+// ast_loop_target is the index in labels (the labels of the enclosing
+// loops, innermost last; "" for an unlabeled loop) of the loop a `break`
+// or `continue` with the given label leaves: the innermost one for "",
+// -1 when no loop has the label.
+fn ast_loop_target(labels: Vec<String>, label: String) -> Int {
+    let n = labels.len();
+    if label == "" {
+        return n - 1;
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        if labels.get(i).unwrap_or("") == label {
+            return i;
+        }
+        i = i - 1;
+    }
+    -1
+}
+
 fn ast_pos_string(p: AstPos) -> String {
     if p.file != "" {
         return p.file + ":" + p.line.to_string() + ":" + p.col.to_string();
@@ -516,7 +688,16 @@ fn ast_pos_string(p: AstPos) -> String {
 }
 
 fn ast_error_string(e: AstError) -> String {
-    ast_pos_string(e.pos) + ": " + e.msg
+    ast_pos_string(e.pos) + ": " + ast_display_name(e.msg)
+}
+
+// ast_display_name spells the global names of module items (`a$b$f`,
+// compiler/modres.kek) as paths (`a::b::f`) in s.
+fn ast_display_name(s: String) -> String {
+    if !s.contains("$") {
+        return s;
+    }
+    s.split("$").join("::")
 }
 
 fn ast_type_pos(t: AstType) -> AstPos {
@@ -532,6 +713,7 @@ fn ast_type_pos(t: AstType) -> AstPos {
 fn ast_expr_pos(e: AstExpr) -> AstPos {
     match e {
         AstExpr::IntLit(x) => x.pos,
+        AstExpr::FloatLit(x) => x.pos,
         AstExpr::BoolLit(x) => x.pos,
         AstExpr::StrLit(x) => x.pos,
         AstExpr::UnitLit(x) => x.pos,
@@ -551,12 +733,14 @@ fn ast_expr_pos(e: AstExpr) -> AstPos {
         AstExpr::Tuple(x) => x.pos,
         AstExpr::Range(x) => x.pos,
         AstExpr::Index(x) => x.pos,
+        AstExpr::Macro(x) => x.pos,
     }
 }
 
 fn ast_expr_id(e: AstExpr) -> Int {
     match e {
         AstExpr::IntLit(x) => x.id,
+        AstExpr::FloatLit(x) => x.id,
         AstExpr::BoolLit(x) => x.id,
         AstExpr::StrLit(x) => x.id,
         AstExpr::UnitLit(x) => x.id,
@@ -576,6 +760,7 @@ fn ast_expr_id(e: AstExpr) -> Int {
         AstExpr::Tuple(x) => x.id,
         AstExpr::Range(x) => x.id,
         AstExpr::Index(x) => x.id,
+        AstExpr::Macro(x) => x.id,
     }
 }
 
@@ -768,4 +953,31 @@ fn ast_quote(s: String) -> String {
     parts.push(s.slice(start, n));
     parts.push("\"");
     parts.join("")
+}
+
+// ast_new_pattern returns a pattern with no parts set (a binding of "").
+fn ast_new_pattern(id: Int, pos: AstPos) -> AstPattern {
+    AstPattern {
+        id: id,
+        pos: pos,
+        wildcard: false,
+        tuple: false,
+        mutable: false,
+        bind: "",
+        ty: "",
+        ctor: "",
+        args: Vec::new(),
+        int_value: None,
+        bool_lit: None,
+        str_value: None,
+        alts: Vec::new(),
+        range: false,
+        range_lo: None,
+        range_hi: None,
+        range_incl: false,
+        at: Vec::new(),
+        brace: false,
+        fields: Vec::new(),
+        rest: false,
+    }
 }

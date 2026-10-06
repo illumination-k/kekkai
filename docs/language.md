@@ -5,33 +5,66 @@
 ## プログラムの構成
 
 - 1 ファイル、または 1 ディレクトリ（中の `*.kek` すべてが 1 つの名前空間）が 1 プログラム。
-- トップレベルは `struct`・`enum`・`trait`・`impl`・`fn` のみ。グローバル変数はない（＝暗黙の権限がない）。
-- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・イテレータ・`HashMap`／`HashSet`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
+- ディレクトリのサブディレクトリはモジュール（`foo/` が `foo`、`a/b/` が `a::b`。`mod foo;` は書かない）。直下のファイルはルートモジュール。設計は [modules.md](modules.md)。
+  - 項目は `pub` を付けない限り、そのモジュールと子孫からだけ見える。固有の `impl` のメソッドと struct のフィールドも同じ（`pub fn`・`pub x: Int`）。ルートモジュールの項目は `pub` なしでどこからでも `crate::x` で名指せる。
+  - パスは `foo::bar()`・`foo::Type::new()`・`foo::Enum::V`・`crate::x`・`super::x`・`self::x`。先頭は `crate`・`self`・`super`・子モジュール・`use` した名前。
+  - `use foo::bar;`・`use foo::{a, b as c};`・`use foo::*;`・`use crate::util;` はそのファイルだけに効く。core と prelude の名前はどこからでも見える。trait のメソッドは `use` しなくても見つかる。
+  - `#[main]`・`#[handler]` はルートモジュールに置く。診断・`kek caps`・`kek test` などはモジュールの項目を `foo::bar` と表示する。
+- トップレベルは `use` と `struct`・`enum`・`trait`・`impl`・`fn`・`type`・`const`（それぞれ `pub` を付けられる）のみ。グローバル変数はない（＝暗黙の権限がない）。`const` は純粋な値で、使うたびに評価される（下記「定数」）。
+- どのプログラムにも core ライブラリ（`lib/core`：比較・ハッシュ・`Default`・表示（`Display`・`Debug`）・演算子（`Add` など）・イテレータ・`Vec`／`Int`／`Float`／`String`／`Option`／`Result` のメソッド・`HashMap`／`HashSet`／`BTreeMap`／`BTreeSet`／`VecDeque`・ラベル付きの値の `Labeled`・権限の `Can`・シリアライズの `Value`／`Json`／`Toml`・時刻の `Timestamp`／`Duration`／`Date`）が含まれる。core の型名と trait 名は予約されている。`__` で始まる名前は core と prelude だけが使える。
 - エントリポイントは次のどちらか一つ。
   - `#[handler] fn h(req: Request, db: &Db, ...) -> Response`：Workers の HTTP ハンドラ（`#[handler(idempotent)]` は冪等なハンドラ。下記）
   - `#[main] fn main(args: Vec<String>, fs: &Fs, ...) -> Int`：コマンドラインプログラム（`kek run`）
-- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`#[test(cases = N)]` でケース数を指定）。
+- `#[test]` 関数は `kek test` がモック capability を渡して実行する。capability 以外の引数（`Int`・`Float`・`String`・`Vec`・自前の struct/enum など）を取るとプロパティベーステストになり、引数は生成される（`Float` は有限の値だけで、0.0・-0.0・±1・極値・非正規化数に偏らせる。NaN と無限大は生成しない。縮小は 0.0 に向かう）（`#[test(cases = N)]` でケース数を指定）。テストの中でだけ `assert!`・`assert_eq!` などが使える（下記「マクロ」）。
 
 ## 型
 
 | 型 | 説明 |
 | --- | --- |
 | `Int` | 64bit 符号付き整数。演算はラップアラウンド、`x / 0 == 0`、`x % 0 == x`（panic しない） |
+| `Float` | 64bit の IEEE 754 浮動小数点数（Rust の `f64`、Go の `float64`）。`Int` との暗黙の変換はない（下記「浮動小数点数」） |
 | `Bool`, `String`, `()` | 文字列は不変 |
 | `(A, B, ...)` | タプル（不変の値）。要素は `t.0`、`(A,)` は 1 要素 |
 | `Option<T>`, `Result<T, E>` | `Some`/`None`, `Ok`/`Err` |
 | `Vec<T>` | 伸長可能な配列（参照型） |
-| `HashMap<K, V>`, `HashSet<T>` | core ライブラリのコレクション（下記） |
+| `HashMap<K, V>`, `HashSet<T>`, `BTreeMap<K, V>`, `BTreeSet<T>`, `VecDeque<T>` | core ライブラリのコレクション（下記） |
 | `Labeled<L, T>` | ラベル付きの値（個人情報は `Labeled<PII, T>`）。文字列にできない（下記） |
 | `Can<A, r>` | 資源 `r`（変数）への操作 `A` の権限（下記） |
 | `struct S<T> { f: T, mut g: T }` | フィールドは既定で不変、`mut` を付けたものだけ代入できる（参照型） |
-| `enum E<T> { A, B(T, U) }` | 再帰的に定義してよい |
+| `struct S<T>(T, mut U);`, `struct S;` | タプル構造体（フィールドは `s.0`）とユニット構造体（下記「構造体と列挙型の形」） |
+| `enum E<T> { A, B(T, U), C { x: T, y: U } }` | 再帰的に定義してよい。`C { .. }` は構造体のようなバリアント |
 | `fn(A, B) -> R` | 関数・クロージャの値（純粋） |
+| `dyn Trait`, `Box<dyn Trait>` | trait object：trait を実装したいろいろな型の値（下記「trait object と `impl Trait`」）。`Box<T>` は `T` と同じ |
+| `impl Trait` | 引数では匿名の型パラメータ、戻り値では本体から推論される不透明な型（下記） |
 | `Request`, `Response`, `TxError`, `NetError`, `IoError` | ホストが提供する不透明なデータ |
 | `&Log`, `&Net`, `&Db`, `&Clock`, `&Random`, `&Fs`, `Tx`, `&Tx` | capability（下記） |
 
 - struct・enum・`Vec`・`HashMap` は参照型で、代入や引数渡しは参照の共有になる。capability 以外の `&T`・`&mut T` は型としては `T` と同じで、実行時には何もしないが、どの参照から書き換えられるかを表す（下記「可変性」）。式の `&x`・`&mut x` も同じで、`*x` は何もしない。
 - 型推論は関数本体の中だけで行う（関数のシグネチャは明示）。本体では `_` を型の代わりに書ける（`Vec<_>`）。
+
+### 浮動小数点数（`Float`）
+
+```kek
+let r = 1.5;                         // リテラル：1.5, 0.1, 1e10, 2.5e-3, 1_000.5
+let area = Float::PI * r * r;
+let n = v.len().to_float();          // Int → Float（`Float::from_int(i)` とも）
+let mean = total / n;
+let k = mean.round_to_int();         // Float → Int（飽和、NaN は 0）
+log.info(format!("{} {:?} {:.2}", 0.1 + 0.2, 1.0, area));  // 0.30000000000000004 1.0 7.07
+let x = "3.14".parse_float();        // Option<Float>
+```
+
+- 名前は `Int` に合わせて `Float`（整数型も浮動小数点型も 1 つずつなので幅を名前に入れない）。中身は Rust の `f64` と同じ binary64。
+- リテラルは小数点の後に数字があるか指数を持つ 10 進数（`1.5`、`1e10`、`2.5e-3`、`1_000.5`）。`1.` や `.5` は書けない（`1.max(2)` はメソッド呼び出し、`t.0.1` はタプルの要素）。値は正しく丸められ、`Float` の範囲を超える（`1e400`）とエラー。`kek fmt` は書いた綴りを保つ。パターンには書けない。
+- `+ - * /`・単項 `-`・比較は IEEE 754 の演算（wasm の `f64` 命令）。`%` は切り捨て除算の余り（C の `fmod`、Rust の `f64` の `%`。符号は左辺と同じ、`x % 0.0` は NaN）。`x += 1.0` なども書ける。ビット演算はない。
+- `Int` と混ぜると型エラーで、変換の方法が添えられる（``cannot apply `+` to `Float` and `Int` (there is no implicit conversion: use `i.to_float()` or ...)``）。`as` はないので、`i.to_float()`・`Float::from_int(i)`（最も近い値へ丸める）、`f.trunc_to_int()`・`round_to_int()`・`floor_to_int()`・`ceil_to_int()`（Rust の `as i64` と同じく `Int` の範囲で飽和し、NaN は 0）を使う。
+- `PartialEq`・`PartialOrd` だけを実装し、`Eq`・`Ord`・`Hash` は実装しない（NaN は自分自身と等しくない。Rust と同じ）。したがって `HashMap` のキーや `sort()` には使えず、`Float` を含む型に `Eq`・`Ord`・`Hash` を derive するとエラーになる（`PartialEq`・`PartialOrd`・`Clone`・`Debug`・`Default`・`Serialize`・`Deserialize` は derive できる）。全順序が要るときは `a.total_cmp(&b)`。
+- メソッド：`abs`, `floor`, `ceil`, `trunc`, `round`（0.5 は 0 から遠い方へ）, `round_ties_even`, `fract`, `sqrt`, `powi(n)`, `hypot`, `min`, `max`（NaN を無視する）, `clamp`, `signum`, `copysign`, `recip`, `to_degrees`, `to_radians`, `is_nan`, `is_finite`, `is_infinite`, `is_normal`, `is_sign_negative`, `is_sign_positive`, `to_bits`, `Float::from_bits`, `total_cmp`。関連定数：`Float::NAN`, `INFINITY`, `NEG_INFINITY`, `MAX`, `MIN`, `MIN_POSITIVE`, `EPSILON`, `PI`, `TAU`, `E`, `SQRT_2`, `LN_2`, `LN_10`。`exp`・`ln`・`sin` などの超越関数と `powf`・`mul_add` はまだない。
+- 表示は Rust と同じ。`Display`（`{}`・`to_string()`）は読み戻すと同じ値になる最短の桁で、指数表記を使わない（`1.0` は `1`、`1e21` は `1000000000000000000000`、`1e-7` は `0.0000001`、`-0.0` は `-0`、`NaN`、`inf`、`-inf`）。`Debug`（`{:?}`）は必ず小数部か指数を持つ（`1.0`、`-0.0`、`1e16`、`1.5e-7`。`1e-4` 未満と `1e16` 以上は指数表記）。`{:.2}` は正確な値を偶数丸めで小数 2 桁にする（`{:.1}` で `0.25` は `0.2`、`0.35` は `0.3`）。
+- `s.parse_float() -> Option<Float>` は Rust の `f64::from_str` と同じ文法（符号、`1.`、`.5`、指数、大文字小文字を問わない `inf`・`infinity`・`nan`）で、桁数によらず正しく丸める。
+- NaN のペイロードと NaN の符号は観測できない：`to_bits()` はどの NaN にも正準な quiet NaN（`0x7ff8000000000000`）を返す（wasm の演算が返す NaN のビットは実装によって違いうるため）。
+- 表示・読み込み・`%` は core ライブラリ（`lib/core/flt.kek`）がビット列の上で正確に計算するので、WasmGC と Lean の参照インタプリタで同じ結果になる。
+- 篩型の検査器は `Float` の式を扱わない（QF\_LIA の外。`Float` の比較は事実にならない）。
 
 ## generics
 
@@ -60,6 +93,62 @@ fn largest<T: Ord>(v: Vec<T>, d: T) -> T {
 - `impl` ブロックがメソッドを定義する。レシーバは `self`・`mut self`・`&self`（読み取り専用）・`&mut self`（書き換える）。`Self` は `impl` の対象の型。`impl Pair<Int, Int>` のように特定の型引数だけに定義してもよい。
 - 生成されるコードは型引数ごとに具体化される（単相化）。
 
+## 定数
+
+```kek
+const LIMIT: Int = 10;
+const PRIMES: Vec<Int> = primes_below(LIMIT);
+
+impl Point {
+    const ORIGIN: Point = Point { x: 0, y: 0 };
+
+    fn dist(&self) -> Int { (self.x - Self::ORIGIN.x).abs() + (self.y - Point::ORIGIN.y).abs() }
+}
+
+let m = Int::MAX;   // core の関連定数（`Int::MIN` も）
+```
+
+- `const NAME: T = e;` をトップレベルに、関連定数を固有の `impl` ブロックに書ける（`Type::NAME`、`impl` の中では `Self::NAME`）。trait の関連定数と trait の実装の中の定数はまだない。
+- 定数は引数のない純粋な関数として扱われ、**使うたびに評価される**（`Vec` の定数は使うたびに新しい値）。初期化式は capability を使えない（関数の引数がないので capability の変数が見えない：`const NOW: Int = clock.now_ms();` は ``cannot find value `clock` in this scope``）。初期化式から関数や他の定数を呼んでよい。
+- 名前空間は関数と同じで、同じ名前の関数や定数はエラー。変数・引数・パターンの束縛に定数の名前は使えない（使う場所の名前はいつも定数を指す）。
+- 整数リテラル（`-3` も）の値の定数はパターンに書ける（`match x { LIMIT => .. }` はその値と比べる）。ほかの定数はパターンにできない。
+- 篩型の検査器は整数リテラルの値の定数を値として知っている（関数本体でも、`type Small = Int where self < LIMIT` のような述語の中でも）。
+- `kek caps` は定数を `const NAME: T` と表示し、定義のハッシュ（`kek hash` など）では使った定数が依存になる。
+
+## 構造体と列挙型の形
+
+```kek
+#[derive(PartialEq, Clone, Hash, Serialize, Deserialize)]
+struct Meters(Int);            // タプル構造体
+struct Pair<A, B>(A, mut B);   // `mut` を付けたフィールドだけ代入できる
+struct Marker;                 // ユニット構造体
+
+enum Shape {
+    Rect { w: Int, h: Int },   // 構造体のようなバリアント
+    Dot,
+    Line(Int, Int),
+}
+
+let m = Meters(3);
+let x = m.0 + Pair(1, 2).1;
+let Meters(n) = m;
+let k = Marker;
+let r = Shape::Rect { h: 2, w: 1 };          // フィールドの順は自由。評価は書いた順
+match r {
+    Shape::Rect { w: 0, .. } => "flat",
+    Shape::Rect { w, h: height } => ...,
+    _ => ...,
+}
+let Point { x, mut y } = p;                   // 構造体のパターン（let・match・if let・while let・for）
+```
+
+- タプル構造体 `struct S(A, B);` のフィールドは `0`・`1`… という名前で、`s.0` で読み、`S(a, b)` で作り、`S(p, q)` でパターンにする。数が合わないとエラー。`impl` の中では `Self(a, b)` とも書ける。フィールドは既定で不変で、`struct S(mut Int);` のように型の前に `mut` を付けたものだけ `s.0 = e` で代入できる。
+- ユニット構造体 `struct S;` はフィールドのない構造体で、値もパターンも `S`（`S {}` とも書ける）。
+- 構造体のようなバリアント `V { a: A, b: B }` は `E::V { a: x, b: y }` で作る（すべてのフィールドが必要。`E::V { a, b }` の省略形も可）。順番どおりに書かなくてもよく、値は書いた順に評価される。位置で書くこと（`E::V(x, y)`）はできない。
+- 構造体のパターン `S { a, b: p, mut c, .. }`・`E::V { a, .. }`：`a` は `a: a` の省略形、`..` は残りのフィールドを無視する。`..` がないときはすべてのフィールドを書く（書かないと ``pattern `S` does not mention field(s) `b` ``）。ない名前のフィールドはエラー。入れ子にでき、`match`・`if let`・`while let`・`let`・`for` のどれにも使える。網羅性の検査は構造体をひとつのコンストラクタとして扱う（``missing `Point { .. }` ``）。
+- `#[derive(...)]` はどの形にも使える。シリアライズは serde と同じで、ユニット構造体は `null`、フィールドが 1 つのタプル構造体（newtype）はそのフィールドの値、2 つ以上は配列、構造体のようなバリアントは `{"V": {"a": x, "b": y}}`（[serde.md](serde.md)）。`kek test` のプロパティテストはどの形も生成し、Rust の Debug と同じ形（`Meters(3)`、`Rect { w: 1, h: 2 }`）で表示する。
+- 実装：これらはコンパイラの中で既存の形に書き換えられる（`compiler/desugar.kek`）。タプル構造体はフィールド `0`・`1` の構造体、構造体のようなバリアントは位置のバリアント、定数は引数のない関数になる。タプル構造体の名前を関数の値として渡すこと（`v.iter().map(Meters)`）はまだできない。
+
 ## trait
 
 ```kek
@@ -80,24 +169,100 @@ fn show<T>(x: T) -> String where T: Area + Hash { ... }
 ```
 
 - trait は必須メソッド（`;` で終わる宣言）と既定メソッドを持つ。スーパートレイト（`trait Ord: Eq + PartialOrd`）、関連型（`type Item;`、`Self::Item`、`T::Item`）、型パラメータ（`trait From<T>`）を書ける。
-- 境界は `<T: A + B>`、`where T: A, Self::Item: Ord`、関連型の指定は `I: Iterator<Item = Int>`。
-- 呼び出しはすべて静的に解決する（`dyn` はない）。メソッドは固有メソッド、組み込み、trait の順に探す。
+- 境界は `<T: A + B>`、`where T: A, Self::Item: Ord`、関連型の指定は `I: Iterator<Item = Int>`（`where Self::Item: IntoIterator<IntoIter = J>` のように `where` にも書け、本体での関連型の解決と呼び出し側の型引数の推論に使われる）。
+- 呼び出しは静的に解決する（trait object 経由の呼び出しも、プログラム全体で使われる型への分岐になる。下記）。メソッドは固有メソッド、組み込み、trait の順に探す。
 - trait の関連関数は `T::default()`、`Default::default()`、`Point::default()` のように呼べる。
 - 組み込み型（`Int`、`String`、`Vec` など）には、この program で定義した trait だけを実装できる（core の trait の実装は core にある）。
-- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
+- `#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Default, Clone, Debug, Serialize, Deserialize)]` を struct・enum に付けられる（`Default` は struct のみ）。`Debug` の出力は Rust と同じ（`Point { x: 1, y: 2 }`、`Some(3)`、`Circle(Point { .. }, 3)`、文字列は `"a\"b\n"` のように引用・エスケープ）。`Hash` を導出できるのは `mut` フィールドのない struct だけ。`Float` を含む型には `Eq`・`Ord`・`Hash` を導出できない。`Labeled` を含む型（フィールドの型に `Labeled` が現れる）に導出できるのは `Clone` と `Deserialize` だけ。
 
 ### 演算子と core の trait
 
 | trait | 内容 |
 | --- | --- |
-| `PartialEq`, `Eq` | `==`・`!=`。`Int`・`Bool`・`String`・`()` は組み込みの比較 |
-| `PartialOrd`, `Ord` | `<`・`<=`・`>`・`>=`（`Int` は組み込み）、`cmp -> Ordering`、`max`・`min` |
+| `PartialEq`, `Eq` | `==`・`!=`。`Int`・`Float`・`Bool`・`String`・`()` は組み込みの比較（`Float` は `PartialEq` だけ） |
+| `PartialOrd`, `Ord` | `<`・`<=`・`>`・`>=`（`Int`・`Float` は組み込み。`Float` は `PartialOrd` だけ）、`cmp -> Ordering`、`max`・`min` |
 | `Hash`, `Hasher` | `x.hash(&mut h)`、`DefaultHasher::new()`、`h.finish()` |
 | `Default` | `default() -> Self` |
+| `From<T>` | `from(value: T) -> Self`：`?` がエラー型の変換に使う（下記「文と式」） |
 | `Clone` | `clone(&self) -> Self`：所有する深い複製（下記「可変性」） |
+| `Display`, `Debug` | `fmt(&self, f: &mut Formatter)`：`{}`・`to_string()` と `{:?}`（下記「表示」） |
+| `Add<Rhs>`, `Sub<Rhs>`, `Mul<Rhs>`, `Div<Rhs>`, `Rem<Rhs>`, `Neg` | `+ - * / %` と単項 `-`（下記「演算子のオーバーロード」） |
 | `Iterator`, `DoubleEndedIterator`, `IntoIterator`, `FromIterator<A>`, `Sum<A>`, `Product<A>` | 下記 |
 
-core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Clone` は `HashMap`・`HashSet`・`Labeled` にも）。
+core は `Int`・`Bool`・`String`・`()`・タプル（8 要素まで）・`Option`・`Result`・`Vec` にこれらを実装している（`Float` は `Eq`・`Ord`・`Hash` 以外。`Clone`・`PartialEq`・`Debug` は `HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque` にも、`Clone` は `Labeled` にも。`Display` は `Int`・`Float`・`Bool`・`String`・`()` と時刻の型だけ、`Debug` は `Ordering`・時刻の型にも）。
+
+### 表示（`Display`・`Debug`）
+
+```kek
+trait Display {
+    fn fmt(&self, f: &mut Formatter);
+    fn to_string(&self) -> String { ... }   // 既定メソッド
+}
+trait Debug {
+    fn fmt(&self, f: &mut Formatter);
+}
+
+impl Display for Point {
+    fn fmt(&self, f: &mut Formatter) {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+```
+
+- `Formatter` は文字列を組み立てるだけの core の struct で、`f.write_str(s)`、`f.write_display(&x)`、`f.write_debug(&x)` と `write!(f, ...)`・`writeln!(f, ...)` で書く。Rust と違い `fmt` は何も返さない（書き込みは失敗しない）ので、`fmt::Result` も `?` も要らない。
+- `x.to_string()` は `Display` を実装したどの型にも使える（`Display` の既定メソッド。`Int`・`Bool` は組み込み、`Duration`・`Date` は固有メソッドが優先）。
+- `Labeled` はどちらも実装しない。`format!("{}", u.email)`・`format!("{:?}", u.email)`・`u.email.to_string()` は型エラーで、`"x" + l` と同じく `map`・`zip`・`and_then` と格下げの方法が添えられる。
+
+### 演算子のオーバーロード
+
+```kek
+impl Add for V2 {                 // `impl Add<V2> for V2` と同じ
+    type Output = V2;
+    fn add(self, rhs: V2) -> V2 { V2 { x: self.x + rhs.x, y: self.y + rhs.y } }
+}
+impl Mul<Int> for V2 { type Output = V2; fn mul(self, k: Int) -> V2 { ... } }
+
+fn sum_all<T: Add<Output = T>>(xs: Vec<T>, zero: T) -> T { ... acc = acc + x; ... }
+```
+
+- `Int`（`+` では `String` も）以外の値の `a + b` は `Add::add(a, b)` の呼び出しになる（`-`：`Sub`、`*`：`Mul`、`/`：`Div`、`%`：`Rem`、単項 `-`：`Neg`）。右辺の型は trait の引数で、省くと `Self`（Rust の `Rhs = Self`）。結果の型は `Output`。
+- 呼び出しは静的に解決し、`kek assure`・`kek affected` などの依存（defhash）には実装が入る。篩型の検査器は整数の演算としては扱わない。
+- core は `Int`・`Float`（全部）と `String`（`Add`）に実装しているので、generic な関数から使える。`Float` の `+ - * /` と単項 `-` は組み込みの演算、`%` は core の `Rem` の実装（fmod）。時刻の型には `Duration + Duration`、`Duration - Duration`、`-Duration`、`Duration * Int`、`Timestamp + Duration`、`Timestamp - Duration` がある（2 つの `Timestamp` の差は `t.since(&earlier)`）。
+- 同じ型に同じ trait を右辺の型ごとに複数実装できる（`Mul<Int>` と `Mul<V2>`）。ただし実装の中では `Self::Output` ではなく具体的な型を書く。
+
+## trait object と `impl Trait`
+
+```kek
+trait Shape: Display {
+    fn area(&self) -> Int;
+    fn describe(&self) -> String { format!("{} ({})", self, self.area()) }
+}
+
+let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Circle { r: 2 }), Box::new(Rect { w: 3, h: 4 })];
+let total: Int = shapes.iter().map(|s| s.area()).sum();
+
+fn make(kind: Int) -> Box<dyn Shape> {
+    if kind == 0 { Box::new(Circle { r: 1 }) } else { Box::new(Rect { w: kind, h: 2 }) }
+}
+fn largest(a: &dyn Shape, b: &mut dyn Counter) { ... }
+fn numbers(up: Bool) -> Box<dyn Iterator<Item = Int>> { ... }
+
+fn total(it: impl Iterator<Item = Int>) -> Int { it.sum() }        // 匿名の型パラメータ
+fn evens(n: Int) -> impl Iterator<Item = Int> {                     // 不透明な型
+    (0..n).filter(|x| x % 2 == 0)
+}
+fn price(cents: Int) -> impl Display { Money { cents } }
+```
+
+- `dyn Trait`（`dyn Iterator<Item = Int>` のように trait の引数と関連型も書く。関連型はすべて指定する）は trait を実装した値の型で、`Vec`・フィールド・引数・戻り値・`Option` などどこにでも書ける。Rust と同じく `Box<dyn Trait>`、`&dyn Trait`、`&mut dyn Trait` と書くのが普通だが、値はもともと参照なので `Box<T>` は `T` と同じ型で、`Box::new(x)` は `x` と同じ（プログラムが自分で `Box` を定義したときはそちらが使われる）。
+- 型が `dyn Trait` だと分かっている場所に別の型の値を書くと trait object に変換される（Rust の unsized coercion）：引数（`v.push(..)` も）、型を書いた `let`、`return` と関数の結果、struct のフィールド、代入、`vec![..]` の要素、そこにある `if`・`match`・ブロックの各分岐。値の型がその trait（と関連型の指定）を満たさなければ ``the trait bound `Plain: Shape` is not satisfied``。`Some(Box::new(x))` のように別の型の中に入れた値は変換されないので、先に `let` で `dyn` の型にする。別の trait object への変換（`Box<dyn Shape>` から `Box<dyn Display>`、スーパートレイトへのアップキャスト）もできる。
+- trait object でできるのは、その trait とスーパートレイトのメソッドの呼び出しだけ（フィールドはない）。`&self`・`&mut self`・`self` のメソッドが呼べ、可変性は普通の値と同じ（`&dyn T` からは `&mut self` のメソッドを呼べない。[mutability.md](mutability.md)）。`dyn Display`・`dyn Debug` は `format!` の `{}`・`{:?}` に使える。trait object を `T: Trait` の型引数にもできる。
+- オブジェクト安全性：trait object にできるのは、必須メソッド（スーパートレイトのものも）がすべて `self` のレシーバを持ち、自分の型パラメータを持たず、レシーバ以外に `Self` を使わない trait だけ（違反は ``the trait `Factory` cannot be made into an object: associated function `make` has no `self` parameter``、``method `apply` has generic type parameters``、``method `same` references the `Self` type in its parameters or return type``）。この条件を満たさない既定メソッド（`Iterator::map` など）は、Rust の `where Self: Sized` のメソッドと同じく trait object 自身を `Self` として既定の本体で呼ばれる（`numbers(true).map(|x| x * 10).collect()` が書ける）。条件を満たす既定メソッドは実装ごとの上書きに分岐する。
+- capability：trait object のメソッドも capability を引数に取れる。capability は呼び出しの引数として渡るので第二級のままで、trait の呼び出しと同じく「実装のどれかが呼ばれうる」として扱う（`kek caps`・冪等性・async・`kek assure` の依存はすべての実装を含む）。
+- `impl Trait` を引数の型に書くと匿名の型パラメータ（`fn total<I: Iterator<Item = Int>>(it: I)` と同じ）になる。`Vec<impl Display>` のように中に書いてもよい。
+- `impl Trait` を戻り値の型に書くと、本体から推論される不透明な型になる。すべての `return` と末尾の値は同じ型でなければならず（``mismatched types in function result: expected `Money`, found `String` ``）、その型は trait を満たさなければならない。呼び出し側からは trait（と関連型）しか見えない（``no field `cents` on type `impl Display` ``、`Money` の型には代入できない）。generic な関数では型パラメータごとに別の型になる。固有メソッドに書いてもよいが、trait のメソッドの戻り値（Rust の RPITIT）、`let`・フィールドの型には書けない。自分自身を返す再帰で型が決まらないときは ``cannot resolve opaque type``。
+- `impl Fn(A) -> R`・`dyn Fn(A) -> R` はこれまでどおり関数の値の型 `fn(A) -> R` と同じ。
+- 実装（`compiler/chk_dyn.kek`）：`dyn Trait` の型は lowering で「プログラム中でそこへ変換される具体型（単相化の後）ごとに 1 つの variant を持つ enum」になり、変換は variant を作ること、メソッド呼び出しは variant で分岐して各型の実装を呼ぶ関数（`<dyn Shape as Shape>::area<..>`）になる。クロージャの非関数化と同じく IR の新しい命令は要らず、Lean の参照インタプリタもそのまま動く。不透明な型は、lowering で推論された具体型に置き換わる。
 
 ## クロージャ
 
@@ -112,7 +277,7 @@ fn compose(f: fn(Int) -> Int, g: impl Fn(Int) -> Int) -> fn(Int) -> Int { move |
 - クロージャは純粋な第一級の値で、変数・フィールド・`Vec` に入れられる。名前付きの関数も値として使える（`apply(double, 3)`）。
 - 変数は値で捕捉する（`move` は書いても書かなくてもよい）。捕捉した変数への代入はできない（状態は struct のフィールドに置く）。捕捉した値は束縛の可変性と view を保つ（`let mut v` を捕捉すれば `v.push(..)` できる。`&T` を捕捉したクロージャは読み取り専用の値）。
 - capability を捕捉したり引数に取ったりはできない（クロージャは I/O をしない）。例外は `db.transaction(|tx| ...)` の本体で、これは第二級のまま。
-- 型の書き方は `fn(A) -> R`、`impl Fn(A) -> R`、境界 `F: Fn(A) -> R`（`FnMut`・`FnOnce` も同じ）。
+- 型の書き方は `fn(A) -> R`、`impl Fn(A) -> R`、`Box<dyn Fn(A) -> R>`、境界 `F: Fn(A) -> R`（`FnMut`・`FnOnce` も同じ）。
 
 ## capability
 
@@ -128,7 +293,7 @@ fn compose(f: fn(Int) -> Int, g: impl Fn(Int) -> Int) -> fn(Int) -> Int { move |
 | `&Clock` | `now_ms() -> Int` |
 | `&Random` | `int(lo, hi) -> Int` |
 | `&Net` | `get(url)`, `post(url, body)` → `Result<String, NetError>` |
-| `&Fs` | `read(path)`, `write(path, s)`, `write_bytes(path, Vec<Int>)` → `Result<_, IoError>` |
+| `&Fs` | `read(path)`, `write(path, s)`, `write_bytes(path, Vec<Int>)`, `list(dir)` → `Result<_, IoError>`；標準入出力は `read_line() -> Option<String>`、`read_stdin(n) -> Option<String>`（n バイト）、`write_stdout(s)`（改行なし） |
 | `&Db` | `get(key)`, `transaction(\|tx\| ...)` |
 
 ### トランザクション
@@ -159,7 +324,7 @@ fn handle(req: Request, db: &Db, log: &Log) -> Response { ... }
 
 - 冪等なハンドラと、そこから呼び出しグラフで到達できる関数は、冪等な capability の操作しか使えない。リトライ（同じリクエストの再送、Workers の再実行）で状態が変わらないことを型検査で保証する。
 - 冪等とみなす操作：`log.*`、`clock.now_ms`、`net.get`、`db.get`、`db.transaction`、`tx.get`、`tx.put`（同じキーの上書き）、`tx.delete`（2 回目は何もしない）、`tx.commit`・`tx.rollback`、`fs.read`・`fs.list`・`fs.set_cwd`。
-- それ以外は冪等でない：`net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`、`fs.read_line`（入力を消費する）、`random.int`（リトライで別の ID などを作ってしまう）。新しい操作は一覧に加えるまで冪等でないとみなす。
+- それ以外は冪等でない：`net.post`、`tx.outbox`、`fs.write`・`fs.write_bytes`、`fs.read_line`・`fs.read_stdin`（入力を消費する）、`fs.write_stdout`、`random.int`（リトライで別の ID などを作ってしまう）。新しい操作は一覧に加えるまで冪等でないとみなす。
 - 違反はハンドラに報告する：``idempotent handler `h` reaches `net.post` via `settle` -> `charge` (payments.kek:12), which is not idempotent: a retry would do it again``。
 - 冪等性は操作の種類で判定する。`tx.put` に乱数や時刻を書く・キーの有無で分岐して別の効果を起こす、といった値に依存する性質は見ない。Idempotency-Key で重複を検出する `tx.outbox` のような、実装上冪等なパターンも型では冪等と認めない（`#[handler]` のまま使う）。
 - `kek caps` は冪等なハンドラに `#[handler(idempotent)]`、capability を受け取る関数に `idempotent: true|false` を表示する（JSON は全関数の `idempotent`）。`kek assure` は `idempotent` の保証を記録する。
@@ -198,7 +363,7 @@ fn same_domain(a: User, b: User) -> Labeled<PII, Bool> {
 | `l.expose_unchecked() -> T` | 値そのもの（脱出口） |
 | `clone()` | `T: Clone` なら |
 
-- `Labeled` は表示・変換・比較・順序・ハッシュの trait を実装しない。`log.info(l)`・`"x" + l`・`Response::text(200, l)`・`tx.put(k, l)`・`l.to_string()`・`l == m`・`if` の条件はどれも型エラーになり、エラーには `map`・`zip`・`and_then` と格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。違うラベルの値は `zip` で組み合わせられない。
+- `Labeled` は表示（`Display`・`Debug`）・変換・比較・順序・ハッシュ・演算子の trait を実装しない。`log.info(l)`・`"x" + l`・`format!("{}", l)`・`Response::text(200, l)`・`tx.put(k, l)`・`l.to_string()`・`l == m`・`if` の条件はどれも型エラーになり、エラーには `map`・`zip`・`and_then` と格下げの方法が添えられる。trait の境界を満たさないので generic な関数経由でも漏れない。違うラベルの値は `zip` で組み合わせられない。
 - **暗黙のフロー**：ラベル付きの値で分岐できるのは `map`・`zip`・`and_then` に渡すクロージャの中だけで、その結果は同じラベルで包まれる。クロージャは中身を読み取り専用で受け取り、書き換えられる状態（`&T` で借りていない `Vec` など）と関数の値を捕捉できない（capability はもともと捕捉できない）。関数を渡すときはクロージャ式か名前付きの関数（可変な状態に届く引数は `&T`）。違反は ``the closure given to `map` cannot capture `seen: Vec<Int>`: it has mutable state that the closure could write the labeled value to`` のように報告する（`kek check -json` の phase `flow`）。
 - そのため、格下げしないプログラムでは素の出力はラベル付きの入力に依存しない（非干渉性。終了と時間のチャネルは除く。コア計算での証明は `lean/Kekkai/Flow.lean`）。
 - 格下げ（`mask`・`hash`・`expose_unchecked` の呼び出し）は `kek caps` に関数ごとに一覧され（`declassify`）、`kek assure` に前提 `flow.declassify` として記録される。関数に `#[declassify(reason = "...", owner = "...", expires = "YYYY-MM-DD")]` を付けると、その関数の格下げの承認者・理由・期限になる（`kekkai.toml` の `[flow] declassify_requires` で必須にでき、`[flow] max_declassify_per_module` でファイルごとの数を制限できる。[assure.md](assure.md)）。
@@ -370,7 +535,7 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 
 ### `Clone`
 
-`trait Clone { fn clone(&self) -> Self; }`（core）。`clone()` の結果は所有する深い複製で、共有の参照から得た値もこれで書き換えたり保存したりできる。`#[derive(Clone)]` は全フィールド（enum はペイロード）を複製する。core は `Int`・`Bool`・`String`・`()`・タプル・`Option`・`Result`・`Vec`・`HashMap`・`HashSet`・`Pii`（`T: Clone` のとき）に実装している。
+`trait Clone { fn clone(&self) -> Self; }`（core）。`clone()` の結果は所有する深い複製で、共有の参照から得た値もこれで書き換えたり保存したりできる。`#[derive(Clone)]` は全フィールド（enum はペイロード）を複製する。core は `Int`・`Bool`・`String`・`()`・タプル・`Option`・`Result`・`Vec`・`HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque`・`Pii`（`T: Clone` のとき）に実装している。
 
 ### `kek fix`
 
@@ -379,14 +544,80 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 ## 文と式
 
 - `let x = e;`, `let mut x: T = e;`, `let (a, mut b) = e;`（パターンは反駁不能であること）, `x = e;`, `s.f = e;`（`mut` フィールドのみ。`s` が可変であること）
+- `let P = e else { ... };`（let-else）：`e` が反駁可能なパターン `P` に合えばその変数を束縛し、合わなければ `else` のブロックを実行する。ブロックは `return`・`break`・`continue`（またはそれで終わる `if`/`match`、`loop`）で終わらなければならない（構文として検査する）。型注釈は書けない。`let Some((a, mut b)) = o else { return 0; };`
+- 複合代入 `x += e;`（`-= *= /= %= &= |= ^= <<= >>=` も）は `x = x + e;` と同じ。`s.f += e;`、`v[i] += e;` も書ける。左辺は 2 回評価されるので、変数・フィールド・要素（添字は呼び出しを含まない式。`v.len()` は可）に限る
+- 要素の代入 `v[i] = e;`（`Vec` のみ）：読み出しの `v[i]` と同じく `0 <= i && i < v.len()` の証明が要り（[refinement.md](refinement.md)）、`v` は可変な経路であること（`push` と同じ）。core の `Vec::__index_set` の呼び出しになる
 - `if c { } else if d { } else { }`、`if let P = e { } else { }`（式）
-- `match e { pat => e, ... }`（式、網羅性検査あり、ネスト可）
-- `while c { }`, `while let P = e { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
-- `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet` など）を回る
-- `e?`：`Result` / `Option` の早期リターン（エラー型は一致が必要）
-- 演算子：`+ - * / %`（`String` の `+` は連結）、`== != < <= > >=`（上記の trait）、`&& || !`
+- `match e { pat => e, pat if guard => e, ... }`（式、網羅性検査あり、ネスト可）。ガード `if guard`（`Bool`）は腕の束縛を見られ、ガードのある腕は網羅性に数えない（Rust と同じ）
+- `while c { }`, `while let P = e { }`, `loop { }`, `for x in a..b { }`, `for mut x in v { }`, `for (i, x) in iter { }`, `break;`, `continue;`, `return e;`
+- `loop { }` は無限ループで、`break` か `return` で抜ける。`loop` は式で、値は `break e` の `e`（`break;` は `()`）。すべての `break` の値は同じ型でなければならない。`break` のない `loop` は発散する（型は `!`）ので、`fn f() -> Int { loop { if c { return 1; } } }` は型が合う。式の位置に書ける（`let x = loop { ... break 42; };`、引数、末尾）。ブロックの最後の文が `loop` なら（Rust と同じく）ブロックの値はその `loop` の値になる：`fn f() -> Int { loop { if c { break 1; } } }`
+- ラベル：`'outer: for ...`、`'a: while ...`、`'a: loop { }` と `break 'a;`・`continue 'a;`・`break 'a e;`（`loop` のみ）。ラベルのない `break`・`continue` はいちばん内側のループに働く
+  - 知らないラベル（`use of undeclared label`）、外側のループと同じ名前のラベル（Rust の警告。Kekkai ではエラー）はエラー。クロージャの中から外のループのラベルには飛べない
+  - ラベルはループにだけ付けられる（ラベル付きのブロック `'a: { }` はない）ので、`continue 'a` の行き先はいつもループ
+  - 値を持つ `break e` は `loop` だけ（`while`・`for` から値付きで抜けるとエラー。Rust と同じ）
+  - 篩型の検査は、`break 'a` で抜けるループ `'a` には出口の事実（条件の否定）を付けない。トランザクションの線形性は、`break 'a`・`continue 'a` の時点の状態を `'a` の開始時と比べる
+- match の腕の本体には、波括弧なしで文を書ける：代入・複合代入 `Some(x) => total += x,`、`None => break,`、`None => continue,`、`_ => return 0,`。値は `()`（`break`・`continue`・`return` は `!`）。`kek fmt` は波括弧を付けずに出力する。クロージャの本体には書けない（クロージャは捕捉した変数に代入できない）
+- `for` は範囲・`Vec`・`Iterator`・`IntoIterator`（`HashMap`・`HashSet`・`BTreeMap`・`VecDeque`・`Option` など）を回る
+- `e?`：`Result` / `Option` の早期リターン。`Result<T, E2>` に `?` を使う関数の戻り値が `Result<U, E>` で `E2` と `E` が違うときは、`impl From<E2> for E` があればエラーを `From::from` で変換して返す（Rust と同じ。実装がなければ `` `?` cannot convert the error type `E2` into `E` `` で、`From` の実装か `map_err` を勧める）。`From` は core の trait。`Into` はない。`Option` の `?` は `Option` を返す関数の中だけ
+- 演算子：`+ - * / %`（`String` の `+` は連結、`Float` の `%` は fmod）、`== != < <= > >=`（上記の trait）、`&& || !`、`Int` のビット演算 `& | ^ << >>` と `!x`（ビット反転）。`>>` は算術シフト、シフト量は 64 の剰余（組み込みメソッド `bit_and`・`shl` などと同じ）
+- 優先順位は Rust と同じ：単項 `- ! & *` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > 比較 > `&&` > `||`（比較は連鎖できない）。`kek fmt` は比較やほかのビット演算の中のビット演算、シフトの中の算術に括弧を付ける（`(a & b) == 0`、`1 << (n - 1)`）
+- 浮動小数点数のリテラル：`1.5`、`0.1`、`1e10`、`2.5e-3`、`1_000.5`（上記「浮動小数点数」）
+- 整数リテラル：`255`、`0xff`、`0o17`、`0b1010`、区切り `1_000_000`。`i64` の範囲を超えるとエラー。文字リテラル `'a'`、`'\n'`（`\r \t \\ \' \" \0 \x7f \u{1F600}`）はその Unicode のコードポイントの `Int`（文字の型はない）、バイトリテラル `b'a'`・`b'\xff'` はそのバイトの `Int`。パターンにも書ける。`kek fmt` は書いた綴りを保つ
 - 範囲 `a..b`・`a..=b` は core の `Range`・`RangeInclusive`（`Int` のイテレータ）
-- パターン：`_`、変数（`mut x`）、整数・文字列・真偽値リテラル、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`
+- パターン：`_`、変数（`mut x`）、整数・文字・文字列・真偽値リテラル、整数の定数、タプル `(p, q)`、`Some(p)`、`None`、`Ok(p)`、`Err(p)`、`E::V(p, ...)`、`V`、構造体 `S { a, b: p, .. }`・`E::V { a, .. }`、タプル構造体 `S(p, q)`、ユニット構造体 `S`、or パターン `p | q`、整数の範囲 `lo..=hi`・`lo..hi`・`..=hi`・`lo..`、束縛 `x @ p`（`mut x @ p`）
+  - or パターンはネストでき（`Some(1 | 2)`）、`match` の腕・`if let`・`while let` の先頭には `|` を書いてもよい。どの選択肢も同じ名前を同じ型・同じ可変性で束縛すること。網羅性検査は選択肢ごとに展開して数える
+  - 範囲は `Int` だけで、`lo > hi`（`lo..hi` では `lo >= hi`）はエラー。`Int` は範囲を並べても網羅とみなさない（`_` が要る）
+  - `x @ p` は p に一致した値全体を x に束縛する。p が or パターンなら括弧が要る（`x @ (A | B)`）
+  - 篩型の検査は、整数の範囲・or パターン・`@` の束縛を腕（と `if let`）の事実にし、ガードのない腕の否定を後の `_` の腕の事実にする。ガードは腕の中だけの事実になる
+
+## マクロ
+
+```kek
+let v = vec![1, 2, 3];
+let grid = vec![vec![0; w]; h];          // 要素は clone される
+log.info(format!("{name}: {} items, first = {:?}", v.len(), v.get(0)));
+let s = format!("[{:>8}] [{:<5}] [{:^7}] [{:05}] [{:#x}] [{:+}] [{:.3}]", title, n, c, n, n, n, s);
+if matches!(r, Ok(_)) { ... }
+
+#[test]
+fn parses() {
+    assert!(parse("1").is_ok());
+    assert_eq!(parse("1"), Ok(1), "input {}", "1");
+}
+```
+
+マクロ `name!(...)`・`name![...]` は構文解析で普通の式に展開される（`compiler/macro.kek`）。以降の検査・コード生成は展開結果を見て、`kek fmt` は書いたとおりの呼び出しを出力する。式の位置にも文の位置にも書ける。自分でマクロを定義することはできず、知らない名前はエラーになる。
+
+| マクロ | 展開 |
+| --- | --- |
+| `vec![a, b]`, `vec![]`, `vec![x; n]` | `Vec` を作って `push`。`vec![x; n]` は `x.clone()` を n 個（`T: Clone`） |
+| `format!("...", args)` | `String`（下記） |
+| `write!(f, "...", args)`, `writeln!` | `f.write_str(format!(...))`（`writeln!` は改行を足す）。`Display`・`Debug` の実装で使う |
+| `matches!(e, pat)` | `match e { pat => true, _ => false }`（ガード `if` はまだない） |
+| `assert!(c)`, `assert!(c, "...", args)` | 失敗すると `assertion failed: <c のソース>` かメッセージでテストを止める |
+| `assert_eq!(a, b)`, `assert_ne!(a, b)`（後ろにメッセージも可） | `PartialEq` で比べ、両辺を `Debug` で表示する（`left: ..`・`right: ..`） |
+| `panic!("...", args)`, `unreachable!()`, `todo!()`, `unimplemented!()` | テストを止める（型は何にでもなる） |
+
+書式文字列はコンパイル時に解析する。`{}`（`Display`）、`{:?}`（`Debug`）、`{0}`（位置）、`{name}`（スコープの変数を捕捉、または名前付き引数 `name = e`）、`{{`・`}}`（波括弧そのもの）。書式指定は `{:[[fill]align][+][#][0][width][.precision][type]}`：
+
+- `width` と `align`（`<` 左、`^` 中央、`>` 右）・`fill`（任意の 1 文字）は表示した文字列（コードポイント数）を詰める。揃えの既定は数（`Int`・`Float`）が右、ほかは左。
+- `+`（正でも符号）、`0`（符号と接頭辞の後ろを 0 で埋める）、`#`（`0x`・`0b`・`0o`）、`type` の `x`・`X`・`b`・`o`（16・2・8 進。負の数は Rust の i64 と同じく 2 の補数）は `Int` だけ。
+- `.precision` は `Float` では小数点以下の桁数（正確な値を偶数丸め：`{:.2}`）、`String` などほかの `Display` では先頭の n 文字、`Int` では無視される（Rust と同じ）。`+`・`0`・`type` は `Float` には使えない。
+- `{:#?}`（整形した Debug）、`{:e}`、`width$` の引数指定は未対応。
+- 誤りはコンパイルエラーになる：引数が足りない（`2 positional arguments in format string, but there is 1 argument`）、使われない引数（`argument never used`）、範囲外の位置、閉じていない `{`・対応のない `}`、知らない書式、文字列リテラルでない書式文字列、`Display`・`Debug` を実装しない値（`#[derive(Debug)]` や `impl Display` を勧める）。
+- 引数はちょうど 1 回、書いた順に評価される。
+
+`assert!` などの止まるマクロは **`#[test]` 関数の中でだけ**使える。Kekkai の本番コードは panic しない約束なので、ほかの場所（テストから呼ぶ補助関数も含む）では `` `assert!` can only be used in `#[test]` functions: Kekkai code does not panic; return a `Result` or an `Option` ... `` というエラーになる。テストで失敗すると、そのテストだけが止まり、メッセージが報告される（ほかのテストは続く）：
+
+```
+test eq_fails ... FAILED (panicked)
+    panicked at asserts.kek:26:5:
+    assertion `left == right` failed
+      left: Pair { a: 4, b: "x" }
+     right: Pair { a: 5, b: "x\n" }
+```
+
+実行時には prelude の `__panic_report` が標準エラーにこれを書いて終了コード 101 で終わる（モックの `log` の行と outbox も続けて出す）。prelude のない IR（`kek ir`、Lean の参照インタプリタ）では `unreachable` になる。`println!`・`print!`・`eprintln!`・`dbg!` は使えない（出力には capability が要る）。エラーは `log.info(format!(...))` を勧める。
 
 ## イテレータ
 
@@ -397,15 +628,36 @@ for (i, w) in words.iter().enumerate() { ... }
 ```
 
 - `Iterator` は `type Item;` と `fn next(&mut self) -> Option<Self::Item>` を持つ。自分の型に実装すれば `for` やアダプタが使える。
-- アダプタ：`map`, `filter`, `filter_map`, `enumerate`, `zip`, `chain`, `take`, `skip`, `take_while`, `skip_while`, `step_by`, `peekable`（`peek`）, `rev`（`DoubleEndedIterator`）
-- 消費：`count`, `last`, `nth`, `fold`, `for_each`, `any`, `all`, `find`, `find_map`, `position`, `collect`（`Vec`・`String`・`HashMap`・`HashSet` へ）, `sum`, `product`, `max`, `min`, `max_by_key`, `min_by_key`
+- アダプタ：`map`, `filter`, `filter_map`, `enumerate`, `zip`, `chain`, `take`, `skip`, `take_while`, `skip_while`, `step_by`, `peekable`（`peek`）, `rev`（`DoubleEndedIterator`）, `flat_map`, `flatten`, `scan`, `inspect`, `map_while`, `fuse`, `cycle`, `copied`, `cloned`
+- 消費：`count`, `last`, `nth`, `fold`, `for_each`, `any`, `all`, `find`, `find_map`, `position`, `collect`, `sum`, `product`, `max`, `min`, `max_by_key`, `min_by_key`, `max_by`, `min_by`, `reduce`, `try_fold`, `try_for_each`, `partition`, `unzip`, `is_sorted`, `is_sorted_by`, `is_sorted_by_key`, 比較 `eq`・`ne`・`lt`・`le`・`gt`・`ge`・`cmp`（辞書順。相手は `Iterator`：`(1..4).eq(v.iter())`）
+- `collect` の行き先：`Vec`・`HashMap`・`HashSet`・`BTreeMap`・`BTreeSet`・`VecDeque`・`String`（`String` の要素か、コードポイントの `Int`：`s.chars().rev().collect::<String>()`。U+FFFF を超えるものはサロゲートペアに、スカラー値でないものは U+FFFD にする）、`Option<C>`（最初の `None` で `None`）、`Result<C, E>`（最初の `Err`）。`sum`・`product` も `Option`・`Result` の要素を受け取る。
+- `flat_map` と `flatten` は要素を `IntoIterator`（`Vec`・`Option`・`Result`・`HashMap` など）として展開する。範囲（`Range`）はイテレータだが `IntoIterator` ではないので、`flat_map(|x| (0..x).collect::<Vec<Int>>())` のように `Vec` にする。
+- Rust との違い（値は借用されないため）：
+  - `scan(init, |st, x| ...)` のクロージャは `&mut St` を書き換えるのではなく、`Option<(次の状態, 出す要素)>` を返す（`None` で止まる）。
+  - `try_fold(init, |acc, x| ...)` と `try_for_each` のクロージャは `Option` か `Result` を返し、最初の `None`・`Err` で止まってそれを返す。
+  - `partition` は `(Vec<T>, Vec<T>)`、`unzip` は `(Vec<A>, Vec<B>)` を返す（行き先の型は選べない）。
+  - `copied` は何もしない（要素はもともと値）。`cloned` は各要素を `clone()` するので、共有の参照から回しても要素は所有する値になる（`items.iter().filter(..).cloned().collect()` を `Vec<Item>` として返せる）。
+  - `cycle` はイテレータを複製せず、1 周目の要素を覚えて繰り返す（クロージャは純粋なので結果は同じ）。
 - `v.iter()` は `Vec` を添字で回る。`for x in v` と同じく、回っている間に `push` された要素も見える。
 
 ## コレクション
 
 ### `Vec<T>`
 
-`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `iter`, `join(sep)`（`Vec<String>`）
+組み込み：`Vec::new()`, `push`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `pop`, `len`, `join(sep)`（`Vec<String>`）。`v[i]` で読み、`v[i] = x` で書く（範囲の証明が要る）。core（`lib/core/vec.kek`・`iter.kek`）は Rust の `Vec`・スライスと同じ名前のメソッドを足している。
+
+- 生成・情報：`Vec::with_capacity(n)`（容量は持たないので `new` と同じ）, `iter`, `is_empty`, `first`, `last`, `slice(a, b)`（`v[a..b].to_vec()` に当たる新しい `Vec`）
+- 書き換え（`&mut self`）：`insert(i, x)`, `remove(i) -> Option<T>`, `swap_remove(i) -> Option<T>`, `swap(i, j)`, `reverse`, `truncate(n)`, `clear`, `extend(iter)`（`Iterator`。`Vec` は `v.iter()` を渡す）, `append(&mut other)`（`other` は空になる）, `split_off(at) -> Vec<T>`, `retain(|x| ..)`, `dedup_by(|a, b| ..)`, `dedup_by_key(|x| ..)`, `rotate_left(k)`, `rotate_right(k)`
+- 整列：`sort_by(|a, b| Ordering)`, `sort_by_key(|x| k)` は安定なマージソート（O(n log n)）。`sort_unstable_by`・`sort_unstable_by_key` は同じもの。`binary_search_by(|x| Ordering) -> Result<Int, Int>`、`binary_search_by_key(&k, |x| ..)`、`partition_point(|x| ..)`
+- 分割：`chunks(n)`, `windows(n)`（`Vec<Vec<T>>`。`n < 1` は空）
+- `T: PartialEq`：`contains(&x)`, `starts_with(&v)`, `ends_with(&v)`, `dedup`（連続する重複を除く）
+- `T: Ord`：`sort`, `sort_unstable`, `binary_search(&x) -> Result<Int, Int>`（`Ok(一致した位置)` か `Err(順序を保って挿入できる位置)`）
+- `T: Clone`：`fill(x)`, `resize(n, x)`, `extend_from_slice(&v)`, `repeat(n)`（要素は複製する）
+- `Vec<Vec<T>>`：`concat`
+
+panic はしない。要素の間の位置（`insert`・`split_off`・`truncate`・`resize`・`slice` の範囲）は `[0, len]` に丸め（`insert(100, x)` は末尾に足す）、要素の添字（`remove`・`swap_remove`・`swap`）が範囲外なら `None` か何もしない。
+
+`extend` と `append` は要素を共有する（参照型の要素は複製しない）。`extend_from_slice` は `clone()` した要素を足す。
 
 `for x in v` は毎回 `v.len()` を読み直す。本体で `v`（やその別名）に `push` すると終わらないので注意する。
 
@@ -413,14 +665,73 @@ for (i, w) in words.iter().enumerate() { ... }
 
 キーは `Hash + Eq + Ord`。
 
-- `HashMap`：`new`, `with_capacity`, `insert(k, v) -> Option<V>`（古い値）, `get(&k) -> Option<V>`, `get_or(&k, d)`, `contains_key`, `remove(&k) -> Option<V>`, `len`, `is_empty`, `clear`, `iter`（`(K, V)`）, `keys`, `values`, `retain`, `extend`
-- `HashSet`：`new`, `insert(x) -> Bool`, `contains`, `remove -> Bool`, `len`, `is_empty`, `clear`, `iter`, `extend`, `retain`, `is_subset`, `union`・`intersection`・`difference`（`Vec<T>` を返す）
+- `HashMap`：`new`, `with_capacity`, `insert(k, v) -> Option<V>`（古い値）, `get(&k) -> Option<V>`, `get_or(&k, d)`, `get_key_value`, `contains_key`, `remove(&k) -> Option<V>`, `remove_entry(&k) -> Option<(K, V)>`, `len`, `is_empty`, `clear`, `iter`（`(K, V)`）, `keys`, `values`, `into_keys`, `into_values`, `retain`, `extend`, `entry`（下記）。`==` は順序によらずキーと値で比べる
+- `HashSet`：`new`, `insert(x) -> Bool`, `contains`, `remove -> Bool`, `len`, `is_empty`, `clear`, `iter`, `extend`, `retain`, `is_subset`, `is_superset`, `is_disjoint`, `union`・`intersection`・`difference`・`symmetric_difference`（`Vec<T>` を返す）
 - 反復は**挿入順**（既存のキーへの `insert` は位置を保ち、`remove` の後の `insert` は末尾）。ハッシュは固定（seed なし）なので結果は決定的。
 - 反復は**生きたビュー**で、反復中に追加されたエントリも見え、削除されたエントリは飛ばす。
 - 同じバケットへの衝突が 8 を超えると、そのバケットはキーの順序で並べた木になる。わざと衝突させる入力（HashDoS）でも各操作は O(log n)。
 
+### entry API
+
+```kek
+let mut counts: HashMap<String, Int> = HashMap::new();
+for w in text.split_whitespace() {
+    counts.entry(w).and_modify(|n| n + 1).or_insert(1);
+}
+groups.entry(key).or_insert(Vec::new()).push(item);   // 格納された Vec に足す
+match m.entry(k) {
+    Entry::Occupied(mut o) => { let old = o.insert(o.get() + 1); }
+    Entry::Vacant(v) => { v.insert(0); }
+}
+```
+
+`HashMap` と `BTreeMap` の `entry(k)` は Rust と同じ形の `Entry`（`Entry::Occupied(OccupiedEntry)`・`Entry::Vacant(VacantEntry)`）を返す（`lib/core/entry.kek`。型は `Entry<M, K, V>` で、`M` は元のマップ）。`entry` は `&mut self` なので、共有の参照（`&HashMap`）からは呼べない。
+
+- `Entry`：`or_insert(v)`, `or_insert_with(|| v)`, `or_insert_with_key(|k| v)`, `or_default()`（`V: Default`）, `and_modify(|v| 新しい値)`, `key()`, `insert_entry(v)`
+- `OccupiedEntry`：`key`, `get`, `insert(v) -> V`（古い値）, `remove() -> V`, `remove_entry() -> (K, V)`
+- `VacantEntry`：`key`, `into_key`, `insert(v) -> V`
+- Rust との違い：値は借用されないので、`&mut V` の代わりに値 `V` を返す。struct や `Vec` の値は参照型なので、返された値はマップの中の値そのもの（`or_insert(Vec::new()).push(x)` は格納された `Vec` に足す）。`Int` などの値は書き換えられないので、`and_modify` は `FnMut(&mut V)` ではなく `fn(V) -> V` を取り、結果を格納し直す。
+
+### `BTreeMap<K, V>` と `BTreeSet<T>`
+
+キーは `Ord` で、**キーの順**に並ぶ（`lib/core/btree.kek`）。実装は AVL 木で（名前と API は Rust に合わせた）、`insert`・`get`・`remove`・`first_key_value`・`pop_first` などは O(log n)。
+
+- `BTreeMap`：`new`, `insert(k, v) -> Option<V>`, `get`, `get_key_value`, `contains_key`, `remove`, `remove_entry`, `len`, `is_empty`, `clear`, `iter`・`keys`・`values`（キーの昇順。`DoubleEndedIterator` なので `rev()` で降順）, `into_keys`, `into_values`, `first_key_value`, `last_key_value`, `pop_first`, `pop_last`, `range(r)`, `entry`, `retain`, `extend`, `append(&mut other)`
+- `BTreeSet`：`new`, `insert -> Bool`, `contains`, `remove -> Bool`, `len`, `is_empty`, `clear`, `iter`, `first`, `last`, `pop_first`, `pop_last`, `range(r)`, `retain`, `extend`, `append`, `is_subset`, `is_superset`, `is_disjoint`, `union`・`intersection`・`difference`・`symmetric_difference`（昇順の `Vec<T>`）
+- `range` は `RangeBounds<K>` を受け取る：`Int` のキーなら `m.range(2..5)`・`m.range(2..=5)`、どのキーでも `Bound` の組 `m.range((Bound::Excluded(lo), Bound::Included(hi)))`（`Bound::Included`・`Excluded`・`Unbounded`）。片側が `Bound::Unbounded` のときは型を推論できないので `Bound::<String>::Unbounded` か `let hi: Bound<String> = Bound::Unbounded;` と書く。`k..`・`..k` の範囲式はない。
+- 反復は `HashMap` と同じく**生きたビュー**：イテレータは最後に返したキーを覚え、次のキーを根から探す（1 歩 O(log n)）。反復中に挿入されたキーも（まだ通っていなければ）見え、削除されたキーは飛ばす。
+- `FromIterator`・`IntoIterator`・`Clone`・`PartialEq`・`Eq`・`Debug`（`{1: "a"}`・`{1, 2}`）・`Default` を実装している。
+
+### `VecDeque<T>`
+
+両端キュー（`lib/core/vecdeque.kek`）。リングバッファで、両端の `push`・`pop` は償却 O(1)、`get(i)` は O(1)。
+
+- `new`, `with_capacity(n)`, `capacity`, `len`, `is_empty`, `push_back`, `push_front`, `pop_back`, `pop_front`, `front`, `back`, `get(i) -> Option<T>`, `set(i, x) -> Bool`, `swap`, `insert(i, x)`（`[0, len]` に丸める）, `remove(i) -> Option<T>`, `truncate`, `retain`, `rotate_left`, `rotate_right`, `append(&mut other)`, `extend`, `clear`, `contains`（`T: PartialEq`）, `iter`（前から。`rev()` できる）, `make_contiguous`（前からの `Vec<T>`）
+- `Vec` と同じく panic しない（範囲外の添字は `None` か何もしない）。`v[i]` の添字の構文は `Vec` だけ。
+- `FromIterator`・`IntoIterator`・`Clone`・`PartialEq`・`Eq`・`Debug`（`[1, 2]`）・`Default` を実装している。
+
 ## 組み込みメソッド（抜粋）
 
+- `Int`：`to_string`, `abs`, `min`, `max`, `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, `cmp`（組み込み）と core（`lib/core/int.kek`）の
+  - `Int::max_value()`・`Int::min_value()`（関連定数はまだないので `Int::MAX`・`Int::MIN` の代わり）
+  - `pow(e)`（ラップアラウンド。負の `e` は整数除算と同じく切り捨て：`1` は 1、`-1` は ±1、ほかは 0）
+  - `checked_add`, `checked_sub`, `checked_mul`, `checked_div`, `checked_rem`, `checked_pow`, `checked_neg`, `checked_abs` は `Option<Int>`（オーバーフロー・0 での除算・`MIN / -1`・負の指数で `None`）
+  - `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`（演算子と同じ）、`saturating_add`, `saturating_sub`, `saturating_mul`, `saturating_pow`（範囲の端で止まる）
+  - `signum`, `is_positive`, `is_negative`, `abs_diff`（`Int` を返し、`Int::MAX` を超えるとラップする）, `clamp(lo, hi)`（`lo > hi` なら `hi`）
+  - `rem_euclid`, `div_euclid`（余りは `[0, |b|)`。`%`・`/` と同じく 0 で割ると `x` と `0`）
+  - `count_ones`, `count_zeros`, `leading_zeros`, `trailing_zeros`（64bit の 2 の補数。0 は 64）, `is_power_of_two`
+- `String`：`len`, `char_at(i) -> Option<Int>`（UTF-16）, `slice(a, b)`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`, `replace`, `trim`, `to_upper`, `to_lower`, `parse_int`, `to_bytes`；`String::from_char(c)`, `String::from_bytes(v)`（組み込み）と core（`lib/core/string.kek`）の
+  - `String::new()`, `is_empty`, `to_string`・`to_owned`・`as_str`（そのまま返す）
+  - `chars()`：コードポイント（`Int`）のイテレータ（`DoubleEndedIterator` なので `rev()` できる。サロゲートペアは 1 つ、孤立したサロゲートは U+FFFD）。`char_indices()` は `(UTF-16 の位置, コードポイント)`。文字数は `chars().count()`
+  - `bytes()`：UTF-8 のバイトのイテレータ（`Vec` は `to_bytes`）
+  - `find(pat)`（= `index_of`）, `rfind(pat)` は `Option<Int>`
+  - `strip_prefix`, `strip_suffix` は `Option<String>`、`split_once`, `rsplit_once` は `Option<(String, String)>`
+  - `trim_start`, `trim_end`（`trim` と同じ空白）, `trim_start_matches(pat)`, `trim_end_matches(pat)`
+  - `lines()`（`\n` と `\r\n` で分ける。末尾の改行の後に空行は数えない）, `split_whitespace()`, `splitn(n, sep)`（最大 `n` 個、最後に残り）は `Vec<String>`
+  - `repeat(n)`, `eq_ignore_ascii_case(s)`
+- `Option`/`Result`：`is_some`, `is_none`, `is_ok`, `is_err`, `unwrap_or`（組み込み）と core の `map`, `and_then`, `and`, `or`, `or_else`, `xor`, `filter`, `unwrap_or_else`, `unwrap_or_default`, `map_or`, `map_or_else`, `ok_or`, `ok_or_else`, `is_some_and`, `is_none_or`, `zip`, `inspect`, `iter`, `flatten`, `transpose`（`Result` は `map_err`, `ok`, `err`, `is_ok_and`, `is_err_and`, `inspect_err` も）。`unwrap`・`expect` はない
+- `Bool`：`then(|| x)`, `then_some(x)`
+- `Display` を実装した型：`to_string`（`String` にも）
 - `Int`：`to_string`, `abs`, `min`, `max`, `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, `cmp`
 - `String`：`len`, `char_at(i) -> Option<Int>`（UTF-16）, `slice(a, b)`, `index_of`, `contains`, `starts_with`, `ends_with`, `split`, `replace`, `trim`, `to_upper`, `to_lower`, `parse_int`, `to_bytes`；`String::from_char(c)`, `String::from_bytes(v)`
 - `Option`/`Result`：`is_some`, `is_none`, `is_ok`, `is_err`, `unwrap_or`

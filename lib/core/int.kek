@@ -1,0 +1,310 @@
+// Methods of Int, as in Rust's i64 (`to_string`, `abs`, `min`, `max` and
+// the bit operations are builtins). Arithmetic wraps around and nothing
+// panics: `checked_*` reports overflow and division by zero as None,
+// `saturating_*` stops at the bounds, and `wrapping_*` is the plain
+// operator. There are no associated constants yet, so Int::MAX and
+// Int::MIN are the functions Int::max_value() and Int::min_value().
+
+impl Int {
+    fn max_value() -> Int {
+        9223372036854775807
+    }
+
+    fn min_value() -> Int {
+        -9223372036854775807 - 1
+    }
+
+    fn is_positive(self) -> Bool {
+        self > 0
+    }
+
+    fn is_negative(self) -> Bool {
+        self < 0
+    }
+
+    // signum is -1, 0 or 1.
+    fn signum(self) -> Int {
+        if self > 0 {
+            1
+        } else if self < 0 { -1 } else { 0 }
+    }
+
+    // pow is self raised to e, wrapping around on overflow. A negative e
+    // gives the truncated result as integer division does: 1 for 1, ±1 for
+    // -1 and 0 otherwise.
+    fn pow(self, e: Int) -> Int {
+        if e < 0 {
+            if self == 1 {
+                return 1;
+            }
+            if self == -1 {
+                return if e % 2 == 0 { 1 } else { -1 };
+            }
+            return 0;
+        }
+        let mut base = self;
+        let mut k = e;
+        let mut r = 1;
+        while k > 0 {
+            if k % 2 == 1 {
+                r = r * base;
+            }
+            k = k / 2;
+            if k > 0 {
+                base = base * base;
+            }
+        }
+        r
+    }
+
+    // ---- checked ----
+
+    fn checked_add(self, b: Int) -> Option<Int> {
+        let r = self + b;
+        if (self >= 0) == (b >= 0) && (r >= 0) != (self >= 0) {
+            None
+        } else {
+            Some(r)
+        }
+    }
+
+    fn checked_sub(self, b: Int) -> Option<Int> {
+        let r = self - b;
+        if (self >= 0) != (b >= 0) && (r >= 0) != (self >= 0) {
+            None
+        } else {
+            Some(r)
+        }
+    }
+
+    fn checked_mul(self, b: Int) -> Option<Int> {
+        if self == 0 || b == 0 {
+            return Some(0);
+        }
+        let min = Int::min_value();
+        if (self == -1 && b == min) || (b == -1 && self == min) {
+            return None;
+        }
+        let r = self * b;
+        if r / b != self { None } else { Some(r) }
+    }
+
+    // checked_div is None for a zero divisor and for MIN / -1.
+    fn checked_div(self, b: Int) -> Option<Int> {
+        if b == 0 || (b == -1 && self == Int::min_value()) {
+            None
+        } else {
+            Some(self / b)
+        }
+    }
+
+    fn checked_rem(self, b: Int) -> Option<Int> {
+        if b == 0 || (b == -1 && self == Int::min_value()) {
+            None
+        } else {
+            Some(self % b)
+        }
+    }
+
+    // checked_pow is None on overflow and for a negative exponent.
+    fn checked_pow(self, e: Int) -> Option<Int> {
+        if e < 0 {
+            return None;
+        }
+        let mut base = self;
+        let mut k = e;
+        let mut r = 1;
+        while k > 0 {
+            if k % 2 == 1 {
+                match r.checked_mul(base) {
+                    Some(x) => {
+                        r = x;
+                    }
+                    None => {
+                        return None;
+                    }
+                }
+            }
+            k = k / 2;
+            if k > 0 {
+                match base.checked_mul(base) {
+                    Some(x) => {
+                        base = x;
+                    }
+                    None => {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(r)
+    }
+
+    fn checked_neg(self) -> Option<Int> {
+        if self == Int::min_value() {
+            None
+        } else {
+            Some(0 - self)
+        }
+    }
+
+    fn checked_abs(self) -> Option<Int> {
+        if self == Int::min_value() {
+            None
+        } else {
+            Some(self.abs())
+        }
+    }
+
+    // ---- wrapping (the operators already wrap) ----
+
+    fn wrapping_add(self, b: Int) -> Int {
+        self + b
+    }
+
+    fn wrapping_sub(self, b: Int) -> Int {
+        self - b
+    }
+
+    fn wrapping_mul(self, b: Int) -> Int {
+        self * b
+    }
+
+    fn wrapping_neg(self) -> Int {
+        0 - self
+    }
+
+    // ---- saturating ----
+
+    fn saturating_add(self, b: Int) -> Int {
+        match self.checked_add(b) {
+            Some(r) => r,
+            None => if b > 0 {
+                Int::max_value()
+            } else {
+                Int::min_value()
+            },
+        }
+    }
+
+    fn saturating_sub(self, b: Int) -> Int {
+        match self.checked_sub(b) {
+            Some(r) => r,
+            None => if b < 0 {
+                Int::max_value()
+            } else {
+                Int::min_value()
+            },
+        }
+    }
+
+    fn saturating_mul(self, b: Int) -> Int {
+        match self.checked_mul(b) {
+            Some(r) => r,
+            None => if (self < 0) == (b < 0) {
+                Int::max_value()
+            } else {
+                Int::min_value()
+            },
+        }
+    }
+
+    fn saturating_pow(self, e: Int) -> Int {
+        match self.checked_pow(e) {
+            Some(r) => r,
+            None => {
+                if e < 0 {
+                    self.pow(e)
+                } else if self < 0 && e % 2 == 1 {
+                    Int::min_value()
+                } else {
+                    Int::max_value()
+                }
+            }
+        }
+    }
+
+    // ---- euclidean division ----
+
+    // rem_euclid is the remainder in [0, |b|). As with `%`, a zero divisor
+    // gives self back.
+    fn rem_euclid(self, b: Int) -> Int {
+        let r = self % b;
+        if r < 0 {
+            if b < 0 { r - b } else { r + b }
+        } else {
+            r
+        }
+    }
+
+    // div_euclid is the quotient q with self == q * b + self.rem_euclid(b).
+    // As with `/`, a zero divisor gives 0.
+    fn div_euclid(self, b: Int) -> Int {
+        let q = self / b;
+        if b != 0 && self % b < 0 {
+            if b > 0 { q - 1 } else { q + 1 }
+        } else {
+            q
+        }
+    }
+
+    // clamp restricts self to [lo, hi]; when lo > hi it gives hi (Rust
+    // panics).
+    fn clamp(self, lo: Int, hi: Int) -> Int {
+        if self < lo {
+            if lo > hi { hi } else { lo }
+        } else if self > hi { hi } else { self }
+    }
+
+    // abs_diff is |self - b|, wrapping around when that exceeds Int::MAX
+    // (Rust returns an unsigned integer).
+    fn abs_diff(self, b: Int) -> Int {
+        if self > b { self - b } else { b - self }
+    }
+
+    // ---- bits (of the 64-bit two's complement) ----
+
+    fn count_ones(self) -> Int {
+        let mut x = self;
+        let mut n = 0;
+        while x != 0 {
+            x = x.bit_and(x - 1);
+            n = n + 1;
+        }
+        n
+    }
+
+    fn count_zeros(self) -> Int {
+        64 - self.count_ones()
+    }
+
+    fn leading_zeros(self) -> Int {
+        if self == 0 {
+            return 64;
+        }
+        let mut x = self;
+        let mut n = 0;
+        while x > 0 {
+            x = x.shl(1);
+            n = n + 1;
+        }
+        n
+    }
+
+    fn trailing_zeros(self) -> Int {
+        if self == 0 {
+            return 64;
+        }
+        let mut x = self;
+        let mut n = 0;
+        while x.bit_and(1) == 0 {
+            x = x.ushr(1);
+            n = n + 1;
+        }
+        n
+    }
+
+    fn is_power_of_two(self) -> Bool {
+        self > 0 && self.bit_and(self - 1) == 0
+    }
+}

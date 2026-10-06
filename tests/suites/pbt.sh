@@ -232,8 +232,42 @@ t_refined() {
 	rm -rf "$d"
 }
 
+# Tuple structs, unit structs and struct-like variants are generated and
+# printed like Rust's Debug.
+t_forms() {
+	d=$(tmpdir)
+	run_test "$d/out" testdata/test/props_forms.kek
+	r=
+	[ $code -eq 1 ] || r="exit $code, want 1"
+	r="$r$(contains "$d/out" \
+		"test markers_are_equal ... ok (pure: hermetic, cacheable; 100 cases" \
+		"    counterexample: short_distances(m = Meters(10))" \
+		"    counterexample: pairs_are_ordered(p = Pair(5, \"a\"))" \
+		"    counterexample: rects_are_thin(s = Rect { w: 3, h: 3 })" \
+		"test result: FAILED. 1 passed; 3 failed")"
+	result forms "$r" "$d/out"
+	rm -rf "$d"
+}
+
+# Float values are finite, round-trip through text and JSON, and shrink
+# toward 0.0.
+t_float() {
+	d=$(tmpdir)
+	run_test "$d/out" testdata/test/props_float.kek
+	r=
+	[ $code -eq 1 ] || r="exit $code, want 1"
+	r="$r$(contains "$d/out" \
+		"test text_round_trips ... ok (pure: hermetic, cacheable; 100 cases" \
+		"test generated_are_finite ... ok (pure: hermetic, cacheable; 100 cases" \
+		"test json_round_trips ... ok (pure: hermetic, cacheable; 100 cases" \
+		"    counterexample: small_readings(r = Reading { at: 0, value: 10.0 })" \
+		"test result: FAILED. 3 passed; 1 failed")"
+	result float "$r" "$d/out"
+	rm -rf "$d"
+}
+
 if [ "${1:-}" = --case ]; then
 	"t_$2"
 	exit 0
 fi
-run_parallel "$0" props seed cases mocks trap types refined
+run_parallel "$0" props seed cases mocks trap types refined forms float

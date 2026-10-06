@@ -1,0 +1,21 @@
+// Module errors (docs/modules.md): private items, unknown modules and
+// items, ambiguous glob imports, misplaced entry points.
+
+use a::*;
+use b::*;
+use a::Counter;
+use nope::thing; // ERROR "unresolved import `nope::thing`"
+use a::missing; // ERROR "cannot find `missing` in module `a`"
+use b::shared as Counter; // ERROR "the name `Counter` is imported more than once"
+
+fn root_helper() -> Int {
+    1
+}
+
+fn uses() -> Int {
+    let x = a::secret(); // ERROR "function `secret` is private to module `a`"
+    let y = shared(); // ERROR "`shared` is ambiguous"
+    let z = zzz::q::f(); // ERROR "unresolved module `zzz`"
+    let w = a::Hidden {}; // ERROR "struct `Hidden` is private to module `a`"
+    x + y + z + a::LIMIT
+}

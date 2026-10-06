@@ -8,7 +8,8 @@
 # Suites (default: all, in this order):
 #   bootstrap     ./kek bootstrap-check (the self-hosting fixed point) and
 #                 compiler/prelude_src.kek up to date with lib/prelude
-#   check         testdata/check/*.kek against their `// ERROR "..."` annotations
+#   check         testdata/check/*.kek and tests/syntax/*.kek (syntax errors)
+#                 against their `// ERROR "..."` annotations
 #   bad-examples  examples/*/*.bad.kek are rejected (`// kek check: ...`)
 #   run           testdata/run/*.kek: stdout == .out, exit code == `// exit: N`
 #   kek-test      kek test: discovery, mocks, failures, flags
@@ -21,6 +22,9 @@
 #   assure        kek assure plan/apply/check on testdata/assure against
 #                 tests/assure goldens
 #   daemon        kek daemon: the compiler kept running gives the same results
+#   lsp           kek lsp: a language server session on tests/lsp against
+#                 its golden (diagnostics, hover, definition, references,
+#                 symbols, UTF-16 positions)
 #   actions       kek affected / test -affected (git changes), the input-digest
 #                 action cache of build and test, the remote cache (file://)
 #   similar       kek similar (duplicate / similar code) against tests/similar goldens
@@ -85,7 +89,7 @@ if [ "$SHORT" = 1 ]; then
 	[ "$FMT_GEN" = 40 ] && FMT_GEN=10
 fi
 export JOBS N FMT_GEN SEED KEEP SHORT VERBOSE
-all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon cover mutate agent-cmds assure similar complexity merge smt refine fmt fix difftest e2e"
+all="bootstrap check bad-examples run kek-test pbt test-cache actions daemon lsp cover mutate agent-cmds assure similar complexity merge smt refine fmt fix difftest e2e"
 [ -n "$suites" ] || suites=$all
 for s in $suites; do
 	[ -f "tests/suites/$s.sh" ] || { echo "unknown suite $s (suites: $all)" >&2; exit 2; }

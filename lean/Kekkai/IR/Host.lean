@@ -194,6 +194,17 @@ def evalHost (name : String) (args : Array Val) : HM Val := do
   | "int.shl" => int2 i64Shl
   | "int.shr" => int2 i64ShrS
   | "int.ushr" => int2 i64ShrU
+  | "int.to_float" | "float.from_int" => match args with
+    | #[.int x] => pure (.float (fOfInt x))
+    | _ => bad
+  | "float.to_bits" => match args with | #[.float x] => pure (.int (fToBits x)) | _ => bad
+  | "float.from_bits" => match args with | #[.int x] => pure (.float (fOfBits x)) | _ => bad
+  | "float.trunc_to_int" => match args with | #[.float x] => pure (.int (fTruncSat x)) | _ => bad
+  | "float.sqrt" => match args with | #[.float x] => pure (.float x.sqrt) | _ => bad
+  | "float.floor" => match args with | #[.float x] => pure (.float x.floor) | _ => bad
+  | "float.ceil" => match args with | #[.float x] => pure (.float x.ceil) | _ => bad
+  | "float.trunc" => match args with | #[.float x] => pure (.float (fTrunc x)) | _ => bad
+  | "float.abs" => match args with | #[.float x] => pure (.float x.abs) | _ => bad
   | "bool.to_string" => match args with
     | #[.bool b] => pure (.str (if b then "true" else "false"))
     | _ => bad

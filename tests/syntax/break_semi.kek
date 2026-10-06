@@ -1,0 +1,9 @@
+// `break value` ends with `;`.
+
+fn f() -> Int {
+    loop {
+        break 1 2; // ERROR "expected `;` after `break`, found integer `2`"
+    }
+}
+
+fn main() {}

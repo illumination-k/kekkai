@@ -1,9 +1,12 @@
 // Front-end entry: `lex <file>`, `ast <file>`, `check <file-or-dir>`,
 // `ir <file-or-dir>`, `build <file-or-dir> <outdir>`.
 
+// module is the module path of the file ("" for the root module, "a::b"
+// for the files of the subdirectory a/b of the program: docs/modules.md).
 struct FeSource {
     name: String,
     text: String,
+    module: String,
 }
 
 struct FeProgram {
@@ -41,76 +44,134 @@ fn frontend_clean_dir(d: String) -> String {
 }
 
 // frontend_read_sources reads a .kek file, or every .kek file of a
-// directory sorted by name. Errors are reported.
+// directory sorted by name, followed by those of its subdirectories (the
+// modules, docs/modules.md; directories starting with "." are skipped).
+// Errors are reported.
 fn frontend_read_sources(path: String, fs: &Fs, log: &Log) -> Option<Vec<FeSource>> {
     let mut srcs = Vec::new();
     let mut names = Vec::new();
+    let mut mods = Vec::new();
     match fs.list(path) {
         Ok(entries) => {
             let dir = frontend_clean_dir(path);
-            for n in entries {
-                if n.ends_with(".kek") {
-                    if dir == "." {
-                        names.push(n);
-                    } else {
-                        names.push(dir + "/" + n);
-                    }
-                }
-            }
+            frontend_list_kek(fs, if dir == "." { "" } else { dir }, entries, "", names, mods);
             if names.len() == 0 {
                 log.error(path + ": no .kek files");
                 return None;
             }
         }
-        Err(_) => names.push(path),
+        Err(_) => {
+            names.push(path);
+            mods.push("");
+        }
     }
+    let mut i = 0;
     for n in names {
         match fs.read(n) {
-            Ok(text) => srcs.push(FeSource { name: n, text: text }),
+            Ok(text) => srcs.push(FeSource {
+                name: n,
+                text: text,
+                module: mods.get(i).unwrap_or(""),
+            }),
             Err(e) => {
                 log.error(n + ": " + e.message());
                 return None;
             }
         }
+        i = i + 1;
     }
     Some(srcs)
+}
+
+// frontend_list_kek adds the .kek files of the directory dir ("" for the
+// current one; entries are its names) to names with their module path
+// (module is dir's) to mods, then those of its subdirectories.
+fn frontend_list_kek(
+    fs: &Fs,
+    dir: String,
+    entries: Vec<String>,
+    module: String,
+    mut names: Vec<String>,
+    mut mods: Vec<String>,
+) {
+    let mut subs = Vec::new();
+    for n in entries {
+        let p = if dir == "" { n } else { dir + "/" + n };
+        if n.ends_with(".kek") {
+            names.push(p);
+            mods.push(module);
+        } else if !n.starts_with(".") && n != "node_modules" && frontend_is_ident(n) {
+            subs.push(n);
+        }
+    }
+    for n in subs {
+        let p = if dir == "" { n } else { dir + "/" + n };
+        match fs.list(p) {
+            Ok(es) => frontend_list_kek(
+                fs,
+                p,
+                es,
+                if module == "" { n } else { module + "::" + n },
+                names,
+                mods,
+            ),
+            Err(_) => {}
+        }
+    }
+}
+
+// frontend_is_ident reports whether a directory name can name a module.
+fn frontend_is_ident(n: String) -> Bool {
+    if n == "" {
+        return false;
+    }
+    for i in 0..n.len() {
+        let c = n.char_at(i).unwrap_or(0);
+        let ok = c == 95
+            || (c >= 97 && c <= 122)
+            || (c >= 65 && c <= 90)
+            || (i > 0 && c >= 48 && c <= 57);
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 // frontend_parse_all parses the files of one program into a single AstFile.
 fn frontend_parse_all(srcs: Vec<FeSource>) -> FeProgram {
     let ids = AstIds { next: 0 };
-    let mut out = AstFile {
+    let mut errs = Vec::new();
+    let mut files = Vec::new();
+    for s in srcs {
+        let pr = parse_file(s.name, s.text, ids);
+        for e in pr.errs {
+            errs.push(e);
+        }
+        files.push(MrFile { pr: pr, module: s.module, name: s.name });
+    }
+    frontend_link(files, errs)
+}
+
+// frontend_link joins the parsed files of a program into one AstFile,
+// resolving the names of its modules first if it has any
+// (compiler/modres.kek).
+fn frontend_link(files: Vec<MrFile>, mut errs: Vec<AstError>) -> FeProgram {
+    if errs.len() == 0 && mr_needed(files) {
+        let f = mr_resolve_program(files, errs);
+        return FeProgram { file: f, errs: ast_sort_errors(errs) };
+    }
+    let out = AstFile {
         structs: Vec::new(),
         enums: Vec::new(),
         funcs: Vec::new(),
         impls: Vec::new(),
         traits: Vec::new(),
         aliases: Vec::new(),
+        consts: Vec::new(),
     };
-    let mut errs = Vec::new();
-    for s in srcs {
-        let pr = parse_file(s.name, s.text, ids);
-        for e in pr.errs {
-            errs.push(e);
-        }
-        for x in pr.file.structs {
-            out.structs.push(x);
-        }
-        for x in pr.file.enums {
-            out.enums.push(x);
-        }
-        for x in pr.file.funcs {
-            out.funcs.push(x);
-        }
-        for x in pr.file.impls {
-            out.impls.push(x);
-        }
-        for x in pr.file.traits {
-            out.traits.push(x);
-        }
-        for x in pr.file.aliases {
-            out.aliases.push(x);
-        }
+    for f in files {
+        chk_append_file(out, f.pr.file);
     }
     FeProgram { file: out, errs: ast_sort_errors(errs) }
 }
@@ -609,15 +670,8 @@ fn fe_cache_new() -> FeCache {
 // frontend_parse_cached is frontend_parse_all with the parses of unchanged
 // files taken from the cache.
 fn frontend_parse_cached(mut c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
-    let out = AstFile {
-        structs: Vec::new(),
-        enums: Vec::new(),
-        funcs: Vec::new(),
-        impls: Vec::new(),
-        traits: Vec::new(),
-        aliases: Vec::new(),
-    };
     let mut errs = Vec::new();
+    let mut files = Vec::new();
     for s in srcs {
         let mut pr = parse_file_dummy();
         let mut found = false;
@@ -645,9 +699,9 @@ fn frontend_parse_cached(mut c: FeCache, srcs: Vec<FeSource>) -> FeProgram {
         for e in pr.errs {
             errs.push(e);
         }
-        chk_append_file(out, pr.file);
+        files.push(MrFile { pr: pr, module: s.module, name: s.name });
     }
-    FeProgram { file: out, errs: ast_sort_errors(errs) }
+    frontend_link(files, errs)
 }
 
 fn parse_file_dummy() -> ParseResult {
@@ -659,8 +713,12 @@ fn parse_file_dummy() -> ParseResult {
             impls: Vec::new(),
             traits: Vec::new(),
             aliases: Vec::new(),
+            consts: Vec::new(),
         },
         errs: Vec::new(),
+        pubs: HashMap::new(),
+        uses: Vec::new(),
+        mod_paths: false,
     }
 }
 

@@ -122,6 +122,10 @@ fn chk_new_builtins() -> ChkBuiltins {
     // a line of standard input (None at its end), and the directory that
     // relative paths are resolved against (for a long-running program)
     chk_ma(bs, "Fs", "read_line", chk_tys0(), Ty::Option(s));
+    // n bytes of standard input (None at its end), and text written to
+    // standard output without a newline (framed protocols: `kek lsp`)
+    chk_ma(bs, "Fs", "read_stdin", chk_tys1(i), Ty::Option(s));
+    chk_ma(bs, "Fs", "write_stdout", chk_tys1(s), u);
     chk_ma(bs, "Fs", "set_cwd", chk_tys1(s), u);
 
     // ---- pure data ----
@@ -132,6 +136,20 @@ fn chk_new_builtins() -> ChkBuiltins {
         chk_m(bs, "Int", op, chk_tys1(i), i);
     }
     chk_m(bs, "Bool", "to_string", chk_tys0(), s);
+    // Float (IEEE 754 binary64): the operations wasm has natively; the
+    // rest of its methods are in the core library (lib/core/float.kek)
+    let f = ty_float();
+    chk_m(bs, "Int", "to_float", chk_tys0(), f);
+    chk_s(bs, "Float", "from_int", chk_tys1(i), f);
+    // the bit pattern (any NaN gives the canonical quiet NaN 0x7ff8...)
+    chk_m(bs, "Float", "to_bits", chk_tys0(), i);
+    chk_s(bs, "Float", "from_bits", chk_tys1(i), f);
+    // truncation toward zero, saturating at Int::MIN / Int::MAX, NaN -> 0
+    // (Rust's `as i64`)
+    chk_m(bs, "Float", "trunc_to_int", chk_tys0(), i);
+    for op in "sqrt floor ceil trunc abs".split(" ") {
+        chk_m(bs, "Float", op, chk_tys0(), f);
+    }
 
     chk_m(bs, "String", "len", chk_tys0(), i);
     chk_m(bs, "String", "parse_int", chk_tys0(), Ty::Option(i));

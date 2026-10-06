@@ -16,7 +16,9 @@
 // Generation is driven by a seeded PRNG (splitmix64), so a seed always
 // gives the same program.
 //
-// Programs exercise arithmetic edge cases, control flow, early returns,
+// Programs exercise arithmetic edge cases (also Float: IEEE operations,
+// NaN, signed zeros, saturating conversions, the bit patterns and the
+// shortest round-trip text), control flow, early returns,
 // enums, Option, `?`, loops, string host operations, Vec/Map collections,
 // `for` loops with break/continue and mutable structs shared through
 // aliases. Function i may only call functions j < i, loops are bounded
@@ -67,6 +69,8 @@ struct Gen {
     mut loops: Int,
     // inside `for x in vec`: no pushes (the loop re-reads the length)
     mut no_push: Bool,
+    // labels of the enclosing `for` loops ("" for an unlabeled one)
+    labels: Vec<String>,
 }
 
 // ---- random source ----
@@ -98,6 +102,7 @@ fn new_gen(seed: Int) -> Gen {
         fresh: 0,
         loops: 0,
         no_push: false,
+        labels: Vec::new(),
     };
     // warm up
     for i in 0..4 {
@@ -245,7 +250,7 @@ fn prelude(g: Gen) {
 fn interesting(g: Gen) -> String {
     pick(
         g,
-        "0~1~2~3~7~10~100~255~65536~2147483647~4294967296~9223372036854775807~(-9223372036854775807 - 1)",
+        "0~1~2~3~7~10~100~255~65536~2147483647~4294967296~9223372036854775807~(-9223372036854775807 - 1)~0xff~0b1010~1_000~0x7fff_ffff_ffff_ffff~'a'~(!0)",
     )
 }
 
@@ -315,9 +320,31 @@ fn stmt(g: Gen, idx: Int, ind: String) {
         ln(g, ind + "let mut " + i + " = 0;");
         let saved = g.vars.len();
         add_var(g, acc, t_int(), true);
-        ln(g, ind + "while " + i + " < " + (1 + intn(g, 6)).to_string() + " {");
+        let n = (1 + intn(g, 6)).to_string();
+        let form = intn(g, 3);
+        if form == 2 {
+            // `loop` as an expression: `break value`
+            ln(g, ind + acc + " = loop {");
+            ln(g, ind + "    if " + i + " >= " + n + " {");
+            ln(g, ind + "        break " + int_expr(g, idx, 2) + ";");
+            ln(g, ind + "    }");
+            ln(g, ind + "    " + acc + " = " + int_expr(g, idx, 2) + ";");
+            ln(g, ind + "    " + i + " += 1;");
+            ln(g, ind + "};");
+            truncate(g, saved);
+            add_var(g, acc, t_int(), true);
+            return;
+        }
+        if form == 0 {
+            ln(g, ind + "while " + i + " < " + n + " {");
+        } else {
+            ln(g, ind + "loop {");
+            ln(g, ind + "    if " + i + " >= " + n + " {");
+            ln(g, ind + "        break;");
+            ln(g, ind + "    }");
+        }
         ln(g, ind + "    " + acc + " = " + int_expr(g, idx, 2) + ";");
-        ln(g, ind + "    " + i + " = " + i + " + 1;");
+        ln(g, ind + "    " + i + " += 1;");
         ln(g, ind + "}");
         truncate(g, saved);
         add_var(g, acc, t_int(), true);
@@ -325,7 +352,11 @@ fn stmt(g: Gen, idx: Int, ind: String) {
         let m = pick_var(g, t_int(), true);
         let e = int_expr(g, idx, 2);
         if m != "" {
-            ln(g, ind + m + " = " + e + ";");
+            if intn(g, 3) == 0 {
+                ln(g, ind + m + " " + pick(g, "+~-~*~/~%~&~|~^~<<~>>") + "= " + e + ";");
+            } else {
+                ln(g, ind + m + " = " + e + ";");
+            }
         } else {
             let v = declare(g, t_int(), "m", true);
             ln(g, ind + "let mut " + v + " = " + e + ";");
@@ -357,16 +388,31 @@ fn int_expr(g: Gen, idx: Int, d: Int) -> String {
     if d <= 0 {
         return int_leaf(g);
     }
-    let k = intn(g, 22);
+    let k = intn(g, 24);
+    if k >= 22 {
+        return float_to_int(g, idx, d - 1);
+    }
     if k >= 14 {
         return coll_int_expr(g, idx, d, k - 14);
     }
     match k {
         0 => int_leaf(g),
         1 => int_leaf(g),
-        2 => paren(int_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~-"), int_expr(g, idx, d - 1)),
-        3 => paren(int_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~-"), int_expr(g, idx, d - 1)),
-        4 => paren(int_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~-"), int_expr(g, idx, d - 1)),
+        2 => paren(
+            int_expr(g, idx, d - 1),
+            pick(g, "+~-~*~/~%~+~-~&~|~^~<<~>>"),
+            int_expr(g, idx, d - 1),
+        ),
+        3 => paren(
+            int_expr(g, idx, d - 1),
+            pick(g, "+~-~*~/~%~+~-~&~|~^~<<~>>"),
+            int_expr(g, idx, d - 1),
+        ),
+        4 => paren(
+            int_expr(g, idx, d - 1),
+            pick(g, "+~-~*~/~%~+~-~&~|~^~<<~>>"),
+            int_expr(g, idx, d - 1),
+        ),
         5 => "(-" + int_expr(g, idx, d - 1) + ")",
         6 => {
             let c = bool_expr(g, idx, d - 1);
@@ -419,6 +465,87 @@ fn int_expr(g: Gen, idx: Int, d: Int) -> String {
             let z = fresh(g, "z");
             "{ let " + z + " = " + int_expr(g, idx, d - 1) + "; " + z + " * 2 - " + z + " }"
         }
+    }
+}
+
+// ---- Float ----
+//
+// Float values reach the Int results through the bit pattern (NaN is
+// canonical), saturating conversions, comparisons and the shortest
+// round-trip text (Display / Debug / `{:.n}`, computed by the core
+// library on both sides).
+
+fn float_to_int(g: Gen, idx: Int, d: Int) -> String {
+    let x = float_expr(g, idx, d);
+    match intn(g, 9) {
+        0 => x + ".to_bits()",
+        1 => x + ".to_bits()",
+        2 => x + ".trunc_to_int()",
+        3 => x + ".round_to_int()",
+        4 => "(if "
+            + x
+            + " "
+            + pick(g, "<~<=~>~>=~==~!=")
+            + " "
+            + float_expr(g, idx, d)
+            + " { 1 } else { 0 })",
+        // (text of moderate values only: the exact algorithms take up to
+        // 150k reference steps for the extremes, and calls may loop)
+        5 => float_tame(g, idx) + ".to_string().len()",
+        6 => "format!(\"{:?}\", " + float_tame(g, idx) + ").len()",
+        7 => "format!(\"{:." + intn(g, 4).to_string() + "}\", " + float_tame(g, idx) + ").len()",
+        _ => "(match "
+            + float_tame(g, idx)
+            + ".to_string().parse_float() { Some(y) => y.to_bits(), None => -1 })",
+    }
+}
+
+// float_tame is a Float of moderate magnitude (or 0, NaN, ±inf).
+fn float_tame(g: Gen, idx: Int) -> String {
+    if intn(g, 2) == 0 {
+        return "(("
+            + int_leaf(g)
+            + " % 100000).to_float() / "
+            + pick(g, "8.0~3.0~10.0~0.0~-7.0")
+            + ")";
+    }
+    pick(g, "0.1~(-0.0)~1e15~1e16~1.5e-5~123.456~(1.0 / 3.0)~Float::NAN~Float::NEG_INFINITY~2.5")
+}
+
+fn float_leaf(g: Gen, idx: Int) -> String {
+    if intn(g, 2) == 0 {
+        return int_leaf(g) + ".to_float()";
+    }
+    pick(
+        g,
+        "0.0~(-0.0)~1.0~0.5~(-2.5)~0.1~1e300~(-1e-300)~3.0e-5~1e16~123.456~5e-324~Float::INFINITY~Float::NAN~Float::MAX~Float::EPSILON~1_000.25",
+    )
+}
+
+fn float_expr(g: Gen, idx: Int, d: Int) -> String {
+    if d <= 0 {
+        return float_leaf(g, idx);
+    }
+    match intn(g, 9) {
+        0 => float_leaf(g, idx),
+        1 => paren(float_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~+~*"), float_expr(g, idx, d - 1)),
+        2 => paren(float_expr(g, idx, d - 1), pick(g, "+~-~*~/~%~-~/"), float_expr(g, idx, d - 1)),
+        3 => "(-" + float_expr(g, idx, d - 1) + ")",
+        4 => float_expr(g, idx, d - 1)
+            + "."
+            + pick(g, "sqrt~floor~ceil~trunc~abs~round~signum~fract")
+            + "()",
+        5 => {
+            let a = float_expr(g, idx, d - 1);
+            a + "." + pick(g, "min~max~copysign~hypot") + "(" + float_expr(g, idx, d - 1) + ")"
+        }
+        6 => float_expr(g, idx, d - 1) + ".powi(" + intn(g, 7).to_string() + " - 3)",
+        7 => {
+            let c = bool_expr(g, idx, d - 1);
+            let t = float_expr(g, idx, d - 1);
+            "(if " + c + " { " + t + " } else { " + float_expr(g, idx, d - 1) + " })"
+        }
+        _ => "Float::from_int(" + int_expr(g, idx, d - 1) + ")",
     }
 }
 
@@ -636,38 +763,45 @@ fn for_loop(mut g: Gen, idx: Int, ind: String) {
     let init = int_expr(g, idx, 1);
     let acc = fresh(g, "acc");
     ln(g, ind + "let mut " + acc + " = " + init + ";");
+    let mut label = "";
+    let mut lp = "";
+    if intn(g, 2) == 0 {
+        label = "'" + fresh(g, "l");
+        lp = label + ": ";
+    }
     let saved = g.vars.len();
     let saved_no_push = g.no_push;
     let x = fresh(g, "k");
     let v = pick_var(g, t_vec(), false);
     let a = pick_var(g, t_acc(), false);
     if v != "" && intn(g, 2) == 0 {
-        ln(g, ind + "for " + x + " in " + v + " {");
+        ln(g, ind + lp + "for " + x + " in " + v + " {");
         g.no_push = true;
     } else if a != "" && intn(g, 3) == 0 {
-        ln(g, ind + "for " + x + " in " + a + ".log {");
+        ln(g, ind + lp + "for " + x + " in " + a + ".log {");
         g.no_push = true;
     } else {
         let mut lo = pick(g, "0~1~-2~");
         if lo == "" {
             lo = int_leaf(g);
         }
-        ln(g, ind + "for " + x + " in " + lo + "..(" + lo + " + " + small_int(g, idx) + ") {");
+        ln(g, ind + lp + "for " + x + " in " + lo + "..(" + lo + " + " + small_int(g, idx) + ") {");
     }
     add_var(g, x, t_int(), false);
     add_var(g, acc, t_int(), true);
     g.loops = g.loops + 1;
+    g.labels.push(label);
     let inner = ind + "    ";
     let n = 1 + intn(g, 3);
     for i in 0..n {
         let k = intn(g, 5);
         if k == 0 {
             ln(g, inner + "if " + bool_expr(g, idx, 1) + " {");
-            ln(g, inner + "    continue;");
+            ln(g, inner + "    continue" + jump_label(g) + ";");
             ln(g, inner + "}");
         } else if k == 1 {
             ln(g, inner + "if " + bool_expr(g, idx, 1) + " {");
-            ln(g, inner + "    break;");
+            ln(g, inner + "    break" + jump_label(g) + ";");
             ln(g, inner + "}");
         } else {
             stmt(g, idx, inner);
@@ -675,6 +809,7 @@ fn for_loop(mut g: Gen, idx: Int, ind: String) {
     }
     ln(g, inner + acc + " = " + int_expr(g, idx, 2) + ";");
     g.loops = g.loops - 1;
+    g.labels.pop();
     ln(g, ind + "}");
     // variables declared in the body are dropped; outer collections may
     // have been mutated
@@ -911,4 +1046,15 @@ fn main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
         }
     }
     0
+}
+
+// jump_label is the label of a `break` / `continue`: " 'l3" for one of the
+// labeled enclosing loops, or "" (the innermost loop).
+fn jump_label(g: Gen) -> String {
+    let k = intn(g, g.labels.len() + 1);
+    let l = g.labels.get(k).unwrap_or("");
+    if l == "" {
+        return "";
+    }
+    " " + l
 }

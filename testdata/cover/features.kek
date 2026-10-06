@@ -1,0 +1,206 @@
+// Fixture of `kek cover` (tests/suites/cover.sh): `?` (also with From),
+// let-else, guards, or-patterns, ranges, labeled loops, `break value`,
+// bare arm bodies, macros, dyn Trait, impl Trait and Float.
+
+enum Cmd {
+    Move { dx: Int, dy: Int },
+    Stop,
+}
+
+struct ParseErr {
+    msg: String,
+}
+
+impl From<String> for ParseErr {
+    fn from(s: String) -> ParseErr {
+        ParseErr { msg: s }
+    }
+}
+
+fn num(s: String) -> Result<Int, String> {
+    match s.parse_int() {
+        Some(n) => Ok(n),
+        None => Err("bad " + s),
+    }
+}
+
+fn parse(a: String, b: String) -> Result<Cmd, ParseErr> {
+    if a == "stop" {
+        return Ok(Cmd::Stop);
+    }
+    Ok(Cmd::Move { dx: num(a)?, dy: num(b)? })
+}
+
+impl From<NetError> for ParseErr {
+    fn from(e: NetError) -> ParseErr {
+        ParseErr { msg: e.message() }
+    }
+}
+
+// `?` on I/O (the function is async), with From
+fn fetch(net: &Net) -> Result<Cmd, ParseErr> {
+    let body = net.get("https://cmd.example/")?;
+    parse(body, "0")
+}
+
+fn first_even(v: Vec<Int>) -> Option<Int> {
+    let Some(x) = v.get(0) else {
+        return None;
+    };
+    if x % 2 == 0 { Some(x) } else { None }
+}
+
+fn sum_pairs(v: Vec<Option<(Int, Int)>>) -> Int {
+    let mut t = 0;
+    for o in v {
+        let Some((a, b)) = o else {
+            continue;
+        };
+        t += a * b;
+    }
+    t
+}
+
+fn classify(n: Int) -> String {
+    match n {
+        0 | 1 => "tiny",
+        2..=9 => "small",
+        x if x < 0 => "negative",
+        _ => "big",
+    }
+}
+
+fn find_pair(v: Vec<Int>, target: Int) -> Int {
+    let mut found = -1;
+    'outer: for i in 0..v.len() {
+        for j in 0..v.len() {
+            if i == j {
+                continue 'outer;
+            }
+            if v[i] + v[j] == target {
+                found = i;
+                break 'outer;
+            }
+        }
+    }
+    found
+}
+
+fn first_over(v: Vec<Int>, limit: Int) -> Int {
+    let mut i = 0;
+    let r = loop {
+        if i >= v.len() {
+            break -1;
+        }
+        if v[i] > limit {
+            break v[i];
+        }
+        i += 1;
+    };
+    r
+}
+
+fn sum_some(v: Vec<Option<Int>>) -> Int {
+    let mut total = 0;
+    for o in v {
+        match o {
+            Some(x) => total += x,
+            None => continue,
+        }
+    }
+    total
+}
+
+trait Shape {
+    fn area(&self) -> Int;
+}
+
+struct Sq {
+    a: Int,
+}
+
+struct Tri {
+    b: Int,
+    h: Int,
+}
+
+impl Shape for Sq {
+    fn area(&self) -> Int {
+        self.a * self.a
+    }
+}
+
+impl Shape for Tri {
+    fn area(&self) -> Int {
+        self.b * self.h / 2
+    }
+}
+
+fn total_area(v: Vec<Box<dyn Shape>>) -> Int {
+    let mut t = 0;
+    for s in v {
+        t += s.area();
+    }
+    t
+}
+
+fn evens(n: Int) -> impl Iterator<Item = Int> {
+    (0..n).filter(|x| x % 2 == 0)
+}
+
+fn half(x: Float) -> Float {
+    if x < 0.0 { 0.0 } else { x / 2.0 }
+}
+
+fn label(n: Int) -> String {
+    format!("n={}", if n > 0 { "pos" } else { "non-pos" })
+}
+
+fn add_opt(a: Option<Int>, b: Option<Int>) -> Option<Int> {
+    let f = |x: Option<Int>| -> Option<Int> {
+        Some(x? + 1)
+    };
+    Some(f(a)? + b?)
+}
+
+#[test]
+fn parses() {
+    assert!(parse("1", "2").is_ok());
+    assert!(parse("x", "2").is_err());
+}
+
+#[test]
+fn offline(net: &Net) {
+    assert!(fetch(net).is_err());
+}
+
+#[test]
+fn lets() {
+    assert_eq!(first_even(vec![4]), Some(4));
+    assert_eq!(first_even(vec![3]), None);
+    assert_eq!(sum_pairs(vec![Some((2, 3)), None]), 6);
+}
+
+#[test]
+fn matches() {
+    assert_eq!(classify(1), "tiny");
+    assert_eq!(classify(5), "small");
+    assert_eq!(classify(50), "big");
+}
+
+#[test]
+fn loops() {
+    assert_eq!(find_pair(vec![1, 2, 3], 5), 2);
+    assert_eq!(first_over(vec![1, 7], 5), 7);
+    assert_eq!(sum_some(vec![Some(1), None, Some(2)]), 3);
+}
+
+#[test]
+fn others() {
+    let v: Vec<Box<dyn Shape>> = vec![Box::new(Sq { a: 2 }), Box::new(Tri { b: 2, h: 3 })];
+    assert_eq!(total_area(v), 7);
+    assert_eq!(evens(5).count(), 3);
+    assert!(half(3.0) == 1.5);
+    assert_eq!(label(1), "n=pos");
+    assert_eq!(add_opt(Some(1), Some(2)), Some(4));
+}

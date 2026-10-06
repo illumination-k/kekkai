@@ -252,7 +252,10 @@ fn asr_w_stmt(w: AsrWalk, s: AstStmt) {
             asr_w_expr(w, a.target.x);
             asr_w_expr(w, a.value);
         }
-        AstStmt::Break(_) => {}
+        AstStmt::Break(b) => match b.value {
+            Some(v) => asr_w_expr(w, v),
+            None => {}
+        },
         AstStmt::Continue(_) => {}
         AstStmt::While(s) => {
             asr_w_expr(w, s.cond);
@@ -283,6 +286,7 @@ fn asr_w_exprs(w: AsrWalk, es: Vec<AstExpr>) {
 fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
     match e {
         AstExpr::IntLit(_) => {}
+        AstExpr::FloatLit(_) => {}
         AstExpr::BoolLit(_) => {}
         AstExpr::StrLit(_) => {}
         AstExpr::UnitLit(_) => {}
@@ -334,6 +338,10 @@ fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
         AstExpr::Match(x) => {
             asr_w_expr(w, x.x);
             for arm in x.arms {
+                match arm.guard {
+                    Some(g) => asr_w_expr(w, g),
+                    None => {}
+                }
                 asr_w_expr(w, arm.body);
             }
         }
@@ -349,6 +357,7 @@ fn asr_w_expr(mut w: AsrWalk, e: AstExpr) {
             asr_w_expr(w, x.x);
             asr_w_expr(w, x.index);
         }
+        AstExpr::Macro(x) => asr_w_expr(w, x.expansion),
     }
 }
 
@@ -629,7 +638,7 @@ fn asr_model(l: DhLoaded) -> AsrState {
             entry = "test";
         }
         asr_state_add(st, AsrDef {
-            name: d.name,
+            name: ast_display_name(d.name),
             hash: d.hash,
             file: asr_clean_file(d.pos.file),
             line: d.pos.line,

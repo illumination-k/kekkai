@@ -1,0 +1,986 @@
+// Macros (prefix mac_ / Mac*): `name!(...)` and `name![...]` are parsed
+// into an AstMacro whose expansion is ordinary AST, built here, that every
+// later pass walks (the formatter prints the invocation as written).
+//
+//   vec![a, b]          { let mut v = Vec::new(); v.push(a); v.push(b); v }
+//   vec![x; n]          __vec_from_elem(x, n)            (x cloned n times)
+//   format!("..", a)    "lit" + __fmt_display(&a) + ...  (lib/core/fmt.kek)
+//   write!(f, "..", a)  f.write_str(format!(..))         (writeln! adds "\n")
+//   matches!(e, p)      match e { p => true, _ => false }
+//   assert!(c, ..)      if !c { __panic(msg) }
+//   assert_eq!(a, b)    { let l = a; let r = b; if !(l == r) { __panic(..) } }
+//   panic!(..), unreachable!(..), todo!(..), unimplemented!(..)
+//                       __panic(msg)
+//
+// The format string is parsed here; its errors (and unknown macros) are
+// kept in AstMacro.errs and reported by the type checker, which also
+// allows the panicking macros only in `#[test]` functions. `__panic` is a
+// checker builtin of type `!`: lowering calls the runtime prelude's
+// `__panic_report` (when present) and ends the block with `unreachable`.
+// Names bound by an expansion start with `__` (a program cannot spell
+// them) and carry the nesting depth, so a macro in an argument of another
+// does not shadow its locals.
+
+// mac_panicking reports the macros that abort (only in #[test] functions).
+fn mac_panicking(name: String) -> Bool {
+    name == "assert"
+        || name == "assert_eq"
+        || name == "assert_ne"
+        || name == "panic"
+        || name == "unreachable"
+        || name == "todo"
+        || name == "unimplemented"
+}
+
+// mac_format_index is the index of the format string among the arguments
+// of a macro (-1 when it has none).
+fn mac_format_index(name: String) -> Int {
+    if name == "format"
+        || name == "panic"
+        || name == "unreachable"
+        || name == "todo"
+        || name == "unimplemented" {
+        return 0;
+    }
+    if name == "write" || name == "writeln" || name == "assert" {
+        return 1;
+    }
+    if name == "assert_eq" || name == "assert_ne" {
+        return 2;
+    }
+    -1
+}
+
+// mac_parse parses a macro invocation; the name is consumed and `!` is the
+// current token.
+fn mac_parse(mut p: ParseState, name: Tok) -> AstExpr {
+    parse_next(p);
+    let open = parse_next(p);
+    let close = if open.kind == "(" { ")" } else { "]" };
+    let saved = p.no_struct;
+    p.no_struct = false;
+    p.mac_depth = p.mac_depth + 1;
+    let mut m = AstMacro {
+        id: parse_id(p),
+        pos: name.pos,
+        name: name.text,
+        delim: open.kind,
+        args: Vec::new(),
+        arg_names: Vec::new(),
+        repeat: false,
+        pat: None,
+        expansion: AstExpr::UnitLit(AstUnitLit { id: 0, pos: name.pos }),
+        errs: Vec::new(),
+    };
+    let mut texts = Vec::new();
+    if m.name == "matches" {
+        if !parse_at(p, close) {
+            m.args.push(parse_expr(p));
+            m.arg_names.push("");
+            parse_expect(p, ",");
+            m.pat = Some(parse_pattern(p));
+            parse_accept(p, ",");
+        }
+    } else {
+        while !parse_at(p, close) && !parse_at(p, "EOF") {
+            if parse_at(p, "IDENT") && parse_peek_at(p, "=") {
+                // a named argument `name = e` of a format macro
+                m.arg_names.push(parse_next(p).text);
+                parse_next(p);
+            } else {
+                m.arg_names.push("");
+            }
+            let start = p.pos;
+            m.args.push(parse_expr(p));
+            texts.push(mac_text(p, start, p.pos));
+            if m.name == "vec" && m.args.len() == 1 && parse_accept(p, ";") {
+                m.repeat = true;
+                m.args.push(parse_expr(p));
+                m.arg_names.push("");
+                break;
+            }
+            if !parse_accept(p, ",") {
+                break;
+            }
+        }
+    }
+    parse_expect(p, close);
+    p.no_struct = saved;
+    m.expansion = mac_expand(p, m, texts);
+    p.mac_depth = p.mac_depth - 1;
+    AstExpr::Macro(m)
+}
+
+// mac_text is the source text of tokens [a, b) (for the message of
+// `assert!(c)`), with Rust's spacing.
+fn mac_text(p: ParseState, a: Int, b: Int) -> String {
+    let mut out = Vec::new();
+    let mut prev = "";
+    let mut prev_unary = false;
+    let mut in_pipes = false;
+    for i in a..b {
+        let t = match p.toks.get(i) {
+            Some(t) => t,
+            None => {
+                break;
+            }
+        };
+        let k = t.kind;
+        let text = if k == "STRING" {
+            ast_quote(t.text)
+        } else if k == "IDENT" || k == "INT" || k == "FLOAT" {
+            t.text
+        } else {
+            k
+        };
+        // a prefix operator follows an operator, an opening delimiter or
+        // nothing
+        let unary = (k == "-" || k == "!" || k == "&" || k == "*")
+            && (prev == "" || mac_is_op(prev) || prev == "(" || prev == "[" || prev == ",");
+        let mut space = prev != "";
+        if prev == "(" || prev == "[" || prev == "." || prev == "::" || prev_unary {
+            space = false;
+        }
+        // closure parameters `|x, y|`
+        let mut open_pipe = false;
+        if k == "|" {
+            if in_pipes {
+                space = false;
+                in_pipes = false;
+            } else {
+                in_pipes = true;
+                open_pipe = true;
+            }
+        }
+        if k == ")" || k == "]" || k == "," || k == "." || k == "::" || k == "?" || k == ";" {
+            space = false;
+        }
+        if (k == "(" || k == "[") && !mac_is_op(prev) && prev != "," && prev != "(" {
+            space = false;
+        }
+        if k == "<" && prev == "::" {
+            space = false;
+        }
+        if space {
+            out.push(" ");
+        }
+        out.push(text);
+        prev = k;
+        prev_unary = unary || open_pipe;
+    }
+    out.join("")
+}
+
+fn mac_is_op(k: String) -> Bool {
+    k == "+"
+        || k == "-"
+        || k == "*"
+        || k == "/"
+        || k == "%"
+        || k == "=="
+        || k == "!="
+        || k == "<"
+        || k == "<="
+        || k == ">"
+        || k == ">="
+        || k == "&&"
+        || k == "||"
+        || k == "!"
+        || k == "&"
+        || k == "="
+        || k == "=>"
+        || k == ".."
+        || k == "..="
+}
+
+fn mac_err(mut m: AstMacro, pos: AstPos, msg: String) {
+    m.errs.push(AstError { pos: pos, msg: msg });
+}
+
+fn mac_arg(m: AstMacro, i: Int) -> AstExpr {
+    m.args.get(i).unwrap_or(AstExpr::UnitLit(AstUnitLit { id: 0, pos: m.pos }))
+}
+
+// ---- AST builders ----
+
+fn mac_unit(p: ParseState, pos: AstPos) -> AstExpr {
+    AstExpr::UnitLit(AstUnitLit { id: parse_id(p), pos: pos })
+}
+
+fn mac_str(p: ParseState, pos: AstPos, s: String) -> AstExpr {
+    AstExpr::StrLit(AstStringLit { id: parse_id(p), pos: pos, value: s })
+}
+
+fn mac_int(p: ParseState, pos: AstPos, v: Int) -> AstExpr {
+    AstExpr::IntLit(AstIntLit { id: parse_id(p), pos: pos, value: v })
+}
+
+fn mac_bool(p: ParseState, pos: AstPos, v: Bool) -> AstExpr {
+    AstExpr::BoolLit(AstBoolLit { id: parse_id(p), pos: pos, value: v })
+}
+
+fn mac_ident(p: ParseState, pos: AstPos, name: String) -> AstExpr {
+    AstExpr::Ident(AstIdent { id: parse_id(p), pos: pos, name: name, targs: Vec::new() })
+}
+
+fn mac_call(p: ParseState, pos: AstPos, f: String, args: Vec<AstExpr>) -> AstExpr {
+    let fe = mac_ident(p, pos, f);
+    AstExpr::Call(AstCall { id: parse_id(p), pos: pos, func: fe, args: args })
+}
+
+fn mac_call1(p: ParseState, pos: AstPos, f: String, a: AstExpr) -> AstExpr {
+    let mut args = Vec::new();
+    args.push(a);
+    mac_call(p, pos, f, args)
+}
+
+fn mac_method(
+    p: ParseState,
+    pos: AstPos,
+    recv: AstExpr,
+    name: String,
+    args: Vec<AstExpr>,
+) -> AstExpr {
+    AstExpr::Method(AstMethodCall {
+        id: parse_id(p),
+        pos: pos,
+        recv: recv,
+        name: name,
+        targs: Vec::new(),
+        args: args,
+    })
+}
+
+fn mac_ref(p: ParseState, pos: AstPos, e: AstExpr) -> AstExpr {
+    AstExpr::Unary(AstUnary { id: parse_id(p), pos: pos, op: "&", x: e })
+}
+
+fn mac_not(p: ParseState, pos: AstPos, e: AstExpr) -> AstExpr {
+    AstExpr::Unary(AstUnary { id: parse_id(p), pos: pos, op: "!", x: e })
+}
+
+fn mac_bin(p: ParseState, pos: AstPos, op: String, x: AstExpr, y: AstExpr) -> AstExpr {
+    AstExpr::Binary(AstBinary { id: parse_id(p), pos: pos, op: op, x: x, y: y, compound: false })
+}
+
+fn mac_let(p: ParseState, pos: AstPos, name: String, mutable: Bool, init: AstExpr) -> AstStmt {
+    AstStmt::Let(AstLetStmt {
+        let_else: false,
+        id: parse_id(p),
+        pos: pos,
+        mutable: mutable,
+        name: name,
+        pat: None,
+        ty: None,
+        init: init,
+    })
+}
+
+fn mac_stmt(p: ParseState, pos: AstPos, e: AstExpr) -> AstStmt {
+    AstStmt::Expr(AstExprStmt { id: parse_id(p), pos: pos, x: e, semi: true })
+}
+
+fn mac_block(p: ParseState, pos: AstPos, stmts: Vec<AstStmt>, tail: Option<AstExpr>) -> AstExpr {
+    AstExpr::Block(AstBlock { id: parse_id(p), pos: pos, stmts: stmts, tail: tail, end: pos })
+}
+
+// mac_if_panic is `if cond { __panic(msg) }`.
+fn mac_if_panic(p: ParseState, pos: AstPos, cond: AstExpr, msg: AstExpr) -> AstExpr {
+    let mut stmts = Vec::new();
+    stmts.push(mac_stmt(p, pos, mac_call1(p, pos, "__panic", msg)));
+    let then = AstBlock { id: parse_id(p), pos: pos, stmts: stmts, tail: None, end: pos };
+    AstExpr::If(AstIf { id: parse_id(p), pos: pos, pat: None, cond: cond, then: then, els: None })
+}
+
+// ---- expansion ----
+
+fn mac_expand(p: ParseState, m: AstMacro, texts: Vec<String>) -> AstExpr {
+    let n = m.name;
+    let pos = m.pos;
+    if n == "vec" {
+        return mac_vec(p, m);
+    }
+    if n == "format" {
+        return mac_format(p, m, 0, "");
+    }
+    if n == "write" || n == "writeln" {
+        if m.args.len() == 0 {
+            mac_err(
+                m,
+                pos,
+                "`" + n + "!` takes a destination (a `&mut Formatter`) and a format string",
+            );
+            return mac_unit(p, pos);
+        }
+        let nl = if n == "writeln" { "\n" } else { "" };
+        let mut args = Vec::new();
+        if m.args.len() == 1 && nl != "" {
+            // `writeln!(f)`
+            args.push(mac_str(p, pos, nl));
+        } else {
+            args.push(mac_format(p, m, 1, nl));
+        }
+        return mac_method(p, pos, mac_arg(m, 0), "write_str", args);
+    }
+    if n == "matches" {
+        return mac_matches(p, m);
+    }
+    if n == "assert" {
+        if m.args.len() == 0 {
+            mac_err(m, pos, "`assert!` takes a condition (and optionally a format string)");
+            return mac_unit(p, pos);
+        }
+        let mut msg = mac_str(p, pos, "assertion failed: " + texts.get(0).unwrap_or(""));
+        if m.args.len() > 1 {
+            msg = mac_format(p, m, 1, "");
+        }
+        return mac_if_panic(p, pos, mac_not(p, pos, mac_arg(m, 0)), msg);
+    }
+    if n == "assert_eq" || n == "assert_ne" {
+        return mac_assert_eq(p, m);
+    }
+    if n == "panic" || n == "unreachable" || n == "todo" || n == "unimplemented" {
+        let mut prefix = "";
+        if n == "unreachable" {
+            prefix = "internal error: entered unreachable code";
+        } else if n == "todo" {
+            prefix = "not yet implemented";
+        } else if n == "unimplemented" {
+            prefix = "not implemented";
+        }
+        let mut msg = mac_str(p, pos, if prefix == "" {
+            "explicit panic"
+        } else {
+            prefix
+        });
+        if m.args.len() > 0 {
+            msg = mac_format(p, m, 0, "");
+            if prefix != "" {
+                msg = mac_bin(p, pos, "+", mac_str(p, pos, prefix + ": "), msg);
+            }
+        }
+        return mac_call1(p, pos, "__panic", msg);
+    }
+    if n == "println" || n == "print" || n == "eprintln" || n == "eprint" || n == "dbg" {
+        mac_err(
+            m,
+            pos,
+            "`"
+                + n
+                + "!` is not available: output needs a capability; take `log: &Log` and write `log.info(format!(...))`",
+        );
+        return mac_unit(p, pos);
+    }
+    mac_err(
+        m,
+        pos,
+        "cannot find macro `"
+            + n
+            + "` (macros: vec!, format!, write!, writeln!, matches!, assert!, assert_eq!, assert_ne!, panic!, unreachable!, todo!, unimplemented!)",
+    );
+    mac_unit(p, pos)
+}
+
+fn mac_vec(p: ParseState, m: AstMacro) -> AstExpr {
+    let pos = m.pos;
+    let new_vec = AstExpr::Call(AstCall {
+        id: parse_id(p),
+        pos: pos,
+        func: AstExpr::Path(AstPathExpr {
+            id: parse_id(p),
+            pos: pos,
+            ty: "Vec",
+            ty_args: Vec::new(),
+            name: "new",
+            targs: Vec::new(),
+        }),
+        args: Vec::new(),
+    });
+    if m.repeat {
+        let mut args = Vec::new();
+        args.push(mac_arg(m, 0));
+        args.push(mac_arg(m, 1));
+        return mac_call(p, pos, "__vec_from_elem", args);
+    }
+    mac_named_args(m, "vec");
+    if m.args.len() == 0 {
+        return new_vec;
+    }
+    let v = "__vec" + p.mac_depth.to_string();
+    let mut stmts = Vec::new();
+    stmts.push(mac_let(p, pos, v, true, new_vec));
+    for a in m.args {
+        let mut args = Vec::new();
+        args.push(a);
+        stmts.push(mac_stmt(p, pos, mac_method(p, pos, mac_ident(p, pos, v), "push", args)));
+    }
+    mac_block(p, pos, stmts, Some(mac_ident(p, pos, v)))
+}
+
+// mac_named_args rejects `name = e` arguments outside format macros.
+fn mac_named_args(m: AstMacro, what: String) {
+    let mut i = 0;
+    for n in m.arg_names {
+        if n != "" {
+            mac_err(m, ast_expr_pos(mac_arg(m, i)), "`" + what + "!` takes no named arguments");
+            return;
+        }
+        i = i + 1;
+    }
+}
+
+fn mac_matches(p: ParseState, m: AstMacro) -> AstExpr {
+    let pos = m.pos;
+    let pat = match m.pat {
+        Some(pt) => pt,
+        None => {
+            mac_err(m, pos, "`matches!` takes an expression and a pattern: `matches!(e, pat)`");
+            return mac_bool(p, pos, false);
+        }
+    };
+    let mut arms = Vec::new();
+    arms.push(AstMatchArm {
+        id: parse_id(p),
+        pos: pos,
+        pat: pat,
+        guard: None,
+        body: mac_bool(p, pos, true),
+        bare: false,
+    });
+    if !pat.wildcard {
+        let mut wild = ast_new_pattern(parse_id(p), pos);
+        wild.wildcard = true;
+        arms.push(AstMatchArm {
+            id: parse_id(p),
+            pos: pos,
+            pat: wild,
+            guard: None,
+            body: mac_bool(p, pos, false),
+            bare: false,
+        });
+    }
+    AstExpr::Match(AstMatch { id: parse_id(p), pos: pos, x: mac_arg(m, 0), arms: arms })
+}
+
+fn mac_assert_eq(p: ParseState, m: AstMacro) -> AstExpr {
+    let pos = m.pos;
+    let eq = m.name == "assert_eq";
+    if m.args.len() < 2 {
+        mac_err(m, pos, "`" + m.name + "!` takes two values (and optionally a format string)");
+        return mac_unit(p, pos);
+    }
+    let d = p.mac_depth.to_string();
+    let l = "__left" + d;
+    let r = "__right" + d;
+    let mut stmts = Vec::new();
+    stmts.push(mac_let(p, pos, l, false, mac_arg(m, 0)));
+    stmts.push(mac_let(p, pos, r, false, mac_arg(m, 1)));
+    let mut msg = mac_str(p, pos, "");
+    if m.args.len() > 2 {
+        msg = mac_format(p, m, 2, "");
+    }
+    let mut fargs = Vec::new();
+    fargs.push(mac_str(p, pos, if eq { "==" } else { "!=" }));
+    fargs.push(mac_call1(p, pos, "__fmt_debug", mac_ref(p, pos, mac_ident(p, pos, l))));
+    fargs.push(mac_call1(p, pos, "__fmt_debug", mac_ref(p, pos, mac_ident(p, pos, r))));
+    fargs.push(msg);
+    let failed = mac_call(p, pos, "__fmt_assert_failed", fargs);
+    let same = mac_bin(p, pos, "==", mac_ident(p, pos, l), mac_ident(p, pos, r));
+    let cond = if eq { mac_not(p, pos, same) } else { same };
+    stmts.push(mac_stmt(p, pos, mac_if_panic(p, pos, cond, failed)));
+    mac_block(p, pos, stmts, None)
+}
+
+// ---- format strings ----
+
+// MacSpec is a parsed `{arg:spec}`: align is -1 (default), 0 left,
+// 1 center, 2 right; width and prec are -1 when absent; ty is "", "?",
+// "x", "X", "b" or "o".
+struct MacSpec {
+    mut fill: String,
+    mut align: Int,
+    mut plus: Bool,
+    mut alt: Bool,
+    mut zero: Bool,
+    mut width: Int,
+    mut prec: Int,
+    mut ty: String,
+}
+
+// MacPiece is literal text (arg == -2), a reference to argument arg, or
+// (arg == -1) the captured identifier capture.
+struct MacPiece {
+    lit: String,
+    mut arg: Int,
+    mut capture: String,
+    mut spec: MacSpec,
+}
+
+fn mac_no_spec() -> MacSpec {
+    MacSpec {
+        fill: " ",
+        align: -1,
+        plus: false,
+        alt: false,
+        zero: false,
+        width: -1,
+        prec: -1,
+        ty: "",
+    }
+}
+
+fn mac_is_ident(s: String) -> Bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for i in 0..s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        if !(lex_is_ident_start(c) || (i > 0 && lex_is_digit(c))) {
+            return false;
+        }
+    }
+    true
+}
+
+fn mac_digits(s: String) -> Bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for i in 0..s.len() {
+        if !lex_is_digit(s.char_at(i).unwrap_or(0)) {
+            return false;
+        }
+    }
+    true
+}
+
+// mac_format expands the format string m.args[first] with the arguments
+// after it (plus suffix) to a String expression.
+fn mac_format(p: ParseState, m: AstMacro, first: Int, suffix: String) -> AstExpr {
+    let pos = m.pos;
+    let fs = match m.args.get(first) {
+        Some(AstExpr::StrLit(s)) => s,
+        Some(e) => {
+            mac_err(
+                m,
+                ast_expr_pos(e),
+                "format argument must be a string literal (write `\"{}\", e`)",
+            );
+            return mac_str(p, pos, "");
+        }
+        None => {
+            mac_err(m, pos, "`" + m.name + "!` requires a format string argument");
+            return mac_str(p, pos, "");
+        }
+    };
+    if m.arg_names.get(first).unwrap_or("") != "" {
+        mac_err(m, fs.pos, "the format string cannot be a named argument");
+    }
+    let spos = fs.pos;
+    // the arguments: positional ones first, then named ones
+    let mut npos = 0;
+    let mut named_seen = false;
+    for i in first + 1..m.args.len() {
+        let nm = m.arg_names.get(i).unwrap_or("");
+        if nm == "" {
+            if named_seen {
+                mac_err(
+                    m,
+                    ast_expr_pos(mac_arg(m, i)),
+                    "positional arguments cannot follow named arguments",
+                );
+            }
+            npos = npos + 1;
+        } else {
+            named_seen = true;
+        }
+    }
+    let nargs = m.args.len() - first - 1;
+    let pieces = mac_parse_fmt(m, fs.value + suffix, spos, first, npos);
+    if m.errs.len() > 0 {
+        return mac_str(p, pos, "");
+    }
+    // every argument must be used; arguments are evaluated once, in order
+    let mut used = Vec::new();
+    for i in 0..nargs {
+        used.push(0);
+    }
+    let mut order = Vec::new();
+    for pc in pieces {
+        if pc.arg >= 0 {
+            used.set(pc.arg, used.get(pc.arg).unwrap_or(0) + 1);
+            order.push(pc.arg);
+        }
+    }
+    for i in 0..nargs {
+        if used.get(i).unwrap_or(0) == 0 {
+            let nm = m.arg_names.get(first + 1 + i).unwrap_or("");
+            let what = if nm == "" {
+                "argument never used"
+            } else {
+                "named argument `" + nm + "` never used"
+            };
+            mac_err(m, ast_expr_pos(mac_arg(m, first + 1 + i)), what);
+        }
+    }
+    if m.errs.len() > 0 {
+        return mac_str(p, pos, "");
+    }
+    let mut inline = order.len() == nargs;
+    for k in 0..order.len() {
+        if order.get(k).unwrap_or(-1) != k {
+            inline = false;
+        }
+    }
+    let d = p.mac_depth.to_string();
+    let mut stmts = Vec::new();
+    if !inline {
+        for i in 0..nargs {
+            stmts.push(
+                mac_let(p, pos, "__fmt" + d + "_" + i.to_string(), false, mac_arg(m, first + 1 + i)),
+            );
+        }
+    }
+    let mut parts = Vec::new();
+    for pc in pieces {
+        if pc.arg == -2 {
+            parts.push(mac_str(p, spos, pc.lit));
+            continue;
+        }
+        let v = if pc.arg == -1 {
+            mac_ident(p, spos, pc.capture)
+        } else if inline {
+            mac_arg(m, first + 1 + pc.arg)
+        } else {
+            mac_ident(p, spos, "__fmt" + d + "_" + pc.arg.to_string())
+        };
+        parts.push(mac_piece(p, ast_expr_pos(v), v, pc.spec));
+    }
+    let mut out = mac_str(p, spos, "");
+    let mut k = 0;
+    for x in parts {
+        if k == 0 {
+            out = x;
+        } else {
+            out = mac_bin(p, spos, "+", out, x);
+        }
+        k = k + 1;
+    }
+    if stmts.len() > 0 {
+        return mac_block(p, pos, stmts, Some(out));
+    }
+    out
+}
+
+// mac_piece formats value v as spec says.
+fn mac_piece(p: ParseState, pos: AstPos, v: AstExpr, sp: MacSpec) -> AstExpr {
+    if sp.ty == "?" {
+        let s = mac_call1(p, pos, "__fmt_debug", mac_ref(p, pos, v));
+        return mac_pad(p, pos, s, sp, 0);
+    }
+    if sp.ty != "" || sp.plus || sp.alt || sp.zero {
+        // an Int
+        let radix = if sp.ty == "x" || sp.ty == "X" {
+            16
+        } else if sp.ty == "b" {
+            2
+        } else if sp.ty == "o" { 8 } else { 10 };
+        let mut args = Vec::new();
+        args.push(v);
+        args.push(mac_int(p, pos, radix));
+        args.push(mac_bool(p, pos, sp.ty == "X"));
+        args.push(mac_bool(p, pos, sp.plus));
+        args.push(mac_bool(p, pos, sp.alt));
+        args.push(mac_int(p, pos, if sp.zero { sp.width } else { 0 }));
+        let s = mac_call(p, pos, "__fmt_int", args);
+        if sp.zero {
+            return s;
+        }
+        return mac_pad(p, pos, s, sp, 2);
+    }
+    if sp.prec >= 0 {
+        // Display::__fmt_precision: n fractional digits of a Float, the
+        // first n characters of a string
+        let mut args = Vec::new();
+        args.push(mac_ref(p, pos, v));
+        args.push(mac_int(p, pos, sp.prec));
+        if sp.width >= 0 && sp.align < 0 {
+            args.push(mac_int(p, pos, sp.width));
+            args.push(mac_str(p, pos, sp.fill));
+            return mac_call(p, pos, "__fmt_prec_auto", args);
+        }
+        return mac_pad(p, pos, mac_call(p, pos, "__fmt_prec", args), sp, 0);
+    }
+    if sp.width >= 0 && sp.align < 0 {
+        // the default alignment depends on the type (numbers right)
+        let mut args = Vec::new();
+        args.push(mac_ref(p, pos, v));
+        args.push(mac_int(p, pos, sp.width));
+        args.push(mac_str(p, pos, sp.fill));
+        return mac_call(p, pos, "__fmt_pad_auto", args);
+    }
+    mac_pad(p, pos, mac_call1(p, pos, "__fmt_display", mac_ref(p, pos, v)), sp, 0)
+}
+
+// mac_pad pads s to the width of sp (align dflt by default).
+fn mac_pad(p: ParseState, pos: AstPos, s: AstExpr, sp: MacSpec, dflt: Int) -> AstExpr {
+    if sp.width < 0 {
+        return s;
+    }
+    let mut args = Vec::new();
+    args.push(s);
+    args.push(mac_int(p, pos, sp.width));
+    args.push(mac_int(p, pos, if sp.align < 0 { dflt } else { sp.align }));
+    args.push(mac_str(p, pos, sp.fill));
+    mac_call(p, pos, "__fmt_pad", args)
+}
+
+// mac_parse_fmt splits a format string into pieces (errors go to m).
+// first is the index of the format string among m's arguments, npos the
+// number of positional arguments after it.
+fn mac_parse_fmt(m: AstMacro, s: String, spos: AstPos, first: Int, npos: Int) -> Vec<MacPiece> {
+    let mut out = Vec::new();
+    let mut lit = Vec::new();
+    let n = s.len();
+    let mut i = 0;
+    let mut start = 0;
+    let mut next = 0;
+    while i < n {
+        let c = s.char_at(i).unwrap_or(0);
+        if c == 125 {
+            // `}}`
+            if s.char_at(i + 1).unwrap_or(0) == 125 {
+                lit.push(s.slice(start, i + 1));
+                i = i + 2;
+                start = i;
+                continue;
+            }
+            mac_err(
+                m,
+                spos,
+                "invalid format string: unmatched `}` found (write `}}` for a literal `}`)",
+            );
+            return out;
+        }
+        if c != 123 {
+            i = i + 1;
+            continue;
+        }
+        if s.char_at(i + 1).unwrap_or(0) == 123 {
+            lit.push(s.slice(start, i + 1));
+            i = i + 2;
+            start = i;
+            continue;
+        }
+        lit.push(s.slice(start, i));
+        let close = match s.slice(i + 1, n).index_of("}") {
+            Some(k) => i + 1 + k,
+            None => {
+                mac_err(
+                    m,
+                    spos,
+                    "invalid format string: expected `}` but string was terminated (write `{{` for a literal `{`)",
+                );
+                return out;
+            }
+        };
+        let body = s.slice(i + 1, close);
+        let colon = body.index_of(":");
+        let name = match colon {
+            Some(k) => body.slice(0, k),
+            None => body,
+        };
+        let spec_s = match colon {
+            Some(k) => body.slice(k + 1, body.len()),
+            None => "",
+        };
+        let mut pc = MacPiece { lit: "", arg: -2, capture: "", spec: mac_no_spec() };
+        let nm = name.trim();
+        if nm == "" {
+            if next >= npos {
+                mac_err(m, spos, mac_count_msg(s, npos));
+                return out;
+            }
+            pc.arg = next;
+            next = next + 1;
+        } else if mac_digits(nm) {
+            let k = parse_int_text(nm).unwrap_or(0);
+            if k >= npos {
+                mac_err(
+                    m,
+                    spos,
+                    "invalid reference to positional argument "
+                        + nm
+                        + " ("
+                        + mac_args_are(npos)
+                        + ")",
+                );
+                return out;
+            }
+            pc.arg = k;
+        } else if mac_is_ident(nm) {
+            pc.arg = -1;
+            pc.capture = nm;
+            for j in first + 1..m.args.len() {
+                if m.arg_names.get(j).unwrap_or("") == nm {
+                    pc.arg = j - first - 1;
+                }
+            }
+        } else {
+            mac_err(m, spos, "invalid format string: invalid argument name `" + nm + "`");
+            return out;
+        }
+        match mac_parse_spec(spec_s) {
+            Ok(sp) => {
+                pc.spec = sp;
+            }
+            Err(msg) => {
+                mac_err(m, spos, "invalid format string: " + msg);
+                return out;
+            }
+        }
+        if lit.len() > 0 {
+            let t = lit.join("");
+            if t != "" {
+                out.push(MacPiece { lit: t, arg: -2, capture: "", spec: mac_no_spec() });
+            }
+            lit = Vec::new();
+        }
+        out.push(pc);
+        i = close + 1;
+        start = i;
+    }
+    lit.push(s.slice(start, n));
+    let t = lit.join("");
+    if t != "" || out.len() == 0 {
+        out.push(MacPiece { lit: t, arg: -2, capture: "", spec: mac_no_spec() });
+    }
+    out
+}
+
+fn mac_args_are(n: Int) -> String {
+    if n == 1 {
+        return "there is 1 argument";
+    }
+    "there are " + n.to_string() + " arguments"
+}
+
+// mac_count_msg: more `{}` than positional arguments.
+fn mac_count_msg(s: String, npos: Int) -> String {
+    let mut holes = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        if (c == 123 || c == 125) && s.char_at(i + 1).unwrap_or(0) == c {
+            i = i + 2;
+            continue;
+        }
+        if c == 123 {
+            let rest = s.slice(i + 1, s.len());
+            if rest.starts_with("}") || rest.starts_with(":") {
+                holes = holes + 1;
+            }
+        }
+        i = i + 1;
+    }
+    let what = if holes == 1 {
+        "1 positional argument"
+    } else {
+        holes.to_string() + " positional arguments"
+    };
+    what + " in format string, but " + mac_args_are(npos)
+}
+
+// mac_parse_spec parses `[[fill]align][+][#][0][width][.precision][type]`.
+fn mac_parse_spec(s: String) -> Result<MacSpec, String> {
+    let mut sp = mac_no_spec();
+    let n = s.len();
+    let mut i = 0;
+    if n >= 2 && mac_align(s.char_at(1).unwrap_or(0)) >= 0 && !mac_is_low(s.char_at(0).unwrap_or(0)) {
+        sp.fill = s.slice(0, 1);
+        sp.align = mac_align(s.char_at(1).unwrap_or(0));
+        i = 2;
+    } else if n >= 1 && mac_align(s.char_at(0).unwrap_or(0)) >= 0 {
+        sp.align = mac_align(s.char_at(0).unwrap_or(0));
+        i = 1;
+    }
+    if s.char_at(i).unwrap_or(0) == 43 {
+        sp.plus = true;
+        i = i + 1;
+    } else if s.char_at(i).unwrap_or(0) == 45 {
+        return Err("the `-` flag is not supported");
+    }
+    if s.char_at(i).unwrap_or(0) == 35 {
+        sp.alt = true;
+        i = i + 1;
+    }
+    if s.char_at(i).unwrap_or(0) == 48 {
+        sp.zero = true;
+        i = i + 1;
+    }
+    let ws = i;
+    while i < n && lex_is_digit(s.char_at(i).unwrap_or(0)) {
+        i = i + 1;
+    }
+    if i > ws {
+        sp.width = parse_int_text(s.slice(ws, i)).unwrap_or(0);
+    }
+    if s.char_at(i).unwrap_or(0) == 36 {
+        return Err("width arguments (`name$`) are not supported");
+    }
+    if sp.zero && sp.width < 0 {
+        return Err("the `0` flag needs a width (`{:05}`)");
+    }
+    if s.char_at(i).unwrap_or(0) == 46 {
+        i = i + 1;
+        let ps = i;
+        while i < n && lex_is_digit(s.char_at(i).unwrap_or(0)) {
+            i = i + 1;
+        }
+        if i == ps {
+            return Err("expected a precision after `.` (`{:.3}`)");
+        }
+        sp.prec = parse_int_text(s.slice(ps, i)).unwrap_or(0);
+    }
+    let ty = s.slice(i, n);
+    if ty == "" || ty == "?" || ty == "x" || ty == "X" || ty == "b" || ty == "o" {
+        sp.ty = ty;
+    } else if ty == "#?" || (sp.alt && ty == "?") {
+        return Err("pretty `{:#?}` is not supported (use `{:?}`)");
+    } else {
+        return Err(
+            "unknown format trait `"
+                + ty
+                + "` (supported: `{}`, `{:?}`, and `{:x}` `{:X}` `{:b}` `{:o}` for Int)",
+        );
+    }
+    if sp.ty == "?" && sp.alt {
+        return Err("pretty `{:#?}` is not supported (use `{:?}`)");
+    }
+    if sp.ty == "?" && (sp.plus || sp.zero || sp.prec >= 0) {
+        return Err("`{:?}` takes only a width, fill and alignment");
+    }
+    if sp.prec >= 0 && (sp.ty != "" || sp.plus || sp.alt || sp.zero) {
+        return Err("a precision is only supported for String (it truncates the text)");
+    }
+    Ok(sp)
+}
+
+// mac_is_low reports a UTF-16 low surrogate (the fill must be one code
+// unit).
+fn mac_is_low(c: Int) -> Bool {
+    c >= 56320 && c <= 57343
+}
+
+fn mac_align(c: Int) -> Int {
+    if c == 60 {
+        return 0;
+    }
+    if c == 94 {
+        return 1;
+    }
+    if c == 62 {
+        return 2;
+    }
+    -1
+}

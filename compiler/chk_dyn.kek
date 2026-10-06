@@ -1,0 +1,563 @@
+// Trait objects (`dyn Trait`) and opaque types (`impl Trait`).
+//
+// `dyn Trait<A, Name = T>` is the type Ty::Struct named "dyn Trait" whose
+// arguments are the trait's arguments followed by the values of every
+// associated type of the trait and its supertraits (its params are named
+// after them, "" for the trait's arguments; it has no fields). It
+// implements the trait and its supertraits (chk_implements). A value of
+// another type becomes a trait object where a `dyn` type is expected (an
+// argument, a `let` with a type, a `return` or a function's result, a
+// struct field, an assignment, a `vec![..]` element): the checker records
+// the coercion (info.coercions) and obliges the value's type to implement
+// the trait. Lowering represents a trait object type by an enum with a
+// variant per type coerced to it in the program (after monomorphization)
+// and a call of a dispatchable method by a function that switches on the
+// variant (compiler/lower.kek). Trait calls already reach every
+// implementation for effects, async and definition hashes, so a call
+// through a trait object is accounted for like any other trait call.
+//
+// `impl Trait` as a parameter type is an anonymous generic param (with
+// the bound). As a function's result type it is an opaque type: the
+// Ty::Struct named "impl Trait#<function>#<k>" over the function's
+// generic params. Callers only know its bound; the body is checked
+// against an inference variable in its place (all returns must agree),
+// and the type found (info.opaques, `hidden`) replaces the opaque type
+// when the program is lowered (chk_reveal).
+
+// ChkOpaque is an `impl Trait` result type of function fname.
+struct ChkOpaque {
+    name: String,
+    fname: String,
+    pos: AstPos,
+    bound: TyBound,
+    params: Vec<TyParam>,
+    mut hidden: Ty,
+}
+
+// ChkDynUse is a `dyn Trait` written in the program.
+struct ChkDynUse {
+    trait_name: String,
+    pos: AstPos,
+}
+
+// chk_is_trait_method_name reports whether name is a method declared in
+// a trait (`Trait::m`) or implementing one (`<T as Trait>::m`).
+fn chk_is_trait_method_name(c: Chk, name: String) -> Bool {
+    if name.starts_with("<") {
+        return true;
+    }
+    match name.index_of("::") {
+        Some(i) => c.info.traits.contains_key(name.slice(0, i)),
+        None => false,
+    }
+}
+
+// chk_named_bound resolves the bound `Trait<Args>` of `dyn Trait<Args>` /
+// `impl Trait<Args>` (prefix is the length of "dyn " / "impl ").
+fn chk_named_bound(c: Chk, te: AstNamedType, prefix: Int) -> Option<TyBound> {
+    let tn = te.name.slice(prefix, te.name.len());
+    chk_resolve_bound_for(
+        c,
+        AstType::Named(AstNamedType { id: te.id, pos: te.pos, name: tn, args: te.args }),
+        None,
+    )
+}
+
+// chk_dyn_type resolves `dyn Trait<Args>`.
+fn chk_dyn_type(mut c: Chk, te: AstNamedType) -> Ty {
+    let tn = te.name.slice(4, te.name.len());
+    if !c.info.traits.contains_key(tn) {
+        chk_errorf(c, te.pos, "cannot find trait `" + tn + "`");
+        return ty_invalid();
+    }
+    let b = match chk_named_bound(c, te, 4) {
+        Some(b) => b,
+        None => {
+            return ty_invalid();
+        }
+    };
+    let mut ps = Vec::new();
+    let mut args = Vec::new();
+    for a in b.args {
+        ps.push(TyParam { id: 0, name: "", bounds: Vec::new() });
+        args.push(a);
+    }
+    for t in chk_trait_closure(c.info, tn) {
+        match c.info.traits.get(t) {
+            Some(tr) => {
+                for n in tr.assoc {
+                    let mut found = false;
+                    for i in 0..b.assoc_names.len() {
+                        if !found && b.assoc_names.get(i).unwrap_or("") == n {
+                            found = true;
+                            ps.push(TyParam { id: 0, name: n, bounds: Vec::new() });
+                            args.push(b.assoc_tys.get(i).unwrap_or(ty_unit()));
+                        }
+                    }
+                    if !found {
+                        chk_errorf(
+                            c,
+                            te.pos,
+                            "the value of the associated type `"
+                                + n
+                                + "` in `"
+                                + t
+                                + "` must be specified: write `dyn "
+                                + tn
+                                + "<"
+                                + n
+                                + " = ...>`",
+                        );
+                        return ty_invalid();
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    c.dyn_uses.push(ChkDynUse { trait_name: tn, pos: te.pos });
+    Ty::Struct(TyStruct { name: "dyn " + tn, params: ps, fields: Vec::new() }, args)
+}
+
+// chk_impl_type resolves `impl Trait<Args>` (see c.impl_mode).
+fn chk_impl_type(mut c: Chk, te: AstNamedType) -> Ty {
+    let shown = fmt_typ(AstType::Named(te));
+    if c.impl_mode == "trait" {
+        chk_errorf(
+            c,
+            te.pos,
+            "`" + shown + "` is not supported in the return type of a trait method",
+        );
+        return ty_invalid();
+    }
+    if c.impl_mode != "arg" && c.impl_mode != "ret" {
+        chk_errorf(
+            c,
+            te.pos,
+            "`impl Trait` is only allowed in the parameter and return types of functions, found `"
+                + shown
+                + "`",
+        );
+        return ty_invalid();
+    }
+    let b = match chk_named_bound(c, te, 5) {
+        Some(b) => b,
+        None => {
+            return ty_invalid();
+        }
+    };
+    let mut bounds = Vec::new();
+    bounds.push(b);
+    if c.impl_mode == "arg" {
+        c.next_id = c.next_id + 1;
+        let p = TyParam { id: c.next_id, name: shown, bounds: bounds };
+        c.anon.push(p);
+        return Ty::Param(p);
+    }
+    let name = shown + "#" + c.opaque_fn + "#" + c.info.opaques.len().to_string();
+    c.info.opaques.insert(name, ChkOpaque {
+        name: name,
+        fname: c.opaque_fn,
+        pos: te.pos,
+        bound: b,
+        params: c.opaque_ps,
+        hidden: ty_invalid(),
+    });
+    let mut args = Vec::new();
+    for p in c.opaque_ps {
+        args.push(Ty::Param(p));
+    }
+    Ty::Struct(TyStruct { name: name, params: c.opaque_ps, fields: Vec::new() }, args)
+}
+
+// chk_dyn_bound is the bound a trait object type stands for.
+fn chk_dyn_bound(info: ChkInfo, st: TyStruct, args: Vec<Ty>) -> TyBound {
+    let tn = st.name.slice(4, st.name.len());
+    let mut b = chk_bound(tn);
+    for i in 0..args.len() {
+        let n = match st.params.get(i) {
+            Some(p) => p.name,
+            None => "",
+        };
+        let a = args.get(i).unwrap_or(ty_unit());
+        if n == "" {
+            b.args.push(a);
+        } else {
+            b.assoc_names.push(n);
+            b.assoc_tys.push(a);
+        }
+    }
+    b
+}
+
+// chk_struct_bound is the bound of a trait object or opaque type (None
+// for the other types).
+fn chk_struct_bound(info: ChkInfo, t: Ty) -> Option<TyBound> {
+    match ty_prune(t) {
+        Ty::Struct(st, args) => {
+            if st.name.starts_with("dyn ") {
+                return Some(chk_dyn_bound(info, st, args));
+            }
+            if st.name.starts_with("impl ") {
+                return match info.opaques.get(st.name) {
+                    Some(op) => {
+                        let b = op.bound;
+                        Some(TyBound {
+                            trait_name: b.trait_name,
+                            args: ty_subst_all(b.args, op.params, args),
+                            assoc_names: b.assoc_names,
+                            assoc_tys: ty_subst_all(b.assoc_tys, op.params, args),
+                        })
+                    }
+                    None => None,
+                };
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+// chk_coerce checks a value of type got where want is expected: a value
+// becomes a trait object where a `dyn` type is expected.
+fn chk_coerce(mut c: Chk, e: AstExpr, got: Ty, want: Ty, what: String) {
+    let w = ty_prune(want);
+    let g = ty_prune(got);
+    let pos = ast_expr_pos(e);
+    let mut coerce = ty_is_dyn(w)
+        && !ty_is_var(g)
+        && !ty_is_prim(g, "!")
+        && !ty_is_prim(g, "<invalid>");
+    if coerce && ty_is_dyn(g) {
+        // the same trait object type, or another one (upcasting)
+        coerce = chk_recv_name(g) != chk_recv_name(w);
+    }
+    if !coerce {
+        chk_expect(c, pos, got, want, what);
+        return;
+    }
+    match chk_struct_bound(c.info, w) {
+        Some(b) => {
+            chk_oblige_args(c, pos, b.trait_name, b.args, g, "");
+            for i in 0..b.assoc_names.len() {
+                chk_assoc_eq(
+                    c,
+                    pos,
+                    g,
+                    b.trait_name,
+                    b.assoc_names.get(i).unwrap_or(""),
+                    b.assoc_tys.get(i).unwrap_or(ty_unit()),
+                    true,
+                );
+            }
+        }
+        None => {}
+    }
+    c.info.coercions.insert(ast_expr_id(e), w);
+}
+
+// ---- object safety ----
+
+// chk_check_dyn_uses reports the trait objects of traits that are not
+// object safe.
+fn chk_check_dyn_uses(c: Chk) {
+    let mut seen: HashMap<String, Bool> = HashMap::new();
+    for u in c.dyn_uses {
+        let key = ast_pos_string(u.pos);
+        if seen.contains_key(key) {
+            continue;
+        }
+        seen.insert(key, true);
+        let rs = chk_object_safety(c.info, u.trait_name);
+        if rs.len() > 0 {
+            chk_errorf(
+                c,
+                u.pos,
+                "the trait `" + u.trait_name + "` cannot be made into an object: " + rs.join("; "),
+            );
+        }
+    }
+}
+
+// chk_object_safety lists why trait tn cannot be a trait object: a
+// required method of it or of a supertrait that cannot be dispatched
+// (default methods that cannot be dispatched are called with
+// Self = the trait object type instead).
+fn chk_object_safety(info: ChkInfo, tn: String) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in chk_trait_closure(info, tn) {
+        match info.traits.get(t) {
+            Some(tr) => {
+                for fd in tr.decl.funcs {
+                    if fd.has_body {
+                        continue;
+                    }
+                    match info.funcs.get(t + "::" + fd.name) {
+                        Some(f) => {
+                            let of = if t == tn {
+                                ""
+                            } else {
+                                " of supertrait `" + t + "`"
+                            };
+                            let r = chk_not_dispatchable(info, f, of);
+                            if r != "" {
+                                out.push(r);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+// chk_not_dispatchable explains why trait method f cannot be called
+// through a trait object ("" when it can): it needs a receiver, no
+// generic params of its own and no `Self` outside the receiver.
+fn chk_not_dispatchable(info: ChkInfo, f: ChkFunc, of: String) -> String {
+    let m = "`" + f.decl.name + "`" + of;
+    if f.decl.self_kind == "" {
+        return "associated function " + m + " has no `self` parameter";
+    }
+    let ntrait = match info.traits.get(f.trait_name) {
+        Some(tr) => tr.params.len(),
+        None => 0,
+    };
+    if f.tparams.len() > 1 + ntrait {
+        return "method " + m + " has generic type parameters";
+    }
+    let self_id = match f.tparams.get(0) {
+        Some(p) => p.id,
+        None => -1,
+    };
+    let mut uses = chk_mentions_param(f.result, self_id);
+    for i in 1..f.params.len() {
+        match f.params.get(i) {
+            Some(b) => {
+                if chk_mentions_param(b.ty, self_id) {
+                    uses = true;
+                }
+            }
+            None => {}
+        }
+    }
+    if uses {
+        return "method " + m + " references the `Self` type in its parameters or return type";
+    }
+    ""
+}
+
+// chk_dyn_dispatchable reports whether trait method f is called through
+// the variants of a trait object (otherwise its default body is used with
+// Self = the trait object type).
+fn chk_dyn_dispatchable(info: ChkInfo, f: ChkFunc) -> Bool {
+    chk_not_dispatchable(info, f, "") == ""
+}
+
+// chk_mentions_param reports whether t mentions the param id (outside
+// associated types `Self::Item`).
+fn chk_mentions_param(t0: Ty, id: Int) -> Bool {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Param(p) => p.id == id,
+        Ty::Result(a, b) => chk_mentions_param(a, id) || chk_mentions_param(b, id),
+        Ty::Option(a) => chk_mentions_param(a, id),
+        Ty::Vec(a) => chk_mentions_param(a, id),
+        Ty::Tuple(ts) => chk_any_mentions_param(ts, id),
+        Ty::Struct(_, ts) => chk_any_mentions_param(ts, id),
+        Ty::Enum(_, ts) => chk_any_mentions_param(ts, id),
+        Ty::Fn(ps, r) => chk_any_mentions_param(ps, id) || chk_mentions_param(r, id),
+        _ => false,
+    }
+}
+
+fn chk_any_mentions_param(ts: Vec<Ty>, id: Int) -> Bool {
+    for t in ts {
+        if chk_mentions_param(t, id) {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- opaque types ----
+
+// chk_opaque_vars makes an inference variable for each opaque result type
+// of fun (by name).
+fn chk_opaque_vars(c: Chk, fun: ChkFunc) -> HashMap<String, Ty> {
+    let mut out: HashMap<String, Ty> = HashMap::new();
+    for (n, op) in c.info.opaques.iter() {
+        if op.fname == fun.name {
+            out.insert(n, chk_new_var(c));
+        }
+    }
+    out
+}
+
+// chk_opaque_oblige requires the type found for each opaque type of the
+// function being checked to satisfy its bound.
+fn chk_opaque_oblige(c: Chk, vars: HashMap<String, Ty>) {
+    for (n, v) in vars.iter() {
+        match c.info.opaques.get(n) {
+            Some(op) => {
+                let b = op.bound;
+                chk_oblige_args(c, op.pos, b.trait_name, b.args, v, "");
+                for i in 0..b.assoc_names.len() {
+                    chk_assoc_eq(
+                        c,
+                        op.pos,
+                        v,
+                        b.trait_name,
+                        b.assoc_names.get(i).unwrap_or(""),
+                        b.assoc_tys.get(i).unwrap_or(ty_unit()),
+                        true,
+                    );
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+// chk_opaque_store records the types found for the opaque types.
+fn chk_opaque_store(c: Chk, vars: HashMap<String, Ty>) {
+    for (n, v) in vars.iter() {
+        match c.info.opaques.get(n) {
+            Some(mut op) => {
+                let t = ty_resolve(v);
+                if chk_mentions_struct(t, n) {
+                    chk_errorf(
+                        c,
+                        op.pos,
+                        "cannot resolve opaque type `"
+                            + ty_str(chk_opaque_ty(op))
+                            + "`: it expands to a recursive type",
+                    );
+                    op.hidden = ty_invalid();
+                } else {
+                    op.hidden = t;
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+fn chk_opaque_ty(op: ChkOpaque) -> Ty {
+    Ty::Struct(TyStruct { name: op.name, params: op.params, fields: Vec::new() }, Vec::new())
+}
+
+// chk_mentions_struct reports whether t mentions the struct named n.
+fn chk_mentions_struct(t0: Ty, n: String) -> Bool {
+    let t = ty_prune(t0);
+    match t {
+        Ty::Struct(st, ts) => st.name == n || chk_any_mentions_struct(ts, n),
+        Ty::Result(a, b) => chk_mentions_struct(a, n) || chk_mentions_struct(b, n),
+        Ty::Option(a) => chk_mentions_struct(a, n),
+        Ty::Vec(a) => chk_mentions_struct(a, n),
+        Ty::Tuple(ts) => chk_any_mentions_struct(ts, n),
+        Ty::Enum(_, ts) => chk_any_mentions_struct(ts, n),
+        Ty::Fn(ps, r) => chk_any_mentions_struct(ps, n) || chk_mentions_struct(r, n),
+        Ty::Assoc(s, _, _) => chk_mentions_struct(s, n),
+        _ => false,
+    }
+}
+
+fn chk_any_mentions_struct(ts: Vec<Ty>, n: String) -> Bool {
+    for t in ts {
+        if chk_mentions_struct(t, n) {
+            return true;
+        }
+    }
+    false
+}
+
+// chk_hide_opaques replaces the opaque types in vars (by name) by their
+// variables: the type the body of their function is checked against.
+fn chk_hide_opaques(t: Ty, vars: HashMap<String, Ty>) -> Ty {
+    chk_map_opaques(None, t, vars, false, 0)
+}
+
+// chk_reveal replaces every opaque type in t by the type its function
+// returns (for lowering).
+fn chk_reveal(info: ChkInfo, t: Ty) -> Ty {
+    if info.opaques.len() == 0 {
+        return t;
+    }
+    chk_map_opaques(Some(info), t, HashMap::new(), true, 0)
+}
+
+fn chk_map_opaques(
+    info: Option<ChkInfo>,
+    t0: Ty,
+    vars: HashMap<String, Ty>,
+    reveal: Bool,
+    depth: Int,
+) -> Ty {
+    let t = ty_prune(t0);
+    if depth > 64 {
+        return t;
+    }
+    match t {
+        Ty::Struct(st, xs) => {
+            let args = chk_map_opaques_all(info, xs, vars, reveal, depth);
+            if st.name.starts_with("impl ") {
+                match vars.get(st.name) {
+                    Some(v) => {
+                        return v;
+                    }
+                    None => {}
+                }
+                if reveal {
+                    match info {
+                        Some(i) => match i.opaques.get(st.name) {
+                            Some(op) => {
+                                return chk_map_opaques(
+                                    info,
+                                    ty_subst(op.hidden, op.params, args),
+                                    vars,
+                                    reveal,
+                                    depth + 1,
+                                );
+                            }
+                            None => {}
+                        },
+                        None => {}
+                    }
+                }
+            }
+            Ty::Struct(st, args)
+        }
+        Ty::Result(a, b) => {
+            let ra = chk_map_opaques(info, a, vars, reveal, depth);
+            Ty::Result(ra, chk_map_opaques(info, b, vars, reveal, depth))
+        }
+        Ty::Option(a) => Ty::Option(chk_map_opaques(info, a, vars, reveal, depth)),
+        Ty::Vec(a) => Ty::Vec(chk_map_opaques(info, a, vars, reveal, depth)),
+        Ty::Tuple(ts) => Ty::Tuple(chk_map_opaques_all(info, ts, vars, reveal, depth)),
+        Ty::Enum(en, ts) => Ty::Enum(en, chk_map_opaques_all(info, ts, vars, reveal, depth)),
+        Ty::Assoc(s, tr, n) => Ty::Assoc(chk_map_opaques(info, s, vars, reveal, depth), tr, n),
+        Ty::Fn(ps, r) => {
+            let mps = chk_map_opaques_all(info, ps, vars, reveal, depth);
+            Ty::Fn(mps, chk_map_opaques(info, r, vars, reveal, depth))
+        }
+        _ => t,
+    }
+}
+
+fn chk_map_opaques_all(
+    info: Option<ChkInfo>,
+    ts: Vec<Ty>,
+    vars: HashMap<String, Ty>,
+    reveal: Bool,
+    depth: Int,
+) -> Vec<Ty> {
+    let mut out = Vec::new();
+    for t in ts {
+        out.push(chk_map_opaques(info, t, vars, reveal, depth));
+    }
+    out
+}

@@ -1,0 +1,21 @@
+// The module `geo`.
+
+pub trait Shape {
+    fn area(&self) -> Int;
+}
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct Rect {
+    pub w: Int,
+    pub h: Int,
+}
+
+impl Shape for Rect {
+    fn area(&self) -> Int {
+        area(self.w, self.h)
+    }
+}
+
+pub fn area(w: Int, h: Int) -> Int {
+    w * h
+}

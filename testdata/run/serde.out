@@ -1,4 +1,4 @@
-ok {"a":[1,2.5,-3e2,true,null,"x\nyé😀"],"b":{}}
+ok {"a":[1,2.5,-300.0,true,null,"x\nyé😀"],"b":{}}
   pretty round trip true
 err line 1, column 7: unexpected character
 err line 1, column 10: duplicate key
@@ -30,10 +30,10 @@ err expected a map (`Server`), found a sequence
 wrap 2 true
 login a h*******
 err password: expected a string, found an integer
-{"title":"TOML éx","nums":[1,31,15,5,1000,-3,4],"floats":[1.5,-2e3,6.626e-34,null,null],"when":"1979-05-27T07:32:00-08:00","day":"1979-05-27","local":"1979-05-27 07:32:00","lit":"C:\\path","ml":"line1\nline2 cont","mll":"raw \\n","owner":{"name":"Tom","a":{"b":{"c":1}},"quoted key":true},"database":{"connection":{"ports":[8000,8001,8002],"inline":{"x":1,"y":{"z":"q"}}}},"products":[{"name":"Hammer"},{"name":"Nail","dims":{"w":2}}]}
+{"title":"TOML éx","nums":[1,31,15,5,1000,-3,4],"floats":[1.5,-2000.0,6.626e-34,null,null],"when":"1979-05-27T07:32:00-08:00","day":"1979-05-27","local":"1979-05-27 07:32:00","lit":"C:\\path","ml":"line1\nline2 cont","mll":"raw \\n","owner":{"name":"Tom","a":{"b":{"c":1}},"quoted key":true},"database":{"connection":{"ports":[8000,8001,8002],"inline":{"x":1,"y":{"z":"q"}}}},"products":[{"name":"Hammer"},{"name":"Nail","dims":{"w":2}}]}
 title = "TOML éx"
 nums = [1, 31, 15, 5, 1000, -3, 4]
-floats = [1.5, -2e3, 6.626e-34, inf, nan]
+floats = [1.5, -2000.0, 6.626e-34, inf, nan]
 when = 1979-05-27T07:32:00-08:00
 day = 1979-05-27
 local = 1979-05-27 07:32:00

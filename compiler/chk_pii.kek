@@ -100,8 +100,8 @@ fn chk_idempotent_attr(fun: ChkFunc) -> Bool {
 // doing them again (a retry) leaves the same state. Reads, logging, the
 // clock, overwriting a key (tx.put), deleting a key (tx.delete) and the
 // transaction itself. Everything else is not (net.post, tx.outbox,
-// fs.write, fs.write_bytes, fs.read_line, random.int, and any operation
-// added later until it is listed here).
+// fs.write, fs.write_bytes, fs.read_line, fs.read_stdin, fs.write_stdout,
+// random.int, and any operation added later until it is listed here).
 fn chk_idempotent_op(op: String) -> Bool {
     op.starts_with("log.")
         || op == "clock.now_ms"

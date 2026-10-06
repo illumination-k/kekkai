@@ -7,7 +7,8 @@
 //
 //   cover    insert probes `__cov_hit(k);` (lib/prelude/cover.kek): at the
 //            entry of every function, in every branch (then / else, also
-//            an implicit empty else, match arms), loop body and closure
+//            an implicit empty else, match arms, both outcomes of a match
+//            guard), loop body and closure
 //            body, and after every statement that may leave its block
 //            early (`return`, `?`, `break`, `continue`), so that the probes
 //            give exact line coverage. Each probe is a site (CovSite) with
@@ -25,9 +26,9 @@ struct CovSite {
     id: Int,
     func: String,
     file: String,
-    line: Int,
-    col: Int,
-    // fn, then, else, arm, loop, closure, seq
+    mut line: Int,
+    mut col: Int,
+    // fn, then, else, arm, guard, let-else, try, loop, closure, seq
     kind: String,
     // branches: the decision (if / match) they belong to, their index in
     // it and its line
@@ -47,6 +48,8 @@ struct CovW {
     mut groups: Int,
     mut func: String,
     mut rare: Bool,
+    // the next match is the desugaring of a let-else
+    mut letelse: Bool,
     // mutate
     mut info: Option<ChkInfo>,
     lines: HashMap<String, Vec<String>>,
@@ -67,6 +70,7 @@ fn cov_new_walk(mode: String) -> CovW {
         groups: 0,
         func: "",
         rare: false,
+        letelse: false,
         info: None,
         lines: HashMap::new(),
         cands: Vec::new(),
@@ -159,58 +163,92 @@ fn cov_probe(w: CovW, k: Int, pos: AstPos) -> AstStmt {
 
 // cov_div_stmt reports whether a statement may leave its block early
 // (outside of nested closures; `break` / `continue` only when they leave
-// the enclosing loop).
-fn cov_div_stmt(s: AstStmt, loops: Int) -> Bool {
+// the enclosing loop: loops is the number of loops entered in s, labels
+// their labels).
+fn cov_div_stmt(s: AstStmt, loops: Int, labels: Vec<String>) -> Bool {
     match s {
-        AstStmt::Let(l) => cov_div_expr(l.init, loops),
-        AstStmt::Assign(a) => cov_div_expr(a.value, loops),
-        AstStmt::FieldAssign(a) => cov_div_expr(a.target.x, loops) || cov_div_expr(a.value, loops),
-        AstStmt::Break(_) => loops == 0,
-        AstStmt::Continue(_) => loops == 0,
-        AstStmt::While(x) => cov_div_expr(x.cond, loops) || cov_div_block(x.body, loops + 1),
+        AstStmt::Let(l) => cov_div_expr(l.init, loops, labels),
+        AstStmt::Assign(a) => cov_div_expr(a.value, loops, labels),
+        AstStmt::FieldAssign(a) => {
+            cov_div_expr(a.target.x, loops, labels) || cov_div_expr(a.value, loops, labels)
+        }
+        // a labeled `break` / `continue` may leave outer loops too
+        AstStmt::Break(b) => cov_div_jump(b.label, loops, labels) || match b.value {
+            Some(v) => cov_div_expr(v, loops, labels),
+            None => false,
+        },
+        AstStmt::Continue(c) => cov_div_jump(c.label, loops, labels),
+        // `loop` ends only by `break` (or never)
+        AstStmt::While(x) => x.is_loop
+            || cov_div_expr(x.cond, loops, labels)
+            || cov_div_block(x.body, loops + 1, cov_div_enter(labels, x.label)),
         AstStmt::For(x) => {
             let e = match x.end {
-                Some(e) => cov_div_expr(e, loops),
+                Some(e) => cov_div_expr(e, loops, labels),
                 None => false,
             };
-            e || cov_div_expr(x.iter, loops) || cov_div_block(x.body, loops + 1)
+            e
+                || cov_div_expr(x.iter, loops, labels)
+                || cov_div_block(x.body, loops + 1, cov_div_enter(labels, x.label))
         }
         AstStmt::Return(_) => true,
-        AstStmt::Expr(e) => cov_div_expr(e.x, loops),
+        AstStmt::Expr(e) => cov_div_expr(e.x, loops, labels),
     }
 }
 
-fn cov_div_block(b: AstBlock, loops: Int) -> Bool {
+// cov_div_jump: a `break` / `continue` (with label, "" if none) leaves
+// the statement.
+fn cov_div_jump(label: String, loops: Int, labels: Vec<String>) -> Bool {
+    if label == "" {
+        return loops == 0;
+    }
+    !labels.contains(&label)
+}
+
+fn cov_div_enter(labels: Vec<String>, label: String) -> Vec<String> {
+    let mut out = Vec::new();
+    for l in labels {
+        out.push(l);
+    }
+    if label != "" {
+        out.push(label);
+    }
+    out
+}
+
+fn cov_div_block(b: AstBlock, loops: Int, labels: Vec<String>) -> Bool {
     for s in b.stmts {
-        if cov_div_stmt(s, loops) {
+        if cov_div_stmt(s, loops, labels) {
             return true;
         }
     }
     match b.tail {
-        Some(t) => cov_div_expr(t, loops),
+        Some(t) => cov_div_expr(t, loops, labels),
         None => false,
     }
 }
 
-fn cov_div_exprs(es: Vec<AstExpr>, loops: Int) -> Bool {
+fn cov_div_exprs(es: Vec<AstExpr>, loops: Int, labels: Vec<String>) -> Bool {
     for e in es {
-        if cov_div_expr(e, loops) {
+        if cov_div_expr(e, loops, labels) {
             return true;
         }
     }
     false
 }
 
-fn cov_div_expr(e: AstExpr, loops: Int) -> Bool {
+fn cov_div_expr(e: AstExpr, loops: Int, labels: Vec<String>) -> Bool {
     match e {
-        AstExpr::Binary(x) => cov_div_expr(x.x, loops) || cov_div_expr(x.y, loops),
-        AstExpr::Unary(x) => cov_div_expr(x.x, loops),
-        AstExpr::Call(x) => cov_div_expr(x.func, loops) || cov_div_exprs(x.args, loops),
-        AstExpr::Method(x) => cov_div_expr(x.recv, loops) || cov_div_exprs(x.args, loops),
-        AstExpr::Field(x) => cov_div_expr(x.x, loops),
+        AstExpr::Binary(x) => cov_div_expr(x.x, loops, labels) || cov_div_expr(x.y, loops, labels),
+        AstExpr::Unary(x) => cov_div_expr(x.x, loops, labels),
+        AstExpr::Call(x) => cov_div_expr(x.func, loops, labels)
+            || cov_div_exprs(x.args, loops, labels),
+        AstExpr::Method(x) => cov_div_expr(x.recv, loops, labels)
+            || cov_div_exprs(x.args, loops, labels),
+        AstExpr::Field(x) => cov_div_expr(x.x, loops, labels),
         AstExpr::StructLit(x) => {
             for f in x.fields {
-                if cov_div_expr(f.value, loops) {
+                if cov_div_expr(f.value, loops, labels) {
                     return true;
                 }
             }
@@ -218,24 +256,35 @@ fn cov_div_expr(e: AstExpr, loops: Int) -> Bool {
         }
         AstExpr::If(x) => {
             let els = match x.els {
-                Some(e) => cov_div_expr(e, loops),
+                Some(e) => cov_div_expr(e, loops, labels),
                 None => false,
             };
-            els || cov_div_expr(x.cond, loops) || cov_div_block(x.then, loops)
+            els || cov_div_expr(x.cond, loops, labels) || cov_div_block(x.then, loops, labels)
         }
         AstExpr::Match(x) => {
             for a in x.arms {
-                if cov_div_expr(a.body, loops) {
+                if cov_div_expr(a.body, loops, labels) {
                     return true;
                 }
+                match a.guard {
+                    Some(ge) => {
+                        if cov_div_expr(ge, loops, labels) {
+                            return true;
+                        }
+                    }
+                    None => {}
+                }
             }
-            cov_div_expr(x.x, loops)
+            cov_div_expr(x.x, loops, labels)
         }
-        AstExpr::Block(b) => cov_div_block(b, loops),
+        AstExpr::Block(b) => cov_div_block(b, loops, labels),
         AstExpr::Try(_) => true,
-        AstExpr::Tuple(x) => cov_div_exprs(x.elems, loops),
-        AstExpr::Range(x) => cov_div_expr(x.start, loops) || cov_div_expr(x.end, loops),
-        AstExpr::Index(x) => cov_div_expr(x.x, loops) || cov_div_expr(x.index, loops),
+        AstExpr::Tuple(x) => cov_div_exprs(x.elems, loops, labels),
+        AstExpr::Range(x) => cov_div_expr(x.start, loops, labels)
+            || cov_div_expr(x.end, loops, labels),
+        AstExpr::Index(x) => cov_div_expr(x.x, loops, labels)
+            || cov_div_expr(x.index, loops, labels),
+        AstExpr::Macro(x) => cov_div_exprs(x.args, loops, labels),
         _ => false,
     }
 }
@@ -294,7 +343,7 @@ fn cov_block_k(
         stmts.push(cov_stmt(w, s));
         w.cur = cur;
         i = i + 1;
-        if cover && cur > 0 && cov_div_stmt(s, 0) {
+        if cover && cur > 0 && cov_div_stmt(s, 0, Vec::new()) {
             let next = match b.stmts.get(i) {
                 Some(t) => Some(fmt_stmt_pos(t)),
                 None => match b.tail {
@@ -350,17 +399,22 @@ fn cov_wrap_probe(
     AstExpr::Block(cov_block_of(w, pos, stmts, Some(inner)))
 }
 
-fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
+fn cov_stmt(mut w: CovW, s: AstStmt) -> AstStmt {
     let s2 = match s {
-        AstStmt::Let(l) => AstStmt::Let(AstLetStmt {
-            id: l.id,
-            pos: l.pos,
-            mutable: l.mutable,
-            name: l.name,
-            pat: l.pat,
-            ty: l.ty,
-            init: cov_expr(w, l.init),
-        }),
+        AstStmt::Let(l) => {
+            // the match of a let-else is one decision: matched / else
+            w.letelse = l.let_else;
+            AstStmt::Let(AstLetStmt {
+                id: l.id,
+                pos: l.pos,
+                mutable: l.mutable,
+                name: l.name,
+                pat: l.pat,
+                ty: l.ty,
+                init: cov_expr(w, l.init),
+                let_else: l.let_else,
+            })
+        }
         AstStmt::Assign(a) => AstStmt::Assign(AstAssignStmt {
             id: a.id,
             pos: a.pos,
@@ -376,16 +430,32 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
                 value: cov_expr(w, a.value),
             })
         }
-        AstStmt::Break(_) => s,
+        AstStmt::Break(x) => match x.value {
+            Some(v) => AstStmt::Break(AstBreakStmt {
+                id: x.id,
+                pos: x.pos,
+                label: x.label,
+                value: Some(cov_expr(w, v)),
+            }),
+            None => s,
+        },
         AstStmt::Continue(_) => s,
         AstStmt::While(x) => {
-            let cond = mut_hook_cond(w, x.id, x.pat, x.cond, x.body.pos, cov_expr(w, x.cond));
+            // `loop` has no condition to mutate
+            let cond = if x.is_loop {
+                x.cond
+            } else {
+                mut_hook_cond(w, x.id, x.pat, x.cond, x.body.pos, cov_expr(w, x.cond))
+            };
             AstStmt::While(AstWhileStmt {
                 id: x.id,
                 pos: x.pos,
                 pat: x.pat,
                 cond: cond,
                 body: cov_block_k(w, x.body, "loop", 0, 0, 0, 0),
+                is_loop: x.is_loop,
+                label: x.label,
+                expr: x.expr,
             })
         }
         AstStmt::For(x) => {
@@ -402,6 +472,7 @@ fn cov_stmt(w: CovW, s: AstStmt) -> AstStmt {
                 iter: iter,
                 end: end,
                 body: cov_block_k(w, x.body, "loop", 0, 0, 0, 0),
+                label: x.label,
             })
         }
         AstStmt::Return(r) => AstStmt::Return(AstReturnStmt {
@@ -438,6 +509,7 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
             op: x.op,
             x: cov_expr(w, x.x),
             y: cov_expr(w, x.y),
+            compound: x.compound,
         }),
         AstExpr::Unary(x) => AstExpr::Unary(AstUnary {
             id: x.id,
@@ -481,7 +553,10 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
         AstExpr::If(x) => cov_if_expr(w, x),
         AstExpr::Match(x) => cov_match(w, x),
         AstExpr::Block(b) => AstExpr::Block(cov_block_k(w, b, "", 0, 0, 0, 0)),
-        AstExpr::Try(x) => AstExpr::Try(AstTry { id: x.id, pos: x.pos, x: cov_expr(w, x.x) }),
+        AstExpr::Try(x) => {
+            let inner = cov_expr(w, x.x);
+            AstExpr::Try(AstTry { id: x.id, pos: x.pos, x: cov_try(w, inner, x.pos) })
+        }
         AstExpr::Closure(x) => {
             let body = match x.body {
                 AstExpr::Block(b) => AstExpr::Block(cov_block_k(w, b, "closure", 0, 0, 0, 0)),
@@ -519,9 +594,149 @@ fn cov_expr(w: CovW, e: AstExpr) -> AstExpr {
             let base = cov_expr(w, x.x);
             AstExpr::Index(AstIndex { id: x.id, pos: x.pos, x: base, index: cov_expr(w, x.index) })
         }
+        AstExpr::Macro(x) => cov_macro(w, x),
         _ => e,
     };
     mut_hook_expr(w, e, e2)
+}
+
+// cov_macro rewrites the arguments of a macro in its expansion (where
+// module resolution and desugaring have rewritten them; the macro's own
+// args are as written). The code the expansion adds gets neither probes
+// nor mutants: the branch of `assert!` that panics is not a branch of the
+// program, and its message is not the program's string.
+fn cov_macro(w: CovW, m: AstMacro) -> AstExpr {
+    let mut ids: HashSet<Int> = HashSet::new();
+    let fmt = mac_format_index(m.name);
+    let mut i = 0;
+    for a in m.args {
+        // the format string is not in the expansion (its pieces are)
+        if i != fmt {
+            ids.insert(ast_expr_id(a));
+        }
+        i = i + 1;
+    }
+    AstExpr::Macro(AstMacro {
+        id: m.id,
+        pos: m.pos,
+        name: m.name,
+        delim: m.delim,
+        args: m.args,
+        arg_names: m.arg_names,
+        repeat: m.repeat,
+        pat: m.pat,
+        expansion: cov_subst(w, m.expansion, ids),
+        errs: m.errs,
+    })
+}
+
+// cov_subst copies an expansion (the node kinds compiler/macro.kek builds),
+// rewriting the argument expressions in it.
+fn cov_subst(w: CovW, e: AstExpr, args: HashSet<Int>) -> AstExpr {
+    if args.contains(&ast_expr_id(e)) {
+        return cov_expr(w, e);
+    }
+    match e {
+        AstExpr::Binary(x) => AstExpr::Binary(AstBinary {
+            compound: x.compound,
+            id: x.id,
+            pos: x.pos,
+            op: x.op,
+            x: cov_subst(w, x.x, args),
+            y: cov_subst(w, x.y, args),
+        }),
+        AstExpr::Unary(x) => AstExpr::Unary(AstUnary {
+            id: x.id,
+            pos: x.pos,
+            op: x.op,
+            x: cov_subst(w, x.x, args),
+        }),
+        AstExpr::Call(x) => AstExpr::Call(AstCall {
+            id: x.id,
+            pos: x.pos,
+            func: x.func,
+            args: cov_subst_all(w, x.args, args),
+        }),
+        AstExpr::Method(x) => AstExpr::Method(AstMethodCall {
+            id: x.id,
+            pos: x.pos,
+            recv: cov_subst(w, x.recv, args),
+            name: x.name,
+            targs: x.targs,
+            args: cov_subst_all(w, x.args, args),
+        }),
+        AstExpr::If(x) => AstExpr::If(AstIf {
+            id: x.id,
+            pos: x.pos,
+            pat: x.pat,
+            cond: cov_subst(w, x.cond, args),
+            then: cov_subst_block(w, x.then, args),
+            els: match x.els {
+                Some(el) => Some(cov_subst(w, el, args)),
+                None => None,
+            },
+        }),
+        AstExpr::Match(x) => {
+            let mut arms = Vec::new();
+            for a in x.arms {
+                arms.push(AstMatchArm {
+                    id: a.id,
+                    pos: a.pos,
+                    pat: a.pat,
+                    guard: match a.guard {
+                        Some(g) => Some(cov_subst(w, g, args)),
+                        None => None,
+                    },
+                    body: cov_subst(w, a.body, args),
+                    bare: a.bare,
+                });
+            }
+            AstExpr::Match(
+                AstMatch { id: x.id, pos: x.pos, x: cov_subst(w, x.x, args), arms: arms },
+            )
+        }
+        AstExpr::Block(b) => AstExpr::Block(cov_subst_block(w, b, args)),
+        _ => e,
+    }
+}
+
+fn cov_subst_all(w: CovW, es: Vec<AstExpr>, args: HashSet<Int>) -> Vec<AstExpr> {
+    let mut out = Vec::new();
+    for e in es {
+        out.push(cov_subst(w, e, args));
+    }
+    out
+}
+
+fn cov_subst_block(w: CovW, b: AstBlock, args: HashSet<Int>) -> AstBlock {
+    let mut stmts = Vec::new();
+    for s in b.stmts {
+        let s2 = match s {
+            AstStmt::Let(l) => AstStmt::Let(AstLetStmt {
+                let_else: l.let_else,
+                id: l.id,
+                pos: l.pos,
+                mutable: l.mutable,
+                name: l.name,
+                pat: l.pat,
+                ty: l.ty,
+                init: cov_subst(w, l.init, args),
+            }),
+            AstStmt::Expr(x) => AstStmt::Expr(AstExprStmt {
+                id: x.id,
+                pos: x.pos,
+                x: cov_subst(w, x.x, args),
+                semi: x.semi,
+            }),
+            _ => s,
+        };
+        stmts.push(s2);
+    }
+    let tail = match b.tail {
+        Some(t) => Some(cov_subst(w, t, args)),
+        None => None,
+    };
+    AstBlock { id: b.id, pos: b.pos, stmts: stmts, tail: tail, end: b.end }
 }
 
 fn cov_if_expr(mut w: CovW, x: AstIf) -> AstExpr {
@@ -555,6 +770,9 @@ fn cov_if_expr(mut w: CovW, x: AstIf) -> AstExpr {
 }
 
 fn cov_match(mut w: CovW, x: AstMatch) -> AstExpr {
+    let le = w.letelse;
+    w.letelse = false;
+    let kind = if le { "let-else" } else { "arm" };
     let scrut = cov_expr(w, x.x);
     let cover = w.mode == "cover";
     let mut g = 0;
@@ -565,20 +783,95 @@ fn cov_match(mut w: CovW, x: AstMatch) -> AstExpr {
     let mut arms = Vec::new();
     let mut i = 0;
     for a in x.arms {
+        let guard = match a.guard {
+            Some(ge) => Some(cov_guard(w, ge, a.pos.line)),
+            None => None,
+        };
+        let first = w.sites.len() + 1;
         let body = match a.body {
             AstExpr::Block(b) => AstExpr::Block(
-                cov_block_k(w, b, "arm", g, i, x.pos.line, a.pos.line),
+                cov_block_k(w, b, kind, g, i, x.pos.line, a.pos.line),
             ),
             other => if cover {
-                cov_wrap_probe(w, other, "arm", g, i, x.pos.line, a.pos.line)
+                cov_wrap_probe(w, other, kind, g, i, x.pos.line, a.pos.line)
             } else {
                 cov_expr(w, other)
             },
         };
-        arms.push(AstMatchArm { id: a.id, pos: a.pos, pat: a.pat, body: body });
+        if cover && le {
+            // at the pattern and at `else` (the arms' bodies are the
+            // bound variables and the else block)
+            cov_site_move(w, first, a.pos);
+        }
+        arms.push(AstMatchArm {
+            id: a.id,
+            pos: a.pos,
+            pat: a.pat,
+            guard: guard,
+            body: body,
+            bare: a.bare,
+        });
         i = i + 1;
     }
     AstExpr::Match(AstMatch { id: x.id, pos: x.pos, x: scrut, arms: arms })
+}
+
+// cov_guard walks a match guard. In cover mode the guard is a decision of
+// its own: `if g { hit(t); true } else { hit(f); false }` (the sites cover
+// no lines; the arm's probe does).
+fn cov_guard(mut w: CovW, ge: AstExpr, line: Int) -> AstExpr {
+    let g2 = cov_expr(w, ge);
+    if w.mode != "cover" {
+        return g2;
+    }
+    w.groups = w.groups + 1;
+    let g = w.groups;
+    let pos = fmt_start_pos(ge);
+    let kt = cov_new_site(w, pos, "guard", g, 0, line);
+    let kf = cov_new_site(w, pos, "guard", g, 1, line);
+    let mut ts = Vec::new();
+    ts.push(cov_probe(w, kt, pos));
+    let t = AstExpr::BoolLit(AstBoolLit { id: cov_id(w), pos: pos, value: true });
+    let mut fs = Vec::new();
+    fs.push(cov_probe(w, kf, pos));
+    let f = AstExpr::BoolLit(AstBoolLit { id: cov_id(w), pos: pos, value: false });
+    cov_if(w, pos, g2, cov_block_of(w, pos, ts, Some(t)), cov_block_of(w, pos, fs, Some(f)))
+}
+
+// cov_try instruments the operand of `?` (cover): `e.__cov_try(k0, k1)`
+// (lib/prelude/cover.kek) is e, after probing k0 when the `?` continues
+// and k1 when it returns early. A decision of its own; the sites cover no
+// lines (the statement's site and the `seq` site after it do).
+fn cov_try(mut w: CovW, e: AstExpr, pos: AstPos) -> AstExpr {
+    if w.mode != "cover" {
+        return e;
+    }
+    w.groups = w.groups + 1;
+    let g = w.groups;
+    let k0 = cov_new_site(w, pos, "try", g, 0, pos.line);
+    let k1 = cov_new_site(w, pos, "try", g, 1, pos.line);
+    let mut args = Vec::new();
+    args.push(cov_int(w, pos, k0));
+    args.push(cov_int(w, pos, k1));
+    AstExpr::Method(AstMethodCall {
+        id: cov_id(w),
+        pos: pos,
+        recv: e,
+        name: "__cov_try",
+        targs: Vec::new(),
+        args: args,
+    })
+}
+
+// cov_site_move moves site k to pos.
+fn cov_site_move(w: CovW, k: Int, pos: AstPos) {
+    match w.sites.get(k - 1) {
+        Some(mut s) => {
+            s.line = pos.line;
+            s.col = pos.col;
+        }
+        None => {}
+    }
 }
 
 // ---- source text helpers (reports) ----

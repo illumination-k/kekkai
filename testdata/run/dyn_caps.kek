@@ -1,0 +1,55 @@
+// exit: 0
+// Trait objects whose methods take capabilities: the capability is an
+// argument of the call, and the dispatch is async when an implementation
+// is (here through &Db).
+trait Store {
+    fn load(&self, db: &Db, key: String) -> String;
+}
+
+struct Prefixed {
+    prefix: String,
+}
+
+struct Fixed {
+    value: String,
+}
+
+impl Store for Prefixed {
+    fn load(&self, db: &Db, key: String) -> String {
+        match db.get(self.prefix + key) {
+            Ok(Some(v)) => v,
+            _ => "-",
+        }
+    }
+}
+
+impl Store for Fixed {
+    fn load(&self, db: &Db, key: String) -> String {
+        self.value + ":" + key
+    }
+}
+
+fn load_all(stores: &Vec<Box<dyn Store>>, db: &Db, key: String) -> String {
+    let mut parts = Vec::new();
+    for s in stores.iter() {
+        parts.push(s.load(db, key));
+    }
+    parts.join(" ")
+}
+
+#[main]
+fn main(args: Vec<String>, db: &Db, log: &Log) -> Int {
+    let stores: Vec<Box<dyn Store>> = vec![
+        Box::new(Prefixed { prefix: "x:" }),
+        Box::new(Fixed { value: "const" }),
+    ];
+    log.info(load_all(&stores, db, "k"));
+    match db.transaction(|tx| {
+        tx.put("x:k", "stored")?;
+        tx.commit()
+    }) {
+        Ok(_) => log.info(load_all(&stores, db, "k")),
+        Err(_) => log.info("tx failed"),
+    }
+    0
+}

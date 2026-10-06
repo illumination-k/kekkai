@@ -1,0 +1,74 @@
+// Serialize / Deserialize of tuple structs, unit structs and struct-like
+// variants (serde's encoding: a newtype is its field, a tuple struct a
+// sequence, a unit struct null, a struct-like variant `{"V": {...}}`).
+
+type Small = Int where 0 <= self && self < 100;
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct Meters(Int);
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct Pair(String, Small);
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct Marker;
+
+#[derive(Serialize, Deserialize, PartialEq)]
+enum Shape {
+    Rect { w: Int, h: Small },
+    Dot,
+    Pt(Int, Int),
+}
+
+#[derive(Serialize, Deserialize)]
+struct Scene {
+    len: Meters,
+    tag: Pair,
+    mark: Marker,
+    shapes: Vec<Shape>,
+}
+
+fn show<T: Deserialize>(log: &Log, s: String) -> Option<T> {
+    match Json::from_str::<T>(s) {
+        Ok(x) => Some(x),
+        Err(e) => {
+            log.info("error: " + e.message());
+            None
+        }
+    }
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let mut shapes = Vec::new();
+    shapes.push(Shape::Rect { w: 2, h: 3 });
+    shapes.push(Shape::Dot);
+    shapes.push(Shape::Pt(1, 2));
+    let sc = Scene { len: Meters(5), tag: Pair("a", 7), mark: Marker, shapes: shapes };
+    let text = Json::to_string(&sc);
+    log.info(text);
+    match Json::from_str::<Scene>(text) {
+        Ok(back) => {
+            log.info(
+                (back.len == Meters(5)).to_string() + " " + (back.tag == Pair("a", 7)).to_string(),
+            );
+            log.info((back.mark == Marker).to_string() + " " + back.shapes.len().to_string());
+            match back.shapes.get(0) {
+                Some(s) => log.info((s == Shape::Rect { w: 2, h: 3 }).to_string()),
+                None => {}
+            }
+        }
+        Err(e) => log.info("error: " + e.message()),
+    }
+    match Toml::to_string(&sc) {
+        Ok(t) => log.info(t),
+        Err(e) => log.info("error: " + e.message()),
+    }
+    show::<Shape>(log, "{\"Rect\": {\"w\": 1}}");
+    show::<Shape>(log, "{\"Rect\": {\"w\": 1, \"h\": 200}}");
+    show::<Shape>(log, "{\"Rect\": [1, 2]}");
+    show::<Pair>(log, "[\"x\"]");
+    show::<Meters>(log, "\"x\"");
+    show::<Marker>(log, "1");
+    0
+}

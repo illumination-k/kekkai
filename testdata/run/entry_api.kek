@@ -1,0 +1,113 @@
+// The entry API of HashMap and BTreeMap (lib/core/entry.kek), and the
+// newer HashMap / HashSet methods.
+
+fn word_counts(text: String) -> HashMap<String, Int> {
+    let mut m = HashMap::new();
+    for w in text.split_whitespace() {
+        m.entry(w).and_modify(|n| n + 1).or_insert(1);
+    }
+    m
+}
+
+fn sorted_counts(text: String) -> BTreeMap<String, Int> {
+    let mut m = BTreeMap::new();
+    for w in text.split_whitespace() {
+        let n = m.entry(w).or_default();
+        m.insert(w, n + 1);
+    }
+    m
+}
+
+// A user enum may reuse the names of the entry variants.
+enum Seat {
+    Occupied(String),
+    Vacant,
+}
+
+#[main]
+fn main(log: &Log) -> Int {
+    let text = "the cat and the hat and the bat";
+    log.info(format!("{:?}", word_counts(text)));
+    log.info(format!("{:?}", sorted_counts(text)));
+    log.info(format!("{:?}", word_counts("")));
+
+    // or_insert returns the stored value: a Vec in the map grows in place
+    let mut by_len: HashMap<Int, Vec<String>> = HashMap::new();
+    for w in vec!["pear", "fig", "kiwi", "apple", "yam"] {
+        by_len.entry(w.len()).or_insert(Vec::new()).push(w);
+    }
+    log.info(format!("group {:?}", by_len));
+
+    // or_insert_with, or_insert_with_key, or_default, key
+    let mut m: HashMap<String, Int> = HashMap::new();
+    let a = m.entry("a").or_insert_with(|| 10);
+    let b = m.entry("bb").or_insert_with_key(|k| k.len());
+    let c = m.entry("c").or_default();
+    let a2 = m.entry("a").or_insert(99);
+    log.info(format!("values {} {} {} {} {:?} key {}", a, b, c, a2, m, m.entry("zz").key()));
+
+    // matching Occupied / Vacant
+    for k in vec!["a", "q"] {
+        match m.entry(k) {
+            Entry::Occupied(mut o) => {
+                let old = o.insert(o.get() * 2);
+                log.info(format!("occupied {} {} -> {}", o.key(), old, o.get()));
+            }
+            Entry::Vacant(v) => {
+                log.info(format!("vacant {} inserted {}", v.key(), v.insert(7)));
+            }
+        }
+    }
+    if let Entry::Occupied(o) = m.entry("bb") {
+        log.info(format!("removed {:?}", o.remove_entry()));
+    }
+    if let Entry::Occupied(o) = m.entry("c") {
+        log.info(format!("removed {}", o.remove()));
+    }
+    let oe = m.entry("new").insert_entry(5);
+    log.info(format!("insert_entry {} {} {:?}", oe.key(), oe.get(), m));
+
+    // and_modify on a missing key does nothing
+    m.entry("missing").and_modify(|n| n + 1);
+    log.info(format!("missing {}", m.contains_key(&"missing")));
+
+    // HashMap: get_key_value, remove_entry, into_keys, into_values, ==
+    log.info(
+        format!(
+            "{:?} {:?} {:?} {:?}",
+            m.get_key_value(&"q"),
+            m.get_key_value(&"nope"),
+            m.remove_entry(&"q"),
+            m.remove_entry(&"q"),
+        ),
+    );
+    let ks: Vec<String> = m.clone().into_keys().collect();
+    let vs: Vec<Int> = m.clone().into_values().collect();
+    let mut other: HashMap<String, Int> = HashMap::new();
+    other.insert("new", 5);
+    other.insert("a", 20);
+    log.info(format!("{:?} {:?} {} {}", ks, vs, m == other, m == HashMap::new()));
+
+    // HashSet: symmetric_difference, is_superset, is_disjoint, ==
+    let x: HashSet<Int> = (1..6).collect();
+    let y: HashSet<Int> = (4..9).collect();
+    let z: HashSet<Int> = (2..4).collect();
+    log.info(
+        format!(
+            "{:?} {} {} {} {} {}",
+            x.symmetric_difference(&y),
+            x.is_superset(&z),
+            z.is_superset(&x),
+            x.is_disjoint(&y),
+            z.is_disjoint(&y),
+            x == (1..6).rev().collect(),
+        ),
+    );
+
+    let s = Seat::Occupied("ann");
+    match s {
+        Seat::Occupied(who) => log.info("seat " + who),
+        Seat::Vacant => log.info("seat free"),
+    }
+    0
+}

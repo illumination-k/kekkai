@@ -1,0 +1,45 @@
+// Float: no implicit conversion with Int, no bit operations, and only
+// PartialEq / PartialOrd (no Eq, Ord or Hash: NaN != NaN).
+
+#[derive(PartialEq, Eq)] // ERROR "cannot derive `Eq` for `Reading`: field `x` holds a `Float`"
+struct Reading {
+    x: Float,
+}
+
+#[derive(Clone, Hash)] // ERROR "cannot derive `Hash` for `Shape`: variant `Weights` holds a `Float`"
+enum Shape {
+    Weights(Vec<Float>),
+}
+
+#[derive(PartialEq, PartialOrd, Clone, Debug, Default, Serialize, Deserialize)]
+struct Fine {
+    x: Float,
+}
+
+fn add(x: Float, n: Int) -> Float {
+    x + n // ERROR "cannot apply `+` to `Float` and `Int` (there is no implicit conversion: use `i.to_float()`"
+}
+
+fn to_int(x: Float) -> Int {
+    x // ERROR "mismatched types in function result: expected `Int`, found `Float` (there is no implicit conversion"
+}
+
+fn less(n: Int) -> Bool {
+    n < 1.5 // ERROR "cannot apply `<` to `Int` and `Float`"
+}
+
+fn bits(x: Float) -> Float {
+    x & 1.0 // ERROR "cannot apply `&` to `Float` and `Float`"
+}
+
+fn lit() -> Float {
+    let x: Float = 1; // ERROR "expected `Float`, found `Int`"
+    x
+}
+
+fn sorted() {
+    let mut v = vec![1.0, 0.5];
+    v.sort(); // ERROR "the trait bound `Float: Ord` is not satisfied"
+}
+
+fn main() {}

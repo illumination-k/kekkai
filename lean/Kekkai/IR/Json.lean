@@ -57,6 +57,7 @@ def decodeTyKind : String → P TyKind
   | "unit" => pure .unit
   | "bool" => pure .bool
   | "int" => pure .int
+  | "float" => pure .float
   | "string" => pure .string
   | "ext" => pure .ext
   | "agg" => pure .agg
@@ -86,6 +87,7 @@ def decodeConst (j : Json) : P Const := do
   | .unit => pure .unit
   | .bool => return .bool (← boolD j "bool")
   | .int => return .int (← intD j "int")
+  | .float => return .float (← intD j "int")
   | .string => return .str (← strD j "str")
   | k => throw s!"bad constant kind {repr k}"
 

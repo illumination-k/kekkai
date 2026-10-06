@@ -1,0 +1,446 @@
+// Formatting, as in Rust's core::fmt: `Display` (`{}`, `to_string()`) is
+// the text for people, `Debug` (`{:?}`, `#[derive(Debug)]`) the text for
+// programmers. Both write into a Formatter, a string builder:
+//
+//   impl Display for Point {
+//       fn fmt(&self, f: &mut Formatter) {
+//           write!(f, "({}, {})", self.x, self.y)
+//       }
+//   }
+//
+// Unlike Rust, `fmt` returns nothing (writing cannot fail), so `write!`
+// is a plain statement. `format!` and friends (compiler/macro.kek) expand
+// to the `__fmt_*` helpers below. `Labeled` implements neither trait:
+// labeled data cannot become text without declassifying it.
+
+struct Formatter {
+    parts: Vec<String>,
+}
+
+impl Formatter {
+    fn __new() -> Formatter {
+        Formatter { parts: Vec::new() }
+    }
+
+    fn __finish(&self) -> String {
+        self.parts.join("")
+    }
+
+    // write_str appends s.
+    fn write_str(&mut self, s: String) {
+        self.parts.push(s);
+    }
+
+    // write_display appends x as `{}` would.
+    fn write_display<T: Display>(&mut self, x: &T) {
+        x.fmt(self);
+    }
+
+    // write_debug appends x as `{:?}` would.
+    fn write_debug<T: Debug>(&mut self, x: &T) {
+        x.fmt(self);
+    }
+}
+
+trait Display {
+    fn fmt(&self, f: &mut Formatter);
+
+    fn to_string(&self) -> String {
+        __fmt_display(self)
+    }
+
+    // whether `{:5}` aligns the text to the right (numbers do)
+    fn __fmt_numeric(&self) -> Bool {
+        false
+    }
+
+    // `{:.n}`: the first n characters (Float: n fractional digits; Int
+    // ignores the precision, as in Rust)
+    fn __fmt_precision(&self, n: Int) -> String {
+        __fmt_trunc(&__fmt_display(self), n)
+    }
+}
+
+trait Debug {
+    fn fmt(&self, f: &mut Formatter);
+}
+
+// ---- Display ----
+
+impl Display for Int {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_string());
+    }
+
+    fn __fmt_numeric(&self) -> Bool {
+        true
+    }
+
+    fn __fmt_precision(&self, n: Int) -> String {
+        self.to_string()
+    }
+}
+
+impl Display for Bool {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(if *self { "true" } else { "false" });
+    }
+}
+
+impl Display for String {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(*self);
+    }
+}
+
+impl Display for () {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("()");
+    }
+}
+
+// ---- Debug ----
+
+impl Debug for Int {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(self.to_string());
+    }
+}
+
+impl Debug for Bool {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(if *self { "true" } else { "false" });
+    }
+}
+
+// A string is quoted, with `"`, `\` and control characters escaped.
+impl Debug for String {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str(__fmt_escape(self));
+    }
+}
+
+impl Debug for () {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("()");
+    }
+}
+
+impl<T: Debug> Debug for Option<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        match self {
+            Some(x) => {
+                f.write_str("Some(");
+                x.fmt(f);
+                f.write_str(")");
+            }
+            None => f.write_str("None"),
+        }
+    }
+}
+
+impl<T: Debug, E: Debug> Debug for Result<T, E> {
+    fn fmt(&self, f: &mut Formatter) {
+        match self {
+            Ok(x) => {
+                f.write_str("Ok(");
+                f.write_debug(x);
+                f.write_str(")");
+            }
+            Err(e) => {
+                f.write_str("Err(");
+                f.write_debug(e);
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+impl<T: Debug> Debug for Vec<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("[");
+        let mut first = true;
+        for x in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            x.fmt(f);
+        }
+        f.write_str("]");
+    }
+}
+
+impl<K: Debug, V: Debug> Debug for HashMap<K, V> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("{");
+        let mut first = true;
+        for (k, v) in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&k);
+            f.write_str(": ");
+            f.write_debug(&v);
+        }
+        f.write_str("}");
+    }
+}
+
+impl<T: Debug> Debug for HashSet<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("{");
+        let mut first = true;
+        for x in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&x);
+        }
+        f.write_str("}");
+    }
+}
+
+impl<K: Debug + Ord, V: Debug> Debug for BTreeMap<K, V> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("{");
+        let mut first = true;
+        for (k, v) in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&k);
+            f.write_str(": ");
+            f.write_debug(&v);
+        }
+        f.write_str("}");
+    }
+}
+
+impl<T: Debug + Ord> Debug for BTreeSet<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("{");
+        let mut first = true;
+        for x in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&x);
+        }
+        f.write_str("}");
+    }
+}
+
+impl<T: Debug> Debug for VecDeque<T> {
+    fn fmt(&self, f: &mut Formatter) {
+        f.write_str("[");
+        let mut first = true;
+        for x in self.iter() {
+            if !first {
+                f.write_str(", ");
+            }
+            first = false;
+            f.write_debug(&x);
+        }
+        f.write_str("]");
+    }
+}
+
+// ---- helpers of the macros (compiler/macro.kek) ----
+
+fn __fmt_display<T: Display>(x: &T) -> String {
+    let mut f = Formatter::__new();
+    x.fmt(&mut f);
+    f.__finish()
+}
+
+fn __fmt_debug<T: Debug>(x: &T) -> String {
+    let mut f = Formatter::__new();
+    x.fmt(&mut f);
+    f.__finish()
+}
+
+// __fmt_chars counts the characters (code points) of s.
+fn __fmt_chars(s: String) -> Int {
+    let mut n = 0;
+    for i in 0..s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        if c < 56320 || c > 57343 {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+// __fmt_pad pads s with fill to width characters: align 0 left, 1 center
+// (extra fill on the right), 2 right.
+fn __fmt_pad(s: String, width: Int, align: Int, fill: String) -> String {
+    let n = __fmt_chars(s);
+    if n >= width {
+        return s;
+    }
+    let total = width - n;
+    let mut left = 0;
+    if align == 2 {
+        left = total;
+    } else if align == 1 {
+        left = total / 2;
+    }
+    let mut parts = Vec::new();
+    for i in 0..left {
+        parts.push(fill);
+    }
+    parts.push(s);
+    for i in left..total {
+        parts.push(fill);
+    }
+    parts.join("")
+}
+
+// __fmt_pad_auto is `{:width}`: numbers to the right, the rest to the left.
+fn __fmt_pad_auto<T: Display>(x: &T, width: Int, fill: String) -> String {
+    let align = if x.__fmt_numeric() { 2 } else { 0 };
+    __fmt_pad(__fmt_display(x), width, align, fill)
+}
+
+// __fmt_prec is `{:.n}` (Display::__fmt_precision).
+fn __fmt_prec<T: Display>(x: &T, n: Int) -> String {
+    x.__fmt_precision(n)
+}
+
+// __fmt_prec_auto is `{:width.n}` with the default alignment (numbers to
+// the right).
+fn __fmt_prec_auto<T: Display>(x: &T, n: Int, width: Int, fill: String) -> String {
+    let align = if x.__fmt_numeric() { 2 } else { 0 };
+    __fmt_pad(x.__fmt_precision(n), width, align, fill)
+}
+
+// __fmt_trunc is the first n characters of s.
+fn __fmt_trunc(s: &String, n: Int) -> String {
+    let mut seen = 0;
+    for i in 0..s.len() {
+        let c = s.char_at(i).unwrap_or(0);
+        if c < 56320 || c > 57343 {
+            if seen == n {
+                return s.slice(0, i);
+            }
+            seen = seen + 1;
+        }
+    }
+    *s
+}
+
+// __fmt_int formats n in radix 10, 16, 8 or 2 (`{:x}` and friends: a
+// negative number in two's complement, as Rust prints an i64), with a
+// `+` (plus), a `0x`/`0o`/`0b` prefix (alt) and zeros after the sign and
+// prefix up to zero_width characters (`{:08}`).
+fn __fmt_int(n: Int, radix: Int, upper: Bool, plus: Bool, alt: Bool, zero_width: Int) -> String {
+    let mut digits = "";
+    let mut sign = "";
+    if radix == 10 {
+        digits = n.to_string();
+        if n < 0 {
+            digits = digits.slice(1, digits.len());
+            sign = "-";
+        }
+    } else {
+        let bits = if radix == 16 {
+            4
+        } else if radix == 8 { 3 } else { 1 };
+        let mut ds = Vec::new();
+        let mut x = n;
+        if x == 0 {
+            ds.push("0");
+        }
+        while x != 0 {
+            let d = x.bit_and(radix - 1);
+            let c = if d < 10 {
+                48 + d
+            } else if upper { 55 + d } else { 87 + d };
+            ds.push(String::from_char(c));
+            x = x.ushr(bits);
+        }
+        let mut rev = Vec::new();
+        let mut i = ds.len() - 1;
+        while i >= 0 {
+            rev.push(ds.get(i).unwrap_or(""));
+            i = i - 1;
+        }
+        digits = rev.join("");
+    }
+    if plus && sign == "" {
+        sign = "+";
+    }
+    let mut prefix = "";
+    if alt {
+        if radix == 16 {
+            prefix = "0x";
+        } else if radix == 8 {
+            prefix = "0o";
+        } else if radix == 2 {
+            prefix = "0b";
+        }
+    }
+    let mut zeros = Vec::new();
+    for i in sign.len() + prefix.len() + digits.len()..zero_width {
+        zeros.push("0");
+    }
+    sign + prefix + zeros.join("") + digits
+}
+
+// __fmt_escape quotes s as Rust's `{:?}` of a str does.
+fn __fmt_escape(s: &String) -> String {
+    let mut parts = Vec::new();
+    parts.push("\"");
+    let n = s.len();
+    let mut start = 0;
+    for i in 0..n {
+        let c = s.char_at(i).unwrap_or(0);
+        let mut esc = "";
+        if c == 92 {
+            esc = "\\\\";
+        } else if c == 34 {
+            esc = "\\\"";
+        } else if c == 10 {
+            esc = "\\n";
+        } else if c == 9 {
+            esc = "\\t";
+        } else if c == 13 {
+            esc = "\\r";
+        } else if c == 0 {
+            esc = "\\0";
+        } else if c < 32 || c == 127 {
+            esc = "\\u{" + __fmt_int(c, 16, false, false, false, 0) + "}";
+        }
+        if esc != "" {
+            parts.push(s.slice(start, i));
+            parts.push(esc);
+            start = i + 1;
+        }
+    }
+    parts.push(s.slice(start, n));
+    parts.push("\"");
+    parts.join("")
+}
+
+// __fmt_assert_failed is the message of a failed assert_eq! / assert_ne!.
+fn __fmt_assert_failed(op: String, left: String, right: String, msg: String) -> String {
+    let mut head = "assertion `left " + op + " right` failed";
+    if msg != "" {
+        head = head + ": " + msg;
+    }
+    head + "\n  left: " + left + "\n right: " + right
+}
+
+// __vec_from_elem is `vec![x; n]`: n clones of x.
+fn __vec_from_elem<T: Clone>(x: T, n: Int) -> Vec<T> {
+    let mut v = Vec::new();
+    for i in 0..n {
+        v.push(x.clone());
+    }
+    v
+}

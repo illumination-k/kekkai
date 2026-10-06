@@ -39,7 +39,7 @@ struct・`Vec`・`HashMap` などは参照型で、代入や引数渡しは参�
 | `self` / `mut self` / `&self` / `&mut self` | 上と同じ | 受け手に同じ規則 |
 
 - 戻り値：`-> T` で `shared` な値（`&T` 引数からたどった値など）を返すのはエラー（`clone()` するか `-> &T` にする）。`-> &T` の結果は呼び出し側で `shared`、`-> &mut T` の結果は可変（引数のどれかが可変な経路であること）。
-- generic な関数でも同じ。`T` が集約型かどうかに関わらず、型パラメータの値は集約型として扱う。
+- generic な関数でも同じ。`T` が集約型かどうかに関わらず、型パラメータの値は集約型として扱う。trait object（`dyn Trait`）と不透明な型（戻り値の `impl Trait`）の値も同じく集約型として扱う：`&dyn T` からは `&mut self` のメソッドを呼べず（`&mut dyn T` で受け取る）、`Box<dyn T>` の引数で呼ぶには `mut` が要る。`&T` の値を `Box<dyn Trait>` に変換して保存・返却するのもエラー。
 - クロージャ：捕捉した値は捕捉した束縛の view と可変性を保つ。`shared` な値を捕捉したクロージャは `shared`。
 - core と prelude も同じ規則で検査する。イテレータは要素の view を持ち、`shared` なコレクションの `iter()` は `shared` な要素を返すイテレータになる。イテレータ自体の位置（カーソル）は `own` なので、`next` などは呼べる。
 
@@ -84,7 +84,7 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 ### イテレータと view
 
 - イテレータは「カーソル（自分の状態）」と「要素」に分かれる。`shared` なコレクションの `iter()` は `shared-contents`：イテレータ自体は新しく作られた値なので `next(&mut self)` で進められる（`let mut it = v.iter()` が要る）が、要素は `shared`。
-- これを core の関数の宣言で表すのが `#[fresh]`：引数に `shared`（か `shared-contents`）があるとき、普通の core の関数の結果は `shared` だが、`#[fresh]` の関数の結果は `shared-contents` になる。付けたのは `Vec::iter`、`HashMap::iter`・`keys`・`values`、`HashSet::iter`・`union`・`intersection`・`difference`、`IntoIterator::into_iter`、`FromIterator::from_iter`、`Iterator` のアダプタ（`map`・`filter`・`filter_map`・`enumerate`・`zip`・`chain`・`take`・`skip`・`take_while`・`skip_while`・`step_by`・`peekable`・`rev`）と `collect`。trait のメソッドに付けると、その実装すべてに効く。
+- これを core の関数の宣言で表すのが `#[fresh]`：引数に `shared`（か `shared-contents`）があるとき、普通の core の関数の結果は `shared` だが、`#[fresh]` の関数の結果は `shared-contents` になる。付けたのは `Vec::iter`、`HashMap::iter`・`keys`・`values`、`HashSet::iter`・`union`・`intersection`・`difference`、`IntoIterator::into_iter`、`FromIterator::from_iter`、`Iterator` のアダプタ（`map`・`filter`・`filter_map`・`enumerate`・`zip`・`chain`・`take`・`skip`・`take_while`・`skip_while`・`step_by`・`peekable`・`rev`・`flat_map`・`flatten`・`scan` など）と `collect`・`partition`・`unzip`、`BTreeMap`・`BTreeSet`・`VecDeque` の `iter` など。`Iterator::cloned` は `#[owned]`（要素を `clone()` して返し、包んだイテレータには `__` のフィールドからしか届かない）。trait のメソッドに付けると、その実装すべてに効く。
 - そのため `next`・`peek`・`nth` など要素を返すもの、`max`・`find` などの消費は（`#[fresh]` でないので）`shared` な要素（を包んだ `Option`）を返す。`count`・`sum` のように書き換えられない型を返すものは view を持たない。
 - `for x in e`：`e` が `Vec` なら `x` は `e` の要素の view。`IntoIterator` のコレクションは `into_iter`（`#[fresh]`）を通るので同じ。イテレータそのものを回すときは、それを進めるので `shared` なイテレータ（`&Range` の引数など）は回せない（`for` はイテレータを消費するので、`let` の束縛が可変である必要はない）。
 - `collect` で集めたコレクションは `shared-contents`：`let mut v: Vec<&Item> = items.iter().collect()` には要素を足せるが、要素は書き換えられず、所有型 `Vec<Item>` としては返せない（`map(|x| x.clone())` を挟む）。
@@ -119,7 +119,8 @@ x.kek:12:5: cannot return a borrowed value as `Vec<Int>`: it comes from `&self` 
 ### その他の決定
 
 - 所有権がないので `let x` の不変性は浅い：`let mut y = x` で移して書き換えられ（設計どおり）、`x.get(0).unwrap().push(1)` のような所有型の一時値も可変な経路。保証は `shared` な値に対してのもの。
-- パターン（`match`・`if let`・`let (a, b)`・`for (k, v)`）で束縛した値は照合した値の要素の view を持ち、`mut` を付けなければ不変（`Some(mut s) => s.push(..)`、`for mut x in v`）。`shared` を `mut` の束縛に入れるのはエラー。
+- パターン（`match`・`if let`・`let (a, b)`・`for (k, v)`・構造体のパターン `let Point { mut x, .. } = p`・タプル構造体 `let Meters(n) = m`）で束縛した値は照合した値の要素の view を持ち、`mut` を付けなければ不変（`Some(mut s) => s.push(..)`、`for mut x in v`）。`shared` を `mut` の束縛に入れるのはエラー。
+- タプル構造体のフィールドも struct のフィールドと同じく既定で不変で、`struct S(mut Int);` のように型の前に `mut` を付けたものだけ `s.0 = e` で代入できる（Rust にはフィールドごとの `mut` はないが、Kekkai の struct の規則に合わせた）。
 - 診断は位置と文言の組で重複を除く。同じ束縛への書き換えが複数あれば、それぞれの位置で報告する（`kek fix` は束縛ごとに 1 回直す）。
 
 ### `kek fix`

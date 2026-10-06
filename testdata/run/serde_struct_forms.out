@@ -1,0 +1,14 @@
+{"len":5,"tag":["a",7],"mark":null,"shapes":[{"Rect":{"w":2,"h":3}},"Dot",{"Pt":[1,2]}]}
+true true
+true 3
+true
+len = 5
+tag = ["a", 7]
+shapes = [{ Rect = { w = 2, h = 3 } }, "Dot", { Pt = [1, 2] }]
+
+error: missing field `h`
+error: Rect.h: the value is not a valid `Small`
+error: expected a map (`Shape::Rect`), found a sequence
+error: Pair: expected 2 elements, found 1
+error: expected an integer, found a string
+error: expected null, found an integer

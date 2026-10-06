@@ -1,0 +1,37 @@
+const LIMIT: Int = 10;
+
+struct P {
+    x: Int,
+    y: Int,
+}
+
+enum Sh {
+    Rect { w: Int, h: Int },
+    Sq(Int),
+    Dot,
+}
+
+fn area(s: Sh) -> Int {
+    match s {
+        Sh::Rect { w, h } | Sh::Rect { h: w, w: h } if w * h > LIMIT => 999,
+        Sh::Rect { w, h } => w * h,
+        Sh::Sq(n @ 1..=3) => n * n,
+        Sh::Sq(n) => n,
+        Sh::Dot => 0,
+    }
+}
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let p = P { x: 1, y: 2 };
+    match p {
+        P { x: 0 | 1, y } => log.info("small " + y.to_string()),
+        P { .. } => log.info("other"),
+    }
+    log.info(area(Sh::Rect { w: 2, h: 3 }).to_string());
+    log.info(area(Sh::Rect { w: 5, h: 3 }).to_string());
+    log.info(area(Sh::Sq(2)).to_string());
+    log.info(area(Sh::Sq(7)).to_string());
+    log.info(Int::MAX.to_string());
+    0
+}

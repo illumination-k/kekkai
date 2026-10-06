@@ -1,0 +1,14 @@
+use shapes::{Shape, all};
+
+#[main]
+fn main(args: Vec<String>, log: &Log) -> Int {
+    let total: Int = all().iter().map(|s| s.area()).sum();
+    log.info(
+        format!(
+            "{total} {:?} {}",
+            shapes::evens(7).collect::<Vec<Int>>(),
+            shapes::find(vec![1, 2, 3], 2),
+        ),
+    );
+    0
+}

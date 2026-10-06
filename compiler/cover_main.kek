@@ -24,7 +24,7 @@ struct CovProg {
     info: ChkInfo,
     dh: DhProgram,
     tests: Vec<TestrunTest>,
-    // by function declaration id
+    // by function declaration id (names as displayed)
     names: HashMap<Int, String>,
     rare: HashMap<Int, Bool>,
     istest: HashMap<Int, Bool>,
@@ -64,7 +64,8 @@ fn cov_load_srcs(srcs: Vec<FeSource>, log: &Log) -> Option<CovProg> {
         if chk_is_lib(fun) || p.names.contains_key(fun.decl.id) {
             continue;
         }
-        p.names.insert(fun.decl.id, fun.name);
+        // `a::b::f` for the mangled `a$b$f` of a submodule's item
+        p.names.insert(fun.decl.id, ast_display_name(fun.name));
         p.rare.insert(fun.decl.id, ast_has_attr(fun.decl, "rare"));
         p.istest.insert(fun.decl.id, fun.test);
     }
@@ -133,7 +134,7 @@ fn cov_rewrite_funcs(w: CovW, mut fs: Vec<AstFuncDecl>, p: CovProg, sel: HashMap
 }
 
 fn cov_walk_one(mut w: CovW, fd: AstFuncDecl, p: CovProg) -> AstFuncDecl {
-    w.func = p.names.get(fd.id).unwrap_or(fd.name);
+    w.func = p.names.get(fd.id).unwrap_or(ast_display_name(fd.name));
     w.rare = p.rare.get(fd.id).unwrap_or(false);
     w.fkey = p.trans.get(fd.id).unwrap_or("");
     cov_walk_func(w, fd)
@@ -173,7 +174,11 @@ fn cov_with_harness(p: CovProg) -> FeProgram {
         all.push(s);
     }
     if !p.main {
-        all.push(FeSource { name: "<prelude>/kek_test_main.kek", text: testrun_harness(p.tests) });
+        all.push(FeSource {
+            name: "<prelude>/kek_test_main.kek",
+            text: testrun_harness(p.tests),
+            module: "",
+        });
     }
     for s in prelude_sources() {
         all.push(s);
@@ -235,12 +240,12 @@ fn cov_write_tests(p: CovProg, out_dir: String, fs: &Fs, log: &Log) -> Bool {
     let mut names = Vec::new();
     let mut keys = Vec::new();
     for t in p.tests {
-        names.push(t.name + "\n");
+        names.push(ast_display_name(t.name) + "\n");
         let tr = match p.dh.by_name.get(t.name) {
             Some(d) => d.trans,
             None => "",
         };
-        keys.push(t.name + "\t" + tr + "\n");
+        keys.push(ast_display_name(t.name) + "\t" + tr + "\n");
     }
     tool_write(fs, log, out_dir + "/tests.txt", names.join(""))
         && tool_write(fs, log, out_dir + "/testkeys.txt", keys.join(""))
@@ -284,7 +289,7 @@ fn cov_build_main(args: Vec<String>, fs: &Fs, log: &Log) -> Int {
             continue;
         }
         let o = irjson_obj();
-        irjson_set(o, "name", IrjVal::Str(p.names.get(fd.id).unwrap_or(fd.name)));
+        irjson_set(o, "name", IrjVal::Str(p.names.get(fd.id).unwrap_or(ast_display_name(fd.name))));
         irjson_set(o, "file", IrjVal::Str(fd.pos.file));
         irjson_set(o, "line", irjson_int(fd.pos.line));
         irjson_set(o, "rare", irjson_bool(p.rare.get(fd.id).unwrap_or(false)));

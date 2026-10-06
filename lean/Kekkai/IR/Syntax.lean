@@ -8,7 +8,7 @@ types; aggregates refer to `Program.types` by index.
 namespace Kekkai.IR
 
 inductive TyKind where
-  | unit | bool | int | string | ext | agg
+  | unit | bool | int | float | string | ext | agg
   deriving Repr, BEq, Inhabited, DecidableEq
 
 structure Ty where
@@ -31,6 +31,8 @@ inductive Const where
   | unit
   | bool (b : Bool)
   | int (i : Int)
+  /-- a Float constant, by its bit pattern -/
+  | float (bits : Int)
   | str (s : String)
   deriving Repr, Inhabited
 

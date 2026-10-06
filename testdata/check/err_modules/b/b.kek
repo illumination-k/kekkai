@@ -1,0 +1,11 @@
+pub fn shared() -> Int {
+    2
+}
+
+fn peek() -> Int {
+    super::a::secret() // ERROR "function `secret` is private to module `a`"
+}
+
+fn up() -> Int {
+    peek() + crate::a::shared()
+}

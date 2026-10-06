@@ -1,0 +1,28 @@
+// constants, tuple and unit structs, struct-like variants, struct patterns
+const   LIMIT :Int=10;
+const NAME: String = "n"; // trailing
+const   LONG_ONE: Int = 1000000 + 2000000 + 3000000 + 4000000 + 5000000 + 6000000 + 7000000 + 8000000 + 9000000;
+struct Meters( Int ) ;
+struct Pair<A,B>(A,mut B);
+#[derive(PartialEq)]
+struct Marker ;
+enum Shape { Rect{w:Int,h:Int}, Empty {}, Dot, Line(Int,Int) }
+struct Point { x: Int, y: Int }
+impl Point {
+    const ORIGIN : Point = Point{x:0,y:0};
+    // the unit
+    const UNIT: Int=1;
+    fn get(&self) -> Int { Self::UNIT + self.x }
+}
+fn f(s: Shape, p: Point) -> Int {
+    let Point{x,mut y}=p;
+    let Meters(m)=Meters(3);
+    let r = Shape::Rect{w:1,h:2};
+    for Point{x:a,..} in Vec::new() { }
+    match s {
+        Shape::Rect{w:0,..}=>0,
+        Shape::Rect{w,h:height}=>w*height,
+        Shape::Empty{}=>1,
+        _ =>2,
+    }
+}
